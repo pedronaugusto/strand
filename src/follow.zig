@@ -99,12 +99,17 @@ pub fn Follower(comptime T: type) type {
         ) Self {
             var reader_options = options.reader;
             reader_options.require_terminator = true;
-            return .{
+            var self: Self = .{
                 .io = io,
                 .source = source,
                 .reader = .init(allocator, &source.interface, reader_options),
                 .options = options,
             };
+            // The reader counts from where it started; a follower starts
+            // somewhere in a file, so seeding it is what makes `Line.offset`
+            // an offset in that file rather than in what was read from it.
+            self.reader.consumed = source.logicalPos();
+            return self;
         }
 
         /// Releases the reader's buffers. Every `Line` this follower returned
@@ -142,6 +147,7 @@ pub fn Follower(comptime T: type) type {
 
                 self.source.seekTo(position) catch return error.SeekFailed;
                 self.reader.number = number;
+                self.reader.consumed = position;
                 try self.waitForGrowth(position);
             }
         }
@@ -170,6 +176,8 @@ pub fn Follower(comptime T: type) type {
             self.source.seekTo(0) catch return error.SeekFailed;
             self.source.size = null;
             self.reader.number = 0;
+            self.reader.consumed = 0;
+            self.reader.offset = 0;
             self.reader.bom_checked = false;
         }
 

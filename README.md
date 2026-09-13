@@ -25,6 +25,10 @@ that layer itself, usually three times:
   lets a string field point into the line's own bytes when it needs no
   unescaping, which is the common case for a log. `strand` reads that way by
   default and documents exactly how long the borrow lasts.
+- **A line is somewhere.** A line number is for a person; a byte offset is for
+  a program. `Line.offset` says where the line began, so an index of every
+  thousandth line is a loop and a `std.ArrayList(u64)`, and the forwards and
+  backwards readers agree about it.
 - **A line has a kind.** `kindOf` reads the first key of the object, and
   `tagOf` turns it into the tag of a tagged union, without parsing the value —
   so a dispatcher can route a line to the right type before committing to it.
@@ -316,8 +320,11 @@ content of a line:
 | `error.ReadFailed` | The underlying `std.Io.Reader` failed; ask it for diagnostics. |
 | `error.OutOfMemory` | The allocator failed. |
 
-The first three do not desynchronize the stream: the offending line is
-consumed in full, so `next` can simply be called again. The other two can
+`Reader.offset` is where in the stream the line `next` last returned or
+refused began, which is what a report about a bad line needs to be actionable
+and what a seek back to it needs. The first three errors do not desynchronize
+the stream: the offending line is consumed in full, so `next` can simply be
+called again. The other two can
 arrive in the middle of a line and leave the stream wherever they found it.
 Blank lines are skipped by default and still counted, so a line number always
 means the line a text editor would show. `Tail.prev` adds `error.SeekFailed`

@@ -46,6 +46,9 @@ pub fn Tail(comptime T: type) type {
         /// The byte offset in the file of the first byte of the line `prev`
         /// last returned.
         offset: u64 = 0,
+        /// How many records `prev` passed over under
+        /// `on_malformed = .skip`. See `Reader.skipped`.
+        skipped: u64 = 0,
         /// The number of the most recent failure, in the same backwards
         /// count; 0 if there has been none.
         last_error_line: u64 = 0,
@@ -87,6 +90,8 @@ pub fn Tail(comptime T: type) type {
         pub const Options = struct {
             /// See `ParseOptions.ignore_unknown_fields`.
             ignore_unknown_fields: bool = true,
+            /// See `ParseOptions.duplicate_fields`.
+            duplicate_fields: strand.DuplicateFields = .@"error",
             /// The longest line accepted, in bytes. A longer one is
             /// `error.LineTooLong`, and is discarded whole: `prev` continues
             /// with the line before it.
@@ -190,6 +195,9 @@ pub fn Tail(comptime T: type) type {
                 const bom = "\xEF\xBB\xBF";
                 if (self.options.skip_bom and self.offset == 0 and std.mem.startsWith(u8, raw, bom)) {
                     raw = raw[bom.len..];
+                    // The mark is not part of the line, so it is not where
+                    // the line begins either.
+                    self.offset = bom.len;
                 }
 
                 if (self.options.skip_blank and isBlank(raw)) continue;
@@ -200,7 +208,10 @@ pub fn Tail(comptime T: type) type {
                         self.last_error_offset = at;
                         switch (self.options.on_malformed) {
                             .fail => return error.ControlByte,
-                            .skip => continue,
+                            .skip => {
+                                self.skipped += 1;
+                                continue;
+                            },
                         }
                     }
                 }
@@ -208,6 +219,7 @@ pub fn Tail(comptime T: type) type {
                 _ = self.arena.reset(.retain_capacity);
                 const value = strand.parseLine(T, self.arena.allocator(), raw, .{
                     .ignore_unknown_fields = self.options.ignore_unknown_fields,
+                    .duplicate_fields = self.options.duplicate_fields,
                     .copy_strings = false,
                 }) catch |err| switch (err) {
                     error.OutOfMemory => return error.OutOfMemory,
@@ -217,11 +229,14 @@ pub fn Tail(comptime T: type) type {
                         self.last_error_offset = null;
                         switch (self.options.on_malformed) {
                             .fail => return error.MalformedLine,
-                            .skip => continue,
+                            .skip => {
+                                self.skipped += 1;
+                                continue;
+                            },
                         }
                     },
                 };
-                return .{ .value = value, .line = raw, .number = number };
+                return .{ .value = value, .line = raw, .number = number, .offset = self.offset };
             }
         }
 
@@ -230,6 +245,7 @@ pub fn Tail(comptime T: type) type {
         pub fn keep(self: *Self, allocator: Allocator, line: Line(T)) ParseLineError!T {
             return strand.parseLine(T, allocator, line.line, .{
                 .ignore_unknown_fields = self.options.ignore_unknown_fields,
+                .duplicate_fields = self.options.duplicate_fields,
                 .copy_strings = true,
             });
         }
@@ -598,4 +614,50 @@ test "a file with no end cannot be tailed" {
     streaming.size = null;
     streaming.size_err = error.Streaming;
     try testing.expectError(error.Streaming, Tail(Event).init(testing.allocator, &streaming, .{}));
+}
+
+test "a line read backwards knows the offset it began at" {
+    const input =
+        "\xEF\xBB\xBF" ++
+        "{\"kind\":\"a\"}\n" ++
+        "\n" ++
+        "{\"kind\":\"b\"}\r\n" ++
+        "{\"kind\":\"c\"}";
+
+    for ([_]usize{ 1, 5, 64, 4096 }) |block| {
+        var fixture = try Fixture.init(input, 64);
+        defer fixture.deinit();
+
+        var tail: Tail(Event) = try .init(testing.allocator, &fixture.reader, .{ .block_bytes = block });
+        defer tail.deinit();
+
+        while (try tail.prev()) |line| {
+            // The offset a seek needs: the bytes there are the line's bytes.
+            // The mark is not one of them, so the last line's offset is 3.
+            try testing.expectEqualStrings(
+                line.line,
+                input[@intCast(line.offset)..][0..line.line.len],
+            );
+            try testing.expectEqual(tail.offset, line.offset);
+        }
+    }
+}
+
+test "skipped counts what a tolerant backwards read lost" {
+    var fixture = try Fixture.init(
+        \\{"kind":"a"}
+        \\not json
+        \\
+        \\{"kind":"b"}
+        \\
+    , 64);
+    defer fixture.deinit();
+
+    var tail: Tail(Event) = try .init(testing.allocator, &fixture.reader, .{ .on_malformed = .skip });
+    defer tail.deinit();
+
+    var seen: usize = 0;
+    while (try tail.prev()) |_| seen += 1;
+    try testing.expectEqual(@as(usize, 2), seen);
+    try testing.expectEqual(@as(u64, 1), tail.skipped);
 }

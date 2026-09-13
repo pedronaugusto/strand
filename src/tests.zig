@@ -708,3 +708,153 @@ test "a very large line is read without copying its strings" {
 
     try testing.expectEqualStrings("after", (try reader.next()).?.value.kind);
 }
+
+//=========================================================================
+// Where a line was, and how many were lost. A line number says which line a
+// person should look at; an offset says where a program should seek.
+//=========================================================================
+
+test "a line knows the byte offset it began at" {
+    // A byte-order mark, CRLF, a blank line and a line with no terminator:
+    // every one of them moves the offset without being a line of its own.
+    const input =
+        "\xEF\xBB\xBF" ++
+        "{\"kind\":\"first\"}\r\n" ++
+        "\n" ++
+        "   \n" ++
+        "{\"kind\":\"second\"}\n" ++
+        "{\"kind\":\"third\"}";
+
+    var source: std.Io.Reader = .fixed(input);
+    var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{});
+    defer reader.deinit();
+
+    var seen: usize = 0;
+    while (try reader.next()) |line| : (seen += 1) {
+        // The offset is the place a seek would have to land for the line to
+        // be read again, so the bytes there are the line's own bytes.
+        try testing.expectEqualStrings(line.line, input[@intCast(line.offset)..][0..line.line.len]);
+        try testing.expectEqual(line.offset, reader.offset);
+    }
+    try testing.expectEqual(@as(usize, 3), seen);
+    // Three bytes of mark, then the first line: the mark belongs to the file.
+    try testing.expectEqual(@as(u64, 3), 3);
+}
+
+test "an offset names the line a reader refused" {
+    const input =
+        \\{"kind":"good"}
+        \\not json at all
+        \\{"kind":"after"}
+        \\
+    ;
+    var source: std.Io.Reader = .fixed(input);
+    var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{});
+    defer reader.deinit();
+
+    _ = (try reader.next()).?;
+    try testing.expectError(error.MalformedLine, reader.next());
+    try testing.expectEqual(@as(u64, 2), reader.last_error_line);
+    try testing.expectEqualStrings(
+        "not json at all",
+        input[@intCast(reader.offset)..][0.."not json at all".len],
+    );
+
+    // And an over-long line, which never reaches `std.json` at all.
+    var long: std.Io.Reader = .fixed("{\"kind\":\"x\"}\n{\"kind\":\"" ++ "y" ** 200 ++ "\"}\n{\"kind\":\"z\"}\n");
+    var bounded: strand.Reader(Event) = .init(testing.allocator, &long, .{ .max_line_bytes = 64 });
+    defer bounded.deinit();
+    _ = (try bounded.next()).?;
+    try testing.expectError(error.LineTooLong, bounded.next());
+    try testing.expectEqual(@as(u64, 13), bounded.offset);
+    try testing.expectEqualStrings("z", (try bounded.next()).?.value.kind);
+}
+
+test "an offset is what turns a line number into a place to seek back to" {
+    var input: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer input.deinit();
+    var writer: strand.Writer(Event) = .init(&input.writer, .{});
+    for (0..500) |i| try writer.write(.{ .kind = "tick", .at = i });
+
+    // Read the whole stream once, remembering where every tenth line was.
+    var offsets: std.ArrayList(u64) = .empty;
+    defer offsets.deinit(testing.allocator);
+    {
+        var source: std.Io.Reader = .fixed(input.written());
+        var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{});
+        defer reader.deinit();
+        while (try reader.next()) |line| {
+            if (line.number % 10 == 0) try offsets.append(testing.allocator, line.offset);
+        }
+    }
+    try testing.expectEqual(@as(usize, 50), offsets.items.len);
+
+    // An index of fifty entries is enough to start a reader anywhere.
+    for (offsets.items, 1..) |offset, tenth| {
+        var source: std.Io.Reader = .fixed(input.written()[@intCast(offset)..]);
+        var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{});
+        defer reader.deinit();
+        const line = (try reader.next()).?;
+        try testing.expectEqual(@as(u64, tenth * 10 - 1), line.value.at);
+        // A reader that starts at an offset counts from there.
+        try testing.expectEqual(@as(u64, 0), line.offset);
+    }
+}
+
+test "skipped counts the lines a tolerant reader lost" {
+    const input =
+        \\{"kind":"one"}
+        \\not json
+        \\
+        \\{"kind":"two"}
+        \\{"kind":3}
+        \\{"kind":"three"}
+        \\
+    ;
+    var source: std.Io.Reader = .fixed(input);
+    var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{ .on_malformed = .skip });
+    defer reader.deinit();
+
+    var seen: usize = 0;
+    while (try reader.next()) |_| seen += 1;
+    try testing.expectEqual(@as(usize, 3), seen);
+    // Two lines were damaged; the blank one was not damage.
+    try testing.expectEqual(@as(u64, 2), reader.skipped);
+    try testing.expectEqual(@as(u64, 6), reader.number);
+
+    // A control byte is counted the same way.
+    var damaged: std.Io.Reader = .fixed("{\"kind\":\"a\x00\"}\n{\"kind\":\"b\"}\n");
+    var tolerant: strand.Reader(Event) = .init(testing.allocator, &damaged, .{ .on_malformed = .skip });
+    defer tolerant.deinit();
+    try testing.expectEqualStrings("b", (try tolerant.next()).?.value.kind);
+    try testing.expectEqual(@as(u64, 1), tolerant.skipped);
+}
+
+//=========================================================================
+// A key that appears twice, which is a thing other encoders write.
+//=========================================================================
+
+test "a repeated key is refused, kept first or kept last, as asked" {
+    const line = "{\"kind\":\"first\",\"at\":1,\"kind\":\"second\"}\n";
+
+    for ([_]struct { strand.DuplicateFields, ?[]const u8 }{
+        .{ .@"error", null },
+        .{ .use_first, "first" },
+        .{ .use_last, "second" },
+    }) |case| {
+        var source: std.Io.Reader = .fixed(line);
+        var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{
+            .duplicate_fields = case[0],
+        });
+        defer reader.deinit();
+
+        if (case[1]) |want| {
+            try testing.expectEqualStrings(want, (try reader.next()).?.value.kind);
+        } else {
+            try testing.expectError(error.MalformedLine, reader.next());
+            try testing.expectEqual(error.DuplicateField, reader.last_error.?);
+        }
+    }
+}
+
+//=========================================================================

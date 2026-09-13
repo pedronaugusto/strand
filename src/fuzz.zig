@@ -43,23 +43,29 @@ const Physical = struct {
     /// `raw` without a trailing `\r`, which is what the reader reports.
     line: []const u8,
     number: u64,
+    /// The offset of the line's first byte in the input.
+    offset: u64,
 };
 
 /// Walks `rest` the way the oracle says lines are laid out.
 const PhysicalLines = struct {
     rest: []const u8,
     number: u64 = 0,
+    offset: u64 = 0,
 
     fn next(it: *PhysicalLines) ?Physical {
         if (it.rest.len == 0) return null;
         const end = std.mem.indexOfScalar(u8, it.rest, '\n') orelse it.rest.len;
         const raw = it.rest[0..end];
+        const offset = it.offset;
+        it.offset += @min(end + 1, it.rest.len);
         it.rest = it.rest[@min(end + 1, it.rest.len)..];
         it.number += 1;
         return .{
             .raw = raw,
             .line = if (std.mem.endsWith(u8, raw, "\r")) raw[0 .. raw.len - 1] else raw,
             .number = it.number,
+            .offset = offset,
         };
     }
 };
@@ -76,6 +82,10 @@ fn checkReaderFail(input: []const u8, max_line_bytes: usize) !void {
     var source: std.Io.Reader = .fixed(input);
     var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{
         .max_line_bytes = max_line_bytes,
+        // The oracle counts bytes, and a mark the reader drops is bytes the
+        // oracle would still be counting. `a byte-order mark belongs to the
+        // file` in the suite is where dropping it is checked.
+        .skip_bom = false,
     });
     defer reader.deinit();
 
@@ -96,12 +106,16 @@ fn checkReaderFail(input: []const u8, max_line_bytes: usize) !void {
             const line = maybe_line orelse return error.TestReaderEndedEarly;
             try testing.expectEqual(physical.number, line.number);
             try testing.expectEqualStrings(physical.line, line.line);
+            // The offset is where the line's bytes actually are.
+            try testing.expectEqual(physical.offset, line.offset);
+            try testing.expectEqual(physical.offset, reader.offset);
             try testing.expectEqualStrings(line.value.kind, line.value.kind);
             // A line that came back is a line with nothing raw in it.
             try testing.expectEqual(@as(?usize, null), control);
         } else |err| switch (err) {
             error.MalformedLine => {
                 try testing.expectEqual(physical.number, reader.last_error_line);
+                try testing.expectEqual(physical.offset, reader.offset);
                 try testing.expect(reader.last_error != null);
                 // The control byte scan runs first, so a line that parsed
                 // badly is a line that had no control byte to blame.
@@ -109,6 +123,7 @@ fn checkReaderFail(input: []const u8, max_line_bytes: usize) !void {
             },
             error.ControlByte => {
                 try testing.expectEqual(physical.number, reader.last_error_line);
+                try testing.expectEqual(physical.offset, reader.offset);
                 try testing.expectEqual(control, reader.last_error_offset);
                 try testing.expectEqual(@as(?strand.ParseLineError, null), reader.last_error);
             },
@@ -378,10 +393,12 @@ fn checkTail(input: []const u8) !void {
 
     var forward_lines: std.ArrayList([]const u8) = .empty;
     var forward_numbers: std.ArrayList(u64) = .empty;
+    var forward_offsets: std.ArrayList(u64) = .empty;
     defer {
         for (forward_lines.items) |item| testing.allocator.free(item);
         forward_lines.deinit(testing.allocator);
         forward_numbers.deinit(testing.allocator);
+        forward_offsets.deinit(testing.allocator);
     }
 
     var source: std.Io.Reader = .fixed(input);
@@ -394,6 +411,7 @@ fn checkTail(input: []const u8) !void {
         } orelse break;
         try forward_lines.append(testing.allocator, try testing.allocator.dupe(u8, line.line));
         try forward_numbers.append(testing.allocator, line.number);
+        try forward_offsets.append(testing.allocator, line.offset);
     }
     const total = reader.number;
 
@@ -424,6 +442,9 @@ fn checkTail(input: []const u8) !void {
         const i = forward_lines.items.len - 1 - seen;
         try testing.expectEqualStrings(forward_lines.items[i], line.line);
         try testing.expectEqual(total + 1 - forward_numbers.items[i], line.number);
+        // The two directions number lines differently and place them the
+        // same: an offset is a fact about the file, not about the read.
+        try testing.expectEqual(forward_offsets.items[i], line.offset);
         seen += 1;
     }
     try testing.expectEqual(forward_lines.items.len, seen);

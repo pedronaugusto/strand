@@ -63,6 +63,22 @@ pub const ParseOptions = struct {
     /// string is copied out of the line, so the value borrows nothing from
     /// it.
     copy_strings: bool = false,
+    /// What a line that names the same field twice does. `std.json`'s
+    /// default, kept here, is to refuse it; the other two are what a log
+    /// written by a language whose own encoder allows duplicates needs, since
+    /// those encoders resolve a repeat by keeping one of the two.
+    duplicate_fields: DuplicateFields = .@"error",
+};
+
+/// What a repeated key in one line means. The names are `std.json`'s.
+pub const DuplicateFields = enum {
+    /// `error.DuplicateField`, which through a `Reader` is
+    /// `error.MalformedLine`.
+    @"error",
+    /// The first value wins and the rest are skipped.
+    use_first,
+    /// The last value wins, which is what most JSON encoders do.
+    use_last,
 };
 
 /// Everything `std.json` can report about a line whose bytes are already in
@@ -90,6 +106,11 @@ pub fn parseLine(
     return std.json.parseFromSliceLeaky(T, allocator, line, .{
         .ignore_unknown_fields = options.ignore_unknown_fields,
         .allocate = if (options.copy_strings) .alloc_always else .alloc_if_needed,
+        .duplicate_field_behavior = switch (options.duplicate_fields) {
+            .@"error" => .@"error",
+            .use_first => .use_first,
+            .use_last => .use_last,
+        },
     });
 }
 
@@ -138,6 +159,14 @@ pub fn Line(comptime T: type) type {
         /// came before. In `.pretty` mode it is the number of the record's
         /// first line.
         number: u64,
+        /// The byte offset of the record's first byte. `Tail` measures it
+        /// from the start of the file; `Reader` measures it from wherever the
+        /// reader started, which is the same thing for a reader started at
+        /// the beginning, and which `Follower` seeds from the file position
+        /// so that it is a file offset there too. A byte-order mark and the
+        /// terminators of earlier lines are counted, so this is the offset a
+        /// seek needs: it is what turns a line number into a place.
+        offset: u64 = 0,
     };
 }
 
@@ -177,6 +206,14 @@ pub fn Reader(comptime T: type) type {
         /// count of physical lines consumed so far — blank, malformed and
         /// over-long lines included.
         number: u64 = 0,
+        /// The byte offset of the record `next` last returned or refused,
+        /// measured from where this reader started. See `Line.offset`.
+        offset: u64 = 0,
+        /// How many records `next` passed over under
+        /// `on_malformed = .skip` — the count a stream that tolerates damage
+        /// is judged by, since under `.skip` nothing else says a line was
+        /// lost. Blank lines are not damage and are not counted.
+        skipped: u64 = 0,
         /// The line number of the most recent `error.MalformedLine`,
         /// `error.LineTooLong`, `error.ControlByte`, or line skipped under
         /// `.skip`; 0 if there has been none.
@@ -201,6 +238,11 @@ pub fn Reader(comptime T: type) type {
         /// Internal. Whether the stream has been looked at for a byte-order
         /// mark, which happens once and before anything else is read.
         bom_checked: bool = false,
+        /// Internal. Bytes taken from `input` so far, terminators and a
+        /// byte-order mark included. `Line.offset` is a snapshot of this.
+        consumed: u64 = 0,
+        /// Internal. What `consumed` was when the current record began.
+        record_offset: u64 = 0,
 
         const Self = @This();
 
@@ -208,6 +250,8 @@ pub fn Reader(comptime T: type) type {
         pub const Options = struct {
             /// See `ParseOptions.ignore_unknown_fields`.
             ignore_unknown_fields: bool = true,
+            /// See `ParseOptions.duplicate_fields`.
+            duplicate_fields: DuplicateFields = .@"error",
             /// The longest record accepted, in bytes, not counting the
             /// terminator; in `.pretty` mode this bounds the joined record
             /// rather than one physical line. A longer one is
@@ -320,15 +364,21 @@ pub fn Reader(comptime T: type) type {
                 var record = (try self.readPhysical()) orelse return null;
                 const number = self.number;
                 if (self.options.skip_blank and isBlank(record)) continue :record;
-                if (try self.checkControl(record, 0, number)) continue :record;
+                const offset = self.record_offset;
+                self.offset = offset;
+                if (try self.checkControl(record, 0, number)) {
+                    self.skipped += 1;
+                    continue :record;
+                }
 
                 while (true) {
                     _ = self.arena.reset(.retain_capacity);
                     if (parseLine(T, self.arena.allocator(), record, .{
                         .ignore_unknown_fields = self.options.ignore_unknown_fields,
+                        .duplicate_fields = self.options.duplicate_fields,
                         .copy_strings = false,
                     })) |value| {
-                        return .{ .value = value, .line = record, .number = number };
+                        return .{ .value = value, .line = record, .number = number, .offset = offset };
                     } else |err| switch (err) {
                         error.OutOfMemory => return error.OutOfMemory,
                         error.UnexpectedEndOfInput => if (self.options.format == .pretty) {
@@ -341,20 +391,29 @@ pub fn Reader(comptime T: type) type {
                             self.fault(number, error.UnexpectedEndOfInput);
                             switch (self.options.on_malformed) {
                                 .fail => return error.MalformedLine,
-                                .skip => continue :record,
+                                .skip => {
+                                    self.skipped += 1;
+                                    continue :record;
+                                },
                             }
                         } else {
                             self.fault(number, error.UnexpectedEndOfInput);
                             switch (self.options.on_malformed) {
                                 .fail => return error.MalformedLine,
-                                .skip => continue :record,
+                                .skip => {
+                                    self.skipped += 1;
+                                    continue :record;
+                                },
                             }
                         },
                         else => |parse_err| {
                             self.fault(number, parse_err);
                             switch (self.options.on_malformed) {
                                 .fail => return error.MalformedLine,
-                                .skip => continue :record,
+                                .skip => {
+                                    self.skipped += 1;
+                                    continue :record;
+                                },
                             }
                         },
                     }
@@ -381,6 +440,7 @@ pub fn Reader(comptime T: type) type {
         pub fn keep(self: *Self, allocator: Allocator, line: Line(T)) ParseLineError!T {
             return parseLine(T, allocator, line.line, .{
                 .ignore_unknown_fields = self.options.ignore_unknown_fields,
+                .duplicate_fields = self.options.duplicate_fields,
                 .copy_strings = true,
             });
         }
@@ -419,7 +479,8 @@ pub fn Reader(comptime T: type) type {
                 self.last_error_line = number;
                 self.last_error = null;
                 self.last_error_offset = null;
-                try self.discardLine();
+                self.offset = self.record_offset;
+                self.consumed += try self.discardLine();
                 return error.LineTooLong;
             }
             self.line_buf.writer.writeByte('\n') catch return error.OutOfMemory;
@@ -442,6 +503,9 @@ pub fn Reader(comptime T: type) type {
             }
 
             const before = self.line_buf.writer.end;
+            // The first physical line of a record is where the record begins,
+            // and where it begins is what `Line.offset` reports.
+            if (before == self.record_start) self.record_offset = self.consumed;
             const max = self.options.max_line_bytes;
             // One past the bound, so that a record of exactly `max` bytes is
             // accepted and the first byte over it is what trips the limit.
@@ -461,11 +525,14 @@ pub fn Reader(comptime T: type) type {
                     self.last_error_line = self.number;
                     self.last_error = null;
                     self.last_error_offset = null;
-                    try self.discardLine();
+                    self.offset = self.record_offset;
+                    self.consumed += self.line_buf.writer.end - before;
+                    self.consumed += try self.discardLine();
                     return error.LineTooLong;
                 },
             };
             assert(n <= room);
+            self.consumed += n;
 
             // `streamDelimiterLimit` stops before the delimiter, so what is
             // next is either it or the end of the stream — unless the stream
@@ -477,7 +544,10 @@ pub fn Reader(comptime T: type) type {
                 error.EndOfStream => false,
                 error.ReadFailed => return error.ReadFailed,
             };
-            if (terminated) self.input.toss(1);
+            if (terminated) {
+                self.input.toss(1);
+                self.consumed += 1;
+            }
             if (!terminated) {
                 // Nothing at all is the end of the stream; a final line with
                 // no newline is a line unless the caller said otherwise.
@@ -510,15 +580,21 @@ pub fn Reader(comptime T: type) type {
                 error.EndOfStream => return,
                 error.ReadFailed => return error.ReadFailed,
             };
-            if (std.mem.eql(u8, head, bom)) self.input.toss(bom.len);
+            if (std.mem.eql(u8, head, bom)) {
+                self.input.toss(bom.len);
+                self.consumed += bom.len;
+            }
         }
 
-        /// Discards the remainder of an over-long line, terminator included.
-        fn discardLine(self: *Self) error{ReadFailed}!void {
-            _ = self.input.discardDelimiterInclusive('\n') catch |err| switch (err) {
+        /// Discards the remainder of an over-long line, terminator included,
+        /// and says how many bytes that was. An over-long line with no
+        /// terminator ends the stream, so what it discarded is not counted:
+        /// there is no offset after it to be wrong.
+        fn discardLine(self: *Self) error{ReadFailed}!u64 {
+            return self.input.discardDelimiterInclusive('\n') catch |err| switch (err) {
                 // The over-long line was the last one, with no terminator.
-                error.EndOfStream => return,
-                error.ReadFailed => return error.ReadFailed,
+                error.EndOfStream => 0,
+                error.ReadFailed => error.ReadFailed,
             };
         }
     };

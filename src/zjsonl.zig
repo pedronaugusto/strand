@@ -16,14 +16,14 @@
 //!   the line it came from.
 //! * `kindOf` and `tagOf` answer "what kind of line is this" from the first
 //!   key alone, without parsing the value.
-//! * `Writer` emits one minified value per line and counts them.
+//! * `Writer` emits one value per line — minified, or indented for a human —
+//!   and counts them.
 //!
 //! What this package does NOT do: it does not parse JSON (`std.json` does),
-//! does not buffer or own the underlying stream, does not rotate, lock,
-//! compress or seek files, does not index a log or read it backwards, does
-//! not validate a line it is not asked to parse, and has no opinion about
-//! what a line means. There is no global state and no dependency beyond
-//! `std`.
+//! does not buffer or own a stream, does not open, close, rotate, lock or
+//! compress a file, does not index a log or read it backwards, does not
+//! validate a line it is not asked to parse, and has no opinion about what a
+//! line means. There is no global state and no dependency beyond `std`.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -106,19 +106,40 @@ test parseLine {
 /// where it was.
 ///
 /// Ownership is documented per field, and both borrowed fields are tied to
-/// the `Reader` that produced them; see `Reader.next`.
+/// the reader that produced them; see `Reader.next`.
 pub fn Line(comptime T: type) type {
     return struct {
         /// The parsed value. String fields either point into `line` or into
         /// the reader's per-line arena; either way they die when `line` does.
         value: T,
-        /// The line's bytes, without the `\n` or `\r\n` that ended it. Owned
-        /// by the reader, valid until the next call to `next` or `deinit`.
+        /// The line's bytes, without the `\n` or `\r\n` that ended it, and
+        /// without a leading byte-order mark. Owned by the reader, valid
+        /// until the next call to `next` or `deinit`. In `.pretty` mode this
+        /// is the whole record, newlines and all.
         line: []const u8,
-        /// 1-based physical line number, counting blank and skipped lines.
+        /// 1-based line number. `Reader` counts forwards from the start of
+        /// the stream, blank and skipped lines included, so the number is the
+        /// one a text editor shows; `Tail` counts backwards from the end of
+        /// the file, because a backwards read never learns how many lines
+        /// came before. In `.pretty` mode it is the number of the record's
+        /// first line.
         number: u64,
     };
 }
+
+/// How a value is laid out on the wire — the one thing a reader and a writer
+/// have to agree about beyond the schema.
+pub const Format = enum {
+    /// One value per line, no whitespace between tokens. The usual thing: a
+    /// line is a record, and a record is a line.
+    minified,
+    /// A value indented over several lines, for a human to read. The framing
+    /// still holds — `std.json` escapes every line terminator that could
+    /// appear inside a string, so a record ends at the first `\n` that is not
+    /// part of one — but putting the record back together means joining lines
+    /// until they parse, which only a reader in `.pretty` mode does.
+    pretty,
+};
 
 /// A stream of `T`, one per line, over a `*std.Io.Reader`.
 ///
@@ -127,6 +148,10 @@ pub fn Line(comptime T: type) type {
 /// recycled at the start of every `next`, which is what keeps memory bounded
 /// over a stream of any length, and which is why a value must be copied out
 /// (`keep`) to outlive the line it came from.
+///
+/// Threads: a `Reader` has no global state and no lock. Two readers on two
+/// streams are independent and may run on two threads at once — that is what
+/// `Follower`'s tests do — but one `Reader` is not shared between threads.
 pub fn Reader(comptime T: type) type {
     return struct {
         /// The byte source. Not owned: this reader never closes or flushes it,
@@ -139,17 +164,29 @@ pub fn Reader(comptime T: type) type {
         /// over-long lines included.
         number: u64 = 0,
         /// The line number of the most recent `error.MalformedLine`,
-        /// `error.LineTooLong`, or line skipped under `.skip`; 0 if there has
-        /// been none.
+        /// `error.LineTooLong`, `error.ControlByte`, or line skipped under
+        /// `.skip`; 0 if there has been none.
         last_error_line: u64 = 0,
         /// What `std.json` said about the line at `last_error_line`. `null`
-        /// for `error.LineTooLong`, which never reached `std.json`.
+        /// for `error.LineTooLong` and `error.ControlByte`, neither of which
+        /// reached `std.json`.
         last_error: ?ParseLineError = null,
+        /// The 0-based offset within the line of the byte that tripped
+        /// `error.ControlByte`. `null` for every other failure: `std.json`
+        /// reports no offset, and this reader does not invent one.
+        last_error_offset: ?usize = null,
 
-        /// Internal. The current line's bytes; `Line.line` is a view of it.
+        /// Internal. The current record's bytes; `Line.line` is a view of it.
         line_buf: std.Io.Writer.Allocating,
         /// Internal. What parsing the current line allocated, reset per line.
         arena: std.heap.ArenaAllocator,
+        /// Internal. Where in `line_buf` the current record starts. Always 0
+        /// today; the field is what `joinPhysical` measures the record
+        /// against, rather than the buffer.
+        record_start: usize = 0,
+        /// Internal. Whether the stream has been looked at for a byte-order
+        /// mark, which happens once and before anything else is read.
+        bom_checked: bool = false,
 
         const Self = @This();
 
@@ -157,18 +194,50 @@ pub fn Reader(comptime T: type) type {
         pub const Options = struct {
             /// See `ParseOptions.ignore_unknown_fields`.
             ignore_unknown_fields: bool = true,
-            /// The longest line accepted, in bytes, not counting the
-            /// terminator. A longer line is `error.LineTooLong`; the rest of
-            /// it is discarded, so `next` can be called again to continue
-            /// with the line after it. This bound is the reader's memory
-            /// bound, and it is independent of the size of `input`'s buffer.
+            /// The longest record accepted, in bytes, not counting the
+            /// terminator; in `.pretty` mode this bounds the joined record
+            /// rather than one physical line. A longer one is
+            /// `error.LineTooLong`; the rest of it is discarded, so `next`
+            /// can be called again to continue with the line after it. This
+            /// bound is the reader's memory bound, and it is independent of
+            /// the size of `input`'s buffer.
             max_line_bytes: usize = 1 << 20,
             /// When true, a line that is empty or all spaces and tabs is
             /// consumed and not returned. Its number is still counted.
             skip_blank: bool = true,
+            /// See `Format`. A `.pretty` reader also reads minified lines,
+            /// since a minified record simply parses on its first line; the
+            /// cost of the tolerance is that a truncated line joins with the
+            /// one after it instead of failing on the spot.
+            format: Format = .minified,
+            /// When true, a C0 control byte other than tab — a NUL above all,
+            /// which is what a torn write or a half-written block leaves
+            /// behind — is `error.ControlByte` naming the line and the offset,
+            /// rather than whatever `std.json` would have made of it.
+            ///
+            /// JSON forbids these bytes raw in a string and has no use for
+            /// them between tokens, so this refuses nothing that was valid;
+            /// it costs one scan of the line and buys an error that says what
+            /// actually happened.
+            reject_control_bytes: bool = true,
+            /// When true, a final line the stream has not terminated with a
+            /// `\n` is not a line: `next` returns `null`, `number` does not
+            /// advance, and the bytes are dropped. This is what a reader of a
+            /// file still being appended to wants, because the last line of
+            /// such a file is usually half-written; see `Follower`, which
+            /// rewinds and reads it again once the writer has finished it.
+            ///
+            /// When false — the default, and what a finished file wants — a
+            /// final line with no terminator is a line like any other.
+            require_terminator: bool = false,
+            /// When true, a UTF-8 byte-order mark at the very start of the
+            /// stream is not part of the first line. Editors and Windows
+            /// tooling put one there; `std.json` has no idea what it is.
+            skip_bom: bool = true,
             /// What a line that is not a `T` does.
             on_malformed: enum {
-                /// `next` returns `error.MalformedLine`.
+                /// `next` returns `error.MalformedLine` or
+                /// `error.ControlByte`.
                 fail,
                 /// `next` moves on to the following line.
                 skip,
@@ -179,12 +248,16 @@ pub fn Reader(comptime T: type) type {
         ///
         /// The parse errors of `std.json` collapse into `MalformedLine`,
         /// which says "this line, the one at `last_error_line`, is not a
-        /// `T`"; `last_error` holds which parse error it was. The other three
-        /// are not about the content of a line: `OutOfMemory` is the
-        /// allocator's, `ReadFailed` is the stream's (ask it for diagnostics),
-        /// and `LineTooLong` is this reader's own bound.
+        /// `T`"; `last_error` holds which parse error it was. `ControlByte`
+        /// is the same claim about a line `std.json` was not shown, made
+        /// before parsing because a control byte in a line means the line is
+        /// damaged rather than merely wrong. The other three are not about
+        /// the content of a line: `OutOfMemory` is the allocator's,
+        /// `ReadFailed` is the stream's (ask it for diagnostics), and
+        /// `LineTooLong` is this reader's own bound.
         pub const NextError = error{
             MalformedLine,
+            ControlByte,
             LineTooLong,
             ReadFailed,
             OutOfMemory,
@@ -219,32 +292,59 @@ pub fn Reader(comptime T: type) type {
         /// previous `Line` pointed at is gone by the time the next one is
         /// returned. To keep a value past that point, call `keep`.
         ///
-        /// `error.MalformedLine` and `error.LineTooLong` do not desynchronize
-        /// the stream: the offending line has been consumed in full, and
-        /// calling `next` again continues with the one after it.
-        /// `error.ReadFailed` and `error.OutOfMemory` can arrive in the middle
-        /// of a line, and leave the stream wherever they found it.
+        /// `error.MalformedLine`, `error.ControlByte` and
+        /// `error.LineTooLong` do not desynchronize the stream: the offending
+        /// line has been consumed in full, and calling `next` again continues
+        /// with the one after it. `error.ReadFailed` and `error.OutOfMemory`
+        /// can arrive in the middle of a line, and leave the stream wherever
+        /// they found it.
         pub fn next(self: *Self) NextError!?Line(T) {
-            while (true) {
-                const raw = (try self.readLine()) orelse return null;
-                if (self.options.skip_blank and isBlank(raw)) continue;
+            record: while (true) {
+                self.line_buf.writer.end = 0;
+                self.record_start = 0;
 
-                _ = self.arena.reset(.retain_capacity);
-                const value = parseLine(T, self.arena.allocator(), raw, .{
-                    .ignore_unknown_fields = self.options.ignore_unknown_fields,
-                    .copy_strings = false,
-                }) catch |err| switch (err) {
-                    error.OutOfMemory => return error.OutOfMemory,
-                    else => |parse_err| {
-                        self.last_error_line = self.number;
-                        self.last_error = parse_err;
-                        switch (self.options.on_malformed) {
-                            .fail => return error.MalformedLine,
-                            .skip => continue,
-                        }
-                    },
-                };
-                return .{ .value = value, .line = raw, .number = self.number };
+                var record = (try self.readPhysical()) orelse return null;
+                const number = self.number;
+                if (self.options.skip_blank and isBlank(record)) continue :record;
+                if (try self.checkControl(record, 0, number)) continue :record;
+
+                while (true) {
+                    _ = self.arena.reset(.retain_capacity);
+                    if (parseLine(T, self.arena.allocator(), record, .{
+                        .ignore_unknown_fields = self.options.ignore_unknown_fields,
+                        .copy_strings = false,
+                    })) |value| {
+                        return .{ .value = value, .line = record, .number = number };
+                    } else |err| switch (err) {
+                        error.OutOfMemory => return error.OutOfMemory,
+                        error.UnexpectedEndOfInput => if (self.options.format == .pretty) {
+                            // A prefix of a value: the rest of it is on the
+                            // lines that follow, unless there are none.
+                            if (try self.joinPhysical(number)) |joined| {
+                                record = joined;
+                                continue;
+                            }
+                            self.fault(number, error.UnexpectedEndOfInput);
+                            switch (self.options.on_malformed) {
+                                .fail => return error.MalformedLine,
+                                .skip => continue :record,
+                            }
+                        } else {
+                            self.fault(number, error.UnexpectedEndOfInput);
+                            switch (self.options.on_malformed) {
+                                .fail => return error.MalformedLine,
+                                .skip => continue :record,
+                            }
+                        },
+                        else => |parse_err| {
+                            self.fault(number, parse_err);
+                            switch (self.options.on_malformed) {
+                                .fail => return error.MalformedLine,
+                                .skip => continue :record,
+                            }
+                        },
+                    }
+                }
             }
         }
 
@@ -271,19 +371,73 @@ pub fn Reader(comptime T: type) type {
             });
         }
 
-        /// Reads one physical line into the line buffer and returns it without
-        /// its terminator, or `null` at end of stream. Counts the line.
-        fn readLine(self: *Self) NextError!?[]const u8 {
-            self.line_buf.clearRetainingCapacity();
+        /// Records a parse failure against `number`, whatever is done about it.
+        fn fault(self: *Self, number: u64, err: ParseLineError) void {
+            self.last_error_line = number;
+            self.last_error = err;
+            self.last_error_offset = null;
+        }
+
+        /// Looks for a control byte in `record[from..]`. Returns true when the
+        /// caller should skip this record; returns `error.ControlByte` when it
+        /// should fail.
+        fn checkControl(self: *Self, record: []const u8, from: usize, number: u64) NextError!bool {
+            if (!self.options.reject_control_bytes) return false;
+            const offset = indexOfControl(record[from..]) orelse return false;
+            self.last_error_line = number;
+            self.last_error = null;
+            self.last_error_offset = from + offset;
+            return switch (self.options.on_malformed) {
+                .fail => error.ControlByte,
+                .skip => true,
+            };
+        }
+
+        /// Appends the next physical line to the current record, separated by
+        /// the `\n` that ended the previous one. `null` when the stream ended
+        /// first, in which case the record is left exactly as it was.
+        fn joinPhysical(self: *Self, number: u64) NextError!?[]const u8 {
+            const before = self.line_buf.writer.end;
+            // The separator counts against the bound like any other byte.
+            if (self.options.max_line_bytes -| (before - self.record_start) == 0) {
+                // It is the record that is too long, and the record began at
+                // `number`, whatever line the reader has reached since.
+                self.last_error_line = number;
+                self.last_error = null;
+                self.last_error_offset = null;
+                try self.discardLine();
+                return error.LineTooLong;
+            }
+            self.line_buf.writer.writeByte('\n') catch return error.OutOfMemory;
+            const joined = (try self.readPhysical()) orelse {
+                self.line_buf.writer.end = before;
+                return null;
+            };
+            if (try self.checkControl(joined, before + 1 - self.record_start, number)) return null;
+            return joined;
+        }
+
+        /// Reads one physical line, appending its bytes to the line buffer
+        /// without its terminator, and returns the record so far. `null` at
+        /// end of stream, and at an unterminated final line under
+        /// `require_terminator`. Counts the line.
+        fn readPhysical(self: *Self) NextError!?[]const u8 {
+            if (!self.bom_checked) {
+                self.bom_checked = true;
+                if (self.options.skip_bom) try self.skipBom();
+            }
+
+            const before = self.line_buf.writer.end;
             const max = self.options.max_line_bytes;
-            // One past the bound, so that a line of exactly `max` bytes is
+            // One past the bound, so that a record of exactly `max` bytes is
             // accepted and the first byte over it is what trips the limit.
             // Saturating, because `Limit` reads a saturated `usize` as
             // unlimited, which is what a bound of `maxInt(usize)` means.
+            const room = max -| (before - self.record_start);
             const n = self.input.streamDelimiterLimit(
                 &self.line_buf.writer,
                 '\n',
-                .limited(max +| 1),
+                .limited(room +| 1),
             ) catch |err| switch (err) {
                 error.ReadFailed => return error.ReadFailed,
                 // The only writer is `line_buf`, which fails only to allocate.
@@ -292,28 +446,57 @@ pub fn Reader(comptime T: type) type {
                     self.number += 1;
                     self.last_error_line = self.number;
                     self.last_error = null;
-                    self.discardLine() catch |e| switch (e) {
-                        error.ReadFailed => return error.ReadFailed,
-                    };
+                    self.last_error_offset = null;
+                    try self.discardLine();
                     return error.LineTooLong;
                 },
             };
-            assert(n <= max);
+            assert(n <= room);
 
             // `streamDelimiterLimit` stops before the delimiter, so what is
-            // next is either it or the end of the stream.
-            const terminated = if (self.input.takeByte()) |_| true else |err| switch (err) {
+            // next is either it or the end of the stream — unless the stream
+            // is a file that grew in between, in which case what is next is
+            // the rest of this very line. The byte is looked at rather than
+            // taken, so that the third case consumes nothing and reads as
+            // what it is: a line that is not finished yet.
+            const terminated = if (self.input.peekByte()) |byte| byte == '\n' else |err| switch (err) {
                 error.EndOfStream => false,
                 error.ReadFailed => return error.ReadFailed,
             };
-            // A final line with no newline is still a line; nothing at all is
-            // the end of the stream.
-            if (n == 0 and !terminated) return null;
+            if (terminated) self.input.toss(1);
+            if (!terminated) {
+                // Nothing at all is the end of the stream; a final line with
+                // no newline is a line unless the caller said otherwise.
+                if (n == 0 or self.options.require_terminator) {
+                    self.line_buf.writer.end = before;
+                    return null;
+                }
+            }
 
             self.number += 1;
-            const raw = self.line_buf.written();
             // Tolerate CRLF: the `\r` belongs to the terminator, not the JSON.
-            return if (std.mem.endsWith(u8, raw, "\r")) raw[0 .. raw.len - 1] else raw;
+            if (self.line_buf.writer.end > before and
+                self.line_buf.writer.buffer[self.line_buf.writer.end - 1] == '\r')
+            {
+                self.line_buf.writer.end -= 1;
+            }
+            return self.line_buf.written()[self.record_start..];
+        }
+
+        /// Consumes a UTF-8 byte-order mark if the stream opens with one.
+        /// Called once, before anything else is read.
+        ///
+        /// A stream whose own buffer cannot hold three bytes cannot be asked
+        /// to peek at three, and cannot be carrying a mark worth finding, so
+        /// it is left alone.
+        fn skipBom(self: *Self) NextError!void {
+            const bom = "\xEF\xBB\xBF";
+            if (self.input.buffer.len < bom.len) return;
+            const head = self.input.peek(bom.len) catch |err| switch (err) {
+                error.EndOfStream => return,
+                error.ReadFailed => return error.ReadFailed,
+            };
+            if (std.mem.eql(u8, head, bom)) self.input.toss(bom.len);
         }
 
         /// Discards the remainder of an over-long line, terminator included.
@@ -332,6 +515,31 @@ fn isBlank(line: []const u8) bool {
     return std.mem.indexOfNone(u8, line, " \t") == null;
 }
 
+/// The offset of the first byte in `bytes` that must not appear raw in a JSON
+/// Lines line, or `null`.
+///
+/// Those are the C0 controls other than tab: JSON forbids them inside a
+/// string without an escape and has no use for them between tokens, so one
+/// arriving raw means the bytes are damaged rather than merely wrong. `\r`
+/// and `\n` reach this test only when they are not the terminator, which is
+/// exactly when they are damage too. DEL and the C1 range are left alone:
+/// they are ordinary characters inside a JSON string.
+pub fn indexOfControl(bytes: []const u8) ?usize {
+    for (bytes, 0..) |byte, i| {
+        if (byte < 0x20 and byte != '\t') return i;
+    }
+    return null;
+}
+
+test indexOfControl {
+    try std.testing.expectEqual(@as(?usize, null), indexOfControl("{\"a\":\"b\"}"));
+    try std.testing.expectEqual(@as(?usize, null), indexOfControl("{\"a\":\t1}"));
+    try std.testing.expectEqual(@as(?usize, 5), indexOfControl("{\"a\":\x00}"));
+    try std.testing.expectEqual(@as(?usize, 0), indexOfControl("\r"));
+    // DEL is an ordinary character as far as JSON is concerned.
+    try std.testing.expectEqual(@as(?usize, null), indexOfControl("\x7f"));
+}
+
 /// Writes values as JSON Lines to a `*std.Io.Writer`, and counts them.
 pub fn Writer(comptime T: type) type {
     return struct {
@@ -339,7 +547,7 @@ pub fn Writer(comptime T: type) type {
         output: *std.Io.Writer,
         /// Read-only after `init`.
         options: Options,
-        /// Lines written so far.
+        /// Records written so far.
         count: u64 = 0,
 
         const Self = @This();
@@ -354,6 +562,9 @@ pub fn Writer(comptime T: type) type {
             /// When true, non-ASCII characters are written as `\uXXXX`
             /// escapes, so every line is pure ASCII.
             escape_unicode: bool = false,
+            /// See `Format`. `.pretty` writes a record over several lines,
+            /// which only a reader in `.pretty` mode reads back.
+            format: Format = .minified,
         };
 
         /// What `write` can report: the destination refused the bytes. Ask it
@@ -365,20 +576,39 @@ pub fn Writer(comptime T: type) type {
             return .{ .output = output, .options = options };
         }
 
-        /// Writes `value` as one line: minified JSON, then `\n`.
+        /// Writes `value` as one record: its JSON, then `\n`.
         ///
-        /// The output is always exactly one line, whatever `value` holds:
-        /// JSON escapes the line terminators that could appear inside a
-        /// string. Nothing is flushed; that is the caller's to do, on the
-        /// writer it owns.
+        /// In `.minified` the record is exactly one line, whatever `value`
+        /// holds, because `std.json` escapes the line terminators that could
+        /// appear inside a string — there is no value this writer has to
+        /// refuse, and `write escapes every terminator` in the test suite is
+        /// the proof. In `.pretty` the record spans lines by design.
+        ///
+        /// Nothing is flushed; that is the caller's to do, on the writer it
+        /// owns.
         pub fn write(self: *Self, value: T) Error!void {
             try std.json.Stringify.value(value, .{
-                .whitespace = .minified,
+                .whitespace = switch (self.options.format) {
+                    .minified => .minified,
+                    .pretty => .indent_2,
+                },
                 .emit_null_optional_fields = self.options.emit_null_optional_fields,
                 .escape_unicode = self.options.escape_unicode,
             }, self.output);
             try self.output.writeByte('\n');
             self.count += 1;
+        }
+
+        /// Writes every value in `values`, in order.
+        ///
+        /// The same bytes as a `write` per value, and the same absence of a
+        /// flush: this exists so that a caller holding a batch hands it over
+        /// once instead of writing a loop, and so that a buffered `output`
+        /// sees the whole batch before it decides to drain. On failure the
+        /// values before the one that failed have been written and `count`
+        /// says how many.
+        pub fn writeAll(self: *Self, values: []const T) Error!void {
+            for (values) |value| try self.write(value);
         }
     };
 }
@@ -460,7 +690,9 @@ test kindOf {
 /// it is enough to route a line without parsing its payload.
 ///
 /// `null` means the line is not shaped that way, its key is escaped (see
-/// `kindOf`), or the key does not name an arm of `U`.
+/// `kindOf`), or the key does not name an arm of `U`. The last of those is
+/// how a line from a newer writer arrives; see "Arms added over time" in
+/// README.md for the `unknown` arm that gives it somewhere to land.
 pub fn tagOf(comptime U: type, line: []const u8) ?std.meta.Tag(U) {
     comptime {
         const info = @typeInfo(U);
@@ -498,9 +730,12 @@ pub const RawLine = struct {
 /// For a buffer, where `Reader` is for a stream: nothing is allocated and
 /// every line is a view into `bytes`. A final line with no terminator is
 /// still a line; a buffer ending in a terminator does not yield an empty line
-/// after it. Blank lines are yielded — `lines` splits, it does not filter.
+/// after it. A UTF-8 byte-order mark at the start of the buffer is not part
+/// of the first line. Blank lines are yielded — `lines` splits, it does not
+/// filter.
 pub fn lines(bytes: []const u8) LineIterator {
-    return .{ .rest = bytes };
+    const bom = "\xEF\xBB\xBF";
+    return .{ .rest = if (std.mem.startsWith(u8, bytes, bom)) bytes[bom.len..] else bytes };
 }
 
 /// The iterator `lines` returns.

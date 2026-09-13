@@ -91,15 +91,26 @@ fn checkReaderFail(input: []const u8, max_line_bytes: usize) !void {
         }
         if (isBlank(physical.line)) continue;
 
+        const control = zjsonl.indexOfControl(physical.line);
         if (reader.next()) |maybe_line| {
             const line = maybe_line orelse return error.TestReaderEndedEarly;
             try testing.expectEqual(physical.number, line.number);
             try testing.expectEqualStrings(physical.line, line.line);
             try testing.expectEqualStrings(line.value.kind, line.value.kind);
+            // A line that came back is a line with nothing raw in it.
+            try testing.expectEqual(@as(?usize, null), control);
         } else |err| switch (err) {
             error.MalformedLine => {
                 try testing.expectEqual(physical.number, reader.last_error_line);
                 try testing.expect(reader.last_error != null);
+                // The control byte scan runs first, so a line that parsed
+                // badly is a line that had no control byte to blame.
+                try testing.expectEqual(@as(?usize, null), control);
+            },
+            error.ControlByte => {
+                try testing.expectEqual(physical.number, reader.last_error_line);
+                try testing.expectEqual(control, reader.last_error_offset);
+                try testing.expectEqual(@as(?zjsonl.ParseLineError, null), reader.last_error);
             },
             else => return err,
         }
@@ -228,6 +239,66 @@ fn isShallow(line: []const u8) bool {
     return true;
 }
 
+/// A `.pretty` reader over any bytes at all reads the stream to its end,
+/// numbers what it returns in order, and never claims a line the oracle does
+/// not have.
+///
+/// It cannot be held to the same lockstep as `checkReaderFail`: joining is
+/// exactly the freedom to turn several physical lines into one record, so the
+/// property is that it stays inside the input rather than that it agrees line
+/// for line.
+fn checkPretty(input: []const u8) !void {
+    var source: std.Io.Reader = .fixed(input);
+    var reader: zjsonl.Reader(Event) = .init(testing.allocator, &source, .{
+        .format = .pretty,
+        .on_malformed = .skip,
+    });
+    defer reader.deinit();
+
+    var all: PhysicalLines = .{ .rest = input };
+    while (all.next()) |_| {}
+
+    var previous: u64 = 0;
+    while (true) {
+        const line = reader.next() catch |err| switch (err) {
+            // The one failure `.skip` does not swallow.
+            error.LineTooLong => continue,
+            else => return err,
+        } orelse break;
+        try testing.expect(line.number > previous);
+        previous = line.number;
+        try testing.expect(line.number <= all.number);
+    }
+    try testing.expect(reader.number <= all.number);
+}
+
+/// A round trip through `.pretty`: what the writer indents over several lines,
+/// the reader puts back together as one record, whatever the values held.
+fn checkPrettyRoundTrip(events: []const Event) !void {
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    var writer: zjsonl.Writer(Event) = .init(&out.writer, .{ .format = .pretty });
+    try writer.writeAll(events);
+
+    var source: std.Io.Reader = .fixed(out.written());
+    var reader: zjsonl.Reader(Event) = .init(testing.allocator, &source, .{ .format = .pretty });
+    defer reader.deinit();
+
+    for (events) |want| {
+        const line = (try reader.next()) orelse return error.TestReaderEndedEarly;
+        try testing.expectEqualStrings(want.kind, line.value.kind);
+        try testing.expectEqual(want.at, line.value.at);
+        try testing.expectEqual(want.level, line.value.level);
+        try testing.expectEqual(want.tags.len, line.value.tags.len);
+        if (want.note) |note| {
+            try testing.expectEqualStrings(note, line.value.note.?);
+        } else {
+            try testing.expectEqual(@as(?[]const u8, null), line.value.note);
+        }
+    }
+    try testing.expectEqual(@as(?zjsonl.Line(Event), null), try reader.next());
+}
+
 //=========================================================================
 // The generator: lines that are nearly right, plus bytes that are not.
 //=========================================================================
@@ -270,6 +341,34 @@ fn append(buf: []u8, end: *usize, bytes: []const u8) void {
     const n = @min(bytes.len, buf.len - end.*);
     @memcpy(buf[end.*..][0..n], bytes[0..n]);
     end.* += n;
+}
+
+/// Fills `events` with generated values, drawing their strings out of `text`,
+/// and returns the ones that fit. The strings are where a round trip can go
+/// wrong, so they are where the awkward bytes go.
+fn generateEvents(smith: *std.testing.Smith, events: []Event, text: []u8) []Event {
+    @disableInstrumentation();
+    const specials: []const []const u8 = &.{
+        "plain",       "with \"quotes\"", "line\nbreak",
+        "tab\there",   "\u{2028}sep",     "back\\slash",
+        "\x01control", "",                "\u{1f600}",
+    };
+    var used: usize = 0;
+    var count: usize = 0;
+    while (count < events.len and !smith.eos()) : (count += 1) {
+        const pick = specials[smith.valueRangeAtMost(u8, 0, specials.len - 1)];
+        if (used + pick.len > text.len) break;
+        @memcpy(text[used..][0..pick.len], pick);
+        const kind = text[used..][0..pick.len];
+        used += pick.len;
+        events[count] = .{
+            .kind = kind,
+            .at = smith.valueRangeAtMost(u64, 0, std.math.maxInt(u64)),
+            .level = if (smith.valueRangeAtMost(u8, 0, 1) == 0) .info else .warn,
+            .note = if (smith.valueRangeAtMost(u8, 0, 1) == 0) null else kind,
+        };
+    }
+    return events[0..count];
 }
 
 /// Seeds. Their bytes drive the generator rather than being the input, so
@@ -331,6 +430,27 @@ fn fuzzLines(_: void, smith: *std.testing.Smith) anyerror!void {
     try checkLines(generate(smith, &buf));
 }
 
+test "fuzz: a pretty reader over generated lines" {
+    try std.testing.fuzz({}, fuzzPretty, .{ .corpus = corpus });
+}
+
+fn fuzzPretty(_: void, smith: *std.testing.Smith) anyerror!void {
+    @disableInstrumentation();
+    var buf: [2048]u8 = undefined;
+    try checkPretty(generate(smith, &buf));
+}
+
+test "fuzz: a pretty round trip over generated values" {
+    try std.testing.fuzz({}, fuzzPrettyRoundTrip, .{ .corpus = corpus });
+}
+
+fn fuzzPrettyRoundTrip(_: void, smith: *std.testing.Smith) anyerror!void {
+    @disableInstrumentation();
+    var text: [512]u8 = undefined;
+    var events: [16]Event = undefined;
+    try checkPrettyRoundTrip(generateEvents(smith, &events, &text));
+}
+
 //=========================================================================
 // The same properties, over inputs chosen by hand. A fuzz test that is only
 // ever run over its corpus proves little, and a corpus drives the generator
@@ -377,10 +497,19 @@ test "the properties hold on a table of awkward inputs" {
         try checkReaderFail(input, 1);
         try checkReaderSkip(input);
 
+        try checkPretty(input);
+
         var it = zjsonl.lines(input);
         while (it.next()) |line| {
             try checkKindOf(line.line);
             try checkTagOf(line.line);
         }
     }
+
+    try checkPrettyRoundTrip(&.{});
+    try checkPrettyRoundTrip(&.{
+        .{ .kind = "plain", .at = 1 },
+        .{ .kind = "with \"quotes\" and a\nbreak", .at = 2, .level = .warn, .note = "x" },
+        .{ .kind = "", .at = std.math.maxInt(u64), .tags = &.{ "a", "b" } },
+    });
 }

@@ -390,3 +390,321 @@ test "an empty stream is a stream" {
     try testing.expectEqual(@as(?zjsonl.Line(Event), null), try reader.next());
     try testing.expectEqual(@as(u64, 0), reader.number);
 }
+
+test "a byte-order mark belongs to the file, not to its first line" {
+    const input = "\xEF\xBB\xBF{\"kind\":\"first\"}\n{\"kind\":\"second\"}\n";
+
+    var source: std.Io.Reader = .fixed(input);
+    var reader: zjsonl.Reader(Event) = .init(testing.allocator, &source, .{});
+    defer reader.deinit();
+
+    const first = (try reader.next()).?;
+    try testing.expectEqualStrings("first", first.value.kind);
+    try testing.expectEqualStrings("{\"kind\":\"first\"}", first.line);
+    try testing.expectEqual(@as(u64, 1), first.number);
+    try testing.expectEqualStrings("second", (try reader.next()).?.value.kind);
+
+    // With the option off, `std.json` is shown the mark and says so.
+    var marked: std.Io.Reader = .fixed(input);
+    var strict: zjsonl.Reader(Event) = .init(testing.allocator, &marked, .{ .skip_bom = false });
+    defer strict.deinit();
+    try testing.expectError(error.MalformedLine, strict.next());
+
+    // `lines` agrees with the reader about where the first line starts.
+    var it = zjsonl.lines(input);
+    try testing.expectEqualStrings("{\"kind\":\"first\"}", it.next().?.line);
+}
+
+test "a control byte is a damaged line, named by number and offset" {
+    const input = "{\"kind\":\"first\"}\n{\"kind\":\"se\x00cond\"}\n{\"kind\":\"third\"}\n";
+
+    var source: std.Io.Reader = .fixed(input);
+    var reader: zjsonl.Reader(Event) = .init(testing.allocator, &source, .{});
+    defer reader.deinit();
+
+    try testing.expectEqualStrings("first", (try reader.next()).?.value.kind);
+    try testing.expectError(error.ControlByte, reader.next());
+    try testing.expectEqual(@as(u64, 2), reader.last_error_line);
+    try testing.expectEqual(@as(?usize, 11), reader.last_error_offset);
+    // It never reached `std.json`, so there is nothing of `std.json`'s to say.
+    try testing.expectEqual(@as(?zjsonl.ParseLineError, null), reader.last_error);
+    // And the stream is where it was: the next line is the next line.
+    const third = (try reader.next()).?;
+    try testing.expectEqualStrings("third", third.value.kind);
+    try testing.expectEqual(@as(u64, 3), third.number);
+
+    // Skipping treats it the way it treats any other line it cannot use.
+    var skipping: std.Io.Reader = .fixed(input);
+    var skipper: zjsonl.Reader(Event) = .init(testing.allocator, &skipping, .{ .on_malformed = .skip });
+    defer skipper.deinit();
+    try testing.expectEqualStrings("first", (try skipper.next()).?.value.kind);
+    try testing.expectEqualStrings("third", (try skipper.next()).?.value.kind);
+
+    // With the scan off the line is still refused, but by `std.json`, which
+    // has no idea what it was looking at.
+    var raw: std.Io.Reader = .fixed(input);
+    var tolerant: zjsonl.Reader(Event) = .init(testing.allocator, &raw, .{ .reject_control_bytes = false });
+    defer tolerant.deinit();
+    _ = try tolerant.next();
+    try testing.expectError(error.MalformedLine, tolerant.next());
+    try testing.expectEqual(error.SyntaxError, tolerant.last_error.?);
+
+    // A tab is whitespace to JSON, so it is not damage.
+    var tabbed: std.Io.Reader = .fixed("{\"kind\":\t\"fine\"}\n");
+    var tabs: zjsonl.Reader(Event) = .init(testing.allocator, &tabbed, .{});
+    defer tabs.deinit();
+    try testing.expectEqualStrings("fine", (try tabs.next()).?.value.kind);
+}
+
+test "pretty: a record written over several lines is read back as one" {
+    const events = [_]Event{
+        .{ .kind = "open", .at = 1, .tags = &.{ "io", "file" } },
+        .{ .kind = "close", .at = 2, .span = .{ .id = 7, .parent = 7 } },
+    };
+
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    var writer: zjsonl.Writer(Event) = .init(&out.writer, .{ .format = .pretty });
+    try writer.writeAll(&events);
+
+    // It really is more than one line per record.
+    try testing.expect(std.mem.count(u8, out.written(), "\n") > events.len);
+
+    var source: std.Io.Reader = .fixed(out.written());
+    var reader: zjsonl.Reader(Event) = .init(testing.allocator, &source, .{ .format = .pretty });
+    defer reader.deinit();
+
+    const first = (try reader.next()).?;
+    try testing.expectEqualStrings("open", first.value.kind);
+    // The record's number is the number of the line it started on.
+    try testing.expectEqual(@as(u64, 1), first.number);
+    // And its bytes are the whole record, newlines and all.
+    try testing.expect(std.mem.indexOfScalar(u8, first.line, '\n') != null);
+
+    const second = (try reader.next()).?;
+    try testing.expectEqualStrings("close", second.value.kind);
+    try testing.expectEqual(@as(u32, 7), second.value.span.id);
+    try testing.expectEqual(@as(?zjsonl.Line(Event), null), try reader.next());
+
+    // A `.pretty` reader reads a minified stream too: a record that parses on
+    // its first line never asks for a second.
+    var minified: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer minified.deinit();
+    var plain: zjsonl.Writer(Event) = .init(&minified.writer, .{});
+    try plain.writeAll(&events);
+
+    var flat: std.Io.Reader = .fixed(minified.written());
+    var tolerant: zjsonl.Reader(Event) = .init(testing.allocator, &flat, .{ .format = .pretty });
+    defer tolerant.deinit();
+    try testing.expectEqual(@as(u64, 1), (try tolerant.next()).?.number);
+    try testing.expectEqual(@as(u64, 2), (try tolerant.next()).?.number);
+    try testing.expectEqual(@as(?zjsonl.Line(Event), null), try tolerant.next());
+}
+
+test "pretty: a record that never finishes is one malformed record" {
+    const input =
+        \\{
+        \\  "kind": "truncated",
+    ;
+    var source: std.Io.Reader = .fixed(input);
+    var reader: zjsonl.Reader(Event) = .init(testing.allocator, &source, .{ .format = .pretty });
+    defer reader.deinit();
+
+    try testing.expectError(error.MalformedLine, reader.next());
+    // Blamed on the line it began on, not the one it ran out on.
+    try testing.expectEqual(@as(u64, 1), reader.last_error_line);
+    try testing.expectEqual(error.UnexpectedEndOfInput, reader.last_error.?);
+    try testing.expectEqual(@as(?zjsonl.Line(Event), null), try reader.next());
+}
+
+test "pretty: the bound is on the record, not on one of its lines" {
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    var writer: zjsonl.Writer(Event) = .init(&out.writer, .{ .format = .pretty });
+    try writer.write(.{ .kind = "open", .at = 1, .tags = &.{ "a", "b", "c" } });
+    try writer.write(.{ .kind = "after", .at = 2 });
+
+    var source: std.Io.Reader = .fixed(out.written());
+    var reader: zjsonl.Reader(Event) = .init(testing.allocator, &source, .{
+        .format = .pretty,
+        // Every physical line of the record fits; the record does not.
+        .max_line_bytes = 24,
+    });
+    defer reader.deinit();
+    try testing.expectError(error.LineTooLong, reader.next());
+}
+
+test "writeAll writes the batch and counts it" {
+    const events = [_]Event{
+        .{ .kind = "one", .at = 1 },
+        .{ .kind = "two", .at = 2 },
+        .{ .kind = "three", .at = 3 },
+    };
+
+    var batched: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer batched.deinit();
+    var batch: zjsonl.Writer(Event) = .init(&batched.writer, .{});
+    try batch.writeAll(&events);
+
+    var looped: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer looped.deinit();
+    var loop: zjsonl.Writer(Event) = .init(&looped.writer, .{});
+    for (events) |event| try loop.write(event);
+
+    // The same bytes and the same count: it is the loop, not another format.
+    try testing.expectEqualStrings(looped.written(), batched.written());
+    try testing.expectEqual(loop.count, batch.count);
+    try testing.expectEqual(@as(u64, 3), batch.count);
+}
+
+test "write escapes every terminator that could break the framing" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+
+    // Every byte a line could be broken by, in a string field, plus the two
+    // Unicode separators that some readers treat as line ends.
+    const hostile = [_][]const u8{
+        "\n",       "\r",            "\r\n", "\n\r",
+        "a\nb\nc",  "\t",            "\x00", "\x1f",
+        "\u{2028}", "\u{2029}",      "}\n{", "\\n",
+        "\"\n\"",   "line\r\nbreak",
+    };
+
+    for (hostile) |raw| {
+        var out: std.Io.Writer.Allocating = .init(testing.allocator);
+        defer out.deinit();
+        var writer: zjsonl.Writer(Event) = .init(&out.writer, .{});
+        try writer.write(.{ .kind = raw, .at = 1, .note = raw });
+
+        // One record, one line: the only `\n` is the one the writer added.
+        try testing.expectEqual(@as(usize, 1), std.mem.count(u8, out.written(), "\n"));
+        try testing.expect(std.mem.endsWith(u8, out.written(), "\n"));
+        // And no raw control byte survived into the line either.
+        try testing.expectEqual(
+            @as(?usize, null),
+            zjsonl.indexOfControl(out.written()[0 .. out.written().len - 1]),
+        );
+
+        // Which means it reads back as what went in.
+        var source: std.Io.Reader = .fixed(out.written());
+        var reader: zjsonl.Reader(Event) = .init(testing.allocator, &source, .{});
+        defer reader.deinit();
+        const line = (try reader.next()).?;
+        try testing.expectEqualStrings(raw, line.value.kind);
+        try testing.expectEqualStrings(raw, line.value.note.?);
+        try testing.expectEqual(@as(?zjsonl.Line(Event), null), try reader.next());
+    }
+}
+
+test "require_terminator: an unfinished last line is not a line" {
+    const input = "{\"kind\":\"whole\"}\n{\"kind\":\"hal";
+
+    var source: std.Io.Reader = .fixed(input);
+    var reader: zjsonl.Reader(Event) = .init(testing.allocator, &source, .{ .require_terminator = true });
+    defer reader.deinit();
+
+    try testing.expectEqualStrings("whole", (try reader.next()).?.value.kind);
+    try testing.expectEqual(@as(?zjsonl.Line(Event), null), try reader.next());
+    // The half-written line was not counted, so a follower can read it again.
+    try testing.expectEqual(@as(u64, 1), reader.number);
+
+    // Without the option, the same bytes are a line, and a bad one.
+    var again: std.Io.Reader = .fixed(input);
+    var plain: zjsonl.Reader(Event) = .init(testing.allocator, &again, .{});
+    defer plain.deinit();
+    _ = try plain.next();
+    try testing.expectError(error.MalformedLine, plain.next());
+    try testing.expectEqual(@as(u64, 2), plain.number);
+}
+
+/// Counts what an allocator was asked to do, and passes the asking on.
+const Counting = struct {
+    child: std.mem.Allocator,
+    allocations: usize = 0,
+
+    fn allocator(self: *Counting) std.mem.Allocator {
+        return .{ .ptr = self, .vtable = &.{
+            .alloc = alloc,
+            .resize = resize,
+            .remap = remap,
+            .free = free,
+        } };
+    }
+
+    fn alloc(ctx: *anyopaque, len: usize, alignment: std.mem.Alignment, ra: usize) ?[*]u8 {
+        const self: *Counting = @ptrCast(@alignCast(ctx));
+        self.allocations += 1;
+        return self.child.rawAlloc(len, alignment, ra);
+    }
+
+    fn resize(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, ra: usize) bool {
+        const self: *Counting = @ptrCast(@alignCast(ctx));
+        return self.child.rawResize(memory, alignment, new_len, ra);
+    }
+
+    fn remap(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, ra: usize) ?[*]u8 {
+        const self: *Counting = @ptrCast(@alignCast(ctx));
+        self.allocations += 1;
+        return self.child.rawRemap(memory, alignment, new_len, ra);
+    }
+
+    fn free(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, ra: usize) void {
+        const self: *Counting = @ptrCast(@alignCast(ctx));
+        self.child.rawFree(memory, alignment, ra);
+    }
+};
+
+test "a long stream stops allocating once its buffers have grown" {
+    const line_count = 20_000;
+
+    var input: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer input.deinit();
+    var writer: zjsonl.Writer(Event) = .init(&input.writer, .{});
+    for (0..line_count) |i| {
+        try writer.write(.{ .kind = "tick", .at = i, .tags = &.{ "generated", "here" } });
+    }
+
+    var counting: Counting = .{ .child = testing.allocator };
+    var source: std.Io.Reader = .fixed(input.written());
+    var reader: zjsonl.Reader(Event) = .init(counting.allocator(), &source, .{});
+    defer reader.deinit();
+
+    // The first thousand lines are where the line buffer and the arena reach
+    // the size the longest line needs.
+    var seen: usize = 0;
+    while (seen < 1000) : (seen += 1) _ = (try reader.next()).?;
+    const settled = counting.allocations;
+
+    while (try reader.next()) |line| : (seen += 1) {
+        try testing.expectEqual(seen, line.value.at);
+    }
+    try testing.expectEqual(@as(usize, line_count), seen);
+    // Not one allocation for the other nineteen thousand lines: the line
+    // buffer is reused and the arena is reset rather than freed.
+    try testing.expectEqual(settled, counting.allocations);
+}
+
+test "a very large line is read without copying its strings" {
+    const payload_len = 4 << 20;
+
+    var input: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer input.deinit();
+    try input.writer.writeAll("{\"kind\":\"");
+    try input.writer.splatByteAll('x', payload_len);
+    try input.writer.writeAll("\",\"at\":1}\n{\"kind\":\"after\"}\n");
+
+    var source: std.Io.Reader = .fixed(input.written());
+    var reader: zjsonl.Reader(Event) = .init(testing.allocator, &source, .{
+        .max_line_bytes = payload_len + 1024,
+    });
+    defer reader.deinit();
+
+    const big = (try reader.next()).?;
+    try testing.expectEqual(@as(usize, payload_len), big.value.kind.len);
+    // Four megabytes that were never copied: the field is the line's bytes.
+    try testing.expect(within(big.value.kind, big.line));
+    // The arena holds nothing, because nothing needed unescaping.
+    try testing.expect(reader.arena.queryCapacity() < 64 * 1024);
+
+    try testing.expectEqualStrings("after", (try reader.next()).?.value.kind);
+}

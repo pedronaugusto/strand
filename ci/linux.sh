@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# zjsonl — the suite on Linux, for real.
+# strand — the suite on Linux, for real.
 #
 # macOS and Linux differ in the places this package actually touches: how a
 # file is read at an offset, what a growing file looks like through an open
@@ -19,7 +19,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-image=${ZJSONL_LINUX_IMAGE:-zjsonl-zig-0.16.0}
+image=${STRAND_LINUX_IMAGE:-strand-zig-0.16.0}
 
 if [ "${1:-}" = "--rebuild" ]; then
   docker image rm -f "$image" >/dev/null 2>&1 || true

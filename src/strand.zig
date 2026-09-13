@@ -711,7 +711,7 @@ pub fn tagOf(comptime U: type, line: []const u8) ?std.meta.Tag(U) {
     comptime {
         const info = @typeInfo(U);
         if (info != .@"union" or info.@"union".tag_type == null) {
-            @compileError("zjsonl.tagOf expects a tagged union, got " ++ @typeName(U));
+            @compileError("strand.tagOf expects a tagged union, got " ++ @typeName(U));
         }
     }
     const key = kindOf(line) orelse return null;

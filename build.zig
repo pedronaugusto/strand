@@ -9,8 +9,8 @@ pub fn build(b: *std.Build) void {
     // no build options, and so nothing a consumer has to match.
     //=====================================================================
 
-    const module = b.addModule("zjsonl", .{
-        .root_source_file = b.path("src/zjsonl.zig"),
+    const module = b.addModule("strand", .{
+        .root_source_file = b.path("src/strand.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -21,15 +21,15 @@ pub fn build(b: *std.Build) void {
     //=====================================================================
 
     const tests = b.addTest(.{
-        .name = "zjsonl-tests",
+        .name = "strand-tests",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/zjsonl.zig"),
+            .root_source_file = b.path("src/strand.zig"),
             .target = target,
             .optimize = optimize,
         }),
     });
 
-    const test_step = b.step("test", "Run zjsonl tests");
+    const test_step = b.step("test", "Run strand tests");
     test_step.dependOn(&b.addRunArtifact(tests).step);
 
     // Compiling without running is what a target the host cannot execute can
@@ -58,7 +58,7 @@ pub fn build(b: *std.Build) void {
                 .root_source_file = b.path(source),
                 .target = target,
                 .optimize = optimize,
-                .imports = &.{.{ .name = "zjsonl", .module = module }},
+                .imports = &.{.{ .name = "strand", .module = module }},
             }),
         });
         examples_step.dependOn(&b.addRunArtifact(example).step);
@@ -80,7 +80,7 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("examples/bench.zig"),
             .target = target,
             .optimize = optimize,
-            .imports = &.{.{ .name = "zjsonl", .module = module }},
+            .imports = &.{.{ .name = "strand", .module = module }},
         }),
     });
     const bench_step = b.step("bench", "Build and run the benchmark");

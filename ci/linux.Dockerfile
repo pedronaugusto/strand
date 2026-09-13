@@ -1,10 +1,10 @@
-# zjsonl — the Linux image `ci/linux.sh` runs the suite in.
+# strand — the Linux image `ci/linux.sh` runs the suite in.
 #
 # Debian plus one Zig tarball, pinned to the version build.zig.zon asks for,
 # and nothing else: the package has no dependency beyond `std`, so an image
 # that needs a package manager would be an image proving the wrong thing.
 #
-#   docker build -f ci/linux.Dockerfile -t zjsonl-zig-0.16.0 ci
+#   docker build -f ci/linux.Dockerfile -t strand-zig-0.16.0 ci
 #
 # The architecture is whatever the host is, so this works on an arm64 laptop
 # and on an x86_64 runner without being told which.

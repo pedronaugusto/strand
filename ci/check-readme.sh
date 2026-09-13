@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# zjsonl — the generated blocks in README.md, regenerated and compared.
+# strand — the generated blocks in README.md, regenerated and compared.
 #
 # A block between `<!-- BEGIN GENERATED <command> -->` and
 # `<!-- END GENERATED -->` must equal that command's output. The marker names

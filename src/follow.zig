@@ -16,9 +16,9 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-const zjsonl = @import("zjsonl.zig");
-const Line = zjsonl.Line;
-const ParseLineError = zjsonl.ParseLineError;
+const strand = @import("strand.zig");
+const Line = strand.Line;
+const ParseLineError = strand.ParseLineError;
 
 /// A stream of `T` over a file that is still being appended to.
 ///
@@ -38,7 +38,7 @@ pub fn Follower(comptime T: type) type {
         source: *std.Io.File.Reader,
         /// The line layer. Public so that `number`, `last_error_line` and
         /// `last_error` are readable, and read-only otherwise.
-        reader: zjsonl.Reader(T),
+        reader: strand.Reader(T),
         /// Read-only after `init`.
         options: Options,
 
@@ -51,7 +51,7 @@ pub fn Follower(comptime T: type) type {
             /// line with no newline on it is a line the writer has not
             /// finished, and this is the whole difference between following a
             /// file and reading one.
-            reader: zjsonl.Reader(T).Options = .{},
+            reader: strand.Reader(T).Options = .{},
             /// How to wait when the file has nothing more on it yet.
             wait: Wait = .{ .poll = .fromMilliseconds(20) },
         };
@@ -81,7 +81,7 @@ pub fn Follower(comptime T: type) type {
         /// half-written line; ask `source.seek_err`. `Truncated` means the
         /// file got shorter than what has already been read from it, which is
         /// rotation seen from the inside: see `restart`.
-        pub const NextError = zjsonl.Reader(T).NextError || error{
+        pub const NextError = strand.Reader(T).NextError || error{
             SeekFailed,
             Truncated,
         } || std.Io.Cancelable;
@@ -272,7 +272,7 @@ const Fixture = struct {
 /// follower meets half-written lines rather than whole ones.
 fn produce(io: std.Io, file: std.Io.File, buffer: []u8, count: u64) !void {
     var file_writer = file.writer(io, buffer);
-    var log: zjsonl.Writer(Event) = .init(&file_writer.interface, .{});
+    var log: strand.Writer(Event) = .init(&file_writer.interface, .{});
     for (0..count) |i| {
         try log.write(.{ .kind = "tick", .at = i });
         // Flushing mid-record is exactly the case the follower exists for:
@@ -406,7 +406,7 @@ test "two writers on two tasks share nothing" {
     const Task = struct {
         fn run(io: std.Io, mark: []const u8, out: *std.Io.Writer.Allocating) !u64 {
             _ = io;
-            var log: zjsonl.Writer(Event) = .init(&out.writer, .{});
+            var log: strand.Writer(Event) = .init(&out.writer, .{});
             for (0..each) |i| try log.write(.{ .kind = mark, .at = i });
             return log.count;
         }
@@ -434,7 +434,7 @@ test "two writers on two tasks share nothing" {
         .{ right.written(), "right" },
     }) |pair| {
         var source: std.Io.Reader = .fixed(pair[0]);
-        var reader: zjsonl.Reader(Event) = .init(testing.allocator, &source, .{});
+        var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{});
         defer reader.deinit();
         var seen: u64 = 0;
         while (try reader.next()) |line| : (seen += 1) {

@@ -1,6 +1,6 @@
-# zjsonl
+# strand
 
-[![CI](https://github.com/pedronaugusto/zjsonl/actions/workflows/ci.yml/badge.svg)](https://github.com/pedronaugusto/zjsonl/actions/workflows/ci.yml)
+[![CI](https://github.com/pedronaugusto/strand/actions/workflows/ci.yml/badge.svg)](https://github.com/pedronaugusto/strand/actions/workflows/ci.yml)
 
 Typed [JSON Lines](https://jsonlines.org) for Zig: one JSON value per line,
 read and written on top of `std.json`. For append-only logs, line protocols
@@ -14,7 +14,7 @@ not have is the line layer, and a program that keeps a log ends up writing
 that layer itself, usually three times:
 
 - **A line is a unit of failure.** One bad line in a million-line log should
-  name itself and be skippable, not abort the read. `zjsonl.Reader` reports
+  name itself and be skippable, not abort the read. `strand.Reader` reports
   `error.MalformedLine` with the line number and the underlying `std.json`
   error, and can be told to skip instead (`on_malformed = .skip`).
 - **A line is a unit of memory.** A reader that allocates per line and frees
@@ -23,7 +23,7 @@ that layer itself, usually three times:
   and `keep` is the one call that copies a value out.
 - **Strings should not be copied twice.** `std.json`'s `.alloc_if_needed`
   lets a string field point into the line's own bytes when it needs no
-  unescaping, which is the common case for a log. `zjsonl` reads that way by
+  unescaping, which is the common case for a log. `strand` reads that way by
   default and documents exactly how long the borrow lasts.
 - **A line has a kind.** `kindOf` reads the first key of the object, and
   `tagOf` turns it into the tag of a tagged union, without parsing the value —
@@ -45,18 +45,18 @@ something executes. So are the three below it.
 
 <!-- BEGIN GENERATED ci/readme_usage.sh -->
 ```zig
-const zjsonl = @import("zjsonl");
+const strand = @import("strand");
 
 // Write: one JSON value per line, minified, null optionals left out.
 var out: std.Io.Writer.Allocating = .init(arena);
-var log: zjsonl.Writer(Event) = .init(&out.writer, .{});
+var log: strand.Writer(Event) = .init(&out.writer, .{});
 try log.write(.{ .kind = "open", .at = 1, .note = "user \"ada\"" });
 try log.write(.{ .kind = "retry", .at = 2, .level = .warn });
 try log.write(.{ .kind = "close", .at = 3 });
 
 // Read: a stream of typed lines, each with its number and its bytes.
 var source: std.Io.Reader = .fixed(out.written());
-var events: zjsonl.Reader(Event) = .init(std.heap.page_allocator, &source, .{
+var events: strand.Reader(Event) = .init(std.heap.page_allocator, &source, .{
     // Defaults, spelled out: a line the reader does not fully understand
     // is still a line, and one it cannot parse at all names itself.
     .ignore_unknown_fields = true,
@@ -78,7 +78,7 @@ while (try events.next()) |line| {
 }
 
 // Route a line by its first key, without parsing the value.
-const kind = zjsonl.kindOf("{\"kind\":\"open\",\"at\":1}");
+const kind = strand.kindOf("{\"kind\":\"open\",\"at\":1}");
 ```
 <!-- END GENERATED -->
 
@@ -103,7 +103,7 @@ you do — so the last ten lines of a gigabyte cost one block read.
     var buffer: [4096]u8 = undefined;
     var file_reader = file.reader(io, &buffer);
 
-    var tail: zjsonl.Tail(zjsonl.Versioned(Entry)) = try .init(gpa, &file_reader, .{});
+    var tail: strand.Tail(strand.Versioned(Entry)) = try .init(gpa, &file_reader, .{});
     defer tail.deinit();
 
     // In file order, on an arena, borrowing nothing from the reader.
@@ -127,7 +127,7 @@ offset of the line just returned. Everything else — the borrow rule, `keep`,
 // Following: read to the end of the file, wait for it to grow, carry on.
 // There is no end to a file being appended to, so a follower stops when
 // the `std.Io` cancels it — or, as here, when the caller stops asking.
-var follower: zjsonl.Follower(zjsonl.Versioned(Entry)) = .init(gpa, io, &file_reader, .{
+var follower: strand.Follower(strand.Versioned(Entry)) = .init(gpa, io, &file_reader, .{
     .wait = .{ .poll = .fromMilliseconds(5) },
 });
 defer follower.deinit();
@@ -186,7 +186,7 @@ const Entry = struct {
         data: std.json.Value,
     ) std.json.ParseFromValueError!@This() {
         if (from != 1) return error.UnknownField;
-        const old = try zjsonl.payloadOf(struct {
+        const old = try strand.payloadOf(struct {
             kind: []const u8,
             at: []const u8 = "0",
         }, allocator, data);
@@ -204,7 +204,7 @@ try out.writer.writeAll(
     \\{"v":1,"data":{"kind":"open","at":"1"}}
     \\
 );
-var log: zjsonl.Writer(zjsonl.Versioned(Entry)) = .init(&out.writer, .{});
+var log: strand.Writer(strand.Versioned(Entry)) = .init(&out.writer, .{});
 try log.writeAll(&.{
     .{ .value = .{ .scope = "net", .kind = "retry", .at = 2 } },
     .{ .value = .{ .kind = "close", .at = 3 } },
@@ -213,7 +213,7 @@ try log.writeAll(&.{
 // Reading it back: every line arrives in today's shape, and says which
 // shape it was written in.
 var source: std.Io.Reader = .fixed(out.written());
-var entries: zjsonl.Reader(zjsonl.Versioned(Entry)) = .init(gpa, &source, .{});
+var entries: strand.Reader(strand.Versioned(Entry)) = .init(gpa, &source, .{});
 defer entries.deinit();
 while (try entries.next()) |line| {
     std.debug.print("line {d}: v{d}{s} {s}/{s} at {d}\n", .{
@@ -256,8 +256,8 @@ const Message = union(enum) {
 };
 
 // Route on the tag, and give an unknown one the line rather than an error.
-const message: Message = if (zjsonl.tagOf(Message, line)) |_|
-    try zjsonl.parseLine(Message, arena, line, .{})
+const message: Message = if (strand.tagOf(Message, line)) |_|
+    try strand.parseLine(Message, arena, line, .{})
 else
     .{ .unknown = try std.json.parseFromSliceLeaky(std.json.Value, arena, line, .{}) };
 ```
@@ -269,12 +269,12 @@ a record should say so and keep going, not stop the stream and not pretend.
 ## Install
 
 ```sh
-zig fetch --save git+https://github.com/pedronaugusto/zjsonl
+zig fetch --save git+https://github.com/pedronaugusto/strand
 ```
 
 ```zig
-const zjsonl_dep = b.dependency("zjsonl", .{ .target = target, .optimize = optimize });
-exe.root_module.addImport("zjsonl", zjsonl_dep.module("zjsonl"));
+const strand_dep = b.dependency("strand", .{ .target = target, .optimize = optimize });
+exe.root_module.addImport("strand", strand_dep.module("strand"));
 ```
 
 There is nothing to link and nothing to configure: pure Zig, `std` only, no

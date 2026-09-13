@@ -186,7 +186,7 @@ pub fn payloadOf(
 fn checkShape(comptime T: type) void {
     const name = @typeName(T);
     if (!@hasDecl(T, "jsonl_version")) {
-        @compileError("zjsonl.Versioned(" ++ name ++ ") needs `pub const jsonl_version: u32` on " ++ name);
+        @compileError("strand.Versioned(" ++ name ++ ") needs `pub const jsonl_version: u32` on " ++ name);
     }
     if (@TypeOf(T.jsonl_version) != u32 and @TypeOf(T.jsonl_version) != comptime_int) {
         @compileError(name ++ ".jsonl_version must be a u32");
@@ -198,7 +198,7 @@ fn checkShape(comptime T: type) void {
     if (info == .@"struct") {
         for (info.@"struct".fields) |field| {
             if (std.mem.eql(u8, field.name, version_key)) {
-                @compileError("zjsonl.Versioned(" ++ name ++ "): " ++ name ++ " has a field named `" ++
+                @compileError("strand.Versioned(" ++ name ++ "): " ++ name ++ " has a field named `" ++
                     version_key ++ "`, which is the envelope's own key. The record goes inside `" ++
                     data_key ++ "`, so the field would never be read as the version; rename one of them.");
             }
@@ -212,7 +212,7 @@ fn checkShape(comptime T: type) void {
 //=========================================================================
 
 const testing = std.testing;
-const zjsonl = @import("zjsonl.zig");
+const strand = @import("strand.zig");
 
 /// Version 1: one string field, and a count that was a string.
 const EventV1 = struct {
@@ -257,7 +257,7 @@ test "a line of the current version is parsed straight into T" {
     defer arena.deinit();
 
     const line = "{\"v\":2,\"data\":{\"scope\":\"net\",\"kind\":\"open\",\"count\":3}}";
-    const record = try zjsonl.parseLine(Versioned(Event), arena.allocator(), line, .{});
+    const record = try strand.parseLine(Versioned(Event), arena.allocator(), line, .{});
 
     try testing.expectEqual(@as(u32, 2), record.from);
     try testing.expect(!record.migrated());
@@ -272,7 +272,7 @@ test "an older line goes through the migrate hook" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
 
-    const record = try zjsonl.parseLine(
+    const record = try strand.parseLine(
         Versioned(Event),
         arena.allocator(),
         "{\"v\":1,\"data\":{\"kind\":\"open\",\"count\":\"7\"}}",
@@ -289,7 +289,7 @@ test "a line with no version at all is the unstamped one" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
 
-    const record = try zjsonl.parseLine(
+    const record = try strand.parseLine(
         Versioned(Event),
         arena.allocator(),
         "{\"data\":{\"kind\":\"open\",\"count\":\"2\"}}",
@@ -310,7 +310,7 @@ test "a line with no version at all is the unstamped one" {
             return .{ .kind = "migrated" };
         }
     };
-    const stamped = try zjsonl.parseLine(
+    const stamped = try strand.parseLine(
         Versioned(Stamped),
         arena.allocator(),
         "{\"data\":{\"kind\":\"open\"}}",
@@ -328,7 +328,7 @@ test "the envelope's keys may arrive in either order" {
         "{\"v\":1,\"data\":{\"kind\":\"open\",\"count\":\"5\"}}",
         "{\"data\":{\"kind\":\"open\",\"count\":\"5\"},\"v\":1}",
     }) |line| {
-        const record = try zjsonl.parseLine(Versioned(Event), arena.allocator(), line, .{});
+        const record = try strand.parseLine(Versioned(Event), arena.allocator(), line, .{});
         try testing.expectEqual(@as(u32, 5), record.value.count);
         try testing.expectEqualStrings("open", record.value.kind);
     }
@@ -342,7 +342,7 @@ test "a version from the future is a malformed line, by number" {
         \\
     ;
     var source: std.Io.Reader = .fixed(input);
-    var reader: zjsonl.Reader(Versioned(Event)) = .init(testing.allocator, &source, .{});
+    var reader: strand.Reader(Versioned(Event)) = .init(testing.allocator, &source, .{});
     defer reader.deinit();
 
     try testing.expectEqualStrings("known", (try reader.next()).?.value.value.kind);
@@ -355,7 +355,7 @@ test "a version from the future is a malformed line, by number" {
 test "a missing data member is a missing field" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
-    try testing.expectError(error.MissingField, zjsonl.parseLine(
+    try testing.expectError(error.MissingField, strand.parseLine(
         Versioned(Event),
         arena.allocator(),
         "{\"v\":2}",
@@ -370,7 +370,7 @@ test "round trip: what is written under the envelope is read back under it" {
     var out: std.Io.Writer.Allocating = .init(testing.allocator);
     defer out.deinit();
 
-    var log: zjsonl.Writer(Versioned(Event)) = .init(&out.writer, .{});
+    var log: strand.Writer(Versioned(Event)) = .init(&out.writer, .{});
     try log.writeAll(&.{
         .{ .value = .{ .kind = "open", .count = 1 } },
         .{ .value = .{ .scope = "net", .kind = "close", .count = 2 } },
@@ -382,18 +382,18 @@ test "round trip: what is written under the envelope is read back under it" {
     , out.written());
 
     var source: std.Io.Reader = .fixed(out.written());
-    var reader: zjsonl.Reader(Versioned(Event)) = .init(testing.allocator, &source, .{});
+    var reader: strand.Reader(Versioned(Event)) = .init(testing.allocator, &source, .{});
     defer reader.deinit();
     try testing.expectEqual(@as(u32, 1), (try reader.next()).?.value.value.count);
     try testing.expectEqualStrings("net", (try reader.next()).?.value.value.scope);
-    try testing.expectEqual(@as(?zjsonl.Line(Versioned(Event)), null), try reader.next());
+    try testing.expectEqual(@as(?strand.Line(Versioned(Event)), null), try reader.next());
 }
 
 test "a migrated record is written back in today's shape" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
 
-    const record = try zjsonl.parseLine(
+    const record = try strand.parseLine(
         Versioned(Event),
         arena.allocator(),
         "{\"v\":1,\"data\":{\"kind\":\"open\",\"count\":\"9\"}}",
@@ -402,7 +402,7 @@ test "a migrated record is written back in today's shape" {
 
     var out: std.Io.Writer.Allocating = .init(testing.allocator);
     defer out.deinit();
-    try zjsonl.writeLine(&out.writer, record);
+    try strand.writeLine(&out.writer, record);
     try testing.expectEqualStrings(
         "{\"v\":2,\"data\":{\"scope\":\"app\",\"kind\":\"open\",\"count\":9}}\n",
         out.written(),

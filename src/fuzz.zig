@@ -11,7 +11,7 @@
 
 const std = @import("std");
 const testing = std.testing;
-const zjsonl = @import("zjsonl.zig");
+const strand = @import("strand.zig");
 
 /// The shape a log line is parsed into here. Optional, defaulted and nested
 /// fields so that a generated line can go wrong in more than one way.
@@ -34,9 +34,9 @@ const Message = union(enum) {
 // The properties.
 //=========================================================================
 
-/// One physical line of `input`, as everything outside `zjsonl` sees it. This
+/// One physical line of `input`, as everything outside `strand` sees it. This
 /// is the oracle: an index scan written out, deliberately not sharing code
-/// with `zjsonl.LineIterator` or with the reader.
+/// with `strand.LineIterator` or with the reader.
 const Physical = struct {
     /// The bytes up to the terminator, `\r` included.
     raw: []const u8,
@@ -74,7 +74,7 @@ fn isBlank(line: []const u8) bool {
 /// reported — under the oracle's number, with the oracle's bytes.
 fn checkReaderFail(input: []const u8, max_line_bytes: usize) !void {
     var source: std.Io.Reader = .fixed(input);
-    var reader: zjsonl.Reader(Event) = .init(testing.allocator, &source, .{
+    var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{
         .max_line_bytes = max_line_bytes,
     });
     defer reader.deinit();
@@ -91,7 +91,7 @@ fn checkReaderFail(input: []const u8, max_line_bytes: usize) !void {
         }
         if (isBlank(physical.line)) continue;
 
-        const control = zjsonl.indexOfControl(physical.line);
+        const control = strand.indexOfControl(physical.line);
         if (reader.next()) |maybe_line| {
             const line = maybe_line orelse return error.TestReaderEndedEarly;
             try testing.expectEqual(physical.number, line.number);
@@ -110,12 +110,12 @@ fn checkReaderFail(input: []const u8, max_line_bytes: usize) !void {
             error.ControlByte => {
                 try testing.expectEqual(physical.number, reader.last_error_line);
                 try testing.expectEqual(control, reader.last_error_offset);
-                try testing.expectEqual(@as(?zjsonl.ParseLineError, null), reader.last_error);
+                try testing.expectEqual(@as(?strand.ParseLineError, null), reader.last_error);
             },
             else => return err,
         }
     }
-    try testing.expectEqual(@as(?zjsonl.Line(Event), null), try reader.next());
+    try testing.expectEqual(@as(?strand.Line(Event), null), try reader.next());
     try testing.expectEqual(oracle.number, reader.number);
 }
 
@@ -124,7 +124,7 @@ fn checkReaderFail(input: []const u8, max_line_bytes: usize) !void {
 /// to its end, whatever it contained.
 fn checkReaderSkip(input: []const u8) !void {
     var source: std.Io.Reader = .fixed(input);
-    var reader: zjsonl.Reader(Event) = .init(testing.allocator, &source, .{
+    var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{
         .on_malformed = .skip,
         // Long enough that no line can trip it: `.skip` is about parsing.
         .max_line_bytes = input.len + 1,
@@ -153,7 +153,7 @@ fn checkReaderSkip(input: []const u8) !void {
 
 /// `kindOf` either declines, or points at a real key of a real object.
 fn checkKindOf(line: []const u8) !void {
-    const kind = zjsonl.kindOf(line);
+    const kind = strand.kindOf(line);
     if (kind) |key| {
         // A view into the line, quoted on both sides, and no escape in it.
         const start = @intFromPtr(key.ptr) - @intFromPtr(line.ptr);
@@ -188,16 +188,16 @@ fn checkKindOf(line: []const u8) !void {
 /// `tagOf` agrees with `kindOf` about the key, and with a full parse about
 /// the arm.
 fn checkTagOf(line: []const u8) !void {
-    const tag = zjsonl.tagOf(Message, line);
+    const tag = strand.tagOf(Message, line);
     if (tag) |t| {
-        const key = zjsonl.kindOf(line) orelse return error.TestTagWithoutKey;
+        const key = strand.kindOf(line) orelse return error.TestTagWithoutKey;
         try testing.expectEqualStrings(@tagName(t), key);
     }
 
     if (!isShallow(line)) return;
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
-    const value = zjsonl.parseLine(Message, arena.allocator(), line, .{}) catch return;
+    const value = strand.parseLine(Message, arena.allocator(), line, .{}) catch return;
 
     if (tag) |t| {
         try testing.expectEqual(std.meta.activeTag(value), t);
@@ -209,7 +209,7 @@ fn checkTagOf(line: []const u8) !void {
 /// `lines` splits exactly the way the oracle does, and hands back views.
 fn checkLines(input: []const u8) !void {
     var oracle: PhysicalLines = .{ .rest = input };
-    var it = zjsonl.lines(input);
+    var it = strand.lines(input);
     while (it.next()) |line| {
         const physical = oracle.next() orelse return error.TestExtraLine;
         try testing.expectEqual(physical.number, line.number);
@@ -225,7 +225,7 @@ fn checkLines(input: []const u8) !void {
 
 /// True when `line` nests shallowly enough for the recursive oracles above.
 /// `std.json`'s value parsers recurse once per level, so a line of ten
-/// thousand `[` is a stack overflow in the oracle — never in `zjsonl`, which
+/// thousand `[` is a stack overflow in the oracle — never in `strand`, which
 /// only ever hands the line to `std.json` as a whole.
 fn isShallow(line: []const u8) bool {
     var depth: usize = 0;
@@ -249,7 +249,7 @@ fn isShallow(line: []const u8) bool {
 /// for line.
 fn checkPretty(input: []const u8) !void {
     var source: std.Io.Reader = .fixed(input);
-    var reader: zjsonl.Reader(Event) = .init(testing.allocator, &source, .{
+    var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{
         .format = .pretty,
         .on_malformed = .skip,
     });
@@ -277,11 +277,11 @@ fn checkPretty(input: []const u8) !void {
 fn checkPrettyRoundTrip(events: []const Event) !void {
     var out: std.Io.Writer.Allocating = .init(testing.allocator);
     defer out.deinit();
-    var writer: zjsonl.Writer(Event) = .init(&out.writer, .{ .format = .pretty });
+    var writer: strand.Writer(Event) = .init(&out.writer, .{ .format = .pretty });
     try writer.writeAll(events);
 
     var source: std.Io.Reader = .fixed(out.written());
-    var reader: zjsonl.Reader(Event) = .init(testing.allocator, &source, .{ .format = .pretty });
+    var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{ .format = .pretty });
     defer reader.deinit();
 
     for (events) |want| {
@@ -296,7 +296,7 @@ fn checkPrettyRoundTrip(events: []const Event) !void {
             try testing.expectEqual(@as(?[]const u8, null), line.value.note);
         }
     }
-    try testing.expectEqual(@as(?zjsonl.Line(Event), null), try reader.next());
+    try testing.expectEqual(@as(?strand.Line(Event), null), try reader.next());
 }
 
 /// The versioned record this package writes is the versioned record it reads,
@@ -313,7 +313,7 @@ const Versioned2 = struct {
         data: std.json.Value,
     ) std.json.ParseFromValueError!Versioned2 {
         if (from != 1) return error.UnknownField;
-        const old = try zjsonl.payloadOf(struct { kind: []const u8 }, allocator, data);
+        const old = try strand.payloadOf(struct { kind: []const u8 }, allocator, data);
         return .{ .kind = old.kind, .at = 0 };
     }
 };
@@ -324,8 +324,8 @@ fn checkVersioned(line: []const u8) !void {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
 
-    const record = zjsonl.parseLine(
-        zjsonl.Versioned(Versioned2),
+    const record = strand.parseLine(
+        strand.Versioned(Versioned2),
         arena.allocator(),
         line,
         .{},
@@ -339,13 +339,13 @@ fn checkVersioned(line: []const u8) !void {
     // And writing it back gives a line that reads as itself.
     var out: std.Io.Writer.Allocating = .init(testing.allocator);
     defer out.deinit();
-    try zjsonl.writeLine(&out.writer, record);
+    try strand.writeLine(&out.writer, record);
     try testing.expect(std.mem.startsWith(u8, out.written(), "{\"v\":2,\"data\":"));
 
     var again: std.heap.ArenaAllocator = .init(testing.allocator);
     defer again.deinit();
-    const round = try zjsonl.parseLine(
-        zjsonl.Versioned(Versioned2),
+    const round = try strand.parseLine(
+        strand.Versioned(Versioned2),
         again.allocator(),
         out.written()[0 .. out.written().len - 1],
         .{},
@@ -365,7 +365,7 @@ fn checkVersioned(line: []const u8) !void {
 /// is the *i*th from the start of a file of *n* lines is the *(n + 1 - i)*th
 /// from its end.
 fn checkTail(input: []const u8) !void {
-    const options: zjsonl.Reader(Event).Options = .{
+    const options: strand.Reader(Event).Options = .{
         .on_malformed = .skip,
         // A bound the generated input can reach, so that an over-long line is
         // part of the property.
@@ -385,7 +385,7 @@ fn checkTail(input: []const u8) !void {
     }
 
     var source: std.Io.Reader = .fixed(input);
-    var reader: zjsonl.Reader(Event) = .init(testing.allocator, &source, options);
+    var reader: strand.Reader(Event) = .init(testing.allocator, &source, options);
     defer reader.deinit();
     while (true) {
         const line = reader.next() catch |err| switch (err) {
@@ -405,7 +405,7 @@ fn checkTail(input: []const u8) !void {
 
     var buffer: [37]u8 = undefined;
     var file_reader = file.reader(testing.io, &buffer);
-    var tail: zjsonl.Tail(Event) = try .init(testing.allocator, &file_reader, .{
+    var tail: strand.Tail(Event) = try .init(testing.allocator, &file_reader, .{
         .on_malformed = .skip,
         .max_line_bytes = options.max_line_bytes,
         .skip_bom = options.skip_bom,
@@ -566,7 +566,7 @@ test "fuzz: kindOf over generated lines" {
 fn fuzzKindOf(_: void, smith: *std.testing.Smith) anyerror!void {
     @disableInstrumentation();
     var buf: [512]u8 = undefined;
-    var it = zjsonl.lines(generate(smith, &buf));
+    var it = strand.lines(generate(smith, &buf));
     while (it.next()) |line| try checkKindOf(line.line);
 }
 
@@ -577,7 +577,7 @@ test "fuzz: tagOf over generated lines" {
 fn fuzzTagOf(_: void, smith: *std.testing.Smith) anyerror!void {
     @disableInstrumentation();
     var buf: [512]u8 = undefined;
-    var it = zjsonl.lines(generate(smith, &buf));
+    var it = strand.lines(generate(smith, &buf));
     while (it.next()) |line| try checkTagOf(line.line);
 }
 
@@ -629,7 +629,7 @@ test "fuzz: Versioned over generated lines" {
 fn fuzzVersioned(_: void, smith: *std.testing.Smith) anyerror!void {
     @disableInstrumentation();
     var buf: [512]u8 = undefined;
-    var it = zjsonl.lines(generateVersioned(smith, &buf));
+    var it = strand.lines(generateVersioned(smith, &buf));
     while (it.next()) |line| try checkVersioned(line.line);
 }
 
@@ -682,7 +682,7 @@ test "the properties hold on a table of awkward inputs" {
         try checkPretty(input);
         try checkTail(input);
 
-        var it = zjsonl.lines(input);
+        var it = strand.lines(input);
         while (it.next()) |line| {
             try checkKindOf(line.line);
             try checkTagOf(line.line);

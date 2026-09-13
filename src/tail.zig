@@ -17,9 +17,9 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const assert = std.debug.assert;
 
-const zjsonl = @import("zjsonl.zig");
-const Line = zjsonl.Line;
-const ParseLineError = zjsonl.ParseLineError;
+const strand = @import("strand.zig");
+const Line = strand.Line;
+const ParseLineError = strand.ParseLineError;
 
 /// A stream of `T` read from the end of a seekable file towards its start.
 ///
@@ -194,7 +194,7 @@ pub fn Tail(comptime T: type) type {
 
                 if (self.options.skip_blank and isBlank(raw)) continue;
                 if (self.options.reject_control_bytes) {
-                    if (zjsonl.indexOfControl(raw)) |at| {
+                    if (strand.indexOfControl(raw)) |at| {
                         self.last_error_line = number;
                         self.last_error = null;
                         self.last_error_offset = at;
@@ -206,7 +206,7 @@ pub fn Tail(comptime T: type) type {
                 }
 
                 _ = self.arena.reset(.retain_capacity);
-                const value = zjsonl.parseLine(T, self.arena.allocator(), raw, .{
+                const value = strand.parseLine(T, self.arena.allocator(), raw, .{
                     .ignore_unknown_fields = self.options.ignore_unknown_fields,
                     .copy_strings = false,
                 }) catch |err| switch (err) {
@@ -228,7 +228,7 @@ pub fn Tail(comptime T: type) type {
         /// A copy of `line.value` that outlives the reader, allocated on
         /// `allocator`. See `Reader.keep`, whose contract this is.
         pub fn keep(self: *Self, allocator: Allocator, line: Line(T)) ParseLineError!T {
-            return zjsonl.parseLine(T, allocator, line.line, .{
+            return strand.parseLine(T, allocator, line.line, .{
                 .ignore_unknown_fields = self.options.ignore_unknown_fields,
                 .copy_strings = true,
             });
@@ -442,7 +442,7 @@ test "an empty file has no last line" {
 test "the block size does not change what is read" {
     var input: std.Io.Writer.Allocating = .init(testing.allocator);
     defer input.deinit();
-    var writer: zjsonl.Writer(Event) = .init(&input.writer, .{});
+    var writer: strand.Writer(Event) = .init(&input.writer, .{});
     for (0..500) |i| try writer.write(.{ .kind = "tick", .at = i });
 
     for ([_]usize{ 1, 2, 7, 64, 4096, 1 << 20 }) |block| {
@@ -465,7 +465,7 @@ test "the block size does not change what is read" {
 test "last(n) reads the end of the file and nothing else" {
     var input: std.Io.Writer.Allocating = .init(testing.allocator);
     defer input.deinit();
-    var writer: zjsonl.Writer(Event) = .init(&input.writer, .{});
+    var writer: strand.Writer(Event) = .init(&input.writer, .{});
     for (0..10_000) |i| try writer.write(.{ .kind = "tick", .at = i });
 
     var fixture = try Fixture.init(input.written(), 64);
@@ -532,7 +532,7 @@ test "a control byte is reported with the line and the offset" {
 test "an over-long line is discarded whole and the one before it is still read" {
     var input: std.Io.Writer.Allocating = .init(testing.allocator);
     defer input.deinit();
-    var writer: zjsonl.Writer(Event) = .init(&input.writer, .{});
+    var writer: strand.Writer(Event) = .init(&input.writer, .{});
     try writer.write(.{ .kind = "short", .at = 1 });
     try writer.write(.{ .kind = "x" ** 300, .at = 2 });
     try writer.write(.{ .kind = "last", .at = 3 });

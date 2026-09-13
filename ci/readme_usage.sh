@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# zjsonl — a README.md code block, extracted from an example.
+# strand — a README.md code block, extracted from an example.
 #
 # A code snippet in a README is a claim about how the library is used, and
 # nothing compiles it. These are regions of examples that `zig build examples`
@@ -13,7 +13,7 @@
 #   ci/readme_usage.sh examples/logbook.zig tail    # a named region of another
 #
 # A region is the text between two `// --- README:<region> ---` markers. The
-# `const zjsonl = @import(...)` line is taken from the file and printed above
+# `const strand = @import(...)` line is taken from the file and printed above
 # the region, because it is the one line a reader needs that cannot live
 # inside a function; `--no-import` leaves it out of a block that is not the
 # first one in the document.
@@ -41,10 +41,10 @@ if len(parts) != 3:
 # The import is the one line a reader needs that cannot live inside a
 # function, so it is read from the file too rather than written out here.
 imports = [
-    line for line in text.splitlines() if line.startswith('const zjsonl = @import(')
+    line for line in text.splitlines() if line.startswith('const strand = @import(')
 ]
 if len(imports) != 1:
-    sys.exit("%s: expected exactly one `const zjsonl = @import(...)` line" % source)
+    sys.exit("%s: expected exactly one `const strand = @import(...)` line" % source)
 
 # The region sits inside a function; the README shows it at the left margin,
 # which means removing the indentation the whole region shares and no more.

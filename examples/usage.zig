@@ -1,5 +1,5 @@
-//! A log written and then read back: events out through a `zjsonl.Writer`,
-//! events in through a `zjsonl.Reader`, one line kept past the line it came
+//! A log written and then read back: events out through a `strand.Writer`,
+//! events in through a `strand.Reader`, one line kept past the line it came
 //! from, and a line routed by its first key without being parsed.
 //!
 //! `zig build examples` builds AND runs this; `ci/readme_usage.sh` extracts
@@ -7,7 +7,7 @@
 //! reader copies is code CI executes.
 
 const std = @import("std");
-const zjsonl = @import("zjsonl");
+const strand = @import("strand");
 
 /// One line of the log.
 const Event = struct {
@@ -28,14 +28,14 @@ pub fn main() !void {
 
     // Write: one JSON value per line, minified, null optionals left out.
     var out: std.Io.Writer.Allocating = .init(arena);
-    var log: zjsonl.Writer(Event) = .init(&out.writer, .{});
+    var log: strand.Writer(Event) = .init(&out.writer, .{});
     try log.write(.{ .kind = "open", .at = 1, .note = "user \"ada\"" });
     try log.write(.{ .kind = "retry", .at = 2, .level = .warn });
     try log.write(.{ .kind = "close", .at = 3 });
 
     // Read: a stream of typed lines, each with its number and its bytes.
     var source: std.Io.Reader = .fixed(out.written());
-    var events: zjsonl.Reader(Event) = .init(std.heap.page_allocator, &source, .{
+    var events: strand.Reader(Event) = .init(std.heap.page_allocator, &source, .{
         // Defaults, spelled out: a line the reader does not fully understand
         // is still a line, and one it cannot parse at all names itself.
         .ignore_unknown_fields = true,
@@ -57,7 +57,7 @@ pub fn main() !void {
     }
 
     // Route a line by its first key, without parsing the value.
-    const kind = zjsonl.kindOf("{\"kind\":\"open\",\"at\":1}");
+    const kind = strand.kindOf("{\"kind\":\"open\",\"at\":1}");
     // --- README:usage ---
 
     std.debug.print("read {d} lines, {d} warning(s)\n", .{ events.number, warnings });

@@ -22,7 +22,7 @@
 //! ```
 
 const std = @import("std");
-const zjsonl = @import("zjsonl");
+const strand = @import("strand");
 
 /// One line of the log being measured: small, mixed, and the shape a real one
 /// has — a string, a number, an enum, an omitted optional.
@@ -48,7 +48,7 @@ pub fn main() !void {
     var out = std.Io.File.stdout().writerStreaming(io, &.{});
     const stdout = &out.interface;
 
-    try stdout.print("zjsonl bench — {d} lines, {s}\n\n", .{
+    try stdout.print("strand bench — {d} lines, {s}\n\n", .{
         line_count,
         @tagName(@import("builtin").mode),
     });
@@ -73,7 +73,7 @@ fn benchWrite(gpa: std.mem.Allocator, io: std.Io, stdout: *std.Io.Writer) ![]u8 
     // The measurement is the encoding, not the growth of the destination.
     try out.ensureUnusedCapacity(line_count * 64);
 
-    var log: zjsonl.Writer(Event) = .init(&out.writer, .{});
+    var log: strand.Writer(Event) = .init(&out.writer, .{});
     const started = std.Io.Clock.awake.now(io);
     for (0..line_count) |i| {
         try log.write(.{
@@ -92,7 +92,7 @@ fn benchWrite(gpa: std.mem.Allocator, io: std.Io, stdout: *std.Io.Writer) ![]u8 
 /// The same million back through a `Reader`.
 fn benchRead(gpa: std.mem.Allocator, io: std.Io, stdout: *std.Io.Writer, input: []const u8) !void {
     var source: std.Io.Reader = .fixed(input);
-    var reader: zjsonl.Reader(Event) = .init(gpa, &source, .{});
+    var reader: strand.Reader(Event) = .init(gpa, &source, .{});
     defer reader.deinit();
 
     var checksum: u64 = 0;
@@ -121,7 +121,7 @@ fn benchWriteAll(gpa: std.mem.Allocator, io: std.Io, stdout: *std.Io.Writer) !vo
     defer out.deinit();
     try out.ensureUnusedCapacity(line_count * 64);
 
-    var log: zjsonl.Writer(Event) = .init(&out.writer, .{});
+    var log: strand.Writer(Event) = .init(&out.writer, .{});
     const started = std.Io.Clock.awake.now(io);
     try log.writeAll(events);
     const elapsed = started.untilNow(io, .awake);
@@ -140,7 +140,7 @@ fn benchTail(gpa: std.mem.Allocator, io: std.Io, stdout: *std.Io.Writer, input: 
     var arena: std.heap.ArenaAllocator = .init(gpa);
     defer arena.deinit();
 
-    var tail: zjsonl.Tail(Event) = try .init(gpa, &file_reader, .{});
+    var tail: strand.Tail(Event) = try .init(gpa, &file_reader, .{});
     defer tail.deinit();
 
     const started = std.Io.Clock.awake.now(io);
@@ -162,7 +162,7 @@ fn benchBigLine(gpa: std.mem.Allocator, io: std.Io, stdout: *std.Io.Writer) !voi
     var buffer: [64 * 1024]u8 = undefined;
     var file_reader = work.file.reader(io, &buffer);
 
-    var reader: zjsonl.Reader(Event) = .init(gpa, &file_reader.interface, .{
+    var reader: strand.Reader(Event) = .init(gpa, &file_reader.interface, .{
         .max_line_bytes = big_line_bytes + 1024,
     });
     defer reader.deinit();

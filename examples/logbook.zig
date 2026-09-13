@@ -7,7 +7,7 @@
 //! code CI executes.
 
 const std = @import("std");
-const zjsonl = @import("zjsonl");
+const strand = @import("strand");
 
 pub fn main() !void {
     var debug: std.heap.DebugAllocator(.{}) = .init;
@@ -46,7 +46,7 @@ pub fn main() !void {
             data: std.json.Value,
         ) std.json.ParseFromValueError!@This() {
             if (from != 1) return error.UnknownField;
-            const old = try zjsonl.payloadOf(struct {
+            const old = try strand.payloadOf(struct {
                 kind: []const u8,
                 at: []const u8 = "0",
             }, allocator, data);
@@ -64,7 +64,7 @@ pub fn main() !void {
         \\{"v":1,"data":{"kind":"open","at":"1"}}
         \\
     );
-    var log: zjsonl.Writer(zjsonl.Versioned(Entry)) = .init(&out.writer, .{});
+    var log: strand.Writer(strand.Versioned(Entry)) = .init(&out.writer, .{});
     try log.writeAll(&.{
         .{ .value = .{ .scope = "net", .kind = "retry", .at = 2 } },
         .{ .value = .{ .kind = "close", .at = 3 } },
@@ -73,7 +73,7 @@ pub fn main() !void {
     // Reading it back: every line arrives in today's shape, and says which
     // shape it was written in.
     var source: std.Io.Reader = .fixed(out.written());
-    var entries: zjsonl.Reader(zjsonl.Versioned(Entry)) = .init(gpa, &source, .{});
+    var entries: strand.Reader(strand.Versioned(Entry)) = .init(gpa, &source, .{});
     defer entries.deinit();
     while (try entries.next()) |line| {
         std.debug.print("line {d}: v{d}{s} {s}/{s} at {d}\n", .{
@@ -101,7 +101,7 @@ pub fn main() !void {
         var buffer: [4096]u8 = undefined;
         var file_reader = file.reader(io, &buffer);
 
-        var tail: zjsonl.Tail(zjsonl.Versioned(Entry)) = try .init(gpa, &file_reader, .{});
+        var tail: strand.Tail(strand.Versioned(Entry)) = try .init(gpa, &file_reader, .{});
         defer tail.deinit();
 
         // In file order, on an arena, borrowing nothing from the reader.
@@ -127,7 +127,7 @@ fn follow(gpa: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, comptime Entry: t
             var file_writer = file.writer(inner_io, &buffer);
             file_writer.pos = try file.length(inner_io);
 
-            var log: zjsonl.Writer(zjsonl.Versioned(Entry)) = .init(&file_writer.interface, .{});
+            var log: strand.Writer(strand.Versioned(Entry)) = .init(&file_writer.interface, .{});
             for (0..appended) |i| {
                 try log.write(.{ .value = .{ .kind = "tick", .at = 10 + i } });
                 try file_writer.interface.flush();
@@ -157,7 +157,7 @@ fn follow(gpa: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, comptime Entry: t
     // Following: read to the end of the file, wait for it to grow, carry on.
     // There is no end to a file being appended to, so a follower stops when
     // the `std.Io` cancels it — or, as here, when the caller stops asking.
-    var follower: zjsonl.Follower(zjsonl.Versioned(Entry)) = .init(gpa, io, &file_reader, .{
+    var follower: strand.Follower(strand.Versioned(Entry)) = .init(gpa, io, &file_reader, .{
         .wait = .{ .poll = .fromMilliseconds(5) },
     });
     defer follower.deinit();
@@ -188,8 +188,8 @@ fn arms(arena: std.mem.Allocator) !void {
     };
 
     // Route on the tag, and give an unknown one the line rather than an error.
-    const message: Message = if (zjsonl.tagOf(Message, line)) |_|
-        try zjsonl.parseLine(Message, arena, line, .{})
+    const message: Message = if (strand.tagOf(Message, line)) |_|
+        try strand.parseLine(Message, arena, line, .{})
     else
         .{ .unknown = try std.json.parseFromSliceLeaky(std.json.Value, arena, line, .{}) };
     // --- README:arms ---

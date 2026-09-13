@@ -16,7 +16,8 @@ that layer itself, usually three times:
 - **A line is a unit of failure.** One bad line in a million-line log should
   name itself and be skippable, not abort the read. `strand.Reader` reports
   `error.MalformedLine` with the line number and the underlying `std.json`
-  error, and can be told to skip instead (`on_malformed = .skip`).
+  error, and can be told to skip instead (`on_malformed = .skip`) and asked
+  afterwards how many it skipped (`skipped`).
 - **A line is a unit of memory.** A reader that allocates per line and frees
   per stream is a leak with a slow fuse. This reader recycles one line buffer
   and one arena, so a stream of any length costs what its longest line costs,
@@ -397,10 +398,10 @@ lines and prints the numbers. On one laptop (Apple M-series, Zig 0.16.0):
 
 | | |
 |---|---|
-| write | 17.1M lines/s, 0.79 GB/s, 58 ns/line |
-| read | 5.7M lines/s, 0.26 GB/s, 176 ns/line, 1000000 of 1000000 strings borrowed |
-| `writeAll` | 17.2M lines/s — the loop, not another format |
-| `Tail.last(100)` of 1M lines | 780 µs, 8.19 kB of 45.89 MB touched |
+| write | 17.3M lines/s, 0.79 GB/s, 57 ns/line |
+| read | 5.6M lines/s, 0.26 GB/s, 178 ns/line, 1000000 of 1000000 strings borrowed |
+| `writeAll` | 17.3M lines/s — the loop, not another format |
+| `Tail.last(100)` of 1M lines | 730 µs, 8.19 kB of 45.89 MB touched |
 | one 100 MB line | 173 ms, borrowed, 232 bytes of arena |
 
 Two claims in that table are the ones worth checking rather than quoting.
@@ -432,22 +433,30 @@ thousand.
   you need it.
 - It does not watch the filesystem. `Follower` polls, or waits on an event
   you set; the watch itself is yours.
+- It does not decompress. A gzipped log is
+  `std.compress.flate.Decompress.init(&file_reader.interface, .gzip, buffer)`
+  and then a `Reader` over `&decompress.reader`, which is three lines and no
+  API here. `Tail` and `Follower` cannot help with one: a gzip stream has no
+  end to start from.
+- It does not repair a line. Bytes that are not UTF-8 are a malformed line,
+  not a line with replacement characters in it.
 - It has no global state, no threads of its own, no allocator of its own, and
   no dependency beyond `std`.
 
 ## Requirements
 
-Zig 0.16.0. `zig build test` runs the suite — 65 tests, every one under
+Zig 0.16.0. `zig build test` runs the suite — 80 tests, every one under
 `std.testing.allocator`, in Debug, ReleaseSafe, ReleaseFast and ReleaseSmall
 on Linux, macOS and Windows. `ci/linux.sh` runs Debug and ReleaseSafe inside
 a container, because a cross-compile proves nothing about reading a file at an
 offset or about what a growing file looks like through an open handle.
 
 Eight of the tests are `std.testing.fuzz` properties over generated lines:
-nothing panics, nothing leaks, every line is reported under its own number, a
-line that cannot be parsed does not cost the reader its place, a file read
-backwards is the same lines in the other order, and a record written over
-several lines comes back as one. A plain `zig build test` checks them over a
+nothing panics, nothing leaks, every line is reported under its own number and
+at its own byte offset, a line that cannot be parsed does not cost the reader
+its place, a file read backwards is the same lines in the other order and
+places them where the forwards read did, and a record written over several
+lines comes back as one. A plain `zig build test` checks them over a
 corpus and a table of awkward inputs, which is quick; `zig build test --fuzz`
 runs them as a campaign.
 

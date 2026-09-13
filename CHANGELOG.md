@@ -4,6 +4,55 @@ Each entry says what the old shape could not express, so a port has the reason
 and not only the diff. Versions follow [semantic versioning](https://semver.org);
 before 1.0 the minor is the breaking one.
 
+## 0.3.0
+
+A pass over the package asking what a JSON Lines reader is expected to answer
+and this one could not. What follows is what that pass found missing, each
+entry with the test it now rests on.
+
+- `Line.offset`, and `Reader.offset` beside it. A line number is what a person
+  needs and a byte offset is what a program needs, and this package had the
+  second only on `Tail`: `Reader` could say a line was bad and not where it
+  was, so an index, a resume or a report that a caller could act on had nothing
+  to be built out of. A byte-order mark and the terminators of earlier lines are
+  counted, `Follower` seeds it from the file position so that it is a file
+  offset there too, and the fuzz properties hold it to an oracle that counts
+  bytes independently — and hold the forwards and backwards readers to the same
+  answer about where each line is.
+- `Reader.skipped` and `Tail.skipped`. `on_malformed = .skip` tolerated damage
+  and then said nothing about how much, which is not a mode a log can be
+  operated under. Both now count what they let past.
+- `ParseOptions.duplicate_fields`, forwarded to `Reader`, `Tail` and
+  `parseLine`. `std.json` refuses a repeated key, which is right, but plenty of
+  writers emit one anyway and settle it by keeping one of the two — so a log
+  from such a writer was unreadable here rather than merely questionable. The
+  default is unchanged.
+- `Writer.Options.flush`: `.never`, `.per_record` or `.per_batch`. Draining is
+  the one thing about durability a line writer can offer without owning the
+  stream. The destination is still the caller's and the default still touches
+  it never.
+- Bytes that are not UTF-8 now have a written-down answer rather than an
+  implied one: **rejected, not repaired.** `std.json` validates UTF-8, so a
+  truncated sequence, an overlong encoding or a lone surrogate half is
+  `error.MalformedLine` naming the line, and the line after it is read. The
+  asymmetry on the writing side is pinned too: a Zig `[]const u8` that is not
+  valid UTF-8 is written by `std.json` as an array of byte values, which reads
+  back here byte for byte and reads elsewhere as an array rather than a string.
+- Behaviour that was already true and never proved, now proved: a `Reader` over
+  a stream that cannot seek and hands over a byte at a time reads the same
+  lines as one over a file; a record with its own `jsonStringify` is written
+  through it, one line per record; `Reader(std.json.Value)` is a schemaless
+  line and is bounded by `max_line_bytes` rather than by the call stack, so
+  nesting costs bytes rather than frames; a file that shrinks under a `Tail`
+  is `error.Truncated` rather than two files spliced together.
+
+Out of scope, with the reasons written down rather than implied: transparent
+gzip (a decompressor in front of a reader is three lines of `std`, and a gzip
+stream has no end for `Tail` to start from), `Filter`/`Map` adapters (Zig has
+no iterator protocol for them to compose with, and where a mapped value lives
+is what `keep` answers), and an index or a seek to line *n* — though
+`Line.offset` is now the ingredient one is built from.
+
 ## 0.2.0
 
 The line layer grew the three things a log asks for once it is older than an

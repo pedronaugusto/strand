@@ -65,6 +65,27 @@ pub fn build(b: *std.Build) void {
         check_step.dependOn(&example.step);
     }
     test_step.dependOn(examples_step);
+
+    //=====================================================================
+    // Benchmark
+    //
+    // Its own step, and not one `test` depends on: a number that varies with
+    // the machine is not a thing to fail a build over. It is still built by
+    // `check`, so it cannot rot.
+    //=====================================================================
+
+    const bench = b.addExecutable(.{
+        .name = "bench",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/bench.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "zjsonl", .module = module }},
+        }),
+    });
+    const bench_step = b.step("bench", "Build and run the benchmark");
+    bench_step.dependOn(&b.addRunArtifact(bench).step);
+    check_step.dependOn(&bench.step);
 }
 
 /// Every example, listed rather than globbed: a build graph that scans a

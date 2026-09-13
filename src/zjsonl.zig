@@ -20,6 +20,8 @@
 //!   and counts them.
 //! * `Tail` reads a seekable file backwards, last line first, without
 //!   reading what comes before.
+//! * `Follower` reads to the end and keeps reading, the way `tail -f` does,
+//!   waiting on an `std.Io` and stopping when that `std.Io` cancels it.
 //!
 //! What this package does NOT do: it does not parse JSON (`std.json` does),
 //! does not buffer or own a stream, does not open, close, rotate, lock or
@@ -32,11 +34,13 @@ const Allocator = std.mem.Allocator;
 const assert = std.debug.assert;
 
 pub const Tail = @import("tail.zig").Tail;
+pub const Follower = @import("follow.zig").Follower;
 
 test {
     _ = @import("tests.zig");
     _ = @import("fuzz.zig");
     _ = @import("tail.zig");
+    _ = @import("follow.zig");
 }
 
 /// How a line's bytes are turned into a `T`.

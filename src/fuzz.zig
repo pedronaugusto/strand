@@ -299,6 +299,62 @@ fn checkPrettyRoundTrip(events: []const Event) !void {
     try testing.expectEqual(@as(?zjsonl.Line(Event), null), try reader.next());
 }
 
+/// The versioned record this package writes is the versioned record it reads,
+/// and a version it does not know is refused rather than guessed at.
+const Versioned2 = struct {
+    kind: []const u8,
+    at: u64 = 0,
+
+    pub const jsonl_version: u32 = 2;
+
+    pub fn jsonlMigrate(
+        allocator: std.mem.Allocator,
+        from: u32,
+        data: std.json.Value,
+    ) std.json.ParseFromValueError!Versioned2 {
+        if (from != 1) return error.UnknownField;
+        const old = try zjsonl.payloadOf(struct { kind: []const u8 }, allocator, data);
+        return .{ .kind = old.kind, .at = 0 };
+    }
+};
+
+/// `Versioned` over any bytes: it either parses, or it fails with one of
+/// `std.json`'s errors — never a panic and never a leak.
+fn checkVersioned(line: []const u8) !void {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+
+    const record = zjsonl.parseLine(
+        zjsonl.Versioned(Versioned2),
+        arena.allocator(),
+        line,
+        .{},
+    ) catch return;
+
+    // A record that came back came back in today's shape, and says which
+    // shape the line was in.
+    try testing.expect(record.from == 1 or record.from == 2 or record.from == 0);
+    try testing.expectEqual(record.from != 2, record.migrated());
+
+    // And writing it back gives a line that reads as itself.
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    try zjsonl.writeLine(&out.writer, record);
+    try testing.expect(std.mem.startsWith(u8, out.written(), "{\"v\":2,\"data\":"));
+
+    var again: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer again.deinit();
+    const round = try zjsonl.parseLine(
+        zjsonl.Versioned(Versioned2),
+        again.allocator(),
+        out.written()[0 .. out.written().len - 1],
+        .{},
+    );
+    try testing.expectEqual(@as(u32, 2), round.from);
+    try testing.expectEqualStrings(record.value.kind, round.value.kind);
+    try testing.expectEqual(record.value.at, round.value.at);
+}
+
 /// Reading a file backwards gives the same lines as reading it forwards, in
 /// the other order, under the same options.
 ///
@@ -417,6 +473,30 @@ fn append(buf: []u8, end: *usize, bytes: []const u8) void {
     end.* += n;
 }
 
+/// Writes generated versioned envelopes into `buf` and returns what was
+/// written. Versions from before, at and after the current one, plus lines
+/// with no version at all and lines that are not envelopes.
+fn generateVersioned(smith: *std.testing.Smith, buf: []u8) []u8 {
+    @disableInstrumentation();
+    var end: usize = 0;
+    while (end < buf.len and !smith.eos()) {
+        switch (smith.valueRangeAtMost(u8, 0, 6)) {
+            0 => append(buf, &end, "{\"v\":2,\"data\":{\"kind\":\"open\",\"at\":1}}"),
+            1 => append(buf, &end, "{\"v\":1,\"data\":{\"kind\":\"open\"}}"),
+            2 => append(buf, &end, "{\"data\":{\"kind\":\"open\"},\"v\":1}"),
+            3 => append(buf, &end, "{\"data\":{\"kind\":\"unstamped\"}}"),
+            4 => append(buf, &end, "{\"v\":9999,\"data\":{\"kind\":\"future\"}}"),
+            5 => append(buf, &end, "{\"v\":2}"),
+            else => {
+                var chunk: [24]u8 = undefined;
+                append(buf, &end, chunk[0..smith.slice(&chunk)]);
+            },
+        }
+        append(buf, &end, "\n");
+    }
+    return buf[0..end];
+}
+
 /// Fills `events` with generated values, drawing their strings out of `text`,
 /// and returns the ones that fit. The strings are where a round trip can go
 /// wrong, so they are where the awkward bytes go.
@@ -454,6 +534,13 @@ const corpus: []const []const u8 = &.{
     "\xff\xfe\xfd\xfc\xfb\xfa\xf9\xf8\xf7\xf6\xf5\xf4\xf3\xf2\xf1\xf0",
     "{}{}{}{}{}{}{}{}\n\n\n\n{\"ping\":7}\n",
     "        \t\t\t\t\n\"\\\\\"\\\"\\\"\n{\"kind\":\"\"}\n",
+};
+
+/// Seeds for the versioned property, for the same reason `corpus` exists.
+const versioned_corpus: []const []const u8 = &.{
+    "{\"v\":2,\"data\":{\"kind\":\"open\"}}\n",
+    "{\"v\":1,\"data\":{\"kind\":\"open\"}}\n{\"v\":9,\"data\":1}\n",
+    "\x00\x01\x02\n{}\n",
 };
 
 test "fuzz: Reader.next over generated lines" {
@@ -535,6 +622,17 @@ fn fuzzTail(_: void, smith: *std.testing.Smith) anyerror!void {
     try checkTail(generate(smith, &buf));
 }
 
+test "fuzz: Versioned over generated lines" {
+    try std.testing.fuzz({}, fuzzVersioned, .{ .corpus = versioned_corpus });
+}
+
+fn fuzzVersioned(_: void, smith: *std.testing.Smith) anyerror!void {
+    @disableInstrumentation();
+    var buf: [512]u8 = undefined;
+    var it = zjsonl.lines(generateVersioned(smith, &buf));
+    while (it.next()) |line| try checkVersioned(line.line);
+}
+
 //=========================================================================
 // The same properties, over inputs chosen by hand. A fuzz test that is only
 // ever run over its corpus proves little, and a corpus drives the generator
@@ -588,9 +686,11 @@ test "the properties hold on a table of awkward inputs" {
         while (it.next()) |line| {
             try checkKindOf(line.line);
             try checkTagOf(line.line);
+            try checkVersioned(line.line);
         }
     }
 
+    for (versioned_table) |line| try checkVersioned(line);
     try checkPrettyRoundTrip(&.{});
     try checkPrettyRoundTrip(&.{
         .{ .kind = "plain", .at = 1 },
@@ -598,3 +698,17 @@ test "the properties hold on a table of awkward inputs" {
         .{ .kind = "", .at = std.math.maxInt(u64), .tags = &.{ "a", "b" } },
     });
 }
+
+/// Envelopes chosen by hand, for the cases a generator is unlikely to reach.
+const versioned_table: []const []const u8 = &.{
+    "{}",
+    "{\"v\":2}",
+    "{\"data\":null}",
+    "{\"v\":0,\"data\":{\"kind\":\"zero\"}}",
+    "{\"v\":2,\"data\":{\"kind\":\"open\"},\"extra\":[1,2]}",
+    "{\"v\":2,\"v\":2,\"data\":{\"kind\":\"twice\"}}",
+    "{\"v\":-1,\"data\":{}}",
+    "{\"v\":\"2\",\"data\":{}}",
+    "{\"data\":{\"kind\":\"first\"},\"data\":{\"kind\":\"again\"}}",
+    "[{\"v\":2,\"data\":{}}]",
+};

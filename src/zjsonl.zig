@@ -22,6 +22,8 @@
 //!   reading what comes before.
 //! * `Follower` reads to the end and keeps reading, the way `tail -f` does,
 //!   waiting on an `std.Io` and stopping when that `std.Io` cancels it.
+//! * `Versioned` puts a schema version on a record and migrates an older one
+//!   forward.
 //!
 //! What this package does NOT do: it does not parse JSON (`std.json` does),
 //! does not buffer or own a stream, does not open, close, rotate, lock or
@@ -35,12 +37,15 @@ const assert = std.debug.assert;
 
 pub const Tail = @import("tail.zig").Tail;
 pub const Follower = @import("follow.zig").Follower;
+pub const Versioned = @import("versioned.zig").Versioned;
+pub const payloadOf = @import("versioned.zig").payloadOf;
 
 test {
     _ = @import("tests.zig");
     _ = @import("fuzz.zig");
     _ = @import("tail.zig");
     _ = @import("follow.zig");
+    _ = @import("versioned.zig");
 }
 
 /// How a line's bytes are turned into a `T`.

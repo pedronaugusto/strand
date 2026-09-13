@@ -18,10 +18,12 @@
 //!   key alone, without parsing the value.
 //! * `Writer` emits one value per line — minified, or indented for a human —
 //!   and counts them.
+//! * `Tail` reads a seekable file backwards, last line first, without
+//!   reading what comes before.
 //!
 //! What this package does NOT do: it does not parse JSON (`std.json` does),
 //! does not buffer or own a stream, does not open, close, rotate, lock or
-//! compress a file, does not index a log or read it backwards, does not
+//! compress a file, does not index a log or seek to line *n*, does not
 //! validate a line it is not asked to parse, and has no opinion about what a
 //! line means. There is no global state and no dependency beyond `std`.
 
@@ -29,9 +31,12 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const assert = std.debug.assert;
 
+pub const Tail = @import("tail.zig").Tail;
+
 test {
     _ = @import("tests.zig");
     _ = @import("fuzz.zig");
+    _ = @import("tail.zig");
 }
 
 /// How a line's bytes are turned into a `T`.

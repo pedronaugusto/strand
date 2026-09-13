@@ -299,6 +299,80 @@ fn checkPrettyRoundTrip(events: []const Event) !void {
     try testing.expectEqual(@as(?zjsonl.Line(Event), null), try reader.next());
 }
 
+/// Reading a file backwards gives the same lines as reading it forwards, in
+/// the other order, under the same options.
+///
+/// This is the whole claim `Tail` makes, and it is checked against `Reader`
+/// rather than against a second copy of the splitting rules: the two share no
+/// code, so an agreement between them is evidence rather than a tautology.
+/// The line numbers are checked too, since they run the other way: a line that
+/// is the *i*th from the start of a file of *n* lines is the *(n + 1 - i)*th
+/// from its end.
+fn checkTail(input: []const u8) !void {
+    const options: zjsonl.Reader(Event).Options = .{
+        .on_malformed = .skip,
+        // A bound the generated input can reach, so that an over-long line is
+        // part of the property.
+        .max_line_bytes = 96,
+        // The forward reader takes the mark off the stream and the backwards
+        // one off the line, which is the same line but a different length,
+        // and the bound above would see the difference.
+        .skip_bom = false,
+    };
+
+    var forward_lines: std.ArrayList([]const u8) = .empty;
+    var forward_numbers: std.ArrayList(u64) = .empty;
+    defer {
+        for (forward_lines.items) |item| testing.allocator.free(item);
+        forward_lines.deinit(testing.allocator);
+        forward_numbers.deinit(testing.allocator);
+    }
+
+    var source: std.Io.Reader = .fixed(input);
+    var reader: zjsonl.Reader(Event) = .init(testing.allocator, &source, options);
+    defer reader.deinit();
+    while (true) {
+        const line = reader.next() catch |err| switch (err) {
+            error.LineTooLong => continue,
+            else => return err,
+        } orelse break;
+        try forward_lines.append(testing.allocator, try testing.allocator.dupe(u8, line.line));
+        try forward_numbers.append(testing.allocator, line.number);
+    }
+    const total = reader.number;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "log.jsonl", .data = input });
+    const file = try tmp.dir.openFile(testing.io, "log.jsonl", .{});
+    defer file.close(testing.io);
+
+    var buffer: [37]u8 = undefined;
+    var file_reader = file.reader(testing.io, &buffer);
+    var tail: zjsonl.Tail(Event) = try .init(testing.allocator, &file_reader, .{
+        .on_malformed = .skip,
+        .max_line_bytes = options.max_line_bytes,
+        .skip_bom = options.skip_bom,
+        // Small enough that a line spans several of them.
+        .block_bytes = 13,
+    });
+    defer tail.deinit();
+
+    var seen: usize = 0;
+    while (true) {
+        const line = tail.prev() catch |err| switch (err) {
+            error.LineTooLong => continue,
+            else => return err,
+        } orelse break;
+        if (seen >= forward_lines.items.len) return error.TestTailInventedALine;
+        const i = forward_lines.items.len - 1 - seen;
+        try testing.expectEqualStrings(forward_lines.items[i], line.line);
+        try testing.expectEqual(total + 1 - forward_numbers.items[i], line.number);
+        seen += 1;
+    }
+    try testing.expectEqual(forward_lines.items.len, seen);
+}
+
 //=========================================================================
 // The generator: lines that are nearly right, plus bytes that are not.
 //=========================================================================
@@ -451,6 +525,16 @@ fn fuzzPrettyRoundTrip(_: void, smith: *std.testing.Smith) anyerror!void {
     try checkPrettyRoundTrip(generateEvents(smith, &events, &text));
 }
 
+test "fuzz: Tail over generated files" {
+    try std.testing.fuzz({}, fuzzTail, .{ .corpus = corpus });
+}
+
+fn fuzzTail(_: void, smith: *std.testing.Smith) anyerror!void {
+    @disableInstrumentation();
+    var buf: [512]u8 = undefined;
+    try checkTail(generate(smith, &buf));
+}
+
 //=========================================================================
 // The same properties, over inputs chosen by hand. A fuzz test that is only
 // ever run over its corpus proves little, and a corpus drives the generator
@@ -498,6 +582,7 @@ test "the properties hold on a table of awkward inputs" {
         try checkReaderSkip(input);
 
         try checkPretty(input);
+        try checkTail(input);
 
         var it = zjsonl.lines(input);
         while (it.next()) |line| {

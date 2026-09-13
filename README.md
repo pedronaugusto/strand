@@ -356,6 +356,24 @@ hand-rolled line layer gets wrong:
   escapes it. `Writer` refuses no value on these grounds and has no check to
   skip: *write escapes every terminator that could break the framing* in the
   suite writes every byte that could, and counts the newlines.
+- **Bytes that are not UTF-8** are a malformed line. JSON Lines is UTF-8 by
+  definition and `std.json` validates it, so a truncated sequence, an overlong
+  encoding or a lone surrogate half is `error.MalformedLine` with
+  `error.SyntaxError` under it — named by line number, and the line after it is
+  read as usual. This package rejects; it does not repair, and it does not
+  substitute U+FFFD for what it could not read. Going the other way, a Zig
+  `[]const u8` that is not valid UTF-8 is written by `std.json` as an array of
+  byte values rather than as a string: the framing holds and this package reads
+  the bytes back exactly, but another language's reader sees an array where it
+  expected a string, so a field carrying arbitrary bytes wants base64 or hex.
+- **A key that appears twice** is `error.MalformedLine` by default, which is
+  `std.json`'s position. Encoders in most other languages resolve a repeat by
+  keeping one of the two, so a log written by one of them may need
+  `duplicate_fields = .use_last` (or `.use_first`) to be readable at all.
+- **A line with no schema** is `Reader(std.json.Value)`, which is a `T` like
+  any other and needs nothing added here. `std.json` builds a `Value` on a heap
+  stack rather than by recursing, so how deep a line may nest is bounded by
+  `max_line_bytes` and not by the call stack.
 - **A record over several lines** is what `Writer`'s `.pretty` format emits,
   for a human to read; a `Reader` in `.pretty` mode joins lines until they
   parse and reads it back. A `.pretty` reader reads minified lines too.

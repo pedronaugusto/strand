@@ -661,3 +661,31 @@ test "skipped counts what a tolerant backwards read lost" {
     try testing.expectEqual(@as(usize, 2), seen);
     try testing.expectEqual(@as(u64, 1), tail.skipped);
 }
+
+test "a file that shrinks under a tail is reported rather than misread" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{
+        .sub_path = "log.jsonl",
+        .data = "{\"kind\":\"a\"}\n" ** 400,
+    });
+
+    const file = try tmp.dir.openFile(testing.io, "log.jsonl", .{});
+    defer file.close(testing.io);
+    var buffer: [64]u8 = undefined;
+    var reader = file.reader(testing.io, &buffer);
+
+    // A tail is a view of the file as it was when it opened, so a rotation
+    // that empties the file under it is a fact it can state rather than a
+    // block of some other file spliced onto the last one read.
+    // One line per block, so that every `prev` has to go back to the file.
+    var tail: Tail(Event) = try .init(testing.allocator, &reader, .{ .block_bytes = 13 });
+    defer tail.deinit();
+    try testing.expectEqualStrings("a", (try tail.prev()).?.value.kind);
+
+    const writer = try tmp.dir.openFile(testing.io, "log.jsonl", .{ .mode = .read_write });
+    defer writer.close(testing.io);
+    try writer.setLength(testing.io, 0);
+
+    try testing.expectError(error.Truncated, tail.prev());
+}

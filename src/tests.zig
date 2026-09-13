@@ -922,3 +922,238 @@ test "a flush policy is how often the destination is asked to drain" {
 }
 
 //=========================================================================
+// Bytes that are not UTF-8. The format is UTF-8 by definition, so the
+// question is only what happens when the bytes are not, and the answer has
+// to be the same one every time.
+//=========================================================================
+
+test "invalid UTF-8 in a line is a malformed line, and the stream survives it" {
+    const cases: []const []const u8 = &.{
+        "{\"kind\":\"\xff\"}", // a byte no UTF-8 sequence starts with
+        "{\"kind\":\"\xc3\"}", // a sequence that stops half way
+        "{\"kind\":\"\xc0\xaf\"}", // an overlong encoding of '/'
+        "{\"kind\":\"\xed\xa0\x80\"}", // a lone surrogate half
+        "\xff{\"kind\":\"ok\"}", // not inside a string at all
+    };
+
+    for (cases) |bad| {
+        var buf: std.Io.Writer.Allocating = .init(testing.allocator);
+        defer buf.deinit();
+        try buf.writer.writeAll(bad);
+        try buf.writer.writeAll("\n{\"kind\":\"after\"}\n");
+
+        var source: std.Io.Reader = .fixed(buf.written());
+        var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{});
+        defer reader.deinit();
+
+        try testing.expectError(error.MalformedLine, reader.next());
+        try testing.expectEqual(@as(u64, 1), reader.last_error_line);
+        // `std.json` validates UTF-8 itself, so this is a syntax error and
+        // not a second opinion of this package's.
+        try testing.expectEqual(error.SyntaxError, reader.last_error.?);
+        // And the line after it is read, because a bad line is one line.
+        try testing.expectEqualStrings("after", (try reader.next()).?.value.kind);
+    }
+}
+
+test "a Zig string that is not UTF-8 is not written as a JSON string" {
+    // `std.json.Stringify` writes a `[]const u8` as a JSON string only when
+    // it is valid UTF-8, and as an array of byte values when it is not. That
+    // is the one case where a value written by `Writer` does not read back as
+    // the same value, and it is worth pinning: a log of arbitrary bytes wants
+    // a base64 or hex field, not a Zig string.
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    try strand.writeLine(&out.writer, .{ .kind = @as([]const u8, "\xff\xfe"), .at = @as(u64, 1) });
+    try testing.expectEqualStrings("{\"kind\":[255,254],\"at\":1}\n", out.written());
+
+    // The framing holds either way: it is still one line.
+    try testing.expectEqual(@as(usize, 1), std.mem.count(u8, out.written(), "\n"));
+
+    // Read back by this package the bytes survive, because `std.json` reads
+    // an array of numbers into a `[]const u8` field. Read back by anything
+    // else the field is an array and not a string, which is why a log of
+    // arbitrary bytes should encode them rather than rely on this.
+    var source: std.Io.Reader = .fixed(out.written());
+    var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{});
+    defer reader.deinit();
+    try testing.expectEqualStrings("\xff\xfe", (try reader.next()).?.value.kind);
+}
+
+//=========================================================================
+// A record with an encoder of its own, and a line with no schema at all.
+//=========================================================================
+
+/// A record that writes itself: two fields flattened into one string, which
+/// is the shape a `jsonStringify` method usually exists for.
+const Packed = struct {
+    host: []const u8,
+    port: u16,
+
+    pub fn jsonStringify(self: @This(), jw: anytype) !void {
+        try jw.beginObject();
+        try jw.objectField("addr");
+        try jw.print("\"{s}:{d}\"", .{ self.host, self.port });
+        try jw.endObject();
+    }
+};
+
+test "a record with its own jsonStringify is written through it, one line per record" {
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+
+    var log: strand.Writer(Packed) = .init(&out.writer, .{});
+    try log.writeAll(&.{
+        .{ .host = "localhost", .port = 8080 },
+        .{ .host = "example", .port = 443 },
+    });
+    try testing.expectEqualStrings(
+        \\{"addr":"localhost:8080"}
+        \\{"addr":"example:443"}
+        \\
+    , out.written());
+    try testing.expectEqual(@as(u64, 2), log.count);
+
+    // One line per record, and the lines read back.
+    const Addr = struct { addr: []const u8 };
+    var source: std.Io.Reader = .fixed(out.written());
+    var reader: strand.Reader(Addr) = .init(testing.allocator, &source, .{});
+    defer reader.deinit();
+    try testing.expectEqualStrings("localhost:8080", (try reader.next()).?.value.addr);
+    try testing.expectEqualStrings("example:443", (try reader.next()).?.value.addr);
+}
+
+test "a schemaless line is a std.json.Value like any other type" {
+    const input =
+        \\{"kind":"open","at":1}
+        \\[1,2,3]
+        \\{"deep":{"nested":{"thing":true}}}
+        \\
+    ;
+    var source: std.Io.Reader = .fixed(input);
+    var reader: strand.Reader(std.json.Value) = .init(testing.allocator, &source, .{});
+    defer reader.deinit();
+
+    try testing.expectEqualStrings("open", (try reader.next()).?.value.object.get("kind").?.string);
+    try testing.expectEqual(@as(usize, 3), (try reader.next()).?.value.array.items.len);
+    const deep = (try reader.next()).?;
+    try testing.expect(deep.value.object.get("deep").?.object.get("nested").?.object.get("thing").?.bool);
+    try testing.expectEqual(@as(?strand.Line(std.json.Value), null), try reader.next());
+}
+
+test "a schemaless line is bounded by max_line_bytes and not by the stack" {
+    // `std.json` parses a `Value` with a heap stack rather than by recursing,
+    // so the only bound on how deep a line may nest is how long it may be —
+    // which is `max_line_bytes`, the bound this reader already has.
+    const depth = 50_000;
+
+    var input: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer input.deinit();
+    try input.writer.splatByteAll('[', depth);
+    try input.writer.splatByteAll(']', depth);
+    try input.writer.writeAll("\n{\"after\":1}\n");
+
+    var source: std.Io.Reader = .fixed(input.written());
+    var reader: strand.Reader(std.json.Value) = .init(testing.allocator, &source, .{
+        .max_line_bytes = 4 * depth,
+    });
+    defer reader.deinit();
+
+    var value = (try reader.next()).?.value;
+    var measured: usize = 0;
+    while (value == .array and value.array.items.len == 1) : (measured += 1) value = value.array.items[0];
+    try testing.expectEqual(@as(usize, depth - 1), measured);
+    try testing.expectEqualStrings("after", (try reader.next()).?.line[2..7]);
+
+    // The same line, past the bound, is one refused line rather than a crash.
+    var again: std.Io.Reader = .fixed(input.written());
+    var bounded: strand.Reader(std.json.Value) = .init(testing.allocator, &again, .{
+        .max_line_bytes = 1024,
+    });
+    defer bounded.deinit();
+    try testing.expectError(error.LineTooLong, bounded.next());
+    // Refused, not fatal: the line after the deep one is still read.
+    try testing.expectEqual(@as(usize, 1), (try bounded.next()).?.value.object.count());
+    try testing.expectEqual(@as(?strand.Line(std.json.Value), null), try bounded.next());
+}
+
+//=========================================================================
+// A stream that is not a file: no size, no seek, and a byte at a time.
+//=========================================================================
+
+/// A `std.Io.Reader` that hands over `chunk` bytes at a time and can neither
+/// seek nor say how long it is — a pipe, in other words, and the smallest
+/// chunk a pipe could plausibly give.
+const Trickle = struct {
+    rest: []const u8,
+    chunk: usize,
+    interface: std.Io.Reader,
+
+    fn init(bytes: []const u8, buffer: []u8, chunk: usize) Trickle {
+        return .{
+            .rest = bytes,
+            .chunk = chunk,
+            .interface = .{
+                .vtable = &.{ .stream = stream },
+                .buffer = buffer,
+                .seek = 0,
+                .end = 0,
+            },
+        };
+    }
+
+    fn stream(io_reader: *std.Io.Reader, w: *std.Io.Writer, limit: std.Io.Limit) std.Io.Reader.StreamError!usize {
+        const self: *Trickle = @alignCast(@fieldParentPtr("interface", io_reader));
+        if (self.rest.len == 0) return error.EndOfStream;
+        const room = @intFromEnum(limit.min(.limited(self.rest.len)));
+        const take = @max(@min(self.chunk, room), 1);
+        const n = try w.write(self.rest[0..take]);
+        self.rest = self.rest[n..];
+        return n;
+    }
+};
+
+test "a non-seekable stream is read under the same guarantees as a file" {
+    const input =
+        "\xEF\xBB\xBF" ++
+        "{\"kind\":\"one\"}\r\n" ++
+        "\n" ++
+        "broken\n" ++
+        "{\"kind\":\"two\",\"at\":2}\n" ++
+        "{\"kind\":\"three\"}";
+
+    // The reader's own buffer is what a BOM is peeked through, so this runs
+    // from too small to hold one up to comfortably large.
+    for ([_]usize{ 1, 2, 3, 4, 16, 512 }) |buffer_len| {
+        for ([_]usize{ 1, 3, 64 }) |chunk| {
+            const buffer = try testing.allocator.alloc(u8, buffer_len);
+            defer testing.allocator.free(buffer);
+
+            var trickle: Trickle = .init(input, buffer, chunk);
+            var reader: strand.Reader(Event) = .init(testing.allocator, &trickle.interface, .{
+                .on_malformed = .skip,
+            });
+            defer reader.deinit();
+
+            var kinds: [3][]const u8 = undefined;
+            var seen: usize = 0;
+            while (try reader.next()) |line| : (seen += 1) {
+                kinds[seen] = try testing.allocator.dupe(u8, line.value.kind);
+            }
+            defer for (kinds[0..seen]) |kind| testing.allocator.free(kind);
+
+            // A buffer too small to peek a byte-order mark through leaves
+            // the mark on the first line, which then does not parse. That is
+            // the one thing a tiny buffer changes, and it is documented on
+            // `skipBom`; everything else is what a file gives.
+            const bom_seen = buffer_len >= 3;
+            try testing.expectEqual(@as(usize, if (bom_seen) 3 else 2), seen);
+            if (bom_seen) try testing.expectEqualStrings("one", kinds[0]);
+            try testing.expectEqualStrings("two", kinds[seen - 2]);
+            try testing.expectEqualStrings("three", kinds[seen - 1]);
+            try testing.expectEqual(@as(u64, if (bom_seen) 1 else 2), reader.skipped);
+            // Every physical line was counted, blank and broken alike.
+            try testing.expectEqual(@as(u64, 5), reader.number);
+        }
+    }
+}

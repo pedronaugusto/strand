@@ -655,6 +655,23 @@ pub fn Writer(comptime T: type) type {
             /// See `Format`. `.pretty` writes a record over several lines,
             /// which only a reader in `.pretty` mode reads back.
             format: Format = .minified,
+            /// When the destination is asked to drain what it is holding.
+            ///
+            /// The default is never, because this writer does not own the
+            /// stream and a flush is a decision about durability that belongs
+            /// to whoever does. A log that another process tails, or that has
+            /// to survive a crash between two records, is the case where the
+            /// decision is "after every one", and saying so here is shorter
+            /// than wrapping every `write`.
+            flush: enum {
+                /// Nothing is flushed. The caller drains its own writer.
+                never,
+                /// `write` flushes the destination after each record.
+                per_record,
+                /// `writeAll` flushes once, after the last record of the
+                /// batch. A plain `write` flushes nothing.
+                per_batch,
+            } = .never,
         };
 
         /// What `write` can report: the destination refused the bytes. Ask it
@@ -687,18 +704,20 @@ pub fn Writer(comptime T: type) type {
             }, self.output);
             try self.output.writeByte('\n');
             self.count += 1;
+            if (self.options.flush == .per_record) try self.output.flush();
         }
 
         /// Writes every value in `values`, in order.
         ///
-        /// The same bytes as a `write` per value, and the same absence of a
-        /// flush: this exists so that a caller holding a batch hands it over
-        /// once instead of writing a loop, and so that a buffered `output`
-        /// sees the whole batch before it decides to drain. On failure the
-        /// values before the one that failed have been written and `count`
-        /// says how many.
+        /// The same bytes as a `write` per value: this exists so that a
+        /// caller holding a batch hands it over once instead of writing a
+        /// loop, and so that a buffered `output` sees the whole batch before
+        /// it decides to drain. Under `flush = .per_batch` the batch is what
+        /// a flush follows. On failure the values before the one that failed
+        /// have been written and `count` says how many.
         pub fn writeAll(self: *Self, values: []const T) Error!void {
             for (values) |value| try self.write(value);
+            if (self.options.flush == .per_batch) try self.output.flush();
         }
     };
 }

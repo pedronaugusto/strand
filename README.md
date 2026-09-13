@@ -89,6 +89,12 @@ const kind = strand.kindOf("{\"kind\":\"open\",\"at\":1}");
 `std.Io.Reader.fixed` above is what makes the example self-contained; in a
 program the source is a file or a socket, and any `*std.Io.Reader` will do.
 
+The writer does not own the destination and never drains it behind your back,
+but *how often to drain* is a decision a log has an opinion about, so it can be
+said once instead of at every call site: `Writer.Options.flush` is `.never` by
+default, `.per_record` for a log another process is tailing, and `.per_batch`
+for one written in batches.
+
 ## Reading backwards
 
 A log answers most questions from its end: what happened last, what the last
@@ -391,10 +397,12 @@ thousand.
 
 - It does not parse JSON. `std.json` does; this is the line layer over it,
   and every parse option that matters is forwarded rather than reinvented.
-- It does not own, buffer, open, close, flush, lock or rotate a stream. It
-  takes a `*std.Io.Reader`, a `*std.Io.Writer` or a `*std.Io.File.Reader` and
-  leaves the rest to the caller — which is why rotation is a documented
-  contract and not a feature.
+- It does not own, buffer, open, close, lock or rotate a stream. It takes a
+  `*std.Io.Reader`, a `*std.Io.Writer` or a `*std.Io.File.Reader` and leaves
+  the rest to the caller — which is why rotation is a documented contract and
+  not a feature. The one exception is stated rather than hidden: a `Writer`
+  asks the destination to drain when `Writer.Options.flush` says to, which is
+  never unless you say otherwise.
 - It does not index a log or seek to line *n*. `Tail` reads backwards from
   the end; it does not build a map of where lines are.
 - It does not read a `.pretty` file backwards: finding where a multi-line

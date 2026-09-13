@@ -858,3 +858,67 @@ test "a repeated key is refused, kept first or kept last, as asked" {
 }
 
 //=========================================================================
+// Flushing, which is a decision about durability rather than about bytes.
+//=========================================================================
+
+/// A writer that counts the drains it is asked for and keeps what it was
+/// given, so that a flush is observable.
+const Draining = struct {
+    interface: std.Io.Writer,
+    flushes: usize = 0,
+    written: std.ArrayList(u8) = .empty,
+
+    fn init(buffer: []u8) Draining {
+        return .{ .interface = .{ .vtable = &.{ .drain = drain }, .buffer = buffer, .end = 0 } };
+    }
+
+    fn deinit(self: *Draining) void {
+        self.written.deinit(testing.allocator);
+    }
+
+    fn drain(io_writer: *std.Io.Writer, data: []const []const u8, splat: usize) std.Io.Writer.Error!usize {
+        const self: *Draining = @alignCast(@fieldParentPtr("interface", io_writer));
+        self.flushes += 1;
+        self.written.appendSlice(testing.allocator, io_writer.buffered()) catch return error.WriteFailed;
+        io_writer.end = 0;
+        var n: usize = 0;
+        for (data[0 .. data.len - 1]) |bytes| {
+            self.written.appendSlice(testing.allocator, bytes) catch return error.WriteFailed;
+            n += bytes.len;
+        }
+        for (0..splat) |_| {
+            self.written.appendSlice(testing.allocator, data[data.len - 1]) catch return error.WriteFailed;
+            n += data[data.len - 1].len;
+        }
+        return n;
+    }
+};
+
+test "a flush policy is how often the destination is asked to drain" {
+    const events = [_]Event{
+        .{ .kind = "one", .at = 1 },
+        .{ .kind = "two", .at = 2 },
+        .{ .kind = "three", .at = 3 },
+    };
+
+    for ([_]struct { @FieldType(strand.Writer(Event).Options, "flush"), usize }{
+        .{ .never, 0 },
+        .{ .per_record, 3 },
+        .{ .per_batch, 1 },
+    }) |case| {
+        var buffer: [4096]u8 = undefined;
+        var sink: Draining = .init(&buffer);
+        defer sink.deinit();
+
+        var log: strand.Writer(Event) = .init(&sink.interface, .{ .flush = case[0] });
+        try log.writeAll(&events);
+        try testing.expectEqual(case[1], sink.flushes);
+
+        // Whatever the policy, the bytes are the same bytes once drained.
+        try sink.interface.flush();
+        try testing.expectEqual(@as(usize, 3), std.mem.count(u8, sink.written.items, "\n"));
+        try testing.expect(std.mem.startsWith(u8, sink.written.items, "{\"kind\":\"one\""));
+    }
+}
+
+//=========================================================================

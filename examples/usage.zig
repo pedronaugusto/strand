@@ -50,7 +50,7 @@ pub fn main() !void {
         // `line.value` is valid until the next `next`: its strings point into
         // `line.line`, which the reader reuses. `keep` copies one out.
         if (std.mem.eql(u8, line.value.kind, "open")) {
-            last_open = try events.keep(line, arena);
+            last_open = try events.keep(arena, line);
         }
         if (line.value.level == .warn) warnings += 1;
         std.debug.print("line {d}: {s}\n", .{ line.number, line.line });

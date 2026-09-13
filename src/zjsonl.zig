@@ -31,6 +31,7 @@ const assert = std.debug.assert;
 
 test {
     _ = @import("tests.zig");
+    _ = @import("fuzz.zig");
 }
 
 /// How a line's bytes are turned into a `T`.
@@ -98,7 +99,7 @@ test parseLine {
     try std.testing.expectEqual(@as(?[]const u8, null), event.note);
     try std.testing.expectEqual(.info, event.level);
     // "open" needed no unescaping, so it is a view into `line`.
-    try std.testing.expect(event.kind.ptr == line.ptr + 9);
+    try std.testing.expect(event.kind.ptr == line.ptr + std.mem.indexOf(u8, line, "open").?);
 }
 
 /// One line of input: the value it parsed to, the bytes it parsed from, and
@@ -133,8 +134,9 @@ pub fn Reader(comptime T: type) type {
         input: *std.Io.Reader,
         /// Read-only after `init`.
         options: Options,
-        /// Number of physical lines consumed so far, blank and malformed
-        /// lines included. The number of the line `next` last returned.
+        /// The number of the line `next` last returned, which is also the
+        /// count of physical lines consumed so far — blank, malformed and
+        /// over-long lines included.
         number: u64 = 0,
         /// The line number of the most recent `error.MalformedLine`,
         /// `error.LineTooLong`, or line skipped under `.skip`; 0 if there has
@@ -144,7 +146,9 @@ pub fn Reader(comptime T: type) type {
         /// for `error.LineTooLong`, which never reached `std.json`.
         last_error: ?ParseLineError = null,
 
+        /// Internal. The current line's bytes; `Line.line` is a view of it.
         line_buf: std.Io.Writer.Allocating,
+        /// Internal. What parsing the current line allocated, reset per line.
         arena: std.heap.ArenaAllocator,
 
         const Self = @This();
@@ -215,9 +219,11 @@ pub fn Reader(comptime T: type) type {
         /// previous `Line` pointed at is gone by the time the next one is
         /// returned. To keep a value past that point, call `keep`.
         ///
-        /// A returned error does not desynchronize the stream: the offending
-        /// line has been consumed in full, and calling `next` again continues
-        /// with the one after it.
+        /// `error.MalformedLine` and `error.LineTooLong` do not desynchronize
+        /// the stream: the offending line has been consumed in full, and
+        /// calling `next` again continues with the one after it.
+        /// `error.ReadFailed` and `error.OutOfMemory` can arrive in the middle
+        /// of a line, and leave the stream wherever they found it.
         pub fn next(self: *Self) NextError!?Line(T) {
             while (true) {
                 const raw = (try self.readLine()) orelse return null;
@@ -258,7 +264,7 @@ pub fn Reader(comptime T: type) type {
         /// `error.OutOfMemory`, since these bytes have already parsed once —
         /// but a `T` with a custom `jsonParse` method is free to disagree, so
         /// the full set is reported rather than asserted away.
-        pub fn keep(self: *Self, line: Line(T), allocator: Allocator) ParseLineError!T {
+        pub fn keep(self: *Self, allocator: Allocator, line: Line(T)) ParseLineError!T {
             return parseLine(T, allocator, line.line, .{
                 .ignore_unknown_fields = self.options.ignore_unknown_fields,
                 .copy_strings = true,
@@ -477,11 +483,12 @@ test tagOf {
     try std.testing.expectEqual(@as(?std.meta.Tag(Message), null), tagOf(Message, "{\"other\":1}"));
 }
 
-/// One line of a buffer, as `lines` yields it.
+/// One line of a buffer, as `lines` yields it: `Line` without the value,
+/// and named the same way.
 pub const RawLine = struct {
     /// The line's bytes, without the `\n` or `\r\n` that ended it. Points
-    /// into the buffer given to `lines`.
-    bytes: []const u8,
+    /// into the buffer given to `lines` and is valid as long as it is.
+    line: []const u8,
     /// 1-based line number.
     number: u64,
 };
@@ -511,17 +518,17 @@ pub const LineIterator = struct {
         it.rest = it.rest[@min(end + 1, it.rest.len)..];
         if (std.mem.endsWith(u8, line, "\r")) line = line[0 .. line.len - 1];
         it.number += 1;
-        return .{ .bytes = line, .number = it.number };
+        return .{ .line = line, .number = it.number };
     }
 };
 
 test lines {
     var it = lines("{\"a\":1}\r\n\n{\"a\":2}");
-    try std.testing.expectEqualStrings("{\"a\":1}", it.next().?.bytes);
-    try std.testing.expectEqualStrings("", it.next().?.bytes);
+    try std.testing.expectEqualStrings("{\"a\":1}", it.next().?.line);
+    try std.testing.expectEqualStrings("", it.next().?.line);
 
     const last = it.next().?;
-    try std.testing.expectEqualStrings("{\"a\":2}", last.bytes);
+    try std.testing.expectEqualStrings("{\"a\":2}", last.line);
     try std.testing.expectEqual(@as(u64, 3), last.number);
     try std.testing.expectEqual(@as(?RawLine, null), it.next());
 }

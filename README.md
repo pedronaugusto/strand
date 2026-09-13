@@ -65,7 +65,7 @@ while (try events.next()) |line| {
     // `line.value` is valid until the next `next`: its strings point into
     // `line.line`, which the reader reuses. `keep` copies one out.
     if (std.mem.eql(u8, line.value.kind, "open")) {
-        last_open = try events.keep(line, arena);
+        last_open = try events.keep(arena, line);
     }
     if (line.value.level == .warn) warnings += 1;
     std.debug.print("line {d}: {s}\n", .{ line.number, line.line });
@@ -126,10 +126,11 @@ content of a line:
 | `error.ReadFailed` | The underlying `std.Io.Reader` failed; ask it for diagnostics. |
 | `error.OutOfMemory` | The allocator failed. |
 
-No error desynchronizes the stream: the offending line is consumed in full,
-so `next` can simply be called again. Blank lines are skipped by default and
-still counted, so a line number always means the line a text editor would
-show.
+The first two do not desynchronize the stream: the offending line is consumed
+in full, so `next` can simply be called again. The other two can arrive in the
+middle of a line and leave the stream wherever they found it. Blank lines are
+skipped by default and still counted, so a line number always means the line a
+text editor would show.
 
 ## What this package does not do
 
@@ -149,9 +150,15 @@ show.
 
 ## Requirements
 
-Zig 0.16.0. `zig build test` runs the suite — 21 tests, every one under
+Zig 0.16.0. `zig build test` runs the suite — 26 tests, every one under
 `std.testing.allocator`, in Debug, ReleaseSafe, ReleaseFast and ReleaseSmall
 on Linux, macOS and Windows.
+
+Four of them are `std.testing.fuzz` properties over generated lines: nothing
+panics, nothing leaks, every line is reported under its own number, and a line
+that cannot be parsed does not cost the reader its place in the stream. A
+plain `zig build test` checks them over a corpus and a table of awkward inputs,
+which is quick; `zig build test --fuzz` runs them as a campaign.
 
 ## License
 

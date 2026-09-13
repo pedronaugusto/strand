@@ -41,7 +41,7 @@ fn readAll(
     var out: std.ArrayList(T) = .empty;
     errdefer out.deinit(testing.allocator);
     while (try reader.next()) |line| {
-        try out.append(testing.allocator, try reader.keep(line, arena));
+        try out.append(testing.allocator, try reader.keep(arena, line));
     }
     return out;
 }
@@ -96,9 +96,9 @@ test "round trip: tagged unions" {
 
     // The tag of each line is readable without parsing it.
     var it = zjsonl.lines(out.written());
-    try testing.expectEqual(.hello, zjsonl.tagOf(Message, it.next().?.bytes).?);
-    try testing.expectEqual(.ping, zjsonl.tagOf(Message, it.next().?.bytes).?);
-    try testing.expectEqual(.goodbye, zjsonl.tagOf(Message, it.next().?.bytes).?);
+    try testing.expectEqual(.hello, zjsonl.tagOf(Message, it.next().?.line).?);
+    try testing.expectEqual(.ping, zjsonl.tagOf(Message, it.next().?.line).?);
+    try testing.expectEqual(.goodbye, zjsonl.tagOf(Message, it.next().?.line).?);
 
     var parsed = try readAll(Message, arena.allocator(), out.written(), .{});
     defer parsed.deinit(testing.allocator);
@@ -294,7 +294,7 @@ test "keep is what makes a value outlive its line" {
         defer reader.deinit();
 
         const first = (try reader.next()).?;
-        kept = try reader.keep(first, arena.allocator());
+        kept = try reader.keep(arena.allocator(), first);
         // The copy borrows neither the line buffer nor anything in it.
         try testing.expect(!within(kept.kind, first.line));
 
@@ -364,7 +364,7 @@ test "parseLine and lines: the buffer already in memory" {
     var count: usize = 0;
     var it = zjsonl.lines(buffer);
     while (it.next()) |line| : (count += 1) {
-        const event = try zjsonl.parseLine(Event, arena.allocator(), line.bytes, .{});
+        const event = try zjsonl.parseLine(Event, arena.allocator(), line.line, .{});
         try testing.expectEqual(line.number, count + 1);
         try testing.expect(event.kind.len > 0);
         // Nothing was copied: the field is a view into the original buffer.

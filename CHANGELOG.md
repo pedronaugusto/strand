@@ -26,3 +26,8 @@ First release: the line layer over `std.json`, and nothing else.
 - `Writer(T)` and `writeLine` emit one minified value per line, omitting null
   optional fields by default, and count what they wrote. `parseLine` and
   `lines` cover a buffer already in memory.
+- The claims above are properties rather than examples: four
+  `std.testing.fuzz` tests hold the reader, `kindOf`, `tagOf` and `lines` to
+  them over generated lines and over a table of awkward inputs, with the line
+  numbering checked against an index scan that shares no code with the
+  package.

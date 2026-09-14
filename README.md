@@ -3,52 +3,18 @@
 [![CI](https://github.com/pedronaugusto/strand/actions/workflows/ci.yml/badge.svg)](https://github.com/pedronaugusto/strand/actions/workflows/ci.yml)
 
 Typed [JSON Lines](https://jsonlines.org) for Zig: one JSON value per line,
-read and written on top of `std.json`. For append-only logs, line protocols
-and event streams.
-
-JSON Lines is the format a log already wants to be — a complete JSON value,
-then `\n`, and nothing else on the line — because it stays greppable,
-tailable and appendable, and frames a stream without a length prefix.
-`std.json` has every piece needed to parse and emit the values. What it does
-not have is the line layer, and a program that keeps a log ends up writing
-that layer itself, usually three times:
-
-- **A line is a unit of failure.** One bad line in a million-line log should
-  name itself and be skippable, not abort the read. `strand.Reader` reports
-  `error.MalformedLine` with the line number and the underlying `std.json`
-  error, and can be told to skip instead (`on_malformed = .skip`) and asked
-  afterwards how many it skipped (`skipped`).
-- **A line is a unit of memory.** A reader that allocates per line and frees
-  per stream is a leak with a slow fuse. This reader recycles one line buffer
-  and one arena, so a stream of any length costs what its longest line costs,
-  and `keep` is the one call that copies a value out.
-- **Strings should not be copied twice.** `std.json`'s `.alloc_if_needed`
-  lets a string field point into the line's own bytes when it needs no
-  unescaping, which is the common case for a log. `strand` reads that way by
-  default and documents exactly how long the borrow lasts.
-- **A line is somewhere.** A line number is for a person; a byte offset is for
-  a program. `Line.offset` says where the line began, so an index of every
-  thousandth line is a loop and a `std.ArrayList(u64)`, and the forwards and
-  backwards readers agree about it. `Reader.resumeAt` reads back from an entry
-  of that index under the line number the index recorded.
-- **A line has a kind.** `kindOf` reads the first key of the object, and
-  `tagOf` turns it into the tag of a tagged union, without parsing the value —
-  so a dispatcher can route a line to the right type before committing to it.
-- **A log is read from its end.** `Tail` reads a seekable file backwards, last
-  line first, touching the blocks those lines are in and nothing before them.
-- **A log is read while it is written.** `Follower` reads to the end, waits on
-  an `std.Io`, and carries on — a half-written line is not a line, and a file
-  replaced under it is followed across when it is given an `Opener`.
-- **A log outlives the program that wrote it.** `Versioned` puts a schema
-  version on a record and brings an older one forward through a hook.
+read and written on top of `std.json`, for append-only logs, line protocols and
+event streams. `std.json` parses and emits the values; this is the line layer
+over it, forwards over a stream, backwards from the end of a seekable file, or
+along a file that is still being appended to.
 
 ## Usage
 
-The block below is not written here: it is a region of
-[`examples/usage.zig`](examples/usage.zig), which `zig build examples` builds
-and RUNS, extracted by `ci/readme_usage.sh` and compared by CI. A snippet in a
-README is a claim about how the library is used, and this one is a claim
-something executes. So are the three below it.
+The code blocks are regions of the examples, which `zig build examples` builds
+and runs: this one from [`examples/usage.zig`](examples/usage.zig), the three
+below from [`examples/logbook.zig`](examples/logbook.zig). `.fixed` is what
+makes this one self-contained; in a program the source is a file or a socket,
+and any `*std.Io.Reader` will do.
 
 <!-- BEGIN GENERATED ci/readme_usage.sh -->
 ```zig
@@ -89,33 +55,58 @@ const kind = strand.kindOf("{\"kind\":\"open\",\"at\":1}");
 ```
 <!-- END GENERATED -->
 
-`std.Io.Reader.fixed` above is what makes the example self-contained; in a
-program the source is a file or a socket, and any `*std.Io.Reader` will do.
+## Install
 
-The writer does not own the destination and never drains it behind your back,
-but *how often to drain* is a decision a log has an opinion about, so it can be
-said once instead of at every call site: `Writer.Options.flush` is `.never` by
-default, `.per_record` for a log another process is tailing, and `.per_batch`
-for one written in batches. `Writer.Options.sync` is the same three settings
-one level down, for a log that has to survive the machine and not only the
-process:
+```sh
+zig fetch --save git+https://github.com/pedronaugusto/strand
+```
 
-| | Survives the process | Survives the machine | Costs |
-|---|---|---|---|
-| `flush` | yes, from the record it drained | no — the operating system may hold the bytes as long as it likes | a write |
-| `sync` | yes | yes, to the last record or batch it synced | an `fsync`: a disk write and a wait, and the slowest thing a log does |
+```zig
+const strand_dep = b.dependency("strand", .{ .target = target, .optimize = optimize });
+exe.root_module.addImport("strand", strand_dep.module("strand"));
+```
 
-A sync drains first, whatever `flush` says, and needs a file to sync:
-`Writer.initFile` is the constructor that has one. The directory entry is not
-covered — a file synced under a name its directory has not recorded may not be
-there after a crash — because opening and creating are the caller's.
+`std` is the only dependency. There is nothing to link and no build options to
+match.
+
+## The API
+
+| | |
+|---|---|
+| `Reader(T)` | A `*std.Io.Reader` as a stream of typed lines. `next` returns a `Line(T)`: the value, the raw bytes, the 1-based number, the byte offset. |
+| `Reader(T).resumeAt` | The same, starting at an offset with a line count behind it, so an index entry reads back as the line it named. |
+| `Reader.keep` | A copy of a value that outlives the line it came from. |
+| `Writer(T)`, `Writer(T).initFile` | One value per line, minified or indented, counted. `initFile` is the one with a file to sync. |
+| `writeLine` | One value, one line, nothing to count. |
+| `Tail(T)` | A seekable file read backwards: `prev` for one line, `last(n)` for the end of the log. |
+| `Follower(T)` | Read to the end, wait, carry on. `Opener` and `PathOpener` are how it follows a path across a rotation. |
+| `Versioned(T)` | The `{"v":N,"data":...}` envelope, with a migration hook for an older shape. |
+| `parseLine`, `lines` | One line, and a buffer of lines, already in memory. |
+| `kindOf`, `tagOf` | The first key of an object, and the union arm it names, without parsing the value. |
+| `indexOfControl` | The first byte that must not appear raw in a line. |
+
+## Memory
+
+Three rules, the same for `Reader`, `Tail` and `Follower`.
+
+1. **A value borrows from the reader.** `Line.line` is the reader's own line
+   buffer; the value's strings point into that buffer when they needed no
+   unescaping, and into the reader's arena when they did.
+2. **The next line takes it back.** `next` clears the buffer and resets the
+   arena before it parses, so a stream costs what its longest line costs.
+3. **`keep` is how a value outlives its line.** It copies every string onto an
+   allocator you give it. Pass an arena and drop it whole; `Tail.last` is
+   `keep` over a batch.
+
+`parseLine` is the same without a reader. `lines`, `kindOf` and
+`indexOfControl` allocate nothing; every allocation anywhere here is on an
+allocator you passed in.
 
 ## Reading backwards
 
-A log answers most questions from its end: what happened last, what the last
-hundred events were, when the process stopped. `Tail` walks a seekable file
-from its end towards its beginning, one block at a time, and stops as soon as
-you do — so the last ten lines of a gigabyte cost one block read.
+`Tail` walks a seekable file from its end towards its beginning, one block at a
+time, and reads no further back than the lines it is asked for: the last ten
+lines of a gigabyte cost one block read.
 
 <!-- BEGIN GENERATED ci/readme_usage.sh examples/logbook.zig tail --no-import -->
 ```zig
@@ -139,13 +130,14 @@ you do — so the last ten lines of a gigabyte cost one block read.
 ```
 <!-- END GENERATED -->
 
-The one thing a backwards read cannot do is count: it never learns how many
-lines came before the ones it read. `Line.number` therefore counts back from
-the end, 1 being the last line of the file, and `Tail.offset` gives the byte
-offset of the line just returned. Everything else — the borrow rule, `keep`,
-`\r\n`, blank lines, control bytes, `max_line_bytes` — is what `Reader` does.
+A backwards read cannot count, so `Line.number` counts back from the end, 1
+being the last line; `Line.offset` is an offset in the file and means the same
+thing in both directions. A file that shrinks under a `Tail` is
+`error.Truncated`. The rest is what `Reader` does.
 
 ## Following
+
+`Follower` reads to the end of a file, waits, and carries on.
 
 <!-- BEGIN GENERATED ci/readme_usage.sh examples/logbook.zig follow --no-import -->
 ```zig
@@ -164,39 +156,59 @@ for (0..appended) |_| {
 ```
 <!-- END GENERATED -->
 
-Two hard parts, and neither is parsing.
+There is no `null`: a file being appended to has no end, so a follower stops
+when the `std.Io` cancels it, or when the caller stops asking.
 
 **The half-written line.** A reader that reaches the end of a growing file
-mid-record must not hand that record over, and must not lose the bytes
-either. `Follower` reads with `Reader.Options.require_terminator`, so a line
-the writer has not finished is not a line, and rewinds the file to where that
-line began. The same option is there on a plain `Reader` for anyone following
-a file by other means.
+mid-record must not hand that record over and must not lose the bytes.
+`Follower` reads with `Reader.Options.require_terminator`, so a line the writer
+has not finished is not a line, and rewinds the file to where it began. The
+option is on a plain `Reader` too.
 
-**Waiting.** A follower that spins burns a core, and one that blocks forever
-cannot be stopped. `Follower` waits on the `std.Io` it was given — an
-`Io.sleep`, or an `Io.Event` you set from a filesystem watch
-(`Wait.wake`) — so cancelling the task cancels the wait. `error.Canceled` is
-the ordinary way a follower ends, including when the cancellation lands inside
-a read rather than inside the wait.
+**Waiting.** `Follower` waits through the `std.Io` it was given — an
+`Io.sleep`, or an `Io.Event` you set from a filesystem watch (`Wait.wake`) — so
+cancelling the task cancels the wait. `error.Canceled` is how a follower ends,
+including when the cancellation lands inside a read.
 
-**Rotation** is handled when the follower is given an `Opener` — one call that
-returns the file a path names right now — and is a contract when it is not:
+**Rotation** is handled when the follower is given an `Opener`, one call
+returning the file a path names now, and is a contract when it is not:
 
 | What happened | Without `Options.reopen` | With `Options.reopen` |
 |---|---|---|
-| Truncated in place | `error.Truncated`, and `truncated()` is true; `restart()` is what to do about it | Begun again at the top of the file, `rotations` counting it |
-| Renamed and recreated | Nothing at all — the handle still refers to the old file, which stops growing; reopen the path yourself | Followed across: the old file is read to its end first, then the new one from its start, numbering from 1 again |
+| Truncated in place | `error.Truncated`, and `truncated()` is true; `restart()` is what to do | Begun again at the top of the file, `rotations` counting it |
+| Renamed and recreated | Nothing at all — the handle still refers to the old file, which stops growing | Followed across: the old file read to its end first, then the new one from its start, numbering from 1 again |
 
-`strand.PathOpener` is the `Opener` over a directory and a path; the interface
-is there because a test stages the files itself rather than racing a
-filesystem.
+The follower asks the opener only once the file it holds has stopped growing,
+which is what puts the old file first, and it closes handles it opened and
+never the one it was given. `PathOpener` is the `Opener` over a directory and a
+path. I made it an interface so a test can stage the two files itself instead
+of racing a filesystem.
 
-## Schema evolution
+## Durability
 
-Adding a field is easy: a reader that defaults its missing fields already
-copes. The day a field changes meaning, splits in two, or moves, the defaults
-stop being enough and the line has to say which shape it is in.
+The writer does not own the destination and drains it only when told to.
+`Writer.Options.flush` is `.never`, `.per_record` or `.per_batch`, so how often
+to drain is said once rather than at every call site; `Writer.Options.sync` is
+the same three settings one level down.
+
+| | Survives the process | Survives the machine | Costs |
+|---|---|---|---|
+| `flush` | yes, from the record it drained | no — the operating system may hold the bytes as long as it likes | a write |
+| `sync` | yes | yes, to the last record or batch it synced | an `fsync`: a disk write and a wait, and the slowest thing a log does |
+
+A sync drains first, whatever `flush` says, and needs a file, so
+`Writer.initFile` is the constructor that can do it. The directory entry is not
+covered — a file synced under a name its directory has not recorded may not be
+there after a crash — because creating and opening are the caller's.
+
+## Schema over time
+
+Adding a field is easy: a reader that defaults its missing fields copes. When a
+field changes meaning, splits in two or moves, the line has to say which shape
+it is in, and `Versioned(T)` is the `{"v":N,"data":...}` envelope that says it.
+`T.jsonl_version` is what this build writes; `T.jsonlMigrate` is the hook an
+older line goes through, taking the version and a `std.json.Value` and
+returning today's shape. `payloadOf` parses the old shape inside the hook.
 
 <!-- BEGIN GENERATED ci/readme_usage.sh examples/logbook.zig versioned --no-import -->
 ```zig
@@ -257,226 +269,139 @@ while (try entries.next()) |line| {
 ```
 <!-- END GENERATED -->
 
-`v` first, `data` second, and everything the record holds inside `data`, so
-the envelope can never collide with the record — a `T` with a field named `v`
-is a compile error rather than a quiet mistake. `Versioned(T)` is an ordinary
-`std.json` type, so it composes with the rest: `Reader(Versioned(T))`,
-`Writer(Versioned(T))`, `Tail(Versioned(T))`, `Follower(Versioned(T))`.
+`v` first and `data` second, with the whole record inside `data`, so the
+envelope cannot collide with it — a `T` with a field named `v` is a compile
+error. `Versioned(T)` is an ordinary `std.json` type and composes:
+`Reader(Versioned(T))`, `Writer(Versioned(T))`, `Tail(Versioned(T))`,
+`Follower(Versioned(T))`. A line with no `v` is version
+`T.jsonl_version_unstamped`, which defaults to 0; no `jsonl_version` may be 0,
+so an unstamped line is always recognisable in the hook. A version no hook
+accepts is `error.UnknownField`, which through a `Reader` is
+`error.MalformedLine` with the line number. A tagged union grows without an
+envelope instead: `std.json` writes `{"open":{...}}`, so the arm is the first
+key, `tagOf` reads it without parsing the payload, and an
+`unknown: std.json.Value` arm gives a line from a newer writer somewhere to
+land. `examples/logbook.zig` has both recipes in full.
 
-A line with no `v` on it is version `T.jsonl_version_unstamped`, which
-defaults to 0 — no `jsonl_version` may be 0, so an unstamped line is always
-recognisable in the hook. A version no hook accepts is `error.UnknownField`,
-which through a `Reader` is `error.MalformedLine` with the line number.
+## What a line may contain
 
-### Arms added over time
-
-A tagged union is the other way a schema grows, and it grows without an
-envelope: `std.json` writes `{"open":{...}}`, so the arm is the first key and
-`tagOf` reads it without parsing the payload. What an old reader needs is
-somewhere for an arm it has never heard of to land:
-
-<!-- BEGIN GENERATED ci/readme_usage.sh examples/logbook.zig arms --no-import -->
-```zig
-const Message = union(enum) {
-    open: struct { path: []const u8 },
-    close: struct { code: u8 },
-    /// Every arm this build does not know. Keep the bytes, not a guess.
-    unknown: std.json.Value,
-};
-
-// Route on the tag, and give an unknown one the line rather than an error.
-const message: Message = if (strand.tagOf(Message, line)) |_|
-    try strand.parseLine(Message, arena, line, .{})
-else
-    .{ .unknown = try std.json.parseFromSliceLeaky(std.json.Value, arena, line, .{}) };
-```
-<!-- END GENERATED -->
-
-The rule is the same one `Versioned` follows: a reader that cannot understand
-a record should say so and keep going, not stop the stream and not pretend.
-
-## Install
-
-```sh
-zig fetch --save git+https://github.com/pedronaugusto/strand
-```
-
-```zig
-const strand_dep = b.dependency("strand", .{ .target = target, .optimize = optimize });
-exe.root_module.addImport("strand", strand_dep.module("strand"));
-```
-
-There is nothing to link and nothing to configure: pure Zig, `std` only, no
-build options, no C.
-
-## Memory
-
-Three rules, and they are the whole of it. They hold for `Reader`, for `Tail`
-and for `Follower` alike.
-
-1. **A line's value borrows from the reader.** `Line.line` is the reader's
-   own line buffer, and the value's string fields point either into that
-   buffer (when they needed no unescaping) or into the reader's arena (when
-   they did).
-2. **The next line takes it back.** `next` clears the line buffer and resets
-   the arena before it parses, so everything the previous `Line` pointed at is
-   gone by the time the next one is returned — which is exactly why the cost
-   of a stream does not grow with its length.
-3. **`keep` is how a value outlives its line.** It returns a copy allocated on
-   an allocator you give it, with every string copied, borrowing nothing from
-   the reader. Pass an arena and drop it when you are done. `Tail.last` is
-   `keep` applied to a batch.
-
-`parseLine` follows the same shape without a reader: allocations land on the
-allocator you pass (use an arena), and strings borrow from the line you pass
-unless you ask for `copy_strings`. `lines`, `kindOf` and `indexOfControl`
-allocate nothing at all and return views into the buffer they were given.
+- **A UTF-8 byte-order mark** at the start of the stream is not part of the
+  first line (`skip_bom`). Editors and Windows tooling put one there.
+- **`\r\n`** is a terminator, and the `\r` is not part of the line.
+- **A raw C0 control byte** other than tab — a NUL above all, which is what a
+  torn write leaves behind — is `error.ControlByte` naming the line and the
+  offset (`reject_control_bytes`). JSON forbids these raw in a string and has
+  no use for them between tokens, so this refuses nothing that was valid.
+- **A line past `max_line_bytes`** is discarded to the next newline, so the
+  reader resynchronises instead of giving up on the stream.
+- **A newline inside a string** cannot break the framing: `std.json` escapes
+  it, and `Writer` refuses no value on these grounds.
+- **Bytes that are not UTF-8** are a malformed line: this package rejects, it
+  does not repair, and it does not substitute U+FFFD. Going the other way, a
+  Zig `[]const u8` that is not valid UTF-8 is written by `std.json` as an array
+  of byte values, which reads back here byte for byte and reads elsewhere as an
+  array — a field carrying arbitrary bytes wants base64 or hex.
+- **A key that appears twice** is `error.MalformedLine` by default, which is
+  `std.json`'s position. Encoders elsewhere keep one of the two, so a log from
+  one of them may need `duplicate_fields = .use_last` or `.use_first`.
+- **A line with no schema** is `Reader(std.json.Value)`. `std.json` builds a
+  `Value` on a heap stack rather than by recursing, so nesting depth is bounded
+  by `max_line_bytes` and not by the call stack.
+- **A record over several lines** is what `Writer`'s `.pretty` format emits. A
+  `Reader` in `.pretty` mode joins lines until they parse, and reads minified
+  lines too.
 
 ## Errors
 
-`Reader.next` has five failure modes, and only two of them are about the
-content of a line:
-
 | Error | Meaning |
 |---|---|
-| `error.MalformedLine` | This line is not a `T`. `last_error_line` says which line, `last_error` says what `std.json` made of it. |
+| `error.MalformedLine` | This line is not a `T`. `last_error_line` says which line, `last_error` what `std.json` made of it. |
 | `error.ControlByte` | This line holds a raw control byte. `last_error_offset` says where in the line. |
 | `error.LineTooLong` | The line ran past `max_line_bytes`. It is discarded whole. |
 | `error.ReadFailed` | The underlying `std.Io.Reader` failed; ask it for diagnostics. |
 | `error.OutOfMemory` | The allocator failed. |
 
-`Reader.offset` is where in the stream the line `next` last returned or
-refused began, which is what a report about a bad line needs to be actionable
-and what a seek back to it needs. The first three errors do not desynchronize
-the stream: the offending line is consumed in full, so `next` can simply be
-called again. The other two can
-arrive in the middle of a line and leave the stream wherever they found it.
-Blank lines are skipped by default and still counted, so a line number always
-means the line a text editor would show. `Tail.prev` adds `error.SeekFailed`
-and `error.Truncated`; `Follower.next` adds those and `error.Canceled`.
-
-## What a line may contain
-
-The format is one value and a newline, and the awkward cases are the ones a
-hand-rolled line layer gets wrong:
-
-- **A UTF-8 byte-order mark** at the start of the stream is not part of the
-  first line (`skip_bom`). Editors and Windows tooling put one there;
-  `std.json` has no idea what it is.
-- **`\r\n`** is a terminator, and the `\r` is not part of the line.
-- **A raw C0 control byte** other than tab — a NUL above all, which is what a
-  torn write leaves behind — is `error.ControlByte` naming the line and the
-  offset rather than whatever `std.json` would have made of it. JSON forbids
-  these bytes raw in a string and has no use for them between tokens, so this
-  refuses nothing that was valid (`reject_control_bytes`).
-- **A line past `max_line_bytes`** is discarded to the next newline, so the
-  reader resynchronises rather than giving up on the stream.
-- **A newline inside a string** cannot break the framing, because `std.json`
-  escapes it. `Writer` refuses no value on these grounds and has no check to
-  skip: *write escapes every terminator that could break the framing* in the
-  suite writes every byte that could, and counts the newlines.
-- **Bytes that are not UTF-8** are a malformed line. JSON Lines is UTF-8 by
-  definition and `std.json` validates it, so a truncated sequence, an overlong
-  encoding or a lone surrogate half is `error.MalformedLine` with
-  `error.SyntaxError` under it — named by line number, and the line after it is
-  read as usual. This package rejects; it does not repair, and it does not
-  substitute U+FFFD for what it could not read. Going the other way, a Zig
-  `[]const u8` that is not valid UTF-8 is written by `std.json` as an array of
-  byte values rather than as a string: the framing holds and this package reads
-  the bytes back exactly, but another language's reader sees an array where it
-  expected a string, so a field carrying arbitrary bytes wants base64 or hex.
-- **A key that appears twice** is `error.MalformedLine` by default, which is
-  `std.json`'s position. Encoders in most other languages resolve a repeat by
-  keeping one of the two, so a log written by one of them may need
-  `duplicate_fields = .use_last` (or `.use_first`) to be readable at all.
-- **A line with no schema** is `Reader(std.json.Value)`, which is a `T` like
-  any other and needs nothing added here. `std.json` builds a `Value` on a heap
-  stack rather than by recursing, so how deep a line may nest is bounded by
-  `max_line_bytes` and not by the call stack.
-- **A record over several lines** is what `Writer`'s `.pretty` format emits,
-  for a human to read; a `Reader` in `.pretty` mode joins lines until they
-  parse and reads it back. A `.pretty` reader reads minified lines too.
+The first three do not desynchronize the stream: the offending line has been
+consumed in full, so `next` can be called again. The other two can arrive
+mid-line and leave the stream where they found it. `Reader.offset` is where the
+line `next` last returned or refused began. `Tail.prev` adds `error.SeekFailed`
+and `error.Truncated`; `Follower.next` adds those, `error.ReopenFailed` and
+`error.Canceled`. Blank lines are skipped by default and still counted, so a
+line number is the line a text editor shows.
 
 ## Concurrency
 
-There is no global state, no lock and no allocator of its own, so two readers
-on two streams are independent and run on two threads without arrangement.
-One `Reader` is not shared between threads.
-
-`Follower` is where `std.Io` matters: it waits through the `Io` it was given,
-which makes cancellation the way a follower stops. The suite proves it with a
-producer task writing a file a few bytes at a time while a consumer task
-follows it, and with a follower on a file that never grows being stopped by
-`Future.cancel`.
+A `Reader`, a `Tail` and a `Follower` each hold their own buffers and share
+nothing else, so two of them over two streams run on two threads without
+arrangement. One `Reader` is not shared between threads.
 
 ## Performance
 
-`zig build bench -Doptimize=ReleaseFast` writes and reads a million small
-lines and prints the numbers. On one laptop (Apple M-series, Zig 0.16.0):
+`zig build bench -Doptimize=ReleaseFast` writes and reads a million small lines
+and prints the numbers. On an Apple M-series laptop, Zig 0.16.0:
 
 | | |
 |---|---|
-| write | 17.3M lines/s, 0.79 GB/s, 57 ns/line |
+| write | 16.9M lines/s, 0.77 GB/s, 59 ns/line |
 | read | 5.6M lines/s, 0.26 GB/s, 178 ns/line, 1000000 of 1000000 strings borrowed |
-| `writeAll` | 17.3M lines/s — the loop, not another format |
-| `Tail.last(100)` of 1M lines | 730 µs, 8.19 kB of 45.89 MB touched |
-| one 100 MB line | 173 ms, borrowed, 232 bytes of arena |
+| `writeAll` | 16.9M lines/s |
+| `Tail.last(100)` of 1M lines | 830 µs, 8.19 kB of 45.89 MB touched |
+| one 100 MB line | 169 ms, borrowed, 232 bytes of arena |
 
-Two claims in that table are the ones worth checking rather than quoting.
-*Every string borrowed*: nothing was copied out of the line, which is
-`.alloc_if_needed` doing its job. *232 bytes of arena for a hundred
-megabytes*: the reader allocated nothing per line — the suite holds it to
-that too, in *a long stream stops allocating once its buffers have grown*,
-which reads twenty thousand lines and counts the allocations after the first
-thousand.
+The borrowed count is how many string fields pointed into the line rather than
+into the arena; the arena figure is what one 100 MB line cost beyond the line
+buffer.
 
-## What this package does not do
+## Scope
 
-- It does not parse JSON. `std.json` does; this is the line layer over it,
-  and every parse option that matters is forwarded rather than reinvented.
-- It does not own, buffer, open, close, lock or rotate a stream. It takes a
-  `*std.Io.Reader`, a `*std.Io.Writer` or a `*std.Io.File.Reader` and leaves
-  the rest to the caller — which is why rotation is a documented contract and
-  not a feature. The one exception is stated rather than hidden: a `Writer`
-  asks the destination to drain when `Writer.Options.flush` says to, which is
-  never unless you say otherwise.
-- It does not index a log or seek to line *n*. `Tail` reads backwards from
-  the end; it does not build a map of where lines are.
-- It does not read a `.pretty` file backwards: finding where a multi-line
-  record begins means parsing forwards.
-- It does not validate a line it is not asked to parse: `kindOf` answering is
-  not a claim that the line is valid JSON.
-- It does not decode escapes in `kindOf`/`tagOf`. A first key containing a
-  `\` is answered with `null` rather than a wrong guess; parse the line if
-  you need it.
-- It does not watch the filesystem. `Follower` polls, or waits on an event
-  you set; the watch itself is yours.
-- It does not decompress. A gzipped log is
-  `std.compress.flate.Decompress.init(&file_reader.interface, .gzip, buffer)`
-  and then a `Reader` over `&decompress.reader`, which is three lines and no
-  API here. `Tail` and `Follower` cannot help with one: a gzip stream has no
-  end to start from.
-- It does not repair a line. Bytes that are not UTF-8 are a malformed line,
-  not a line with replacement characters in it.
-- It has no global state, no threads of its own, no allocator of its own, and
-  no dependency beyond `std`.
+- It does not parse JSON. `std.json` does, and every parse option that matters
+  is forwarded.
+- It does not own, buffer or lock a stream, and opens a file only through an
+  `Opener` you hand it.
+- It does not index a log or seek to line *n*. `Line.offset` and
+  `Reader.resumeAt` are the two halves an index is built from.
+- It does not read a `.pretty` file backwards. `Tail.Options` says why.
+- It does not decompress. Put `std.compress.flate.Decompress` in front of a
+  `Reader`; `Tail` and `Follower` cannot help, because a gzip stream has no end
+  to start from.
+- It does not watch the filesystem. `Follower` polls, or waits on an event you
+  set.
+
+## Platforms
+
+| Platform | What it uses there | Tested |
+|---|---|---|
+| Linux | `std.Io.File` positional reads and seeks; the inode from `stat` identifies a file across a rotation | Suite on the Ubuntu CI runner, and in a Debian container by `ci/linux.sh` |
+| macOS | the same | Suite on the macOS CI runner |
+| Windows | the same; the file index from `stat` stands in for the inode | Compiles for Windows |
+
+Pending: the CI run on Windows.
+
+CI also compiles the suite without running it for x86_64 and aarch64 Linux (gnu,
+plus musl on x86_64), x86_64 and aarch64 Windows (gnu), and x86_64 and aarch64
+macOS.
+
+## Testing
+
+`zig build test` runs 91 tests, every one under `std.testing.allocator`, in
+Debug, ReleaseSafe, ReleaseFast and ReleaseSmall. `ci/linux.sh` runs Debug and
+ReleaseSafe in a container, because a cross-compile says nothing about reading
+a file at an offset or about what a growing file looks like through an open
+handle. `ci/check-readme.sh` regenerates the code blocks from the examples and
+fails on a difference.
+
+Ten of the tests are `std.testing.fuzz` properties over generated lines: every line
+is reported under its own number and at its own byte offset, a reader resumed
+at an offset agrees with one that read the whole stream, a bad line does not
+cost the reader its place, a file read backwards is the same lines in the other
+order and in the same places, a follower reads a replaced file in the right
+order, and a record written over several lines comes back as one. They run over
+a corpus and a table of awkward inputs; `zig build test --fuzz` runs them as a
+campaign.
 
 ## Requirements
 
-Zig 0.16.0. `zig build test` runs the suite — 80 tests, every one under
-`std.testing.allocator`, in Debug, ReleaseSafe, ReleaseFast and ReleaseSmall
-on Linux, macOS and Windows. `ci/linux.sh` runs Debug and ReleaseSafe inside
-a container, because a cross-compile proves nothing about reading a file at an
-offset or about what a growing file looks like through an open handle.
-
-Eight of the tests are `std.testing.fuzz` properties over generated lines:
-nothing panics, nothing leaks, every line is reported under its own number and
-at its own byte offset, a line that cannot be parsed does not cost the reader
-its place, a file read backwards is the same lines in the other order and
-places them where the forwards read did, and a record written over several
-lines comes back as one. A plain `zig build test` checks them over a
-corpus and a table of awkward inputs, which is quick; `zig build test --fuzz`
-runs them as a campaign.
+Zig 0.16.0.
 
 ## License
 

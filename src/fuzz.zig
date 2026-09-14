@@ -166,6 +166,80 @@ fn checkReaderSkip(input: []const u8) !void {
     try testing.expectEqual(all.number, reader.number);
 }
 
+/// A reader resumed at a line's offset reports that line under the number and
+/// the offset the oracle gives it, and carries on from there in lockstep with
+/// a reader that read the whole stream.
+///
+/// This is the property an index rests on: the offsets in it are the oracle's
+/// own byte counts, and what comes back at one of them has to be the line the
+/// oracle put there — not merely a line, and not line 1 of a new stream.
+fn checkResume(input: []const u8) !void {
+    const options: strand.Reader(Event).Options = .{
+        // The oracle counts bytes, and a mark the reader drops is bytes the
+        // oracle would still be counting.
+        .skip_bom = false,
+    };
+
+    var count: PhysicalLines = .{ .rest = input };
+    while (count.next()) |_| {}
+    const total = count.number;
+
+    var oracle: PhysicalLines = .{ .rest = input };
+    while (oracle.next()) |physical| {
+        if (isBlank(physical.line)) continue;
+
+        var source: std.Io.Reader = .fixed(input[@intCast(physical.offset)..]);
+        var reader: strand.Reader(Event) = .resumeAt(testing.allocator, &source, options, .{
+            .offset = physical.offset,
+            .lines_before = physical.number - 1,
+        });
+        defer reader.deinit();
+
+        if (reader.next()) |maybe_line| {
+            const line = maybe_line orelse return error.TestResumeEndedEarly;
+            try testing.expectEqual(physical.number, line.number);
+            try testing.expectEqual(physical.offset, line.offset);
+            try testing.expectEqualStrings(physical.line, line.line);
+        } else |err| switch (err) {
+            // A line that is not a `T` is still that line, under its own
+            // number and at its own offset.
+            error.MalformedLine, error.ControlByte => {
+                try testing.expectEqual(physical.number, reader.last_error_line);
+                try testing.expectEqual(physical.offset, reader.offset);
+            },
+            else => return err,
+        }
+
+        // And the rest of the stream keeps the oracle's numbering too.
+        var rest: PhysicalLines = .{
+            .rest = input[@intCast(physical.offset)..],
+            .number = physical.number - 1,
+            .offset = physical.offset,
+        };
+        // The line just read, skipped over: what follows is what is left.
+        _ = rest.next();
+        while (rest.next()) |after| {
+            if (isBlank(after.line)) continue;
+            if (reader.next()) |maybe_line| {
+                const line = maybe_line orelse return error.TestResumeEndedEarly;
+                try testing.expectEqual(after.number, line.number);
+                try testing.expectEqual(after.offset, line.offset);
+                try testing.expectEqualStrings(after.line, line.line);
+            } else |err| switch (err) {
+                error.MalformedLine, error.ControlByte => {
+                    try testing.expectEqual(after.number, reader.last_error_line);
+                    try testing.expectEqual(after.offset, reader.offset);
+                },
+                else => return err,
+            }
+        }
+        try testing.expectEqual(@as(?strand.Line(Event), null), try reader.next());
+        // Having read to the end from the middle, it has counted the whole
+        // file: the lines behind it plus the lines it read.
+        try testing.expectEqual(total, reader.number);
+    }
+}
+
 /// `kindOf` either declines, or points at a real key of a real object.
 fn checkKindOf(line: []const u8) !void {
     const kind = strand.kindOf(line);
@@ -580,6 +654,16 @@ fn fuzzReader(_: void, smith: *std.testing.Smith) anyerror!void {
     try checkReaderSkip(input);
 }
 
+test "fuzz: a resumed Reader over generated lines" {
+    try std.testing.fuzz({}, fuzzResume, .{ .corpus = corpus });
+}
+
+fn fuzzResume(_: void, smith: *std.testing.Smith) anyerror!void {
+    @disableInstrumentation();
+    var buf: [512]u8 = undefined;
+    try checkResume(generate(smith, &buf));
+}
+
 test "fuzz: kindOf over generated lines" {
     try std.testing.fuzz({}, fuzzKindOf, .{ .corpus = corpus });
 }
@@ -699,6 +783,7 @@ test "the properties hold on a table of awkward inputs" {
         try checkReaderFail(input, 8);
         try checkReaderFail(input, 1);
         try checkReaderSkip(input);
+        try checkResume(input);
 
         try checkPretty(input);
         try checkTail(input);

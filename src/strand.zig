@@ -8,7 +8,9 @@
 //! package is the line layer over it:
 //!
 //! * `Reader` turns a `*std.Io.Reader` into a stream of typed values, one per
-//!   line, each carrying its 1-based line number and its raw bytes.
+//!   line, each carrying its 1-based line number, its raw bytes and the byte
+//!   offset it began at — and `Reader.resumeAt` starts again from one of
+//!   those offsets with the numbering intact.
 //! * A malformed line is an error naming the line, not an abort, and can be
 //!   skipped instead (`Options.on_malformed`).
 //! * Strings borrow from the line's bytes when they need no unescaping, so
@@ -321,14 +323,64 @@ pub fn Reader(comptime T: type) type {
             OutOfMemory,
         };
 
+        /// Where a resumed reader begins: the place it is reading from, and
+        /// how much of the file is behind it. See `resumeAt`.
+        pub const Start = struct {
+            /// The byte offset `input` is positioned at. Every offset this
+            /// reader reports is measured from here, so an offset taken out
+            /// of an index reads back as the same offset.
+            offset: u64 = 0,
+            /// How many lines came before that offset. The first line this
+            /// reader returns is numbered `lines_before + 1`, so a line
+            /// number taken out of an index reads back as the same line
+            /// number.
+            lines_before: u64 = 0,
+        };
+
         /// A reader over `input`, with `allocator` backing the line buffer and
         /// the per-line arena. Does not read from `input`.
         pub fn init(allocator: Allocator, input: *std.Io.Reader, options: Options) Self {
+            return .resumeAt(allocator, input, options, .{});
+        }
+
+        /// A reader over an `input` already positioned part-way into a file,
+        /// numbering and placing its lines as if it had read the rest.
+        ///
+        /// This is the other half of `Line.offset`. An index is a list of
+        /// offsets and the line numbers they belong to; `init` would read
+        /// back from such an offset as line 1 at offset 0, which makes the
+        /// index a place and not a line number. `resumeAt` is told both, so
+        /// the line it returns first carries the number and the offset the
+        /// index recorded, and every line after it carries the next ones.
+        ///
+        /// `input` must already be positioned at `start.offset` — this reader
+        /// does not seek, because it does not own the stream. A byte-order
+        /// mark is looked for only at offset 0, since that is the only place
+        /// one can be.
+        ///
+        /// `start.lines_before` is not checked against anything: a reader
+        /// cannot know what it did not read. An offset that is not where a
+        /// line begins reads as a line beginning there, which is the same
+        /// answer a caller would get by seeking a file and reading it.
+        pub fn resumeAt(
+            allocator: Allocator,
+            input: *std.Io.Reader,
+            options: Options,
+            start: Start,
+        ) Self {
             return .{
                 .input = input,
                 .options = options,
+                .number = start.lines_before,
+                .offset = start.offset,
                 .line_buf = .init(allocator),
                 .arena = .init(allocator),
+                .consumed = start.offset,
+                .record_offset = start.offset,
+                // A mark belongs to the very start of a file, so a reader
+                // that begins anywhere else must not eat three bytes of a
+                // line looking for one.
+                .bom_checked = start.offset != 0,
             };
         }
 

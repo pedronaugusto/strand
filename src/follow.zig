@@ -99,17 +99,18 @@ pub fn Follower(comptime T: type) type {
         ) Self {
             var reader_options = options.reader;
             reader_options.require_terminator = true;
-            var self: Self = .{
+            return .{
                 .io = io,
                 .source = source,
-                .reader = .init(allocator, &source.interface, reader_options),
+                // The reader places its lines from where it started; a
+                // follower starts somewhere in a file, so resuming it there
+                // is what makes `Line.offset` an offset in that file rather
+                // than in what has been read from it.
+                .reader = .resumeAt(allocator, &source.interface, reader_options, .{
+                    .offset = source.logicalPos(),
+                }),
                 .options = options,
             };
-            // The reader counts from where it started; a follower starts
-            // somewhere in a file, so seeding it is what makes `Line.offset`
-            // an offset in that file rather than in what was read from it.
-            self.reader.consumed = source.logicalPos();
-            return self;
         }
 
         /// Releases the reader's buffers. Every `Line` this follower returned

@@ -801,6 +801,89 @@ test "an offset is what turns a line number into a place to seek back to" {
     }
 }
 
+test "a reader resumed at an offset carries the line number with it" {
+    var input: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer input.deinit();
+    // A mark, so that the first line does not begin where the file does.
+    try input.writer.writeAll("\xEF\xBB\xBF");
+    var writer: strand.Writer(Event) = .init(&input.writer, .{});
+    for (0..500) |i| try writer.write(.{ .kind = "tick", .at = i });
+
+    // The index: every tenth line, as a place and as a number.
+    const Mark = struct { offset: u64, number: u64, at: u64 };
+    var index: std.ArrayList(Mark) = .empty;
+    defer index.deinit(testing.allocator);
+    {
+        var source: std.Io.Reader = .fixed(input.written());
+        var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{});
+        defer reader.deinit();
+        while (try reader.next()) |line| {
+            if (line.number % 10 == 0) try index.append(testing.allocator, .{
+                .offset = line.offset,
+                .number = line.number,
+                .at = line.value.at,
+            });
+        }
+    }
+    try testing.expectEqual(@as(usize, 50), index.items.len);
+
+    // Reading back from an entry gives that line under its own number, at
+    // its own offset, and every line after it under the next ones.
+    for (index.items) |mark| {
+        var source: std.Io.Reader = .fixed(input.written()[@intCast(mark.offset)..]);
+        var reader: strand.Reader(Event) = .resumeAt(testing.allocator, &source, .{}, .{
+            .offset = mark.offset,
+            .lines_before = mark.number - 1,
+        });
+        defer reader.deinit();
+
+        const first = (try reader.next()).?;
+        try testing.expectEqual(mark.number, first.number);
+        try testing.expectEqual(mark.offset, first.offset);
+        try testing.expectEqual(mark.at, first.value.at);
+
+        if (mark.number < 500) {
+            const second = (try reader.next()).?;
+            try testing.expectEqual(mark.number + 1, second.number);
+            try testing.expectEqual(mark.at + 1, second.value.at);
+            // The line after it is placed where it really is in the file.
+            try testing.expectEqualStrings(
+                second.line,
+                input.written()[@intCast(second.offset)..][0..second.line.len],
+            );
+        }
+    }
+
+    // Resumed at the end, there is nothing left and the count still holds.
+    var empty: std.Io.Reader = .fixed("");
+    var done: strand.Reader(Event) = .resumeAt(testing.allocator, &empty, .{}, .{
+        .offset = input.written().len,
+        .lines_before = 500,
+    });
+    defer done.deinit();
+    try testing.expectEqual(@as(?strand.Line(Event), null), try done.next());
+    try testing.expectEqual(@as(u64, 500), done.number);
+}
+
+test "a resumed reader does not eat three bytes looking for a mark" {
+    // These three bytes are a byte-order mark, and they are also the middle
+    // of a line: only a reader that began at offset 0 may drop them.
+    const input = "{\"kind\":\"a\"}\n{\"kind\":\"\xEF\xBB\xBF\"}\n";
+    const offset = std.mem.indexOfScalar(u8, input, '\n').? + 1;
+
+    var source: std.Io.Reader = .fixed(input[offset..]);
+    var reader: strand.Reader(Event) = .resumeAt(testing.allocator, &source, .{}, .{
+        .offset = offset,
+        .lines_before = 1,
+    });
+    defer reader.deinit();
+
+    const line = (try reader.next()).?;
+    try testing.expectEqual(@as(u64, 2), line.number);
+    try testing.expectEqual(offset, line.offset);
+    try testing.expectEqualStrings("\xEF\xBB\xBF", line.value.kind);
+}
+
 test "skipped counts the lines a tolerant reader lost" {
     const input =
         \\{"kind":"one"}

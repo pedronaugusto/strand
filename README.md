@@ -29,7 +29,8 @@ that layer itself, usually three times:
 - **A line is somewhere.** A line number is for a person; a byte offset is for
   a program. `Line.offset` says where the line began, so an index of every
   thousandth line is a loop and a `std.ArrayList(u64)`, and the forwards and
-  backwards readers agree about it.
+  backwards readers agree about it. `Reader.resumeAt` reads back from an entry
+  of that index under the line number the index recorded.
 - **A line has a kind.** `kindOf` reads the first key of the object, and
   `tagOf` turns it into the tag of a tagged union, without parsing the value —
   so a dispatcher can route a line to the right type before committing to it.

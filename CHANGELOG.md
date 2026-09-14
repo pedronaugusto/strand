@@ -4,6 +4,23 @@ Each entry says what the old shape could not express, so a port has the reason
 and not only the diff. Versions follow [semantic versioning](https://semver.org);
 before 1.0 the minor is the breaking one.
 
+## Unreleased
+
+- `Reader.resumeAt(allocator, input, options, start)`, with `Reader.Start`
+  beside it. `Line.offset` made an index buildable and nothing could read one
+  back: a reader started on a stream seeked to an offset called that line 1 at
+  offset 0, so an index entry was a place and not a line number, and a report
+  or a resume built on it named the wrong line. A resumed reader is told the
+  offset it stands at and how many lines are behind it, and reports the
+  recorded number and the recorded offset for the line it finds there and the
+  ones after it. A byte-order mark is looked for only at offset 0, since that
+  is the only place one can be. `Reader.init` is `resumeAt` from the start of
+  the stream, and `Follower` seeds its reader through it rather than by hand.
+  *a reader resumed at an offset carries the line number with it* walks an
+  index of every tenth line of five hundred; *fuzz: a resumed Reader over
+  generated lines* resumes at every line the byte-counting oracle has and
+  holds the whole rest of the stream to the oracle's numbers and offsets.
+
 ## 0.3.0
 
 A pass over the package asking what a JSON Lines reader is expected to answer

@@ -37,7 +37,8 @@ that layer itself, usually three times:
 - **A log is read from its end.** `Tail` reads a seekable file backwards, last
   line first, touching the blocks those lines are in and nothing before them.
 - **A log is read while it is written.** `Follower` reads to the end, waits on
-  an `std.Io`, and carries on — and a half-written line is not a line.
+  an `std.Io`, and carries on — a half-written line is not a line, and a file
+  replaced under it is followed across when it is given an `Opener`.
 - **A log outlives the program that wrote it.** `Versioned` puts a schema
   version on a record and brings an older one forward through a hook.
 
@@ -167,13 +168,17 @@ cannot be stopped. `Follower` waits on the `std.Io` it was given — an
 the ordinary way a follower ends, including when the cancellation lands inside
 a read rather than inside the wait.
 
-**Rotation** is a contract rather than a feature, because this package does
-not open files:
+**Rotation** is handled when the follower is given an `Opener` — one call that
+returns the file a path names right now — and is a contract when it is not:
 
-| What happened | What the follower sees | What to do |
+| What happened | Without `Options.reopen` | With `Options.reopen` |
 |---|---|---|
-| Truncated in place | `error.Truncated`, and `truncated()` is true | `restart()`: the file is being written again from the top |
-| Renamed and recreated | Nothing at all — the handle still refers to the old file, which stops growing | Reopen the path yourself and make a new `Follower` |
+| Truncated in place | `error.Truncated`, and `truncated()` is true; `restart()` is what to do about it | Begun again at the top of the file, `rotations` counting it |
+| Renamed and recreated | Nothing at all — the handle still refers to the old file, which stops growing; reopen the path yourself | Followed across: the old file is read to its end first, then the new one from its start, numbering from 1 again |
+
+`strand.PathOpener` is the `Opener` over a directory and a path; the interface
+is there because a test stages the files itself rather than racing a
+filesystem.
 
 ## Schema evolution
 

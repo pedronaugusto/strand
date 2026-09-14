@@ -20,6 +20,31 @@ before 1.0 the minor is the breaking one.
   index of every tenth line of five hundred; *fuzz: a resumed Reader over
   generated lines* resumes at every line the byte-counting oracle has and
   holds the whole rest of the stream to the oracle's numbers and offsets.
+- `Follower.Options.reopen`, with `Opener` and `PathOpener` beside it. A
+  follower held an open handle, so a log renamed away and recreated left it
+  reading a file nobody was writing to any more, for ever and without saying
+  so; the only cure was for the caller to notice, build a second `Follower`
+  and throw the first away. Given an `Opener` — one call returning the file a
+  path names now — the follower does it: when the file it holds has stopped
+  growing it asks what the path holds, and moves to it if that is a different
+  file. The order is the point, and it is stated rather than implied: **the
+  old file is read to its end first, then the new one from its start**, with
+  the line numbering beginning again and `Follower.rotations` counting how
+  often that has happened. A truncation is acted on the same way instead of
+  being reported, so `error.Truncated` does not arise when `reopen` is set.
+  The follower closes handles it opened and never the one it was given.
+  `Opener` is an interface rather than a path because a test stages the files
+  itself: *the opener is an interface, and a test hands over the files itself*
+  drives a rotation with no filesystem involved, *a follower given an opener
+  follows the path across a rename* and *a truncation is begun again rather
+  than reported when there is an opener* drive the two real ones, *the old
+  file is read to its end before the new one is started* rotates before a
+  single line has been read and still gets all three lines of the old file
+  first, and *fuzz: a follower over a file replaced under it* does that over
+  generated pairs of files, holding the result to what a plain reader makes of
+  each of the two.
+- Breaking: `Follower.NextError` gained `error.ReopenFailed`, which is an
+  opener declining or the system refusing to say which file a handle is.
 
 ## 0.3.0
 

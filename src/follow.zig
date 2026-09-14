@@ -12,6 +12,13 @@
 //! on the `std.Io` it was given — a sleep, or an event the caller sets from a
 //! filesystem watch — so that cancelling the task cancels the wait, and
 //! `error.Canceled` comes back out of `next`.
+//!
+//! The third hard part is rotation, and it is the one that needs something
+//! from outside: a log that is renamed away and recreated leaves the follower
+//! holding a handle to a file nobody writes to any more. `Options.reopen`
+//! takes an `Opener` — one call that returns the file a path names right now —
+//! and the follower uses it only when the file it holds has stopped growing,
+//! so the old file is read to its end before the new one is started.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -20,6 +27,66 @@ const strand = @import("strand.zig");
 const Line = strand.Line;
 const ParseLineError = strand.ParseLineError;
 
+/// How a follower gets the file a path names right now.
+///
+/// This package does not open files, so following a path across a rotation
+/// takes one call the caller supplies. It is an interface rather than a path
+/// because the two callers are not alike: a program follows a real path, and
+/// a test hands over files it has staged, so that a rotation happens when the
+/// test says it does and not when the filesystem gets around to it.
+///
+/// `open` returns a file the follower reads from the beginning. `close` is
+/// called on every file this interface opened, and on none that it did not:
+/// the handle a `Follower` was built on stays the caller's.
+pub const Opener = struct {
+    /// Whatever the implementation needs. Not touched here.
+    context: *anyopaque,
+    /// The file the path names now.
+    openFn: *const fn (context: *anyopaque, io: std.Io) OpenError!std.Io.File,
+    /// Called on a file `openFn` returned and the follower is done with.
+    closeFn: *const fn (context: *anyopaque, io: std.Io, file: std.Io.File) void,
+
+    /// What an opener may report. One member, on purpose: the reasons a file
+    /// will not open are the caller's to know and to report, the way
+    /// `error.ReadFailed` leaves diagnostics to the stream.
+    pub const OpenError = error{OpenFailed};
+
+    pub fn open(self: Opener, io: std.Io) OpenError!std.Io.File {
+        return self.openFn(self.context, io);
+    }
+
+    pub fn close(self: Opener, io: std.Io, file: std.Io.File) void {
+        self.closeFn(self.context, io, file);
+    }
+};
+
+/// An `Opener` over a directory and a path in it, which is what a program
+/// following a real log wants.
+///
+/// The struct must outlive the `Follower`, since the follower holds a pointer
+/// to it, and so must `sub_path`.
+pub const PathOpener = struct {
+    dir: std.Io.Dir,
+    sub_path: []const u8,
+
+    /// The interface over this path. The directory is opened once, here, and
+    /// the path is resolved against it on every call, so a rotation that
+    /// replaces the file is seen and one that replaces the directory is not.
+    pub fn opener(self: *PathOpener) Opener {
+        return .{ .context = self, .openFn = openPath, .closeFn = closePath };
+    }
+
+    fn openPath(context: *anyopaque, io: std.Io) Opener.OpenError!std.Io.File {
+        const self: *PathOpener = @ptrCast(@alignCast(context));
+        return self.dir.openFile(io, self.sub_path, .{}) catch error.OpenFailed;
+    }
+
+    fn closePath(context: *anyopaque, io: std.Io, file: std.Io.File) void {
+        _ = context;
+        file.close(io);
+    }
+};
+
 /// A stream of `T` over a file that is still being appended to.
 ///
 /// Wraps a `Reader` and the file handle under it, because following a file
@@ -27,20 +94,36 @@ const ParseLineError = strand.ParseLineError;
 /// whether there are more bytes yet and to rewind when a line turned out to
 /// be half-written.
 ///
-/// What it follows is the open handle, not the path. See `truncated` and
-/// `restart` for what that means when the file is rotated.
+/// What it follows is the open handle, unless it was given an `Opener`, in
+/// which case it follows the path: see `Options.reopen` for the semantics,
+/// and `truncated` and `restart` for what a rotation looks like without one.
 pub fn Follower(comptime T: type) type {
     return struct {
         /// Where the waiting happens, and where cancellation comes from.
         io: std.Io,
-        /// The file. Not owned: this follower never closes it. It seeks it
-        /// back over every line the writer had not finished.
+        /// The file being read. The handle this follower was built on is not
+        /// owned and is never closed; a handle the follower opened for itself
+        /// across a rotation is, and this points at whichever it is reading.
         source: *std.Io.File.Reader,
         /// The line layer. Public so that `number`, `last_error_line` and
         /// `last_error` are readable, and read-only otherwise.
         reader: strand.Reader(T),
         /// Read-only after `init`.
         options: Options,
+        /// How many times this follower has begun again on a file: once per
+        /// replacement it followed across, once per truncation it restarted
+        /// on. The count a log's line numbers have to be read against, since
+        /// they start at 1 again after each.
+        rotations: u64 = 0,
+
+        /// Internal. The handle this follower opened for itself, which is the
+        /// only one it may close. `null` while it is still reading the one it
+        /// was given.
+        opened: ?std.Io.File = null,
+        /// Internal. What the file measured the last time this follower
+        /// waited. A file that has not grown between two waits has stopped,
+        /// and that is when the path is worth looking at again.
+        size_seen: ?u64 = null,
 
         const Self = @This();
 
@@ -54,6 +137,26 @@ pub fn Follower(comptime T: type) type {
             reader: strand.Reader(T).Options = .{},
             /// How to wait when the file has nothing more on it yet.
             wait: Wait = .{ .poll = .fromMilliseconds(20) },
+            /// How to get the file the path names now, or `null` to follow
+            /// the open handle and nothing else — which is the default, and
+            /// what every earlier version did.
+            ///
+            /// With one set, a follower that finds its file has stopped
+            /// growing asks the opener what the path holds. If that is a
+            /// different file, the follower moves to it and reads it from
+            /// the start; if it is the same file made shorter, the follower
+            /// begins again at the top of it. `error.Truncated` is therefore
+            /// never returned when this is set: a truncation is something to
+            /// act on rather than something to report.
+            ///
+            /// The order is the part worth stating: **the old file is read to
+            /// its end first, and only then is the new one started.** A
+            /// rename leaves the old handle readable, so a rotation that
+            /// happens while the follower is behind loses nothing — the
+            /// follower finishes the old file, then moves. The one thing it
+            /// does not carry over is a final line the old file never
+            /// finished, which was never a line.
+            reopen: ?Opener = null,
         };
 
         /// How a follower waits for the file to grow.
@@ -80,10 +183,15 @@ pub fn Follower(comptime T: type) type {
         /// ends. `SeekFailed` means the file refused the rewind over a
         /// half-written line; ask `source.seek_err`. `Truncated` means the
         /// file got shorter than what has already been read from it, which is
-        /// rotation seen from the inside: see `restart`.
+        /// rotation seen from the inside: see `restart`. It is not reported
+        /// at all when `Options.reopen` is set, because then a truncation is
+        /// acted on rather than reported. `ReopenFailed` is that opener
+        /// declining, or the system refusing to say which file a handle is;
+        /// ask your own opener for diagnostics.
         pub const NextError = strand.Reader(T).NextError || error{
             SeekFailed,
             Truncated,
+            ReopenFailed,
         } || std.Io.Cancelable;
 
         /// A follower over `source`, starting wherever `source` is positioned.
@@ -113,9 +221,14 @@ pub fn Follower(comptime T: type) type {
             };
         }
 
-        /// Releases the reader's buffers. Every `Line` this follower returned
+        /// Releases the reader's buffers, and closes the handle this follower
+        /// opened for itself if it opened one. The handle it was given is the
+        /// caller's and is left alone. Every `Line` this follower returned
         /// dangles afterwards.
         pub fn deinit(self: *Self) void {
+            if (self.opened) |file| {
+                if (self.options.reopen) |opener| opener.close(self.io, file);
+            }
             self.reader.deinit();
             self.* = undefined;
         }
@@ -176,14 +289,12 @@ pub fn Follower(comptime T: type) type {
         pub fn restart(self: *Self) error{SeekFailed}!void {
             self.source.seekTo(0) catch return error.SeekFailed;
             self.source.size = null;
-            self.reader.number = 0;
-            self.reader.consumed = 0;
-            self.reader.offset = 0;
-            self.reader.bom_checked = false;
+            self.atStart();
         }
 
-        /// Waits for the file to be longer than `position`, or for the wait
-        /// itself to time out, whichever comes first.
+        /// Waits for the file to grow, or for the wait itself to time out,
+        /// whichever comes first — and decides what a file that did not grow
+        /// means.
         fn waitForGrowth(self: *Self, position: u64) NextError!void {
             switch (self.options.wait) {
                 .poll => |duration| try self.io.sleep(duration, .awake),
@@ -198,11 +309,65 @@ pub fn Follower(comptime T: type) type {
                     wake.event.reset();
                 },
             }
-            // A file that is now shorter than where the reader stands has
-            // been truncated under it, and reading on would splice two
-            // different files together.
+
             const size = self.currentSize() catch return error.ReadFailed;
-            if (size < position) return error.Truncated;
+            // Two waits with the same size is a file that has stopped. One
+            // wait is not enough to say so, and the length alone is not
+            // either: a file whose last line the writer never finished has
+            // bytes past `position` for ever.
+            const stalled = if (self.size_seen) |seen| seen == size else false;
+            self.size_seen = size;
+
+            const opener = self.options.reopen orelse {
+                // A file that is now shorter than where the reader stands has
+                // been truncated under it, and reading on would splice two
+                // different files together.
+                if (size < position) return error.Truncated;
+                return;
+            };
+            // With somewhere to reopen from, a truncation is not news to
+            // report but a rotation to follow, and it is worth looking at at
+            // once rather than after a second wait.
+            if (size < position or stalled) try self.rotate(opener, size < position);
+        }
+
+        /// Looks at what the path holds now, and moves to it if it is not
+        /// what this follower is reading.
+        ///
+        /// `emptied` says the file the follower holds has become shorter than
+        /// what has been read from it, which is a reason to begin again on it
+        /// even when the path still names it.
+        fn rotate(self: *Self, opener: Opener, emptied: bool) NextError!void {
+            const fresh = opener.open(self.io) catch return error.ReopenFailed;
+            var adopted = false;
+            defer if (!adopted) opener.close(self.io, fresh);
+
+            const there = inodeOf(self.io, fresh) catch return error.ReopenFailed;
+            const held = inodeOf(self.io, self.source.file) catch return error.ReopenFailed;
+            if (there != held) {
+                // The old file has been read to its end — that is what
+                // brought us here — so the new one starts from its own.
+                adopted = true;
+                if (self.opened) |old| opener.close(self.io, old);
+                self.opened = fresh;
+                self.source.* = fresh.reader(self.io, self.source.interface.buffer);
+                self.atStart();
+                self.rotations += 1;
+                return;
+            }
+            if (emptied) {
+                try self.restart();
+                self.rotations += 1;
+            }
+        }
+
+        /// Puts the line layer back to where it stands at the top of a file.
+        fn atStart(self: *Self) void {
+            self.reader.number = 0;
+            self.reader.consumed = 0;
+            self.reader.offset = 0;
+            self.reader.bom_checked = false;
+            self.size_seen = null;
         }
 
         /// What a failed read really was.
@@ -218,6 +383,14 @@ pub fn Follower(comptime T: type) type {
                 error.Canceled => error.Canceled,
                 else => error.ReadFailed,
             };
+        }
+
+        /// Which file this handle is, as the system numbers files. Two
+        /// handles opened on one path at different times are the same file
+        /// exactly when this is equal, which is what tells a rename-and-
+        /// recreate apart from a file that is merely quiet.
+        fn inodeOf(io: std.Io, file: std.Io.File) std.Io.File.StatError!std.Io.File.INode {
+            return (try file.stat(io)).inode;
         }
 
         /// The length of the file right now, rather than the length it had
@@ -408,6 +581,186 @@ test "a truncated file is reported rather than spliced onto the old one" {
     const after = try follower.next();
     try testing.expectEqualStrings("after", after.value.kind);
     try testing.expectEqual(@as(u64, 1), after.number);
+}
+
+//=========================================================================
+// Rotation: the path stops naming the file the follower holds.
+//=========================================================================
+
+/// An `Opener` a test drives itself: what the path holds is whichever staged
+/// file `now` points at, and the test moves it. No filesystem, no race, and
+/// the counters say how often the follower actually looked.
+const Staged = struct {
+    files: []const std.Io.File,
+    now: usize = 0,
+    opens: usize = 0,
+    closes: usize = 0,
+
+    fn opener(self: *Staged) Opener {
+        return .{ .context = self, .openFn = open, .closeFn = close };
+    }
+
+    fn open(context: *anyopaque, io: std.Io) Opener.OpenError!std.Io.File {
+        _ = io;
+        const self: *Staged = @ptrCast(@alignCast(context));
+        self.opens += 1;
+        return self.files[self.now];
+    }
+
+    /// The staged handles belong to the test, so this counts and does not
+    /// close. A real opener closes; see `PathOpener`.
+    fn close(context: *anyopaque, io: std.Io, file: std.Io.File) void {
+        _ = io;
+        _ = file;
+        const self: *Staged = @ptrCast(@alignCast(context));
+        self.closes += 1;
+    }
+};
+
+test "the opener is an interface, and a test hands over the files itself" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "one", .data = "{\"kind\":\"one\"}\n" });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "two", .data = "{\"kind\":\"two\"}\n" });
+
+    const first = try tmp.dir.openFile(testing.io, "one", .{});
+    defer first.close(testing.io);
+    const second = try tmp.dir.openFile(testing.io, "two", .{});
+    defer second.close(testing.io);
+
+    var staged: Staged = .{ .files = &.{ first, second } };
+    var buffer: [256]u8 = undefined;
+    var source = first.reader(testing.io, &buffer);
+    {
+        var follower: Follower(Event) = .init(testing.allocator, testing.io, &source, .{
+            .wait = .{ .poll = .fromMicroseconds(100) },
+            .reopen = staged.opener(),
+        });
+        defer follower.deinit();
+
+        try testing.expectEqualStrings("one", (try follower.next()).value.kind);
+        try testing.expectEqual(@as(u64, 0), follower.rotations);
+
+        // What the path holds, changed by the test rather than by the
+        // filesystem, is the whole of a rotation as the follower sees it.
+        staged.now = 1;
+        const line = try follower.next();
+        try testing.expectEqualStrings("two", line.value.kind);
+        try testing.expectEqual(@as(u64, 1), line.number);
+        try testing.expectEqual(@as(u64, 1), follower.rotations);
+        try testing.expect(staged.opens >= 1);
+    }
+    // The handle the follower opened for itself goes back through the same
+    // interface; the one it was given does not.
+    try testing.expectEqual(@as(usize, 1), staged.closes);
+}
+
+test "a follower given an opener follows the path across a rename" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "log.jsonl", .data = "{\"kind\":\"old\"}\n" });
+
+    const file = try tmp.dir.openFile(testing.io, "log.jsonl", .{});
+    defer file.close(testing.io);
+    var buffer: [256]u8 = undefined;
+    var source = file.reader(testing.io, &buffer);
+
+    var path: PathOpener = .{ .dir = tmp.dir, .sub_path = "log.jsonl" };
+    var follower: Follower(Event) = .init(testing.allocator, testing.io, &source, .{
+        .wait = .{ .poll = .fromMicroseconds(100) },
+        .reopen = path.opener(),
+    });
+    defer follower.deinit();
+
+    try testing.expectEqualStrings("old", (try follower.next()).value.kind);
+
+    // Rotation of the kind that leaves the old file intact: the name moves,
+    // and a new file takes it.
+    try tmp.dir.rename("log.jsonl", tmp.dir, "log.1", testing.io);
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "log.jsonl", .data = "{\"kind\":\"new\"}\n" });
+
+    const line = try follower.next();
+    try testing.expectEqualStrings("new", line.value.kind);
+    // A different file is a different file: the numbering starts again.
+    try testing.expectEqual(@as(u64, 1), line.number);
+    try testing.expectEqual(@as(u64, 0), line.offset);
+    try testing.expectEqual(@as(u64, 1), follower.rotations);
+}
+
+test "the old file is read to its end before the new one is started" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{
+        .sub_path = "log.jsonl",
+        .data = "{\"kind\":\"a\",\"at\":1}\n{\"kind\":\"a\",\"at\":2}\n{\"kind\":\"a\",\"at\":3}\n",
+    });
+
+    const file = try tmp.dir.openFile(testing.io, "log.jsonl", .{});
+    defer file.close(testing.io);
+    var buffer: [16]u8 = undefined;
+    var source = file.reader(testing.io, &buffer);
+
+    var path: PathOpener = .{ .dir = tmp.dir, .sub_path = "log.jsonl" };
+    var follower: Follower(Event) = .init(testing.allocator, testing.io, &source, .{
+        .wait = .{ .poll = .fromMicroseconds(100) },
+        .reopen = path.opener(),
+    });
+    defer follower.deinit();
+
+    // The rotation happens before a single line has been read, which is the
+    // case the ordering rule is about: the old file is behind, and nothing
+    // on it may be lost for that.
+    try tmp.dir.rename("log.jsonl", tmp.dir, "log.1", testing.io);
+    try tmp.dir.writeFile(testing.io, .{
+        .sub_path = "log.jsonl",
+        .data = "{\"kind\":\"b\",\"at\":1}\n{\"kind\":\"b\",\"at\":2}\n",
+    });
+
+    for ([_]struct { []const u8, u64, u64 }{
+        .{ "a", 1, 1 },
+        .{ "a", 2, 2 },
+        .{ "a", 3, 3 },
+        .{ "b", 1, 1 },
+        .{ "b", 2, 2 },
+    }) |want| {
+        const line = try follower.next();
+        try testing.expectEqualStrings(want[0], line.value.kind);
+        try testing.expectEqual(want[1], line.value.at);
+        try testing.expectEqual(want[2], line.number);
+    }
+    try testing.expectEqual(@as(u64, 1), follower.rotations);
+}
+
+test "a truncation is begun again rather than reported when there is an opener" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "log.jsonl", .data = "{\"kind\":\"before\"}\n" });
+
+    const file = try tmp.dir.openFile(testing.io, "log.jsonl", .{});
+    defer file.close(testing.io);
+    var buffer: [256]u8 = undefined;
+    var source = file.reader(testing.io, &buffer);
+
+    var path: PathOpener = .{ .dir = tmp.dir, .sub_path = "log.jsonl" };
+    var follower: Follower(Event) = .init(testing.allocator, testing.io, &source, .{
+        .wait = .{ .poll = .fromMicroseconds(100) },
+        .reopen = path.opener(),
+    });
+    defer follower.deinit();
+
+    try testing.expectEqualStrings("before", (try follower.next()).value.kind);
+
+    // Rotation of the kind that empties the file in place. Without an opener
+    // this is `error.Truncated`; with one it is a file to begin again on.
+    const writer = try tmp.dir.openFile(testing.io, "log.jsonl", .{ .mode = .read_write });
+    defer writer.close(testing.io);
+    try writer.setLength(testing.io, 0);
+    try writer.writePositionalAll(testing.io, "{\"kind\":\"after\"}\n", 0);
+
+    const line = try follower.next();
+    try testing.expectEqualStrings("after", line.value.kind);
+    try testing.expectEqual(@as(u64, 1), line.number);
+    try testing.expectEqual(@as(u64, 1), follower.rotations);
 }
 
 test "two writers on two tasks share nothing" {

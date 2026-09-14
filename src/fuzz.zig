@@ -524,6 +524,66 @@ fn checkTail(input: []const u8) !void {
     try testing.expectEqual(forward_lines.items.len, seen);
 }
 
+/// A follower that reopens a path reads the file it holds to its end, then
+/// the file that replaced it from its start — the same lines a plain reader
+/// makes of each of the two, in that order, and numbered from 1 again after
+/// the rotation.
+///
+/// The rotation is staged before the follower has read anything, so the
+/// property is the ordering rule and not merely that a new file is noticed: a
+/// follower that moved early would lose lines off the end of the old file,
+/// and one that never moved would hang rather than fail.
+fn checkRotation(a: []const u8, b: []const u8) !void {
+    const options: strand.Reader(Event).Options = .{
+        .on_malformed = .skip,
+        // A follower's own reading policy: a final line the writer never
+        // finished is not a line, on the abandoned file as on the live one.
+        .require_terminator = true,
+    };
+
+    const Expected = struct { line: []const u8, number: u64 };
+    var want: std.ArrayList(Expected) = .empty;
+    defer {
+        for (want.items) |item| testing.allocator.free(item.line);
+        want.deinit(testing.allocator);
+    }
+    for ([_][]const u8{ a, b }) |bytes| {
+        var source: std.Io.Reader = .fixed(bytes);
+        var reader: strand.Reader(Event) = .init(testing.allocator, &source, options);
+        defer reader.deinit();
+        while (try reader.next()) |line| try want.append(testing.allocator, .{
+            .line = try testing.allocator.dupe(u8, line.line),
+            .number = line.number,
+        });
+    }
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "log.jsonl", .data = a });
+    const file = try tmp.dir.openFile(testing.io, "log.jsonl", .{});
+    defer file.close(testing.io);
+
+    var buffer: [64]u8 = undefined;
+    var source = file.reader(testing.io, &buffer);
+    var path: strand.PathOpener = .{ .dir = tmp.dir, .sub_path = "log.jsonl" };
+    var follower: strand.Follower(Event) = .init(testing.allocator, testing.io, &source, .{
+        .reader = .{ .on_malformed = .skip },
+        .wait = .{ .poll = .fromMicroseconds(50) },
+        .reopen = path.opener(),
+    });
+    defer follower.deinit();
+
+    // The name moves and a new file takes it, all before the first read.
+    try tmp.dir.rename("log.jsonl", tmp.dir, "log.1", testing.io);
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "log.jsonl", .data = b });
+
+    for (want.items) |expected| {
+        const line = try follower.next();
+        try testing.expectEqualStrings(expected.line, line.line);
+        try testing.expectEqual(expected.number, line.number);
+    }
+}
+
 //=========================================================================
 // The generator: lines that are nearly right, plus bytes that are not.
 //=========================================================================
@@ -717,6 +777,19 @@ fn fuzzPrettyRoundTrip(_: void, smith: *std.testing.Smith) anyerror!void {
     try checkPrettyRoundTrip(generateEvents(smith, &events, &text));
 }
 
+test "fuzz: a follower over a file replaced under it" {
+    try std.testing.fuzz({}, fuzzRotation, .{ .corpus = corpus });
+}
+
+fn fuzzRotation(_: void, smith: *std.testing.Smith) anyerror!void {
+    @disableInstrumentation();
+    var before: [256]u8 = undefined;
+    var after: [256]u8 = undefined;
+    const a = generate(smith, &before);
+    const b = generate(smith, &after);
+    try checkRotation(a, b);
+}
+
 test "fuzz: Tail over generated files" {
     try std.testing.fuzz({}, fuzzTail, .{ .corpus = corpus });
 }
@@ -795,6 +868,11 @@ test "the properties hold on a table of awkward inputs" {
             try checkVersioned(line.line);
         }
     }
+
+    // Rotation takes two files, so the table is walked in pairs: every input
+    // is followed once as the file that was replaced and once as the one
+    // that replaced it.
+    for (table, 0..) |before, i| try checkRotation(before, table[(i + 1) % table.len]);
 
     for (versioned_table) |line| try checkVersioned(line);
     try checkPrettyRoundTrip(&.{});

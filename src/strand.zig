@@ -23,13 +23,16 @@
 //! * `Tail` reads a seekable file backwards, last line first, without
 //!   reading what comes before.
 //! * `Follower` reads to the end and keeps reading, the way `tail -f` does,
-//!   waiting on an `std.Io` and stopping when that `std.Io` cancels it.
+//!   waiting on an `std.Io` and stopping when that `std.Io` cancels it — and,
+//!   given an `Opener`, following the path across a rotation rather than the
+//!   handle into a file nobody writes to any more.
 //! * `Versioned` puts a schema version on a record and migrates an older one
 //!   forward.
 //!
 //! What this package does NOT do: it does not parse JSON (`std.json` does),
-//! does not buffer or own a stream, does not open, close, rotate, lock or
-//! compress a file, does not index a log or seek to line *n*, does not
+//! does not buffer or own a stream, does not open a file except through an
+//! `Opener` a caller hands it, does not lock or compress one, does not index
+//! a log or seek to line *n*, does not
 //! validate a line it is not asked to parse, and has no opinion about what a
 //! line means. There is no global state and no dependency beyond `std`.
 
@@ -39,6 +42,8 @@ const assert = std.debug.assert;
 
 pub const Tail = @import("tail.zig").Tail;
 pub const Follower = @import("follow.zig").Follower;
+pub const Opener = @import("follow.zig").Opener;
+pub const PathOpener = @import("follow.zig").PathOpener;
 pub const Versioned = @import("versioned.zig").Versioned;
 pub const payloadOf = @import("versioned.zig").payloadOf;
 

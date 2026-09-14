@@ -127,10 +127,14 @@ fn follow(gpa: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, comptime Entry: t
             var file_writer = file.writer(inner_io, &buffer);
             file_writer.pos = try file.length(inner_io);
 
-            var log: strand.Writer(strand.Versioned(Entry)) = .init(&file_writer.interface, .{});
+            // `.per_record` is the policy a log another process is tailing
+            // wants: every record is on the file, and on the disk under it,
+            // before the next one is written. It costs an `fsync` a record.
+            var log: strand.Writer(strand.Versioned(Entry)) = .initFile(&file_writer, .{
+                .sync = .per_record,
+            });
             for (0..appended) |i| {
                 try log.write(.{ .value = .{ .kind = "tick", .at = 10 + i } });
-                try file_writer.interface.flush();
             }
         }
     };

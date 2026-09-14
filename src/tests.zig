@@ -1005,6 +1005,92 @@ test "a flush policy is how often the destination is asked to drain" {
 }
 
 //=========================================================================
+// Syncing, which is the other half of that decision: a flush survives the
+// process, and only a sync survives the machine.
+//=========================================================================
+
+test "a sync policy drains the destination before it asks the file" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const file = try tmp.dir.createFile(testing.io, "log.jsonl", .{ .read = true });
+    defer file.close(testing.io);
+
+    var buffer: [4096]u8 = undefined;
+    var file_writer = file.writer(testing.io, &buffer);
+
+    // `.flush` is never, so nothing but the sync can have drained it — and
+    // a sync of a file that has not been given the bytes syncs nothing.
+    var log: strand.Writer(Event) = .initFile(&file_writer, .{ .sync = .per_record });
+    const record = "{\"kind\":\"one\",\"at\":1,\"level\":\"info\",\"tags\":[],\"span\":{\"id\":0}}\n".len;
+    try log.write(.{ .kind = "one", .at = 1 });
+    try testing.expectEqual(@as(u64, record), try file.length(testing.io));
+    try log.write(.{ .kind = "two", .at = 2 });
+    try testing.expectEqual(@as(u64, 2 * record), try file.length(testing.io));
+    try testing.expectEqual(@as(u64, 2), log.count);
+
+    // And the bytes on the file are the records, read back as records.
+    var read_buffer: [4096]u8 = undefined;
+    var file_reader = file.reader(testing.io, &read_buffer);
+    try file_reader.seekTo(0);
+    var reader: strand.Reader(Event) = .init(testing.allocator, &file_reader.interface, .{});
+    defer reader.deinit();
+    try testing.expectEqualStrings("one", (try reader.next()).?.value.kind);
+    try testing.expectEqualStrings("two", (try reader.next()).?.value.kind);
+    try testing.expectEqual(@as(?strand.Line(Event), null), try reader.next());
+}
+
+test "a per-batch sync is once for the batch and not once for the record" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const file = try tmp.dir.createFile(testing.io, "log.jsonl", .{ .read = true });
+    defer file.close(testing.io);
+
+    var buffer: [4096]u8 = undefined;
+    var file_writer = file.writer(testing.io, &buffer);
+    var log: strand.Writer(Event) = .initFile(&file_writer, .{ .sync = .per_batch });
+
+    // A plain `write` under `.per_batch` neither drains nor syncs, so the
+    // record is still in this program's buffer and the file is empty.
+    try log.write(.{ .kind = "loose", .at = 0 });
+    try testing.expectEqual(@as(u64, 0), try file.length(testing.io));
+
+    // The batch is what a sync follows, and it takes the loose record with
+    // it: what is drained is everything the buffer holds.
+    try log.writeAll(&.{
+        .{ .kind = "one", .at = 1 },
+        .{ .kind = "two", .at = 2 },
+    });
+    try testing.expect(try file.length(testing.io) > 0);
+    try testing.expectEqual(@as(u64, 3), log.count);
+
+    var read_buffer: [4096]u8 = undefined;
+    var file_reader = file.reader(testing.io, &read_buffer);
+    try file_reader.seekTo(0);
+    var reader: strand.Reader(Event) = .init(testing.allocator, &file_reader.interface, .{});
+    defer reader.deinit();
+    var seen: usize = 0;
+    while (try reader.next()) |_| seen += 1;
+    try testing.expectEqual(@as(usize, 3), seen);
+}
+
+test "a sync policy with no file to sync says so rather than pretending" {
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+
+    // `init` refuses this combination outright; a writer assembled by hand
+    // reports it on the first record rather than silently writing a log
+    // that is not as durable as it was asked to be.
+    var log: strand.Writer(Event) = .{
+        .output = &out.writer,
+        .file = null,
+        .options = .{ .sync = .per_record },
+    };
+    try testing.expectError(error.SyncFailed, log.write(.{ .kind = "one", .at = 1 }));
+    // The record itself was written; it is the durability that failed.
+    try testing.expectEqualStrings("{\"kind\":\"one\",\"at\":1,\"level\":\"info\",\"tags\":[],\"span\":{\"id\":0}}\n", out.written());
+}
+
+//=========================================================================
 // Bytes that are not UTF-8. The format is UTF-8 by definition, so the
 // question is only what happens when the bytes are not, and the answer has
 // to be the same one every time.

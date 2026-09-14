@@ -45,6 +45,27 @@ before 1.0 the minor is the breaking one.
   each of the two.
 - Breaking: `Follower.NextError` gained `error.ReopenFailed`, which is an
   opener declining or the system refusing to say which file a handle is.
+- `Writer.Options.sync`: `.never`, `.per_record` or `.per_batch`, with
+  `Writer.initFile` to give a writer the file a sync needs. A flush moves a
+  record out of this program's buffer into the operating system's, which is
+  enough to survive the process and not enough to survive the machine — the
+  operating system may hold those bytes in memory as long as it likes — and
+  `flush` was all this package offered, so a log that had to be on the disk
+  had no setting to say so and the caller had to reach past the writer for
+  the file after every record. A sync drains first, whatever `flush` says,
+  since bytes still in this program's buffer have never reached the file.
+  What it does not cover is stated rather than implied: the directory entry
+  is not synced, because creating and opening the file are the caller's.
+  `Writer.Options.flush`'s type is now the named `Writer.Flush` rather than an
+  anonymous enum, and `Writer.Sync` is beside it. *a sync policy drains the
+  destination before it asks the file* measures the file after every record,
+  *a per-batch sync is once for the batch and not once for the record* shows a
+  loose record still in the buffer until the batch drains it, and *a sync
+  policy with no file to sync says so rather than pretending* pins the writer
+  built without one.
+- Breaking: `Writer.Error` gained `error.SyncFailed`, so a caller that
+  switches exhaustively over it has one more arm to write. `writeLine` is
+  unchanged: its policy is the default one and it cannot sync.
 
 ## 0.3.0
 

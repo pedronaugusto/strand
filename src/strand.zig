@@ -19,7 +19,8 @@
 //! * `kindOf` and `tagOf` answer "what kind of line is this" from the first
 //!   key alone, without parsing the value.
 //! * `Writer` emits one value per line — minified, or indented for a human —
-//!   and counts them.
+//!   and counts them, draining the destination and syncing the file under it
+//!   as often as it is told to.
 //! * `Tail` reads a seekable file backwards, last line first, without
 //!   reading what comes before.
 //! * `Follower` reads to the end and keeps reading, the way `tail -f` does,
@@ -690,8 +691,14 @@ test indexOfControl {
 /// Writes values as JSON Lines to a `*std.Io.Writer`, and counts them.
 pub fn Writer(comptime T: type) type {
     return struct {
-        /// The destination. Not owned: this writer never flushes or closes it.
+        /// The destination. Not owned: this writer never closes it, and
+        /// drains it only when `Options.flush` or `Options.sync` says to.
         output: *std.Io.Writer,
+        /// The file under `output`, when the writer was made with `initFile`.
+        /// `null` otherwise, and a `sync` policy needs it: there is no way to
+        /// ask a `*std.Io.Writer` to put its bytes on a disk, because not
+        /// every one of them has a disk.
+        file: ?*std.Io.File.Writer = null,
         /// Read-only after `init`.
         options: Options,
         /// Records written so far.
@@ -720,24 +727,85 @@ pub fn Writer(comptime T: type) type {
             /// to survive a crash between two records, is the case where the
             /// decision is "after every one", and saying so here is shorter
             /// than wrapping every `write`.
-            flush: enum {
-                /// Nothing is flushed. The caller drains its own writer.
-                never,
-                /// `write` flushes the destination after each record.
-                per_record,
-                /// `writeAll` flushes once, after the last record of the
-                /// batch. A plain `write` flushes nothing.
-                per_batch,
-            } = .never,
+            flush: Flush = .never,
+            /// When the file is asked to put what it has been given onto the
+            /// disk under it.
+            ///
+            /// A flush moves a record out of this program's buffer and into
+            /// the operating system's. That is enough to survive the process
+            /// dying — another process reading the file sees the record — and
+            /// it is not enough to survive the machine losing power, because
+            /// the operating system is free to hold those bytes in memory for
+            /// as long as it likes. A sync is the call that says otherwise.
+            ///
+            /// What each level buys and costs:
+            ///
+            /// | | Survives the process | Survives the machine | Costs |
+            /// |---|---|---|---|
+            /// | `.never` | only what the caller drains | no | nothing |
+            /// | `.per_record` | yes | yes, to the last record | one `fsync` per record, which is a disk write and a wait: on a spinning disk single-digit milliseconds, on an SSD tens to hundreds of microseconds, and on either it is the slowest thing a log does |
+            /// | `.per_batch` | yes | yes, to the last batch | one `fsync` per `writeAll`, so a batch of a thousand records pays once and risks losing the batch |
+            ///
+            /// A sync drains first, whatever `flush` says: bytes still in
+            /// this program's buffer have not reached the file at all, so
+            /// there would be nothing on it to sync.
+            ///
+            /// Only a writer made with `initFile` has a file to sync. `init`
+            /// refuses any other setting than `.never`, and a writer built by
+            /// hand without a file reports `error.SyncFailed` rather than
+            /// pretending.
+            ///
+            /// What this does not cover is the directory entry: a file that
+            /// is synced but whose directory is not may not be there under
+            /// its name after a crash. Creating and syncing the directory is
+            /// the caller's, as opening the file is.
+            sync: Sync = .never,
         };
 
-        /// What `write` can report: the destination refused the bytes. Ask it
-        /// for diagnostics.
-        pub const Error = std.Io.Writer.Error;
+        /// How often the destination is asked to drain. See `Options.flush`.
+        pub const Flush = enum {
+            /// Nothing is flushed. The caller drains its own writer.
+            never,
+            /// `write` flushes the destination after each record.
+            per_record,
+            /// `writeAll` flushes once, after the last record of the batch.
+            /// A plain `write` flushes nothing.
+            per_batch,
+        };
+
+        /// How often the file is asked to sync. See `Options.sync`.
+        pub const Sync = enum {
+            /// Nothing is synced. A crash of the machine may lose records a
+            /// reader of the file had already seen.
+            never,
+            /// `write` syncs the file after each record, having drained it.
+            per_record,
+            /// `writeAll` syncs once, after the last record of the batch,
+            /// having drained it. A plain `write` syncs nothing.
+            per_batch,
+        };
+
+        /// What `write` can report. `WriteFailed` is the destination refusing
+        /// the bytes and `SyncFailed` is the file refusing to put them on the
+        /// disk; ask the destination or the file for diagnostics.
+        pub const Error = std.Io.Writer.Error || error{SyncFailed};
 
         /// A writer over `output`. Writes nothing.
+        ///
+        /// A writer made this way has no file, so `options.sync` must be
+        /// `.never`; `initFile` is the constructor that can sync.
         pub fn init(output: *std.Io.Writer, options: Options) Self {
+            assert(options.sync == .never);
             return .{ .output = output, .options = options };
+        }
+
+        /// A writer over a file, which is what a `sync` policy needs. Writes
+        /// nothing.
+        ///
+        /// The file is still not owned: this writer never closes it, and
+        /// drains it only when `Options.flush` or `Options.sync` says to.
+        pub fn initFile(dest: *std.Io.File.Writer, options: Options) Self {
+            return .{ .output = &dest.interface, .file = dest, .options = options };
         }
 
         /// Writes `value` as one record: its JSON, then `\n`.
@@ -748,8 +816,9 @@ pub fn Writer(comptime T: type) type {
         /// refuse, and `write escapes every terminator` in the test suite is
         /// the proof. In `.pretty` the record spans lines by design.
         ///
-        /// Nothing is flushed; that is the caller's to do, on the writer it
-        /// owns.
+        /// Nothing is flushed or synced unless `Options.flush` or
+        /// `Options.sync` says so; otherwise draining is the caller's to do,
+        /// on the writer it owns.
         pub fn write(self: *Self, value: T) Error!void {
             try std.json.Stringify.value(value, .{
                 .whitespace = switch (self.options.format) {
@@ -761,6 +830,7 @@ pub fn Writer(comptime T: type) type {
             }, self.output);
             try self.output.writeByte('\n');
             self.count += 1;
+            if (self.options.sync == .per_record) return self.drainAndSync();
             if (self.options.flush == .per_record) try self.output.flush();
         }
 
@@ -774,7 +844,17 @@ pub fn Writer(comptime T: type) type {
         /// have been written and `count` says how many.
         pub fn writeAll(self: *Self, values: []const T) Error!void {
             for (values) |value| try self.write(value);
+            if (self.options.sync == .per_batch) return self.drainAndSync();
             if (self.options.flush == .per_batch) try self.output.flush();
+        }
+
+        /// Drains the destination and then asks the file to put what it now
+        /// holds onto the disk. The order is the whole of it: a sync of a
+        /// file that has not been given the bytes syncs nothing.
+        fn drainAndSync(self: *Self) Error!void {
+            try self.output.flush();
+            const dest = self.file orelse return error.SyncFailed;
+            dest.file.sync(dest.io) catch return error.SyncFailed;
         }
     };
 }
@@ -783,7 +863,12 @@ pub fn Writer(comptime T: type) type {
 /// count. Same encoding as `Writer` with default options.
 pub fn writeLine(output: *std.Io.Writer, value: anytype) std.Io.Writer.Error!void {
     var w: Writer(@TypeOf(value)) = .init(output, .{});
-    return w.write(value);
+    w.write(value) catch |err| switch (err) {
+        error.WriteFailed => return error.WriteFailed,
+        // The default sync policy is `.never`, so nothing here ever asks a
+        // file for anything and this writer has no file to ask.
+        error.SyncFailed => unreachable,
+    };
 }
 
 test writeLine {

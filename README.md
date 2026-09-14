@@ -96,7 +96,19 @@ The writer does not own the destination and never drains it behind your back,
 but *how often to drain* is a decision a log has an opinion about, so it can be
 said once instead of at every call site: `Writer.Options.flush` is `.never` by
 default, `.per_record` for a log another process is tailing, and `.per_batch`
-for one written in batches.
+for one written in batches. `Writer.Options.sync` is the same three settings
+one level down, for a log that has to survive the machine and not only the
+process:
+
+| | Survives the process | Survives the machine | Costs |
+|---|---|---|---|
+| `flush` | yes, from the record it drained | no — the operating system may hold the bytes as long as it likes | a write |
+| `sync` | yes | yes, to the last record or batch it synced | an `fsync`: a disk write and a wait, and the slowest thing a log does |
+
+A sync drains first, whatever `flush` says, and needs a file to sync:
+`Writer.initFile` is the constructor that has one. The directory entry is not
+covered — a file synced under a name its directory has not recorded may not be
+there after a crash — because opening and creating are the caller's.
 
 ## Reading backwards
 

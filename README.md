@@ -371,11 +371,9 @@ buffer.
 
 | Platform | What it uses there | Tested |
 |---|---|---|
-| Linux | `std.Io.File` positional reads and seeks; the inode from `stat` identifies a file across a rotation | Suite on the Ubuntu CI runner, and in a Debian container by `ci/linux.sh` |
-| macOS | the same | Suite on the macOS CI runner |
-| Windows | the same; the file index from `stat` stands in for the inode | Compiles for Windows |
-
-Pending: the CI run on Windows.
+| Linux | `std.Io.File` positional reads and seeks; the inode from `stat` identifies a file across a rotation | Suite on the Ubuntu CI runner in all four optimize modes, and in a Debian container by `ci/linux.sh` |
+| macOS | the same | Suite on the macOS CI runner in all four optimize modes |
+| Windows | the same; the file index from `stat` stands in for the inode | Suite on the Windows CI runner in all four optimize modes |
 
 CI also compiles the suite without running it for x86_64 and aarch64 Linux (gnu,
 plus musl on x86_64), x86_64 and aarch64 Windows (gnu), and x86_64 and aarch64

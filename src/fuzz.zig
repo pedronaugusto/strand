@@ -577,6 +577,12 @@ fn checkRotation(a: []const u8, b: []const u8) !void {
     try tmp.dir.rename("log.jsonl", tmp.dir, "log.1", testing.io);
     try tmp.dir.writeFile(testing.io, .{ .sub_path = "log.jsonl", .data = b });
 
+    // A follower with nothing to notice waits, and a wait does not end on
+    // its own: if the system called these the same file, fail here instead.
+    const replaced = try tmp.dir.openFile(testing.io, "log.jsonl", .{});
+    defer replaced.close(testing.io);
+    try testing.expect((try replaced.stat(testing.io)).inode != (try file.stat(testing.io)).inode);
+
     for (want.items) |expected| {
         const line = try follower.next();
         try testing.expectEqualStrings(expected.line, line.line);

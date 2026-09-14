@@ -465,24 +465,15 @@ fn produce(io: std.Io, file: std.Io.File, buffer: []u8, count: u64) !void {
     try file_writer.interface.flush();
 }
 
-test "a producer task and a follower task over one growing file" {
-    const count = 500;
-    var fixture = try Fixture.init();
-    defer fixture.deinit();
-
-    var producer = testing.io.concurrent(produce, .{
-        testing.io,
-        fixture.write_file,
-        fixture.write_buffer,
-        @as(u64, count),
-    }) catch |err| switch (err) {
-        // A single-threaded `Io` cannot run a producer and a consumer at
-        // once, and this test is about what happens when it can.
-        error.ConcurrencyUnavailable => return error.SkipZigTest,
-    };
-
-    var source = fixture.read_file.reader(testing.io, fixture.read_buffer);
-    var follower: Follower(Event) = .init(testing.allocator, testing.io, &source, .{
+/// Follows `source` until `count` lines have come off it, checking each one.
+///
+/// The consumer is the task and the producer is the caller, not the other way
+/// round. A producer on a task that fails leaves a consumer waiting for lines
+/// that will never be written, and a wait with nothing to wait for does not
+/// end; a producer on the caller's own thread reports its failure as a failed
+/// test.
+fn consume(io: std.Io, source: *std.Io.File.Reader, count: u64) !void {
+    var follower: Follower(Event) = .init(testing.allocator, io, source, .{
         .wait = .{ .poll = .fromMicroseconds(100) },
     });
     defer follower.deinit();
@@ -494,7 +485,31 @@ test "a producer task and a follower task over one growing file" {
         try testing.expectEqualStrings("tick", line.value.kind);
         try testing.expectEqual(seen + 1, line.number);
     }
-    try producer.await(testing.io);
+}
+
+test "a producer task and a follower task over one growing file" {
+    const count = 500;
+    var fixture = try Fixture.init();
+    defer fixture.deinit();
+
+    var source = fixture.read_file.reader(testing.io, fixture.read_buffer);
+    var consumer = testing.io.concurrent(consume, .{
+        testing.io,
+        &source,
+        @as(u64, count),
+    }) catch |err| switch (err) {
+        // A single-threaded `Io` cannot run a producer and a consumer at
+        // once, and this test is about what happens when it can.
+        error.ConcurrencyUnavailable => return error.SkipZigTest,
+    };
+
+    produce(testing.io, fixture.write_file, fixture.write_buffer, count) catch |err| {
+        // The consumer is waiting for lines that are not coming now, so it
+        // has to be stopped before the failure is reported.
+        _ = consumer.cancel(testing.io) catch {};
+        return err;
+    };
+    try consumer.await(testing.io);
 }
 
 /// Follows `source` until it is cancelled, which is the only way it ends.
@@ -679,6 +694,13 @@ test "a follower given an opener follows the path across a rename" {
     try tmp.dir.rename("log.jsonl", tmp.dir, "log.1", testing.io);
     try tmp.dir.writeFile(testing.io, .{ .sub_path = "log.jsonl", .data = "{\"kind\":\"new\"}\n" });
 
+    // A system that called these two the same file would leave the follower
+    // with nothing to notice, and a follower with nothing to notice waits.
+    // Checking it here makes that a failure rather than a wait.
+    const replaced = try tmp.dir.openFile(testing.io, "log.jsonl", .{});
+    defer replaced.close(testing.io);
+    try testing.expect((try replaced.stat(testing.io)).inode != (try file.stat(testing.io)).inode);
+
     const line = try follower.next();
     try testing.expectEqualStrings("new", line.value.kind);
     // A different file is a different file: the numbering starts again.
@@ -715,6 +737,9 @@ test "the old file is read to its end before the new one is started" {
         .sub_path = "log.jsonl",
         .data = "{\"kind\":\"b\",\"at\":1}\n{\"kind\":\"b\",\"at\":2}\n",
     });
+    const replaced = try tmp.dir.openFile(testing.io, "log.jsonl", .{});
+    defer replaced.close(testing.io);
+    try testing.expect((try replaced.stat(testing.io)).inode != (try file.stat(testing.io)).inode);
 
     for ([_]struct { []const u8, u64, u64 }{
         .{ "a", 1, 1 },

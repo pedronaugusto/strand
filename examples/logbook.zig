@@ -115,46 +115,38 @@ pub fn main() !void {
     try arms(arena);
 }
 
-/// One task appending to the log while another follows it.
+/// Records appended to the log, and a follower that picks them up.
 fn follow(gpa: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, comptime Entry: type) !void {
     const appended = 2;
-
-    const Appender = struct {
-        fn run(inner_io: std.Io, target: std.Io.Dir) !void {
-            const file = try target.openFile(inner_io, "log.jsonl", .{ .mode = .write_only });
-            defer file.close(inner_io);
-            var buffer: [512]u8 = undefined;
-            var file_writer = file.writer(inner_io, &buffer);
-            file_writer.pos = try file.length(inner_io);
-
-            // `.per_record` is the policy a log another process is tailing
-            // wants: every record is on the file, and on the disk under it,
-            // before the next one is written. It costs an `fsync` a record.
-            var log: strand.Writer(strand.Versioned(Entry)) = .initFile(&file_writer, .{
-                .sync = .per_record,
-            });
-            for (0..appended) |i| {
-                try log.write(.{ .value = .{ .kind = "tick", .at = 10 + i } });
-            }
-        }
-    };
-
-    var task = io.concurrent(Appender.run, .{ io, dir }) catch |err| switch (err) {
-        // Nothing to demonstrate on an `Io` that cannot run two things at
-        // once, and nothing wrong with one either.
-        error.ConcurrencyUnavailable => {
-            std.debug.print("following: skipped, this Io has no concurrency\n", .{});
-            return;
-        },
-    };
-    defer task.await(io) catch {};
 
     const file = try dir.openFile(io, "log.jsonl", .{});
     defer file.close(io);
     var buffer: [4096]u8 = undefined;
     var file_reader = file.reader(io, &buffer);
-    // Start at the end, the way `tail -f` does: only what arrives from now on.
+    // Start at the end: only what arrives from now on.
     try file_reader.seekTo(try file.length(io));
+
+    // The records arrive. In a program this is another process, or another
+    // task; here it is the lines above the follower, so that the example
+    // finishes on every platform instead of waiting on something that might
+    // not come. `zig build test` runs a producer and a follower at once.
+    {
+        const sink = try dir.openFile(io, "log.jsonl", .{ .mode = .write_only });
+        defer sink.close(io);
+        var sink_buffer: [512]u8 = undefined;
+        var file_writer = sink.writer(io, &sink_buffer);
+        file_writer.pos = try sink.length(io);
+
+        // `.per_record` is the policy a log another process is reading wants:
+        // every record is on the file, and on the disk under it, before the
+        // next one is written. It costs an `fsync` a record.
+        var log: strand.Writer(strand.Versioned(Entry)) = .initFile(&file_writer, .{
+            .sync = .per_record,
+        });
+        for (0..appended) |i| {
+            try log.write(.{ .value = .{ .kind = "tick", .at = 10 + i } });
+        }
+    }
 
     // --- README:follow ---
 

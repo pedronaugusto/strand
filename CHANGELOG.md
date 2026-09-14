@@ -67,6 +67,16 @@ before 1.0 the minor is the breaking one.
   switches exhaustively over it has one more arm to write. `writeLine` is
   unchanged: its policy is the default one and it cannot sync.
 
+No test or example waits on a task that could have failed. A producer on a
+task that fails leaves a consumer waiting for lines that will never be written,
+and a wait with nothing to wait for does not end: the suite hung on the Windows
+runner rather than failing on it. The producer is the caller's own thread now
+and the follower is the task, so a write that fails is a failed test; the
+logbook example appends its records itself instead of from a task; the rotation
+tests check that the system really does call the two files different files,
+since a follower with nothing to notice waits; and every CI job has
+`timeout-minutes: 20`, so a wait that never ends fails the run.
+
 `Tail` in `.pretty` mode was looked at and refused, and the reason is now on
 `Tail.Options` rather than left as a line in the documents. Joining lines needs
 an answer to "is this the whole of a value, or only part of one". Forwards

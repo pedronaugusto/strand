@@ -123,8 +123,13 @@ fn follow(gpa: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, comptime Entry: t
     defer file.close(io);
     var buffer: [4096]u8 = undefined;
     var file_reader = file.reader(io, &buffer);
+    // Where the log ends now, measured once through the handle that is open
+    // for reading. A handle opened only for writing cannot be asked: Windows
+    // refuses the query with `error.AccessDenied`, because reading a file's
+    // attributes is read access.
+    const end = try file.length(io);
     // Start at the end: only what arrives from now on.
-    try file_reader.seekTo(try file.length(io));
+    try file_reader.seekTo(end);
 
     // The records arrive. In a program this is another process, or another
     // task; here it is the lines above the follower, so that the example
@@ -135,7 +140,7 @@ fn follow(gpa: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, comptime Entry: t
         defer sink.close(io);
         var sink_buffer: [512]u8 = undefined;
         var file_writer = sink.writer(io, &sink_buffer);
-        file_writer.pos = try sink.length(io);
+        file_writer.pos = end;
 
         // `.per_record` is the policy a log another process is reading wants:
         // every record is on the file, and on the disk under it, before the

@@ -35,13 +35,16 @@ const ParseLineError = strand.ParseLineError;
 /// a test hands over files it has staged, so that a rotation happens when the
 /// test says it does and not when the filesystem gets around to it.
 ///
-/// `open` returns a file the follower reads from the beginning. `close` is
-/// called on every file this interface opened, and on none that it did not:
-/// the handle a `Follower` was built on stays the caller's.
+/// `open` returns a file the follower reads from the beginning, and it must be
+/// open for reading: the follower reads the lines on it and asks the system
+/// which file it is, and asking for a file's attributes is read access —
+/// Windows refuses it on a handle opened only for writing. `close` is called on
+/// every file this interface opened, and on none that it did not: the handle a
+/// `Follower` was built on stays the caller's.
 pub const Opener = struct {
     /// Whatever the implementation needs. Not touched here.
     context: *anyopaque,
-    /// The file the path names now.
+    /// The file the path names now, open for reading.
     openFn: *const fn (context: *anyopaque, io: std.Io) OpenError!std.Io.File,
     /// Called on a file `openFn` returned and the follower is done with.
     closeFn: *const fn (context: *anyopaque, io: std.Io, file: std.Io.File) void,
@@ -389,6 +392,10 @@ pub fn Follower(comptime T: type) type {
         /// handles opened on one path at different times are the same file
         /// exactly when this is equal, which is what tells a rename-and-
         /// recreate apart from a file that is merely quiet.
+        ///
+        /// Both handles must be open for reading. Asking for a file's
+        /// attributes is read access, and Windows refuses it on a handle
+        /// opened only for writing.
         fn inodeOf(io: std.Io, file: std.Io.File) std.Io.File.StatError!std.Io.File.INode {
             return (try file.stat(io)).inode;
         }

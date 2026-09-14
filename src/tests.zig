@@ -1012,6 +1012,9 @@ test "a flush policy is how often the destination is asked to drain" {
 test "a sync policy drains the destination before it asks the file" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
+    // Read access as well as write: this test measures the file as it goes,
+    // and asking for a file's length is read access — Windows refuses it on a
+    // handle opened only for writing.
     const file = try tmp.dir.createFile(testing.io, "log.jsonl", .{ .read = true });
     defer file.close(testing.io);
 

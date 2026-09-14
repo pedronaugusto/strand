@@ -77,6 +77,13 @@ tests check that the system really does call the two files different files,
 since a follower with nothing to notice waits; and every CI job has
 `timeout-minutes: 20`, so a wait that never ends fails the run.
 
+A file's length is asked of a handle that is open for reading. Reading a
+file's attributes is read access, and Windows refuses the query on a handle
+opened only for writing, so the logbook example measured the end of the log
+through the handle it reads with rather than the one it appends with. `Opener`
+says the same thing about the file it hands over: the follower reads it and
+asks the system which file it is, and both need read access.
+
 `Tail` in `.pretty` mode was looked at and refused, and the reason is now on
 `Tail.Options` rather than left as a line in the documents. Joining lines needs
 an answer to "is this the whole of a value, or only part of one". Forwards

@@ -67,6 +67,24 @@ before 1.0 the minor is the breaking one.
   switches exhaustively over it has one more arm to write. `writeLine` is
   unchanged: its policy is the default one and it cannot sync.
 
+`Tail` in `.pretty` mode was looked at and refused, and the reason is now on
+`Tail.Options` rather than left as a line in the documents. Joining lines needs
+an answer to "is this the whole of a value, or only part of one". Forwards
+there is one: `std.json` reports `error.UnexpectedEndOfInput` when a value is
+cut off at the end, and `Reader` joins on that failure and on no other.
+Backwards there is no mirror of it — `std.json` has no notion of a valid tail
+of a value, so a lone `}` is a syntax error exactly as `not json` is — and a
+backwards join would have to treat every failure as "not the beginning yet".
+That is sound on a file this package wrote, since no line-aligned proper suffix
+of an indented record is itself a complete value, and it is unbounded on
+anything else: one damaged line would prepend lines until `max_line_bytes`,
+which over thirty-byte lines and the default megabyte is tens of thousands of
+parse attempts over ever longer slices, ending in one malformed record that has
+swallowed every good record inside it. Forwards, a syntax error costs one line.
+Counting brackets backwards instead of parsing would be cheap and needs to know
+whether a `"` opens a string or closes one, which is a fact about everything to
+its left — finding where a multi-line record begins means parsing forwards.
+
 ## 0.3.0
 
 A pass over the package asking what a JSON Lines reader is expected to answer

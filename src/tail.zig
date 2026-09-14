@@ -12,6 +12,9 @@
 //! What it cannot do is count: a backwards read never learns how many lines
 //! came before the ones it read, so `Line.number` counts back from the end,
 //! 1 being the last line of the file.
+//!
+//! The other thing it does not do is `.pretty`. See `Tail.Options.format`,
+//! which is the setting that is missing and the reason it is missing.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -83,10 +86,39 @@ pub fn Tail(comptime T: type) type {
         /// Reading and parsing policy, fixed at `init`.
         ///
         /// The same policy as `Reader.Options`, minus the two settings a
-        /// backwards read cannot honour: `format`, because finding where a
-        /// multi-line record begins means parsing forwards, and
-        /// `require_terminator`, because a file being appended to is
-        /// `Follower`'s job, not this one's.
+        /// backwards read cannot honour.
+        ///
+        /// **`require_terminator`** is absent because a file being appended
+        /// to is `Follower`'s job, not this one's.
+        ///
+        /// **`format`** is absent because joining lines needs an answer to
+        /// "is this the whole of a value, or only part of one", and there is
+        /// one answer only going forwards. `Reader` in `.pretty` mode joins
+        /// on `error.UnexpectedEndOfInput`, which `std.json` gives when a
+        /// value is cut off at the end: a definite signal, and the only
+        /// failure that means "the rest is on the next line". Backwards there
+        /// is no mirror of it. `std.json` has no notion of a valid *tail* of
+        /// a value, so a lone `}` is a syntax error exactly as `not json` is,
+        /// and a backwards join would have to treat every failure as "not the
+        /// beginning yet" and keep prepending lines.
+        ///
+        /// That is sound on a file this package wrote — no line-aligned
+        /// proper suffix of an indented record is itself a complete value,
+        /// because such a suffix starts inside a container and so carries
+        /// unmatched closing brackets — and it is unbounded on anything else.
+        /// One damaged line would prepend until `max_line_bytes`: with the
+        /// default megabyte over thirty-byte lines, tens of thousands of
+        /// parse attempts over ever longer slices, ending in one malformed
+        /// record that has swallowed every good record inside it. Forwards, a
+        /// syntax error costs exactly one line. `Tail` exists to be cheap and
+        /// to survive a log damaged at its end, and a `.pretty` mode would
+        /// give up both.
+        ///
+        /// The cheap way out would be counting brackets backwards instead of
+        /// parsing, and it needs to know whether a `"` opens a string or
+        /// closes one — a fact about everything to the left of it. Which is
+        /// to say: finding where a multi-line record begins means parsing
+        /// forwards.
         pub const Options = struct {
             /// See `ParseOptions.ignore_unknown_fields`.
             ignore_unknown_fields: bool = true,

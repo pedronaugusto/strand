@@ -6,6 +6,8 @@ before 1.0 the minor is the breaking one.
 
 ## Unreleased
 
+## 0.4.0
+
 - `Reader.resumeAt(allocator, input, options, start)`, with `Reader.Start`
   beside it. `Line.offset` made an index buildable and nothing could read one
   back: a reader started on a stream seeked to an offset called that line 1 at

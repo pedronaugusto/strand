@@ -13,8 +13,8 @@
 //! came before the ones it read, so `Line.number` counts back from the end,
 //! 1 being the last line of the file.
 //!
-//! The other thing it does not do is `.pretty`. See `Tail.Options.format`,
-//! which is the setting that is missing and the reason it is missing.
+//! The other thing it does not do is `.pretty`. `Tail.Options` is where the
+//! setting would be, and it carries the reason it is not there.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;

@@ -36,8 +36,9 @@ pub fn main() !void {
     // Read: a stream of typed lines, each with its number and its bytes.
     var source: std.Io.Reader = .fixed(out.written());
     var events: strand.Reader(Event) = .init(std.heap.page_allocator, &source, .{
-        // Defaults, spelled out: a line the reader does not fully understand
-        // is still a line, and one it cannot parse at all names itself.
+        // Spelled out rather than left to the defaults: a line the reader
+        // does not fully understand is still a line, and one it cannot
+        // parse at all names itself.
         .ignore_unknown_fields = true,
         .max_line_bytes = 64 * 1024,
         .on_malformed = .fail,

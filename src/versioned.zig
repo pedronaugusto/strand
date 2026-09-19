@@ -408,3 +408,78 @@ test "a migrated record is written back in today's shape" {
         out.written(),
     );
 }
+
+//=========================================================================
+// The composition the documents claim: an envelope is an ordinary type, so
+// every reader in the package reads one without being told about it.
+//=========================================================================
+
+const fixtures = @import("fixtures.zig");
+
+/// A log with one line of the old shape on it and two of the new, which is
+/// what a file written across a version change looks like.
+const mixed_log =
+    "{\"v\":1,\"data\":{\"kind\":\"open\",\"count\":\"1\"}}\n" ++
+    "{\"v\":2,\"data\":{\"scope\":\"net\",\"kind\":\"retry\",\"count\":2}}\n" ++
+    "{\"v\":2,\"data\":{\"scope\":\"app\",\"kind\":\"close\",\"count\":3}}\n";
+
+test "a versioned log read backwards is migrated the same way" {
+    var fixture = try fixtures.Fixture.init(mixed_log, 64);
+    defer fixture.deinit();
+
+    // One line per block, so that the backwards read really does go back to
+    // the file for each of them.
+    var tail: strand.Tail(Versioned(Event)) = try .init(testing.allocator, &fixture.reader, .{
+        .block_bytes = 16,
+    });
+    defer tail.deinit();
+
+    const last = (try tail.prev()).?;
+    try testing.expectEqualStrings("close", last.value.value.kind);
+    try testing.expect(!last.value.migrated());
+
+    const middle = (try tail.prev()).?;
+    try testing.expectEqualStrings("net", middle.value.value.scope);
+
+    // The oldest line is the one the hook has work to do on, and reading
+    // backwards changes nothing about that.
+    const first = (try tail.prev()).?;
+    try testing.expectEqual(@as(u32, 1), first.value.from);
+    try testing.expect(first.value.migrated());
+    try testing.expectEqualStrings("open", first.value.value.kind);
+    try testing.expectEqualStrings("app", first.value.value.scope);
+    try testing.expectEqual(@as(u32, 1), first.value.value.count);
+    try testing.expectEqual(@as(?strand.Line(Versioned(Event)), null), try tail.prev());
+}
+
+test "a versioned log followed as it grows is migrated the same way" {
+    var fixture = try fixtures.Fixture.init(mixed_log, 512);
+    defer fixture.deinit();
+
+    var follower: strand.Follower(Versioned(Event)) = .init(
+        testing.allocator,
+        testing.io,
+        &fixture.reader,
+        .{ .wait = .{ .poll = .fromMicroseconds(100) } },
+    );
+    defer follower.deinit();
+
+    const first = try follower.next();
+    try testing.expect(first.value.migrated());
+    try testing.expectEqual(@as(u32, 1), first.value.value.count);
+    try testing.expectEqualStrings("retry", (try follower.next()).value.value.kind);
+    try testing.expectEqualStrings("close", (try follower.next()).value.value.kind);
+
+    // And a line of the old shape appended while the follower is running
+    // goes through the hook like any other.
+    try fixture.write_file.writePositionalAll(
+        testing.io,
+        "{\"v\":1,\"data\":{\"kind\":\"late\",\"count\":\"4\"}}\n",
+        mixed_log.len,
+    );
+    const late = try follower.next();
+    try testing.expect(late.value.migrated());
+    try testing.expectEqualStrings("late", late.value.value.kind);
+    try testing.expectEqual(@as(u32, 4), late.value.value.count);
+    try testing.expectEqual(@as(u64, 4), late.number);
+}

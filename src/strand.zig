@@ -447,16 +447,28 @@ pub fn Reader(comptime T: type) type {
                         error.UnexpectedEndOfInput => if (self.options.format == .pretty) {
                             // A prefix of a value: the rest of it is on the
                             // lines that follow, unless there are none.
-                            if (try self.joinPhysical(number, record)) |joined| {
-                                record = joined;
-                                continue;
-                            }
-                            self.fault(number, error.UnexpectedEndOfInput);
-                            switch (self.options.on_malformed) {
-                                .fail => return error.MalformedLine,
-                                .skip => {
+                            switch (try self.joinPhysical(number, record)) {
+                                .grown => |joined| {
+                                    record = joined;
+                                    continue;
+                                },
+                                // The record is damaged rather than
+                                // unfinished, and `checkControl` has already
+                                // said where: saying anything else here would
+                                // replace the true diagnosis with a guess.
+                                .damaged => {
                                     self.skipped += 1;
                                     continue :record;
+                                },
+                                .ended => {
+                                    self.fault(number, error.UnexpectedEndOfInput);
+                                    switch (self.options.on_malformed) {
+                                        .fail => return error.MalformedLine,
+                                        .skip => {
+                                            self.skipped += 1;
+                                            continue :record;
+                                        },
+                                    }
                                 },
                             }
                         } else {
@@ -530,10 +542,25 @@ pub fn Reader(comptime T: type) type {
             };
         }
 
+        /// What a join did. Three outcomes rather than two, because a record
+        /// that did not grow can have failed to for either of two reasons,
+        /// and the caller has a different thing to say about each.
+        pub const Joined = union(enum) {
+            /// The next line is part of this record: these are its bytes now.
+            grown: []const u8,
+            /// The stream ended first, and the record is exactly as it was —
+            /// which for a `.pretty` reader means a record that never
+            /// finished.
+            ended,
+            /// The line joined on holds a raw control byte and the reader was
+            /// told to skip such a record. `last_error_line` and
+            /// `last_error_offset` name it already.
+            damaged,
+        };
+
         /// Appends the next physical line to the current record, separated by
-        /// the `\n` that ended the previous one. `null` when the stream ended
-        /// first, in which case the record is left exactly as it was.
-        fn joinPhysical(self: *Self, number: u64, record: []const u8) NextError!?[]const u8 {
+        /// the `\n` that ended the previous one.
+        fn joinPhysical(self: *Self, number: u64, record: []const u8) NextError!Joined {
             if (self.borrowed) {
                 // The record so far is a slice of the input reader's buffer,
                 // and reading the line after it is what takes that buffer
@@ -557,10 +584,10 @@ pub fn Reader(comptime T: type) type {
             self.line_buf.writer.writeByte('\n') catch return error.OutOfMemory;
             const joined = (try self.readPhysical()) orelse {
                 self.line_buf.writer.end = before;
-                return null;
+                return .ended;
             };
-            if (try self.checkControl(joined, before + 1, number)) return null;
-            return joined;
+            if (try self.checkControl(joined, before + 1, number)) return .damaged;
+            return .{ .grown = joined };
         }
 
         /// Reads one physical line and returns the record so far: a slice of

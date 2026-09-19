@@ -570,6 +570,32 @@ test "pretty: a record that never finishes is one malformed record" {
     try testing.expectEqual(@as(?strand.Line(Event), null), try reader.next());
 }
 
+test "pretty: a control byte on a joined line is what the reader says it is" {
+    // A record whose first line is only the start of a value, whose second
+    // line carries a raw NUL, and a reader told to pass damage over. The
+    // record is damaged, not unfinished, and the reader has to say the one
+    // that is true: the byte, where it is, and no parse error.
+    const input = "{\n\"kind\":\"a\x00\"}\n{\"kind\":\"b\"}\n";
+
+    var source: std.Io.Reader = .fixed(input);
+    var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{
+        .format = .pretty,
+        .on_malformed = .skip,
+    });
+    defer reader.deinit();
+
+    const good = (try reader.next()).?;
+    try testing.expectEqualStrings("b", good.value.kind);
+    try testing.expectEqual(@as(u64, 3), good.number);
+
+    try testing.expectEqual(@as(u64, 1), reader.skipped);
+    try testing.expectEqual(@as(u64, 1), reader.last_error_line);
+    // Where in the joined record the byte is: past the `{`, past the `\n`
+    // that joined the two, and nine bytes into the line that carried it.
+    try testing.expectEqual(@as(?usize, 11), reader.last_error_offset);
+    try testing.expectEqual(@as(?strand.ParseLineError, null), reader.last_error);
+}
+
 test "pretty: the bound is on the record, not on one of its lines" {
     var out: std.Io.Writer.Allocating = .init(testing.allocator);
     defer out.deinit();

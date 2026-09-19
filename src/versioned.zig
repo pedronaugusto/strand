@@ -347,8 +347,8 @@ test "a version from the future is a malformed line, by number" {
 
     try testing.expectEqualStrings("known", (try reader.next()).?.value.value.kind);
     try testing.expectError(error.MalformedLine, reader.next());
-    try testing.expectEqual(@as(u64, 2), reader.last_error_line);
-    try testing.expectEqual(error.UnknownField, reader.last_error.?);
+    try testing.expectEqual(@as(u64, 2), reader.fault.line);
+    try testing.expectEqual(error.UnknownField, reader.fault.err.?);
     try testing.expectEqualStrings("known again", (try reader.next()).?.value.value.kind);
 }
 

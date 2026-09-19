@@ -21,6 +21,8 @@ const Allocator = std.mem.Allocator;
 const assert = std.debug.assert;
 
 const strand = @import("strand.zig");
+const line_mod = @import("line.zig");
+const Fault = line_mod.Fault;
 const Line = strand.Line;
 const ParseLineError = strand.ParseLineError;
 
@@ -52,17 +54,9 @@ pub fn Tail(comptime T: type) type {
         /// How many records `prev` passed over under
         /// `on_malformed = .skip`. See `Reader.skipped`.
         skipped: u64 = 0,
-        /// The number of the most recent failure, in the same backwards
-        /// count; 0 if there has been none.
-        last_error_line: u64 = 0,
-        /// What `std.json` said about the line at `last_error_line`. `null`
-        /// when it never reached `std.json`.
-        last_error: ?ParseLineError = null,
-        /// The 0-based offset within the line at which the last failure was:
-        /// the control byte for `error.ControlByte`, and the byte `std.json`
-        /// gave up at for `error.MalformedLine`. See
-        /// `Reader.last_error_offset`, whose rule this is.
-        last_error_offset: ?usize = null,
+        /// What this reader would not hand over, and why, in the same
+        /// backwards numbering. See `Fault`.
+        fault: Fault = .{},
 
         /// Internal. The allocator behind `buf` and `arena`.
         allocator: Allocator,
@@ -167,8 +161,8 @@ pub fn Tail(comptime T: type) type {
         ///
         /// | Error | Meaning |
         /// |---|---|
-        /// | `MalformedLine` | This line is not a `T`; see `last_error`. |
-        /// | `ControlByte` | This line holds a raw control byte; see `last_error_offset`. |
+        /// | `MalformedLine` | This line is not a `T`; see `fault.err`. |
+        /// | `ControlByte` | This line holds a raw control byte; see `fault.offset`. |
         /// | `MissingSeparator` | This line has no record on it; see `Options.record_separator`. |
         /// | `LineTooLong` | This line ran past `max_line_bytes`. |
         /// | `ReadFailed` | The file refused a read; ask `source` for diagnostics. |
@@ -232,16 +226,17 @@ pub fn Tail(comptime T: type) type {
 
                 // The terminator is not part of the line, and neither is a
                 // mark at the very start of the file.
-                if (std.mem.endsWith(u8, raw, "\r")) raw = raw[0 .. raw.len - 1];
-                const bom = "\xEF\xBB\xBF";
-                if (self.options.skip_bom and self.offset == 0 and std.mem.startsWith(u8, raw, bom)) {
-                    raw = raw[bom.len..];
+                raw = line_mod.trimCr(raw);
+                if (self.options.skip_bom and self.offset == 0 and
+                    std.mem.startsWith(u8, raw, line_mod.bom))
+                {
+                    raw = raw[line_mod.bom.len..];
                     // The mark is not part of the line, so it is not where
                     // the line begins either.
-                    self.offset = bom.len;
+                    self.offset = line_mod.bom.len;
                 }
 
-                if (self.options.skip_blank and isBlank(raw)) continue;
+                if (self.options.skip_blank and line_mod.isBlank(raw)) continue;
                 if (self.options.record_separator) {
                     // What is before the separator is the tail of a record
                     // that was torn, and the separator is where the record
@@ -250,9 +245,7 @@ pub fn Tail(comptime T: type) type {
                         raw = raw[at + 1 ..];
                         self.offset += at;
                     } else {
-                        self.last_error_line = number;
-                        self.last_error = null;
-                        self.last_error_offset = null;
+                        self.fault.framing(number);
                         switch (self.options.on_malformed) {
                             .fail => return error.MissingSeparator,
                             .skip => {
@@ -264,9 +257,7 @@ pub fn Tail(comptime T: type) type {
                 }
                 if (self.options.reject_control_bytes) {
                     if (strand.indexOfControl(raw)) |at| {
-                        self.last_error_line = number;
-                        self.last_error = null;
-                        self.last_error_offset = at;
+                        self.fault.control(number, at);
                         switch (self.options.on_malformed) {
                             .fail => return error.ControlByte,
                             .skip => {
@@ -285,14 +276,12 @@ pub fn Tail(comptime T: type) type {
                 }) catch |err| switch (err) {
                     error.OutOfMemory => return error.OutOfMemory,
                     else => |parse_err| {
-                        self.last_error_line = number;
-                        self.last_error = parse_err;
-                        self.last_error_offset = strand.whereItFailed(
+                        self.fault.parse(number, parse_err, line_mod.whereItFailed(
                             T,
                             self.arena.allocator(),
                             raw,
                             self.options,
-                        );
+                        ));
                         switch (self.options.on_malformed) {
                             .fail => return error.MalformedLine,
                             .skip => {
@@ -309,11 +298,7 @@ pub fn Tail(comptime T: type) type {
         /// A copy of `line.value` that outlives the reader, allocated on
         /// `allocator`. See `Reader.keep`, whose contract this is.
         pub fn keep(self: *Self, allocator: Allocator, line: Line(T)) ParseLineError!T {
-            return strand.parseLine(T, allocator, line.line, .{
-                .ignore_unknown_fields = self.options.ignore_unknown_fields,
-                .duplicate_fields = self.options.duplicate_fields,
-                .copy_strings = true,
-            });
+            return line_mod.keep(T, allocator, line.line, self.options);
         }
 
         /// The last `n` values of the file, in file order, allocated on
@@ -380,9 +365,7 @@ pub fn Tail(comptime T: type) type {
         /// have been dropped and only its extent is known.
         fn emit(self: *Self, line: []const u8, over: bool) NextError!?[]const u8 {
             if (!over and line.len <= self.options.max_line_bytes) return line;
-            self.last_error_line = self.number;
-            self.last_error = null;
-            self.last_error_offset = null;
+            self.fault.framing(self.number);
             return error.LineTooLong;
         }
 
@@ -469,12 +452,6 @@ test lastNewline {
             }
         }
     }
-}
-
-/// True for a line with nothing on it but spaces and tabs. The same rule
-/// `Reader` applies, restated here rather than exported from there.
-fn isBlank(line: []const u8) bool {
-    return std.mem.indexOfNone(u8, line, " \t") == null;
 }
 
 //=========================================================================
@@ -612,10 +589,10 @@ test "a malformed line names itself and does not cost the reader its place" {
     try testing.expectEqualStrings("third", (try tail.prev()).?.value.kind);
     try testing.expectError(error.MalformedLine, tail.prev());
     // Numbered from the end: the bad line is the second from last.
-    try testing.expectEqual(@as(u64, 2), tail.last_error_line);
+    try testing.expectEqual(@as(u64, 2), tail.fault.line);
     // And placed within itself, the same way a forwards read places it.
-    try testing.expectEqual(@as(?usize, 1), tail.last_error_offset);
-    try testing.expectEqual(error.SyntaxError, tail.last_error.?);
+    try testing.expectEqual(@as(?usize, 1), tail.fault.offset);
+    try testing.expectEqual(error.SyntaxError, tail.fault.err.?);
     try testing.expectEqualStrings("first", (try tail.prev()).?.value.kind);
     try testing.expectEqual(@as(?Line(Event), null), try tail.prev());
 }
@@ -628,8 +605,8 @@ test "a control byte is reported with the line and the offset" {
     defer tail.deinit();
 
     try testing.expectError(error.ControlByte, tail.prev());
-    try testing.expectEqual(@as(u64, 1), tail.last_error_line);
-    try testing.expectEqual(@as(?usize, 10), tail.last_error_offset);
+    try testing.expectEqual(@as(u64, 1), tail.fault.line);
+    try testing.expectEqual(@as(?usize, 10), tail.fault.offset);
     try testing.expectEqualStrings("a", (try tail.prev()).?.value.kind);
 }
 
@@ -653,7 +630,7 @@ test "an over-long line is discarded whole and the one before it is still read" 
 
         try testing.expectEqualStrings("last", (try tail.prev()).?.value.kind);
         try testing.expectError(error.LineTooLong, tail.prev());
-        try testing.expectEqual(@as(u64, 2), tail.last_error_line);
+        try testing.expectEqual(@as(u64, 2), tail.fault.line);
         try testing.expectEqualStrings("short", (try tail.prev()).?.value.kind);
         try testing.expectEqual(@as(?Line(Event), null), try tail.prev());
     }
@@ -792,7 +769,7 @@ test "a line with no record on it is not a malformed record" {
 
     try testing.expectEqualStrings("c", (try tail.prev()).?.value.kind);
     try testing.expectError(error.MissingSeparator, tail.prev());
-    try testing.expectEqual(@as(u64, 2), tail.last_error_line);
+    try testing.expectEqual(@as(u64, 2), tail.fault.line);
     try testing.expectEqualStrings("a", (try tail.prev()).?.value.kind);
 }
 

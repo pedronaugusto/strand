@@ -132,7 +132,7 @@ test "unknown fields are ignored, missing fields take their defaults" {
     var reader: strand.Reader(Event) = .init(testing.allocator, &strict, .{ .ignore_unknown_fields = false });
     defer reader.deinit();
     try testing.expectError(error.MalformedLine, reader.next());
-    try testing.expectEqual(error.UnknownField, reader.last_error.?);
+    try testing.expectEqual(error.UnknownField, reader.fault.err.?);
 }
 
 test "a malformed line is reported by number, and the stream survives it" {
@@ -149,8 +149,8 @@ test "a malformed line is reported by number, and the stream survives it" {
 
     try testing.expectEqualStrings("first", (try reader.next()).?.value.kind);
     try testing.expectError(error.MalformedLine, reader.next());
-    try testing.expectEqual(@as(u64, 2), reader.last_error_line);
-    try testing.expectEqual(error.SyntaxError, reader.last_error.?);
+    try testing.expectEqual(@as(u64, 2), reader.fault.line);
+    try testing.expectEqual(error.SyntaxError, reader.fault.err.?);
 
     // The bad line was consumed whole, so reading continues past it.
     const third = (try reader.next()).?;
@@ -174,17 +174,17 @@ test "a malformed line says where in it the parse gave up" {
 
     // The brace that turned out to be where a key had to be.
     try testing.expectError(error.MalformedLine, reader.next());
-    try testing.expectEqual(error.SyntaxError, reader.last_error.?);
-    try testing.expectEqual(@as(?usize, 15), reader.last_error_offset);
+    try testing.expectEqual(error.SyntaxError, reader.fault.err.?);
+    try testing.expectEqual(@as(?usize, 15), reader.fault.offset);
 
     // A value that is not there at all: the brace again, further along.
     try testing.expectError(error.MalformedLine, reader.next());
-    try testing.expectEqual(@as(?usize, 20), reader.last_error_offset);
+    try testing.expectEqual(@as(?usize, 20), reader.fault.offset);
 
     // A line cut off at its end has nowhere further to point than its end.
     try testing.expectError(error.MalformedLine, reader.next());
-    try testing.expectEqual(error.UnexpectedEndOfInput, reader.last_error.?);
-    try testing.expectEqual(@as(?usize, 14), reader.last_error_offset);
+    try testing.expectEqual(error.UnexpectedEndOfInput, reader.fault.err.?);
+    try testing.expectEqual(@as(?usize, 14), reader.fault.offset);
 
     // And a good line clears none of it and reports none of it.
     const good = (try reader.next()).?;
@@ -200,8 +200,8 @@ test "an over-long line has no offset in it to report" {
     // The line never reached `std.json`, so there is nothing to have a
     // place in: an invented one would be worse than none.
     try testing.expectError(error.LineTooLong, reader.next());
-    try testing.expectEqual(@as(?usize, null), reader.last_error_offset);
-    try testing.expectEqual(@as(?strand.ParseLineError, null), reader.last_error);
+    try testing.expectEqual(@as(?usize, null), reader.fault.offset);
+    try testing.expectEqual(@as(?strand.ParseLineError, null), reader.fault.err);
 }
 
 test "on_malformed = .skip passes over the bad line" {
@@ -221,8 +221,8 @@ test "on_malformed = .skip passes over the bad line" {
     try testing.expectEqualStrings("third", third.value.kind);
     try testing.expectEqual(@as(u64, 3), third.number);
     // The skip is not silent: it is on the record.
-    try testing.expectEqual(@as(u64, 2), reader.last_error_line);
-    try testing.expect(reader.last_error != null);
+    try testing.expectEqual(@as(u64, 2), reader.fault.line);
+    try testing.expect(reader.fault.err != null);
 }
 
 test "the last line needs no newline, and blank lines do not break numbering" {
@@ -244,7 +244,7 @@ test "the last line needs no newline, and blank lines do not break numbering" {
     defer keeper.deinit();
     _ = try keeper.next();
     try testing.expectError(error.MalformedLine, keeper.next());
-    try testing.expectEqual(@as(u64, 2), keeper.last_error_line);
+    try testing.expectEqual(@as(u64, 2), keeper.fault.line);
 }
 
 test "CRLF is tolerated, and the terminator is not part of the line" {
@@ -273,9 +273,9 @@ test "max_line_bytes is enforced, and the reader continues after the long line" 
 
     try testing.expectEqualStrings("short", (try reader.next()).?.value.kind);
     try testing.expectError(error.LineTooLong, reader.next());
-    try testing.expectEqual(@as(u64, 2), reader.last_error_line);
+    try testing.expectEqual(@as(u64, 2), reader.fault.line);
     // No parse was attempted, so there is no parse error to report.
-    try testing.expectEqual(@as(?strand.ParseLineError, null), reader.last_error);
+    try testing.expectEqual(@as(?strand.ParseLineError, null), reader.fault.err);
 
     const third = (try reader.next()).?;
     try testing.expectEqualStrings("short again", third.value.kind);
@@ -522,10 +522,10 @@ test "a control byte is a damaged line, named by number and offset" {
 
     try testing.expectEqualStrings("first", (try reader.next()).?.value.kind);
     try testing.expectError(error.ControlByte, reader.next());
-    try testing.expectEqual(@as(u64, 2), reader.last_error_line);
-    try testing.expectEqual(@as(?usize, 11), reader.last_error_offset);
+    try testing.expectEqual(@as(u64, 2), reader.fault.line);
+    try testing.expectEqual(@as(?usize, 11), reader.fault.offset);
     // It never reached `std.json`, so there is nothing of `std.json`'s to say.
-    try testing.expectEqual(@as(?strand.ParseLineError, null), reader.last_error);
+    try testing.expectEqual(@as(?strand.ParseLineError, null), reader.fault.err);
     // And the stream is where it was: the next line is the next line.
     const third = (try reader.next()).?;
     try testing.expectEqualStrings("third", third.value.kind);
@@ -545,7 +545,7 @@ test "a control byte is a damaged line, named by number and offset" {
     defer tolerant.deinit();
     _ = try tolerant.next();
     try testing.expectError(error.MalformedLine, tolerant.next());
-    try testing.expectEqual(error.SyntaxError, tolerant.last_error.?);
+    try testing.expectEqual(error.SyntaxError, tolerant.fault.err.?);
 
     // A tab is whitespace to JSON, so it is not damage.
     var tabbed: std.Io.Reader = .fixed("{\"kind\":\t\"fine\"}\n");
@@ -610,8 +610,8 @@ test "pretty: a record that never finishes is one malformed record" {
 
     try testing.expectError(error.MalformedLine, reader.next());
     // Blamed on the line it began on, not the one it ran out on.
-    try testing.expectEqual(@as(u64, 1), reader.last_error_line);
-    try testing.expectEqual(error.UnexpectedEndOfInput, reader.last_error.?);
+    try testing.expectEqual(@as(u64, 1), reader.fault.line);
+    try testing.expectEqual(error.UnexpectedEndOfInput, reader.fault.err.?);
     try testing.expectEqual(@as(?strand.Line(Event), null), try reader.next());
 }
 
@@ -634,11 +634,11 @@ test "pretty: a control byte on a joined line is what the reader says it is" {
     try testing.expectEqual(@as(u64, 3), good.number);
 
     try testing.expectEqual(@as(u64, 1), reader.skipped);
-    try testing.expectEqual(@as(u64, 1), reader.last_error_line);
+    try testing.expectEqual(@as(u64, 1), reader.fault.line);
     // Where in the joined record the byte is: past the `{`, past the `\n`
     // that joined the two, and nine bytes into the line that carried it.
-    try testing.expectEqual(@as(?usize, 11), reader.last_error_offset);
-    try testing.expectEqual(@as(?strand.ParseLineError, null), reader.last_error);
+    try testing.expectEqual(@as(?usize, 11), reader.fault.offset);
+    try testing.expectEqual(@as(?strand.ParseLineError, null), reader.fault.err);
 }
 
 test "pretty: the bound is on the record, not on one of its lines" {
@@ -878,7 +878,7 @@ test "an offset names the line a reader refused" {
 
     _ = (try reader.next()).?;
     try testing.expectError(error.MalformedLine, reader.next());
-    try testing.expectEqual(@as(u64, 2), reader.last_error_line);
+    try testing.expectEqual(@as(u64, 2), reader.fault.line);
     try testing.expectEqualStrings(
         "not json at all",
         input[@intCast(reader.offset)..][0.."not json at all".len],
@@ -1059,7 +1059,7 @@ test "a repeated key is refused, kept first or kept last, as asked" {
             try testing.expectEqualStrings(want, (try reader.next()).?.value.kind);
         } else {
             try testing.expectError(error.MalformedLine, reader.next());
-            try testing.expectEqual(error.DuplicateField, reader.last_error.?);
+            try testing.expectEqual(error.DuplicateField, reader.fault.err.?);
         }
     }
 }
@@ -1133,8 +1133,8 @@ test "a torn record is what a separator makes visible" {
     // And a line carrying no record is not a malformed record: it is a line
     // with nothing on it that this reader was promised.
     try testing.expectError(error.MissingSeparator, reader.next());
-    try testing.expectEqual(@as(u64, 3), reader.last_error_line);
-    try testing.expectEqual(@as(?strand.ParseLineError, null), reader.last_error);
+    try testing.expectEqual(@as(u64, 3), reader.fault.line);
+    try testing.expectEqual(@as(?strand.ParseLineError, null), reader.fault.err);
 
     // The stream is not lost: the next line is read as usual.
     try testing.expectEqualStrings("third", (try reader.next()).?.value.kind);
@@ -1153,7 +1153,7 @@ test "a separator is a decision both ends make" {
     var plain: strand.Reader(Event) = .init(testing.allocator, &source, .{});
     defer plain.deinit();
     try testing.expectError(error.ControlByte, plain.next());
-    try testing.expectEqual(@as(?usize, 0), plain.last_error_offset);
+    try testing.expectEqual(@as(?usize, 0), plain.fault.offset);
 
     // And a stream with no separators on it is nothing but torn records to
     // a reader that was told there would be.
@@ -1623,10 +1623,10 @@ test "invalid UTF-8 in a line is a malformed line, and the stream survives it" {
         defer reader.deinit();
 
         try testing.expectError(error.MalformedLine, reader.next());
-        try testing.expectEqual(@as(u64, 1), reader.last_error_line);
+        try testing.expectEqual(@as(u64, 1), reader.fault.line);
         // `std.json` validates UTF-8 itself, so this is a syntax error and
         // not a second opinion of this package's.
-        try testing.expectEqual(error.SyntaxError, reader.last_error.?);
+        try testing.expectEqual(error.SyntaxError, reader.fault.err.?);
         // And the line after it is read, because a bad line is one line.
         try testing.expectEqualStrings("after", (try reader.next()).?.value.kind);
     }

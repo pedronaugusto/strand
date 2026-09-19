@@ -112,7 +112,7 @@ fn checkReaderFailOver(source: *std.Io.Reader, input: []const u8, max_line_bytes
         // has to read the byte before it can know it was a terminator.
         if (physical.raw.len > max_line_bytes) {
             try testing.expectError(error.LineTooLong, reader.next());
-            try testing.expectEqual(physical.number, reader.last_error_line);
+            try testing.expectEqual(physical.number, reader.fault.line);
             try testing.expectEqual(physical.number, reader.number);
             continue;
         }
@@ -131,21 +131,21 @@ fn checkReaderFailOver(source: *std.Io.Reader, input: []const u8, max_line_bytes
             try testing.expectEqual(@as(?usize, null), control);
         } else |err| switch (err) {
             error.MalformedLine => {
-                try testing.expectEqual(physical.number, reader.last_error_line);
+                try testing.expectEqual(physical.number, reader.fault.line);
                 try testing.expectEqual(physical.offset, reader.offset);
-                try testing.expect(reader.last_error != null);
+                try testing.expect(reader.fault.err != null);
                 // Where the parse gave up is a place in the line, or is not
                 // reported at all. It is never a place outside it.
-                if (reader.last_error_offset) |at| try testing.expect(at <= physical.line.len);
+                if (reader.fault.offset) |at| try testing.expect(at <= physical.line.len);
                 // The control byte scan runs first, so a line that parsed
                 // badly is a line that had no control byte to blame.
                 try testing.expectEqual(@as(?usize, null), control);
             },
             error.ControlByte => {
-                try testing.expectEqual(physical.number, reader.last_error_line);
+                try testing.expectEqual(physical.number, reader.fault.line);
                 try testing.expectEqual(physical.offset, reader.offset);
-                try testing.expectEqual(control, reader.last_error_offset);
-                try testing.expectEqual(@as(?strand.ParseLineError, null), reader.last_error);
+                try testing.expectEqual(control, reader.fault.offset);
+                try testing.expectEqual(@as(?strand.ParseLineError, null), reader.fault.err);
             },
             else => return err,
         }
@@ -227,7 +227,7 @@ fn checkResume(input: []const u8) !void {
             // A line that is not a `T` is still that line, under its own
             // number and at its own offset.
             error.MalformedLine, error.ControlByte => {
-                try testing.expectEqual(physical.number, reader.last_error_line);
+                try testing.expectEqual(physical.number, reader.fault.line);
                 try testing.expectEqual(physical.offset, reader.offset);
             },
             else => return err,
@@ -250,7 +250,7 @@ fn checkResume(input: []const u8) !void {
                 try testing.expectEqualStrings(after.line, line.line);
             } else |err| switch (err) {
                 error.MalformedLine, error.ControlByte => {
-                    try testing.expectEqual(after.number, reader.last_error_line);
+                    try testing.expectEqual(after.number, reader.fault.line);
                     try testing.expectEqual(after.offset, reader.offset);
                 },
                 else => return err,

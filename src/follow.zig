@@ -194,8 +194,8 @@ pub fn Follower(comptime T: type) type {
         /// owned and is never closed; a handle the follower opened for itself
         /// across a rotation is, and this points at whichever it is reading.
         source: *std.Io.File.Reader,
-        /// The line layer. Public so that `number`, `last_error_line` and
-        /// `last_error` are readable, and read-only otherwise.
+        /// The line layer. Public so that `number` and `fault` are
+        /// readable, and read-only otherwise.
         reader: strand.Reader(T),
         /// Read-only after `init`.
         options: Options,

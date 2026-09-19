@@ -42,6 +42,12 @@ const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const assert = std.debug.assert;
 
+const line_mod = @import("line.zig");
+pub const Fault = line_mod.Fault;
+const bom = line_mod.bom;
+const trimCr = line_mod.trimCr;
+const isBlank = line_mod.isBlank;
+
 pub const Tail = @import("tail.zig").Tail;
 pub const Follower = @import("follow.zig").Follower;
 pub const Opener = @import("follow.zig").Opener;
@@ -274,22 +280,11 @@ pub fn Reader(comptime T: type) type {
         /// is judged by, since under `.skip` nothing else says a line was
         /// lost. Blank lines are not damage and are not counted.
         skipped: u64 = 0,
-        /// The line number of the most recent `error.MalformedLine`,
-        /// `error.LineTooLong`, `error.ControlByte`, or line skipped under
-        /// `.skip`; 0 if there has been none.
-        last_error_line: u64 = 0,
-        /// What `std.json` said about the line at `last_error_line`. `null`
-        /// for `error.LineTooLong` and `error.ControlByte`, neither of which
-        /// reached `std.json`.
-        last_error: ?ParseLineError = null,
-        /// The 0-based offset within the line at which the last failure was:
-        /// the control byte itself for `error.ControlByte`, and the byte
-        /// `std.json` gave up at for `error.MalformedLine` — which is not
-        /// always the byte that is wrong, but is never before it. The line's
-        /// own length means the parse ran off the end, which is what a
-        /// truncated line does. `null` for `error.LineTooLong`, which never
-        /// reached `std.json`, and for a line the reader has not failed on.
-        last_error_offset: ?usize = null,
+        /// What the reader would not hand over, and why: the line number,
+        /// the `std.json` error if the line got that far, and the offset in
+        /// the line. See `Fault`. It is the last such line, whether it was
+        /// reported or skipped; `fault.line` is 0 until there has been one.
+        fault: Fault = .{},
 
         /// Internal. The current record's bytes; `Line.line` is a view of it.
         line_buf: std.Io.Writer.Allocating,
@@ -389,8 +384,8 @@ pub fn Reader(comptime T: type) type {
         /// What `next` can report.
         ///
         /// The parse errors of `std.json` collapse into `MalformedLine`,
-        /// which says "this line, the one at `last_error_line`, is not a
-        /// `T`"; `last_error` holds which parse error it was. `ControlByte`
+        /// which says "this line, the one at `fault.line`, is not a
+        /// `T`"; `fault.err` holds which parse error it was. `ControlByte`
         /// is the same claim about a line `std.json` was not shown, made
         /// before parsing because a control byte in a line means the line is
         /// damaged rather than merely wrong. `MissingSeparator` is a line
@@ -539,9 +534,7 @@ pub fn Reader(comptime T: type) type {
                     // the separator is where the record begins.
                     const at = std.mem.indexOfScalar(u8, record, separator) orelse {
                         self.offset = offset;
-                        self.last_error_line = number;
-                        self.last_error = null;
-                        self.last_error_offset = null;
+                        self.fault.framing(number);
                         switch (self.options.on_malformed) {
                             .fail => return error.MissingSeparator,
                             .skip => {
@@ -619,8 +612,11 @@ pub fn Reader(comptime T: type) type {
         /// Records a parse failure against `number` and does what
         /// `on_malformed` says about it: `null` is a record passed over.
         fn malformed(self: *Self, number: u64, record: []const u8, err: ParseLineError) NextError!?Line(T) {
-            self.fault(number, err);
-            self.last_error_offset = whereItFailed(T, self.arena.allocator(), record, self.options);
+            self.fault.parse(
+                number,
+                err,
+                line_mod.whereItFailed(T, self.arena.allocator(), record, self.options),
+            );
             switch (self.options.on_malformed) {
                 .fail => return error.MalformedLine,
                 .skip => {
@@ -647,20 +643,7 @@ pub fn Reader(comptime T: type) type {
         /// but a `T` with a custom `jsonParse` method is free to disagree, so
         /// the full set is reported rather than asserted away.
         pub fn keep(self: *Self, allocator: Allocator, line: Line(T)) ParseLineError!T {
-            return parseLine(T, allocator, line.line, .{
-                .ignore_unknown_fields = self.options.ignore_unknown_fields,
-                .duplicate_fields = self.options.duplicate_fields,
-                .copy_strings = true,
-            });
-        }
-
-        /// Records a parse failure against `number`, whatever is done about
-        /// it. The offset is the caller's to fill in, since only a line that
-        /// reached `std.json` has one.
-        fn fault(self: *Self, number: u64, err: ParseLineError) void {
-            self.last_error_line = number;
-            self.last_error = err;
-            self.last_error_offset = null;
+            return line_mod.keep(T, allocator, line.line, self.options);
         }
 
         /// Looks for a control byte in `record[from..]`. Returns true when the
@@ -669,9 +652,7 @@ pub fn Reader(comptime T: type) type {
         fn checkControl(self: *Self, record: []const u8, from: usize, number: u64) NextError!bool {
             if (!self.options.reject_control_bytes) return false;
             const offset = indexOfControl(record[from..]) orelse return false;
-            self.last_error_line = number;
-            self.last_error = null;
-            self.last_error_offset = from + offset;
+            self.fault.control(number, from + offset);
             return switch (self.options.on_malformed) {
                 .fail => error.ControlByte,
                 .skip => true,
@@ -689,8 +670,7 @@ pub fn Reader(comptime T: type) type {
             /// finished.
             ended,
             /// The line joined on holds a raw control byte and the reader was
-            /// told to skip such a record. `last_error_line` and
-            /// `last_error_offset` name it already.
+            /// told to skip such a record. `fault` names it already.
             damaged,
         };
 
@@ -710,9 +690,7 @@ pub fn Reader(comptime T: type) type {
             if (self.options.max_line_bytes -| before == 0) {
                 // It is the record that is too long, and the record began at
                 // `number`, whatever line the reader has reached since.
-                self.last_error_line = number;
-                self.last_error = null;
-                self.last_error_offset = null;
+                self.fault.framing(number);
                 self.offset = self.record_offset;
                 self.consumed += try self.discardLine();
                 return error.LineTooLong;
@@ -769,9 +747,7 @@ pub fn Reader(comptime T: type) type {
                 error.WriteFailed => return error.OutOfMemory,
                 error.StreamTooLong => {
                     self.number += 1;
-                    self.last_error_line = self.number;
-                    self.last_error = null;
-                    self.last_error_offset = null;
+                    self.fault.framing(self.number);
                     self.offset = self.record_offset;
                     self.consumed += self.line_buf.writer.end - before;
                     self.consumed += try self.discardLine();
@@ -836,9 +812,7 @@ pub fn Reader(comptime T: type) type {
             self.input.toss(frame.len);
             self.consumed += frame.len;
             if (line.len > room) {
-                self.last_error_line = self.number;
-                self.last_error = null;
-                self.last_error_offset = null;
+                self.fault.framing(self.number);
                 self.offset = self.record_offset;
                 return error.LineTooLong;
             }
@@ -854,7 +828,6 @@ pub fn Reader(comptime T: type) type {
         /// to peek at three, and cannot be carrying a mark worth finding, so
         /// it is left alone.
         fn skipBom(self: *Self) NextError!void {
-            const bom = "\xEF\xBB\xBF";
             if (self.input.buffer.len < bom.len) return;
             const head = self.input.peek(bom.len) catch |err| switch (err) {
                 error.EndOfStream => return,
@@ -878,40 +851,6 @@ pub fn Reader(comptime T: type) type {
             };
         }
     };
-}
-
-/// Where `std.json` gave up on a line that has already failed to parse.
-///
-/// The line is parsed a second time with the scanner's diagnostics on, which
-/// is what makes the first parse — the one every good line goes through —
-/// cost nothing for this. The answer is an offset in `line`; `null` when the
-/// second parse disagrees with the first and succeeds, which only a `T` with
-/// a `jsonParse` of its own can arrange.
-pub fn whereItFailed(
-    comptime T: type,
-    allocator: Allocator,
-    line: []const u8,
-    options: anytype,
-) ?usize {
-    var where: Diagnostics = .{};
-    _ = parseLine(T, allocator, line, .{
-        .ignore_unknown_fields = options.ignore_unknown_fields,
-        .duplicate_fields = options.duplicate_fields,
-        .copy_strings = false,
-        .diagnostics = &where,
-    }) catch return where.offset;
-    return null;
-}
-
-/// A line without the `\r` of a `\r\n` terminator.
-fn trimCr(line: []const u8) []const u8 {
-    if (line.len > 0 and line[line.len - 1] == '\r') return line[0 .. line.len - 1];
-    return line;
-}
-
-/// True for a line with nothing on it but spaces and tabs.
-fn isBlank(line: []const u8) bool {
-    return std.mem.indexOfNone(u8, line, " \t") == null;
 }
 
 /// The offset of the first byte in `bytes` that must not appear raw in a JSON
@@ -1534,7 +1473,6 @@ pub const RawLine = struct {
 /// of the first line. Blank lines are yielded — `lines` splits, it does not
 /// filter.
 pub fn lines(bytes: []const u8) LineIterator {
-    const bom = "\xEF\xBB\xBF";
     const marked = std.mem.startsWith(u8, bytes, bom);
     return .{
         .rest = if (marked) bytes[bom.len..] else bytes,

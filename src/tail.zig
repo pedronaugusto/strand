@@ -135,6 +135,11 @@ pub fn Tail(comptime T: type) type {
             skip_blank: bool = true,
             /// See `Reader.Options.reject_control_bytes`.
             reject_control_bytes: bool = true,
+            /// See `Reader.Options.record_separator`. A backwards read
+            /// treats a line the same way a forwards one does: the record is
+            /// what follows the first separator on it, and a line with none
+            /// is `error.MissingSeparator`.
+            record_separator: bool = false,
             /// When true, a UTF-8 byte-order mark at the very start of the
             /// file is not part of the first line — which a backwards read
             /// only ever meets last.
@@ -164,6 +169,7 @@ pub fn Tail(comptime T: type) type {
         /// |---|---|
         /// | `MalformedLine` | This line is not a `T`; see `last_error`. |
         /// | `ControlByte` | This line holds a raw control byte; see `last_error_offset`. |
+        /// | `MissingSeparator` | This line has no record on it; see `Options.record_separator`. |
         /// | `LineTooLong` | This line ran past `max_line_bytes`. |
         /// | `ReadFailed` | The file refused a read; ask `source` for diagnostics. |
         /// | `SeekFailed` | The file refused a seek; ask `source.seek_err`. |
@@ -172,6 +178,7 @@ pub fn Tail(comptime T: type) type {
         pub const NextError = error{
             MalformedLine,
             ControlByte,
+            MissingSeparator,
             LineTooLong,
             ReadFailed,
             SeekFailed,
@@ -235,6 +242,26 @@ pub fn Tail(comptime T: type) type {
                 }
 
                 if (self.options.skip_blank and isBlank(raw)) continue;
+                if (self.options.record_separator) {
+                    // What is before the separator is the tail of a record
+                    // that was torn, and the separator is where the record
+                    // this line carries begins.
+                    if (std.mem.indexOfScalar(u8, raw, strand.separator)) |at| {
+                        raw = raw[at + 1 ..];
+                        self.offset += at;
+                    } else {
+                        self.last_error_line = number;
+                        self.last_error = null;
+                        self.last_error_offset = null;
+                        switch (self.options.on_malformed) {
+                            .fail => return error.MissingSeparator,
+                            .skip => {
+                                self.skipped += 1;
+                                continue;
+                            },
+                        }
+                    }
+                }
                 if (self.options.reject_control_bytes) {
                     if (strand.indexOfControl(raw)) |at| {
                         self.last_error_line = number;
@@ -721,6 +748,52 @@ test "skipped counts what a tolerant backwards read lost" {
     while (try tail.prev()) |_| seen += 1;
     try testing.expectEqual(@as(usize, 2), seen);
     try testing.expectEqual(@as(u64, 1), tail.skipped);
+}
+
+test "a separated file is read backwards the same way" {
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    var writer: strand.Writer(Event) = .init(&out.writer, .{ .record_separator = true });
+    try writer.writeAll(&.{
+        .{ .kind = "a", .at = 1 },
+        .{ .kind = "b", .at = 2 },
+        .{ .kind = "c", .at = 3 },
+    });
+
+    var fixture = try Fixture.init(out.written(), 64);
+    defer fixture.deinit();
+
+    var tail: Tail(Event) = try .init(testing.allocator, &fixture.reader, .{
+        .record_separator = true,
+        .block_bytes = 8,
+    });
+    defer tail.deinit();
+
+    for ([_][]const u8{ "c", "b", "a" }) |want| {
+        const line = (try tail.prev()).?;
+        try testing.expectEqualStrings(want, line.value.kind);
+        // The separator is where the record begins, backwards as forwards.
+        try testing.expectEqual(
+            @as(u8, strand.separator),
+            out.written()[@intCast(line.offset)],
+        );
+    }
+    try testing.expectEqual(@as(?Line(Event), null), try tail.prev());
+}
+
+test "a line with no record on it is not a malformed record" {
+    var fixture = try Fixture.init("\x1e{\"kind\":\"a\"}\nnothing\n\x1e{\"kind\":\"c\"}\n", 64);
+    defer fixture.deinit();
+
+    var tail: Tail(Event) = try .init(testing.allocator, &fixture.reader, .{
+        .record_separator = true,
+    });
+    defer tail.deinit();
+
+    try testing.expectEqualStrings("c", (try tail.prev()).?.value.kind);
+    try testing.expectError(error.MissingSeparator, tail.prev());
+    try testing.expectEqual(@as(u64, 2), tail.last_error_line);
+    try testing.expectEqualStrings("a", (try tail.prev()).?.value.kind);
 }
 
 test "a file that shrinks under a tail is reported rather than misread" {

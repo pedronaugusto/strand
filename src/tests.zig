@@ -1065,6 +1065,107 @@ test "a repeated key is refused, kept first or kept last, as asked" {
 }
 
 //=========================================================================
+// A record that says where it starts.
+//=========================================================================
+
+test "a separated stream says where every record begins" {
+    const events = [_]Event{
+        .{ .kind = "open", .at = 1 },
+        .{ .kind = "retry", .at = 2, .level = .warn },
+        .{ .kind = "close", .at = 3 },
+    };
+
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    var log: strand.Writer(Event) = .init(&out.writer, .{ .record_separator = true });
+    try log.writeAll(&events);
+
+    // One byte per record, in front of it, and the rest is the line it
+    // would have been.
+    try testing.expectEqual(@as(usize, 3), std.mem.count(u8, out.written(), &.{strand.separator}));
+    try testing.expectEqual(@as(u8, 0x1e), out.written()[0]);
+    try testing.expect(std.mem.startsWith(u8, out.written()[1..], "{\"kind\":\"open\""));
+
+    var source: std.Io.Reader = .fixed(out.written());
+    var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{
+        .record_separator = true,
+    });
+    defer reader.deinit();
+
+    for (events) |want| {
+        const line = (try reader.next()).?;
+        try testing.expectEqualStrings(want.kind, line.value.kind);
+        // The line is the record and not the byte in front of it; the
+        // offset is where the record begins, which is that byte.
+        try testing.expectEqual(@as(u8, strand.separator), out.written()[@intCast(line.offset)]);
+        try testing.expectEqualStrings(
+            line.line,
+            out.written()[@intCast(line.offset + 1)..][0..line.line.len],
+        );
+    }
+    try testing.expectEqual(@as(?strand.Line(Event), null), try reader.next());
+}
+
+test "a torn record is what a separator makes visible" {
+    // A line with the tail of a record on the front of it, which is what a
+    // writer interrupted mid-record leaves behind, and a line with no
+    // record on it at all.
+    const input =
+        "\x1e{\"kind\":\"first\"}\n" ++
+        "\",\"at\":9}\x1e{\"kind\":\"second\"}\n" ++
+        "nothing at all\n" ++
+        "\x1e{\"kind\":\"third\"}\n";
+
+    var source: std.Io.Reader = .fixed(input);
+    var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{
+        .record_separator = true,
+    });
+    defer reader.deinit();
+
+    try testing.expectEqualStrings("first", (try reader.next()).?.value.kind);
+
+    // The tail of the torn record is dropped and the record after it is
+    // read: that is the whole of what the separator buys.
+    const second = (try reader.next()).?;
+    try testing.expectEqualStrings("second", second.value.kind);
+    try testing.expectEqual(@as(u8, strand.separator), input[@intCast(second.offset)]);
+
+    // And a line carrying no record is not a malformed record: it is a line
+    // with nothing on it that this reader was promised.
+    try testing.expectError(error.MissingSeparator, reader.next());
+    try testing.expectEqual(@as(u64, 3), reader.last_error_line);
+    try testing.expectEqual(@as(?strand.ParseLineError, null), reader.last_error);
+
+    // The stream is not lost: the next line is read as usual.
+    try testing.expectEqualStrings("third", (try reader.next()).?.value.kind);
+    try testing.expectEqual(@as(?strand.Line(Event), null), try reader.next());
+}
+
+test "a separator is a decision both ends make" {
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    var log: strand.Writer(Event) = .init(&out.writer, .{ .record_separator = true });
+    try log.write(.{ .kind = "open", .at = 1 });
+
+    // To a reader that was not told, the separator is a raw control byte,
+    // which is what it is.
+    var source: std.Io.Reader = .fixed(out.written());
+    var plain: strand.Reader(Event) = .init(testing.allocator, &source, .{});
+    defer plain.deinit();
+    try testing.expectError(error.ControlByte, plain.next());
+    try testing.expectEqual(@as(?usize, 0), plain.last_error_offset);
+
+    // And a stream with no separators on it is nothing but torn records to
+    // a reader that was told there would be.
+    var unseparated: std.Io.Reader = .fixed("{\"kind\":\"open\"}\n");
+    var expectant: strand.Reader(Event) = .init(testing.allocator, &unseparated, .{
+        .record_separator = true,
+    });
+    defer expectant.deinit();
+    try testing.expectError(error.MissingSeparator, expectant.next());
+}
+
+//=========================================================================
 // The bound on what a writer will emit, which is the reader's bound seen
 // from the other end.
 //=========================================================================

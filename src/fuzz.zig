@@ -476,6 +476,51 @@ fn checkVersioned(line: []const u8) !void {
     try testing.expectEqual(record.value.at, round.value.at);
 }
 
+/// A separated stream is the same stream with one byte in front of every
+/// record: what the writer marks, the reader finds, and what lies between two
+/// records is dropped rather than read as one.
+fn checkSeparated(events: []const Event, damage: []const u8) !void {
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    var writer: strand.Writer(Event) = .init(&out.writer, .{ .record_separator = true });
+    try writer.writeAll(events);
+
+    // Damage on the front of the stream, which is what a reader that joined
+    // a log part-way through sees: not a record, and not a reason to lose
+    // the records after it. A separator inside the damage would be a record
+    // starting there, which is the one thing it must not claim to be.
+    var torn: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer torn.deinit();
+    for (damage) |byte| {
+        try torn.writer.writeByte(if (byte == strand.separator) 'x' else byte);
+    }
+    try torn.writer.writeAll(out.written());
+
+    var source: std.Io.Reader = .fixed(torn.written());
+    var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{
+        .record_separator = true,
+        .on_malformed = .skip,
+    });
+    defer reader.deinit();
+
+    for (events) |want| {
+        const line = while (true) {
+            const maybe = reader.next() catch |err| switch (err) {
+                error.LineTooLong => continue,
+                else => return err,
+            };
+            break maybe orelse return error.TestReaderEndedEarly;
+        };
+        try testing.expectEqualStrings(want.kind, line.value.kind);
+        try testing.expectEqual(want.at, line.value.at);
+        // The offset is the separator, and the line is what follows it.
+        try testing.expectEqual(
+            @as(u8, strand.separator),
+            torn.written()[@intCast(line.offset)],
+        );
+    }
+}
+
 /// Reading a file backwards gives the same lines as reading it forwards, in
 /// the other order, under the same options.
 ///
@@ -821,6 +866,19 @@ fn fuzzPrettyRoundTrip(_: void, smith: *std.testing.Smith) anyerror!void {
     try checkPrettyRoundTrip(generateEvents(smith, &events, &text));
 }
 
+test "fuzz: a separated stream over generated values" {
+    try std.testing.fuzz({}, fuzzSeparated, .{ .corpus = corpus });
+}
+
+fn fuzzSeparated(_: void, smith: *std.testing.Smith) anyerror!void {
+    @disableInstrumentation();
+    var text: [512]u8 = undefined;
+    var events: [16]Event = undefined;
+    var damage: [64]u8 = undefined;
+    const made = generateEvents(smith, &events, &text);
+    try checkSeparated(made, damage[0..smith.slice(&damage)]);
+}
+
 test "fuzz: a follower over a file replaced under it" {
     try std.testing.fuzz({}, fuzzRotation, .{ .corpus = corpus });
 }
@@ -897,6 +955,7 @@ fn oneRound(bytes: []const u8) !void {
         fuzzLines,
         fuzzPretty,
         fuzzPrettyRoundTrip,
+        fuzzSeparated,
         fuzzRotation,
         fuzzTail,
         fuzzVersioned,
@@ -994,6 +1053,11 @@ test "the properties hold on a table of awkward inputs" {
     for (table, 0..) |before, i| try checkRotation(before, table[(i + 1) % table.len]);
 
     for (versioned_table) |line| try checkVersioned(line);
+    try checkSeparated(&.{}, "");
+    try checkSeparated(&.{
+        .{ .kind = "plain", .at = 1 },
+        .{ .kind = "with \"quotes\" and a\nbreak", .at = 2, .level = .warn },
+    }, "half a record\n\x1e{\"kind\":\n");
     try checkPrettyRoundTrip(&.{});
     try checkPrettyRoundTrip(&.{
         .{ .kind = "plain", .at = 1 },

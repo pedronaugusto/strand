@@ -213,7 +213,9 @@ pub fn Line(comptime T: type) type {
         /// the beginning, and which `Follower` seeds from the file position
         /// so that it is a file offset there too. A byte-order mark and the
         /// terminators of earlier lines are counted, so this is the offset a
-        /// seek needs: it is what turns a line number into a place.
+        /// seek needs: it is what turns a line number into a place. Where a
+        /// record is separated, this is the separator, since that is where
+        /// the record begins; `line` is what follows it.
         offset: u64 = 0,
     };
 }
@@ -231,6 +233,16 @@ pub const Format = enum {
     /// until they parse, which only a reader in `.pretty` mode does.
     pretty,
 };
+
+/// The byte that marks the start of a record in a separated stream: ASCII
+/// RS, 0x1E, which is what RFC 7464 puts in front of one.
+///
+/// It is the only byte that cannot appear unescaped inside a JSON value, so
+/// it is the only unambiguous "a record starts here" there is. JSON Lines on
+/// its own has no such marker: a torn line is detectable only as one that
+/// does not parse, and a reader cannot tell the difference between damage
+/// and a record it does not understand. See `Reader.Options.record_separator`.
+pub const separator: u8 = 0x1E;
 
 /// A stream of `T`, one per line, over a `*std.Io.Reader`.
 ///
@@ -321,6 +333,25 @@ pub fn Reader(comptime T: type) type {
             /// cost of the tolerance is that a truncated line joins with the
             /// one after it instead of failing on the spot.
             format: Format = .minified,
+            /// When true, every record on the stream begins with a
+            /// `separator` byte, and what comes before the first one on a
+            /// line is the tail of a record that was torn — it is discarded,
+            /// and the reader carries on with the record the separator
+            /// marks. A line with no separator on it at all is
+            /// `error.MissingSeparator`.
+            ///
+            /// This is what JSON Lines cannot do on its own: a line that
+            /// does not parse is either damage or a record from a writer
+            /// that knows something this reader does not, and there is no
+            /// way to tell. A separator says where a record starts, so a
+            /// reader can find the next one and say what it lost.
+            ///
+            /// A reader in this mode does not read a stream without
+            /// separators, and a reader not in it does not read one with
+            /// them: the byte is a raw control byte, which is
+            /// `error.ControlByte`. It is a decision both ends make
+            /// together, like the schema.
+            record_separator: bool = false,
             /// When true, a C0 control byte other than tab — a NUL above all,
             /// which is what a torn write or a half-written block leaves
             /// behind — is `error.ControlByte` naming the line and the offset,
@@ -362,13 +393,17 @@ pub fn Reader(comptime T: type) type {
         /// `T`"; `last_error` holds which parse error it was. `ControlByte`
         /// is the same claim about a line `std.json` was not shown, made
         /// before parsing because a control byte in a line means the line is
-        /// damaged rather than merely wrong. The other three are not about
+        /// damaged rather than merely wrong. `MissingSeparator` is a line
+        /// with no record on it at all, which only a reader in
+        /// `Options.record_separator` mode can tell. The other three are not
+        /// about
         /// the content of a line: `OutOfMemory` is the allocator's,
         /// `ReadFailed` is the stream's (ask it for diagnostics), and
         /// `LineTooLong` is this reader's own bound.
         pub const NextError = error{
             MalformedLine,
             ControlByte,
+            MissingSeparator,
             LineTooLong,
             ReadFailed,
             OutOfMemory,
@@ -494,15 +529,36 @@ pub fn Reader(comptime T: type) type {
             while (true) {
                 self.line_buf.writer.end = 0;
 
-                const record = (try self.readPhysical()) orelse return null;
+                var record = (try self.readPhysical()) orelse return null;
                 const number = self.number;
                 if (self.options.skip_blank and isBlank(record)) continue;
-                self.offset = self.record_offset;
+                var offset = self.record_offset;
+                if (self.options.record_separator) {
+                    // What is before the separator is the tail of a record
+                    // that was torn; the record is what comes after it, and
+                    // the separator is where the record begins.
+                    const at = std.mem.indexOfScalar(u8, record, separator) orelse {
+                        self.offset = offset;
+                        self.last_error_line = number;
+                        self.last_error = null;
+                        self.last_error_offset = null;
+                        switch (self.options.on_malformed) {
+                            .fail => return error.MissingSeparator,
+                            .skip => {
+                                self.skipped += 1;
+                                continue;
+                            },
+                        }
+                    };
+                    record = record[at + 1 ..];
+                    offset += at;
+                }
+                self.offset = offset;
                 if (try self.checkControl(record, 0, number)) {
                     self.skipped += 1;
                     continue;
                 }
-                return .{ .line = record, .number = number, .offset = self.record_offset };
+                return .{ .line = record, .number = number, .offset = offset };
             }
         }
 
@@ -1002,6 +1058,11 @@ pub fn Writer(comptime T: type) type {
             /// See `Format`. `.pretty` writes a record over several lines,
             /// which only a reader in `.pretty` mode reads back.
             format: Format = .minified,
+            /// When true, every record is written with a `separator` byte in
+            /// front of it, which only a reader in the matching mode reads
+            /// back. One byte per record, and what it buys is on
+            /// `Reader.Options.record_separator`.
+            record_separator: bool = false,
             /// The longest record this writer will emit, in bytes, not
             /// counting the terminator; `null` for no bound, which is the
             /// default. A longer one is `error.LineTooLong` and **none of it
@@ -1200,6 +1261,7 @@ pub fn Writer(comptime T: type) type {
         pub fn write(self: *Self, value: T) Error!void {
             if (self.sync_failed) return error.SyncFailed;
             if (self.options.max_line_bytes) |max| try self.checkLength(value, max);
+            if (self.options.record_separator) try self.output.writeByte(separator);
             try std.json.Stringify.value(value, self.encoding(), self.output);
             try self.output.writeByte('\n');
             self.count += 1;
@@ -1241,7 +1303,8 @@ pub fn Writer(comptime T: type) type {
             var counter: std.Io.Writer.Discarding = .init(&.{});
             std.json.Stringify.value(value, self.encoding(), &counter.writer) catch
                 return error.WriteFailed;
-            if (counter.fullCount() > max) return error.LineTooLong;
+            const written = counter.fullCount() + @intFromBool(self.options.record_separator);
+            if (written > max) return error.LineTooLong;
         }
 
         /// Drains the destination now, whatever `Options.flush` says.

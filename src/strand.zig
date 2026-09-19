@@ -1027,7 +1027,9 @@ pub fn Writer(comptime T: type) type {
             /// to whoever does. A log that another process tails, or that has
             /// to survive a crash between two records, is the case where the
             /// decision is "after every one", and saying so here is shorter
-            /// than wrapping every `write`.
+            /// than wrapping every `write`. `.per_records` is the one for a
+            /// stream that is neither: one drain per `n` records, however
+            /// they arrive.
             flush: Flush = .never,
             /// When the file is asked to put what it has been given onto the
             /// disk under it.
@@ -1046,6 +1048,7 @@ pub fn Writer(comptime T: type) type {
             /// | `.never` | only what the caller drains | no | nothing |
             /// | `.per_record` | yes | yes, to the last record | one sync per record, which is a disk write and a wait: on a spinning disk single-digit milliseconds, on an SSD tens to hundreds of microseconds, and on either it is the slowest thing a log does |
             /// | `.per_batch` | yes | yes, to the last batch | one sync per `writeAll`, so a batch of a thousand records pays once and risks losing the batch |
+            /// | `.per_records` | yes | yes, to the last `n` | one sync per `n` records, whether they came one at a time or in batches: the cost divided by `n`, against losing up to `n` |
             ///
             /// A sync drains first, whatever `flush` says: bytes still in
             /// this program's buffer have not reached the file at all, so
@@ -1071,6 +1074,11 @@ pub fn Writer(comptime T: type) type {
             /// record — and it is not a thing to write past either. Deal with
             /// the file, then build a writer over it.
             ///
+            /// There is no setting that drains on a timer. A writer is only
+            /// ever called when there is a record, so a timer would need a
+            /// task of its own, and this package does not own one — a caller
+            /// that has a task has `flush` and `sync` to call from it.
+            ///
             /// Only a writer made with `initFile` has a file to sync. `init`
             /// refuses any other setting than `.never`, and a writer built by
             /// hand without a file reports `error.SyncFailed` rather than
@@ -1084,7 +1092,7 @@ pub fn Writer(comptime T: type) type {
         };
 
         /// How often the destination is asked to drain. See `Options.flush`.
-        pub const Flush = enum {
+        pub const Flush = union(enum) {
             /// Nothing is flushed. The caller drains its own writer.
             never,
             /// `write` flushes the destination after each record.
@@ -1092,10 +1100,16 @@ pub fn Writer(comptime T: type) type {
             /// `writeAll` flushes once, after the last record of the batch.
             /// A plain `write` flushes nothing.
             per_batch,
+            /// Every `n`th record, counted across `write` and `writeAll`
+            /// alike. This is the one a stream of records can use: it costs
+            /// one drain per `n` rather than one per record, and it bounds
+            /// what a crash loses at `n` records rather than at whatever the
+            /// caller happened to batch. `n` must not be 0.
+            per_records: u64,
         };
 
         /// How often the file is asked to sync. See `Options.sync`.
-        pub const Sync = enum {
+        pub const Sync = union(enum) {
             /// Nothing is synced. A crash of the machine may lose records a
             /// reader of the file had already seen.
             never,
@@ -1104,7 +1118,47 @@ pub fn Writer(comptime T: type) type {
             /// `writeAll` syncs once, after the last record of the batch,
             /// having drained it. A plain `write` syncs nothing.
             per_batch,
+            /// Every `n`th record, having drained it: one sync for the `n`
+            /// records that arrived since the last one, which is the trade a
+            /// log that is written to continuously has to make. The slowest
+            /// thing a log does, divided by `n`, against losing up to `n`
+            /// records. `n` must not be 0.
+            per_records: u64,
         };
+
+        /// Whether `policy` falls due on the record just written.
+        fn due(self: *const Self, policy: anytype) bool {
+            return switch (policy) {
+                .never, .per_batch => false,
+                .per_record => true,
+                .per_records => |n| self.count % n == 0,
+            };
+        }
+
+        /// Whether `policy` falls due at the end of a batch.
+        fn dueForBatch(policy: anytype) bool {
+            return switch (policy) {
+                .per_batch => true,
+                // A count is counted across a batch too, so the records in
+                // one have already drained it every `n`; draining again at
+                // the end would be a second policy, not this one.
+                .never, .per_record, .per_records => false,
+            };
+        }
+
+        /// A count of zero would fall due on every record and on none,
+        /// depending on how the remainder is read; it is a mistake rather
+        /// than a setting.
+        fn checkPolicies(options: Options) void {
+            switch (options.flush) {
+                .per_records => |n| assert(n > 0),
+                else => {},
+            }
+            switch (options.sync) {
+                .per_records => |n| assert(n > 0),
+                else => {},
+            }
+        }
 
         /// What `write` can report. `WriteFailed` is the destination refusing
         /// the bytes, `SyncFailed` is the file refusing to put them on the
@@ -1118,6 +1172,7 @@ pub fn Writer(comptime T: type) type {
         /// `.never`; `initFile` is the constructor that can sync.
         pub fn init(output: *std.Io.Writer, options: Options) Self {
             assert(options.sync == .never);
+            checkPolicies(options);
             return .{ .output = output, .options = options };
         }
 
@@ -1127,6 +1182,7 @@ pub fn Writer(comptime T: type) type {
         /// The file is still not owned: this writer never closes it, and
         /// drains it only when `Options.flush` or `Options.sync` says to.
         pub fn initFile(dest: *std.Io.File.Writer, options: Options) Self {
+            checkPolicies(options);
             return .{ .output = &dest.interface, .file = dest, .options = options };
         }
 
@@ -1147,8 +1203,8 @@ pub fn Writer(comptime T: type) type {
             try std.json.Stringify.value(value, self.encoding(), self.output);
             try self.output.writeByte('\n');
             self.count += 1;
-            if (self.options.sync == .per_record) return self.drainAndSync();
-            if (self.options.flush == .per_record) try self.output.flush();
+            if (self.due(self.options.sync)) return self.drainAndSync();
+            if (self.due(self.options.flush)) try self.output.flush();
         }
 
         /// Writes every value in `values`, in order.
@@ -1161,8 +1217,8 @@ pub fn Writer(comptime T: type) type {
         /// have been written and `count` says how many.
         pub fn writeAll(self: *Self, values: []const T) Error!void {
             for (values) |value| try self.write(value);
-            if (self.options.sync == .per_batch) return self.drainAndSync();
-            if (self.options.flush == .per_batch) try self.output.flush();
+            if (dueForBatch(self.options.sync)) return self.drainAndSync();
+            if (dueForBatch(self.options.flush)) try self.output.flush();
         }
 
         /// How `std.json` is asked to lay a value out.

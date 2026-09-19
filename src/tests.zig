@@ -1271,6 +1271,71 @@ test "a flush policy is how often the destination is asked to drain" {
 // process, and only a sync survives the machine.
 //=========================================================================
 
+test "a count is how often a stream of records drains" {
+    const events = [_]Event{
+        .{ .kind = "one", .at = 1 },   .{ .kind = "two", .at = 2 },
+        .{ .kind = "three", .at = 3 }, .{ .kind = "four", .at = 4 },
+        .{ .kind = "five", .at = 5 },  .{ .kind = "six", .at = 6 },
+        .{ .kind = "seven", .at = 7 },
+    };
+
+    var buffer: [4096]u8 = undefined;
+    var sink: Draining = .init(&buffer);
+    defer sink.deinit();
+
+    // Three at a time, whether they arrive one at a time or in a batch: the
+    // third and the sixth records drain, and the seventh is still in the
+    // buffer afterwards.
+    var log: strand.Writer(Event) = .init(&sink.interface, .{ .flush = .{ .per_records = 3 } });
+    try log.write(events[0]);
+    try log.write(events[1]);
+    try testing.expectEqual(@as(usize, 0), sink.flushes);
+    try log.write(events[2]);
+    try testing.expectEqual(@as(usize, 1), sink.flushes);
+
+    try log.writeAll(events[3..]);
+    try testing.expectEqual(@as(usize, 2), sink.flushes);
+    try testing.expectEqual(@as(u64, 7), log.count);
+
+    // And the drains were drains: what they wrote is the records, in order.
+    try log.flush();
+    try testing.expectEqual(@as(usize, 7), std.mem.count(u8, sink.written.items, "\n"));
+    try testing.expect(std.mem.startsWith(u8, sink.written.items, "{\"kind\":\"one\""));
+}
+
+test "a count is how often a stream of records reaches the disk" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const file = try tmp.dir.createFile(testing.io, "log.jsonl", .{ .read = true });
+    defer file.close(testing.io);
+
+    var buffer: [4096]u8 = undefined;
+    var file_writer = file.writer(testing.io, &buffer);
+    var log: strand.Writer(Event) = .initFile(&file_writer, .{ .sync = .{ .per_records = 2 } });
+
+    // A sync drains first, so the file's length moves at every second
+    // record and at no other.
+    try log.write(.{ .kind = "one", .at = 1 });
+    try testing.expectEqual(@as(u64, 0), try file.length(testing.io));
+    try log.write(.{ .kind = "two", .at = 2 });
+    const after_two = try file.length(testing.io);
+    try testing.expect(after_two > 0);
+
+    try log.write(.{ .kind = "three", .at = 3 });
+    try testing.expectEqual(after_two, try file.length(testing.io));
+    try log.write(.{ .kind = "four", .at = 4 });
+    try testing.expect(try file.length(testing.io) > after_two);
+
+    var read_buffer: [4096]u8 = undefined;
+    var file_reader = file.reader(testing.io, &read_buffer);
+    try file_reader.seekTo(0);
+    var reader: strand.Reader(Event) = .init(testing.allocator, &file_reader.interface, .{});
+    defer reader.deinit();
+    var seen: usize = 0;
+    while (try reader.next()) |_| seen += 1;
+    try testing.expectEqual(@as(usize, 4), seen);
+}
+
 test "a sync policy drains the destination before it asks the file" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();

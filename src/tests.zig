@@ -1166,6 +1166,60 @@ test "a sync policy drains the destination before it asks the file" {
     try testing.expectEqual(@as(?strand.Line(Event), null), try reader.next());
 }
 
+test "a flush and a sync are also things to ask for one at a time" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const file = try tmp.dir.createFile(testing.io, "log.jsonl", .{ .read = true });
+    defer file.close(testing.io);
+
+    var buffer: [4096]u8 = undefined;
+    var file_writer = file.writer(testing.io, &buffer);
+
+    // Nothing is drained by policy here, so the only thing that can move
+    // the end of the file is the call that says to.
+    var log: strand.Writer(Event) = .initFile(&file_writer, .{});
+    try log.write(.{ .kind = "one", .at = 1 });
+    try log.write(.{ .kind = "two", .at = 2 });
+    try testing.expectEqual(@as(u64, 0), try file.length(testing.io));
+
+    try log.flush();
+    const after_flush = try file.length(testing.io);
+    try testing.expect(after_flush > 0);
+
+    try log.write(.{ .kind = "three", .at = 3 });
+    try testing.expectEqual(after_flush, try file.length(testing.io));
+
+    // A sync drains first, so the third record reaches the file here and
+    // not at the write that made it.
+    try log.sync();
+    try testing.expect(try file.length(testing.io) > after_flush);
+    try testing.expectEqual(@as(u64, 3), log.count);
+
+    var read_buffer: [4096]u8 = undefined;
+    var file_reader = file.reader(testing.io, &read_buffer);
+    try file_reader.seekTo(0);
+    var reader: strand.Reader(Event) = .init(testing.allocator, &file_reader.interface, .{});
+    defer reader.deinit();
+    var seen: usize = 0;
+    while (try reader.next()) |_| seen += 1;
+    try testing.expectEqual(@as(usize, 3), seen);
+}
+
+test "a sync asked for by hand still needs a file" {
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+
+    var log: strand.Writer(Event) = .init(&out.writer, .{});
+    // A flush of a destination that is not a file is an ordinary drain.
+    try log.write(.{ .kind = "one", .at = 1 });
+    try log.flush();
+    try testing.expect(out.written().len > 0);
+
+    // A sync of one is not.
+    try testing.expectError(error.SyncFailed, log.sync());
+    try testing.expect(log.sync_failed);
+}
+
 test "a per-batch sync is once for the batch and not once for the record" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();

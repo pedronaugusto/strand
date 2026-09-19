@@ -1151,6 +1151,31 @@ pub fn Writer(comptime T: type) type {
             if (self.options.flush == .per_batch) try self.output.flush();
         }
 
+        /// Drains the destination now, whatever `Options.flush` says.
+        ///
+        /// The policy covers the ordinary case — after every record, after
+        /// every batch, never — and this is the one-off: a barrier at a
+        /// checkpoint, or at the end of a run. A writer on `.never` that had
+        /// to reach past itself to the stream it does not own, to do that,
+        /// was the reason `Options.flush` exists at all, and this is the same
+        /// reason one level further in.
+        pub fn flush(self: *Self) Error!void {
+            if (self.sync_failed) return error.SyncFailed;
+            try self.output.flush();
+        }
+
+        /// Drains the destination and puts what the file then holds onto the
+        /// disk under it, whatever `Options.sync` says.
+        ///
+        /// The same one-off as `flush`, one level down, and it needs a file
+        /// for the same reason `Options.sync` does: `error.SyncFailed` when
+        /// this writer has none, and the writer takes no more records after
+        /// a sync that failed.
+        pub fn sync(self: *Self) Error!void {
+            if (self.sync_failed) return error.SyncFailed;
+            return self.drainAndSync();
+        }
+
         /// Drains the destination and then asks the file to put what it now
         /// holds onto the disk. The order is the whole of it: a sync of a
         /// file that has not been given the bytes syncs nothing.

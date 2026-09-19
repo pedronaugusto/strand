@@ -749,19 +749,41 @@ pub fn indexOfControl(bytes: []const u8) ?usize {
             const Block = @Vector(block_len, u8);
             const highest: Block = @splat(0x20);
             const tab: Block = @splat('\t');
-            // Two blocks a turn, so one bounds check covers both.
-            while (i + 2 * block_len <= bytes.len) {
-                inline for (0..2) |_| {
-                    const block: Block = bytes[i..][0..block_len].*;
-                    const matches = (block < highest) & (block != tab);
-                    if (@reduce(.Or, matches)) return i + std.simd.firstTrue(matches).?;
-                    i += block_len;
+            const group = 4 * block_len;
+            // Four blocks are folded into one answer before anything leaves
+            // the vector registers, because asking a vector "did any lane
+            // match" is the expensive instruction here and the compares are
+            // not. A line that has no control byte in it — which is every
+            // line of an undamaged log — pays one of those per group.
+            while (i + group <= bytes.len) : (i += group) {
+                var any = @as(@Vector(block_len, bool), @splat(false));
+                inline for (0..4) |k| {
+                    const block: Block = bytes[i + k * block_len ..][0..block_len].*;
+                    any = any | ((block < highest) & (block != tab));
                 }
+                // One of these four blocks holds it; which byte it is, is
+                // worth finding the slow way, since it ends the scan.
+                if (@reduce(.Or, any)) return i + scalarControl(bytes[i..][0..group]).?;
             }
-            while (i + block_len <= bytes.len) : (i += block_len) {
-                const block: Block = bytes[i..][0..block_len].*;
-                const matches = (block < highest) & (block != tab);
-                if (@reduce(.Or, matches)) return i + std.simd.firstTrue(matches).?;
+            // What is left of the line is folded the same way, in one go: the
+            // last block is read overlapping the one before it rather than a
+            // byte at a time, so a line of any length at all costs at most
+            // one more of those instructions.
+            if (i < bytes.len and bytes.len >= block_len) {
+                const rest = i;
+                var any = @as(@Vector(block_len, bool), @splat(false));
+                while (i + block_len <= bytes.len) : (i += block_len) {
+                    const block: Block = bytes[i..][0..block_len].*;
+                    any = any | ((block < highest) & (block != tab));
+                }
+                if (i < bytes.len) {
+                    const block: Block = bytes[bytes.len - block_len ..][0..block_len].*;
+                    any = any | ((block < highest) & (block != tab));
+                }
+                if (!@reduce(.Or, any)) return null;
+                // The overlap may reach back over bytes already cleared, so
+                // what it found is at `rest` or after it, or was never here.
+                return if (scalarControl(bytes[rest..])) |at| rest + at else null;
             }
         }
     }

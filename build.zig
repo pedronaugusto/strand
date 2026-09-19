@@ -29,6 +29,21 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
+    // How much generated input the properties are run over, and which. The
+    // default is what a `zig build test` should cost; a campaign is what CI
+    // and a rainy afternoon are for. Only the test build has these, so the
+    // module a consumer gets has no build options to match.
+    const campaign = b.option(
+        usize,
+        "campaign",
+        "Rounds of generated input for the fuzz properties (default 32)",
+    ) orelse 32;
+    const seed = b.option(u64, "seed", "Which rounds of generated input (default 0)") orelse 0;
+    const test_options = b.addOptions();
+    test_options.addOption(usize, "campaign", campaign);
+    test_options.addOption(u64, "seed", seed);
+    tests.root_module.addOptions("build_options", test_options);
+
     const test_step = b.step("test", "Run strand tests");
     test_step.dependOn(&b.addRunArtifact(tests).step);
 

@@ -163,6 +163,9 @@ fn checkReaderSkip(input: []const u8) !void {
         .on_malformed = .skip,
         // Long enough that no line can trip it: `.skip` is about parsing.
         .max_line_bytes = input.len + 1,
+        // The oracle counts bytes, and a mark the reader drops is bytes the
+        // oracle would still be counting.
+        .skip_bom = false,
     });
     defer reader.deinit();
 
@@ -317,12 +320,21 @@ fn checkTagOf(line: []const u8) !void {
 
 /// `lines` splits exactly the way the oracle does, and hands back views.
 fn checkLines(input: []const u8) !void {
-    var oracle: PhysicalLines = .{ .rest = input };
+    // `lines` takes a byte-order mark off the front of the buffer, which the
+    // oracle does not know about: it is not part of the first line, and it is
+    // not where that line begins either.
+    const bom = "\xEF\xBB\xBF";
+    const marked = std.mem.startsWith(u8, input, bom);
+    var oracle: PhysicalLines = .{
+        .rest = if (marked) input[bom.len..] else input,
+        .offset = if (marked) bom.len else 0,
+    };
     var it = strand.lines(input);
     while (it.next()) |line| {
         const physical = oracle.next() orelse return error.TestExtraLine;
         try testing.expectEqual(physical.number, line.number);
         try testing.expectEqualStrings(physical.line, line.line);
+        try testing.expectEqual(physical.offset, line.offset);
         try testing.expect(std.mem.indexOfScalar(u8, line.line, '\n') == null);
         if (line.line.len != 0) {
             const start = @intFromPtr(line.line.ptr) - @intFromPtr(input.ptr);
@@ -706,22 +718,28 @@ fn generateEvents(smith: *std.testing.Smith, events: []Event, text: []u8) []Even
     return events[0..count];
 }
 
-/// Seeds. Their bytes drive the generator rather than being the input, so
-/// they are here to give a campaign somewhere to start, and to give
-/// `zig build test` a handful of runs that are not the empty one.
+/// Seeds, from `src/corpus/lines`. Their bytes drive the generator rather than
+/// being the input, so they are there to give a campaign somewhere to start
+/// and to give `zig build test` a handful of runs that are not the empty one.
+///
+/// They are files rather than string literals so that an input a campaign
+/// found can be kept: write the bytes into `src/corpus/lines` under a name that
+/// says what they are, add the line here, and every later run starts from it
+/// too.
 const corpus: []const []const u8 = &.{
-    "{\"kind\":\"open\",\"at\":1}\n{\"kind\":\"close\"}\n",
-    "\x00\x01\x02\x03\x04\x05\x06\x07\n\r\n{\"a\":1}",
-    "\xff\xfe\xfd\xfc\xfb\xfa\xf9\xf8\xf7\xf6\xf5\xf4\xf3\xf2\xf1\xf0",
-    "{}{}{}{}{}{}{}{}\n\n\n\n{\"ping\":7}\n",
-    "        \t\t\t\t\n\"\\\\\"\\\"\\\"\n{\"kind\":\"\"}\n",
+    @embedFile("corpus/lines/plain.jsonl"),
+    @embedFile("corpus/lines/control-bytes.jsonl"),
+    @embedFile("corpus/lines/not-utf8.jsonl"),
+    @embedFile("corpus/lines/empty-objects.jsonl"),
+    @embedFile("corpus/lines/escapes.jsonl"),
+    @embedFile("corpus/lines/byte-order-mark.jsonl"),
 };
 
-/// Seeds for the versioned property, for the same reason `corpus` exists.
+/// Seeds for the versioned property, from `src/corpus/versioned`.
 const versioned_corpus: []const []const u8 = &.{
-    "{\"v\":2,\"data\":{\"kind\":\"open\"}}\n",
-    "{\"v\":1,\"data\":{\"kind\":\"open\"}}\n{\"v\":9,\"data\":1}\n",
-    "\x00\x01\x02\n{}\n",
+    @embedFile("corpus/versioned/current.jsonl"),
+    @embedFile("corpus/versioned/older-and-unknown.jsonl"),
+    @embedFile("corpus/versioned/damaged.jsonl"),
 };
 
 test "fuzz: Reader.next over generated lines" {
@@ -838,6 +856,78 @@ fn fuzzVersioned(_: void, smith: *std.testing.Smith) anyerror!void {
 }
 
 //=========================================================================
+// The campaign: every property over generated inputs, driven by a seed.
+//
+// `zig build test --fuzz` is what a campaign is supposed to be, and on Zig
+// 0.16.0 it does not build — the test runner the compiler links in fuzz mode
+// does not compile — so the properties would only ever see the corpus and the
+// table. A `std.testing.Smith` can be driven from any bytes at all, so these
+// bytes come from a seeded generator instead: no coverage to steer it, and
+// every input it does reach is one the properties were never run over before.
+//
+// `-Dcampaign=N` is how many rounds, `-Dseed=N` is which ones. A round that
+// fails prints both, and a run with those two numbers is that round again.
+//=========================================================================
+
+const build_options = @import("build_options");
+
+/// Bytes shaped the way a `std.testing.Smith` reads them.
+///
+/// It takes one byte to decide whether a sequence has ended — anything but
+/// zero ends it — and eight little-endian bytes for a value, which it throws
+/// away and replaces with the bottom of the range unless it is inside it. A
+/// stream of uniform random bytes therefore ends at once and chooses nothing,
+/// and mostly zeros with small values among them is what drives it through
+/// its choices instead.
+fn seedBytes(random: std.Random, out: []u8) void {
+    for (out) |*byte| byte.* = switch (random.uintLessThan(u8, 10)) {
+        0...7 => 0,
+        8 => random.uintLessThan(u8, 7),
+        else => random.int(u8),
+    };
+}
+
+/// Every property, over one generated input.
+fn oneRound(bytes: []const u8) !void {
+    inline for (.{
+        fuzzReader,
+        fuzzResume,
+        fuzzKindOf,
+        fuzzTagOf,
+        fuzzLines,
+        fuzzPretty,
+        fuzzPrettyRoundTrip,
+        fuzzRotation,
+        fuzzTail,
+        fuzzVersioned,
+    }) |property| {
+        var smith: std.testing.Smith = .{ .in = bytes };
+        try property({}, &smith);
+    }
+}
+
+test "the properties hold over generated inputs" {
+    // The corpus first, through every property rather than only the ones
+    // that name it, and then as much generated input as the build asked for.
+    for (corpus) |seed| try oneRound(seed);
+    for (versioned_corpus) |seed| try oneRound(seed);
+
+    var prng: std.Random.DefaultPrng = .init(build_options.seed);
+    var bytes: [1024]u8 = undefined;
+    for (0..build_options.campaign) |i| {
+        const len = prng.random().intRangeAtMost(usize, 1, bytes.len);
+        seedBytes(prng.random(), bytes[0..len]);
+        oneRound(bytes[0..len]) catch |err| {
+            std.debug.print(
+                "round {d} of seed 0x{x} failed: rerun with -Dseed=0x{x} -Dcampaign={d}\n",
+                .{ i, build_options.seed, build_options.seed, i + 1 },
+            );
+            return err;
+        };
+    }
+}
+
+//=========================================================================
 // The same properties, over inputs chosen by hand. A fuzz test that is only
 // ever run over its corpus proves little, and a corpus drives the generator
 // rather than the code, so the awkward cases are stated outright.
@@ -859,6 +949,9 @@ const table: []const []const u8 = &.{
     "[{\"kind\":\"open\"}]",
     "{\"kind\":\"open\"}",
     "{\"kind\":\"open\"}\n",
+    "\xEF\xBB\xBF{\"kind\":\"open\"}\n",
+    "\xEF\xBB\xBF",
+    "\xEF\xBB",
     "{\"kind\":\"open\"}\r\n{\"kind\":\"close\"}",
     "{\"kind\":\"open\"}\nnot json\n{\"kind\":\"close\"}\n",
     "{\"ki\\u006ed\":\"open\"}\n",

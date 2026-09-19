@@ -1,3 +1,8 @@
 # Everything this repository holds is LF on every platform, so no diff and no
 # gate ever reads a line ending as a change.
 * text=auto eol=lf
+
+# Corpus files are bytes, not text: they are fed to the fuzzer exactly as
+# they are, and a line ending rewritten on the way in or out is a different
+# seed.
+src/corpus/** -text

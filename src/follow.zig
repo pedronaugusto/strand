@@ -90,6 +90,92 @@ pub const PathOpener = struct {
     }
 };
 
+/// What makes two handles the same file.
+///
+/// A rotation is noticed by asking "is what the path holds now the file I was
+/// reading?", and there are two ways to answer it.
+pub const Identity = union(enum) {
+    /// The number the system gives a file: the inode on a POSIX system, the
+    /// file index on Windows. One call, nothing read, and exactly right
+    /// while the numbers are not reused — which is the catch. A filesystem
+    /// is free to give a new file the number of one just deleted, and then a
+    /// log that was rotated away reads as the log that replaced it; going
+    /// the other way, a filesystem that renumbers a file it did not replace
+    /// reads as a rotation that never happened. Both are silent.
+    inode,
+    /// The first bytes of the file, hashed. A log's opening lines are
+    /// written once and not written again, so they name the file in a way
+    /// the filesystem cannot take back — which is what makes this the answer
+    /// for a log on a filesystem whose numbers move, and the answer for a
+    /// rotation that copies the log away and writes the same file again
+    /// from the top, which no number can see at all.
+    ///
+    /// A file with fewer bytes than the window needs cannot be told apart by
+    /// its content yet, so it is compared by number until it is long enough.
+    /// Two files whose first bytes are identical — two logs opened in the
+    /// same second with the same header — are one file as far as this is
+    /// concerned: make the window long enough to reach something that
+    /// differs.
+    fingerprint: struct {
+        /// Where the window starts.
+        offset: u64 = 0,
+        /// How many bytes of it are hashed.
+        length: usize = 1024,
+    },
+
+    /// What one file is, under one identity.
+    ///
+    /// Taken while the file is the file you mean and compared later, which
+    /// is the whole point: a fingerprint read afresh from both sides of a
+    /// rotation that rewrote a file in place would find the two the same.
+    pub const Taken = struct {
+        /// What the system calls the file.
+        inode: std.Io.File.INode,
+        /// The hash of the window, or `null` under `.inode` and for a file
+        /// that is not yet as long as the window.
+        fingerprint: ?u64 = null,
+
+        /// Whether these are the same file. Two fingerprints settle it; with
+        /// fewer than two, the number does.
+        pub fn eql(a: Taken, b: Taken) bool {
+            if (a.fingerprint) |mine| {
+                if (b.fingerprint) |yours| return mine == yours;
+            }
+            return a.inode == b.inode;
+        }
+    };
+
+    /// What `file` is, now. The handle must be open for reading: asking a
+    /// file's attributes is read access, and so is reading its first bytes.
+    pub fn take(self: Identity, io: std.Io, file: std.Io.File) !Taken {
+        const inode = (try file.stat(io)).inode;
+        switch (self) {
+            .inode => return .{ .inode = inode },
+            .fingerprint => |window| return .{
+                .inode = inode,
+                .fingerprint = try fingerprintOf(io, file, window.offset, window.length),
+            },
+        }
+    }
+};
+
+/// The hash of `length` bytes of `file` at `offset`, or `null` when the file
+/// does not reach that far yet. Read positionally, so nothing that is reading
+/// the file moves.
+fn fingerprintOf(io: std.Io, file: std.Io.File, offset: u64, length: usize) !?u64 {
+    var hash: std.hash.Wyhash = .init(0);
+    var buffer: [512]u8 = undefined;
+    var taken: usize = 0;
+    while (taken < length) {
+        const want = @min(buffer.len, length - taken);
+        const got = try file.readPositionalAll(io, buffer[0..want], offset + taken);
+        if (got < want) return null;
+        hash.update(buffer[0..got]);
+        taken += got;
+    }
+    return hash.final();
+}
+
 /// A stream of `T` over a file that is still being appended to.
 ///
 /// Wraps a `Reader` and the file handle under it, because following a file
@@ -123,6 +209,10 @@ pub fn Follower(comptime T: type) type {
         /// only one it may close. `null` while it is still reading the one it
         /// was given.
         opened: ?std.Io.File = null,
+        /// Internal. What the file this follower is reading was, when it
+        /// started reading it. Taken at the first read rather than at `init`,
+        /// which cannot fail, and taken again for every file adopted since.
+        held: ?Identity.Taken = null,
         /// Internal. What the file measured the last time this follower
         /// waited. A file that has not grown between two waits has stopped,
         /// and that is when the path is worth looking at again.
@@ -160,6 +250,10 @@ pub fn Follower(comptime T: type) type {
             /// does not carry over is a final line the old file never
             /// finished, which was never a line.
             reopen: ?Opener = null,
+            /// What makes the file the path holds now the file this follower
+            /// is reading. Only looked at when `reopen` is set, since it is
+            /// the answer to a question only a reopen asks.
+            identity: Identity = .inode,
         };
 
         /// How a follower waits for the file to grow.
@@ -248,6 +342,12 @@ pub fn Follower(comptime T: type) type {
         /// Ownership: exactly `Reader.next`'s. The returned `Line` borrows the
         /// reader's line buffer and arena, and the next call takes both back.
         pub fn next(self: *Self) NextError!Line(T) {
+            // What the file is has to be taken before it is read, not when
+            // the question is asked: a file rewritten where it stands would
+            // otherwise be measured after the rewrite and match itself.
+            if (self.held == null and self.options.reopen != null) {
+                _ = self.heldIdentity() catch return error.ReopenFailed;
+            }
             while (true) {
                 // Where the line about to be read begins, and what it will be
                 // numbered — so that a line the writer has not finished can
@@ -345,9 +445,9 @@ pub fn Follower(comptime T: type) type {
             var adopted = false;
             defer if (!adopted) opener.close(self.io, fresh);
 
-            const there = inodeOf(self.io, fresh) catch return error.ReopenFailed;
-            const held = inodeOf(self.io, self.source.file) catch return error.ReopenFailed;
-            if (there != held) {
+            const held = self.heldIdentity() catch return error.ReopenFailed;
+            const there = self.options.identity.take(self.io, fresh) catch return error.ReopenFailed;
+            if (!held.eql(there)) {
                 // The old file has been read to its end — that is what
                 // brought us here — so the new one starts from its own.
                 adopted = true;
@@ -364,6 +464,22 @@ pub fn Follower(comptime T: type) type {
             }
         }
 
+        /// What the file being read was when this follower took it up.
+        ///
+        /// Taken once and kept, because that is what a later comparison has
+        /// to be against: a file rewritten where it stands is a different
+        /// file, and reading its first bytes again would only find what it
+        /// says about itself now. A file still too short to fingerprint is
+        /// asked again, since its first bytes have not all been written yet.
+        fn heldIdentity(self: *Self) !Identity.Taken {
+            if (self.held) |taken| {
+                if (taken.fingerprint != null or self.options.identity == .inode) return taken;
+            }
+            const taken = try self.options.identity.take(self.io, self.source.file);
+            self.held = taken;
+            return taken;
+        }
+
         /// Puts the line layer back to where it stands at the top of a file.
         fn atStart(self: *Self) void {
             self.reader.number = 0;
@@ -371,6 +487,7 @@ pub fn Follower(comptime T: type) type {
             self.reader.offset = 0;
             self.reader.bom_checked = false;
             self.size_seen = null;
+            self.held = null;
         }
 
         /// What a failed read really was.
@@ -386,18 +503,6 @@ pub fn Follower(comptime T: type) type {
                 error.Canceled => error.Canceled,
                 else => error.ReadFailed,
             };
-        }
-
-        /// Which file this handle is, as the system numbers files. Two
-        /// handles opened on one path at different times are the same file
-        /// exactly when this is equal, which is what tells a rename-and-
-        /// recreate apart from a file that is merely quiet.
-        ///
-        /// Both handles must be open for reading. Asking for a file's
-        /// attributes is read access, and Windows refuses it on a handle
-        /// opened only for writing.
-        fn inodeOf(io: std.Io, file: std.Io.File) std.Io.File.StatError!std.Io.File.INode {
-            return (try file.stat(io)).inode;
         }
 
         /// The length of the file right now, rather than the length it had
@@ -635,6 +740,91 @@ test "the opener is an interface, and a test hands over the files itself" {
     // The handle the follower opened for itself goes back through the same
     // interface; the one it was given does not.
     try testing.expectEqual(@as(usize, 1), staged.closes);
+}
+
+test "what a file is, by its number or by what is on it" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const header = "{\"kind\":\"open\",\"at\":1}\n" ** 60;
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "one", .data = header });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "copy", .data = header });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "short", .data = "{}\n" });
+
+    const one = try tmp.dir.openFile(testing.io, "one", .{});
+    defer one.close(testing.io);
+    const copy = try tmp.dir.openFile(testing.io, "copy", .{});
+    defer copy.close(testing.io);
+    const short = try tmp.dir.openFile(testing.io, "short", .{});
+    defer short.close(testing.io);
+
+    const by_content: Identity = .{ .fingerprint = .{} };
+
+    // A file is itself, whichever way the question is asked.
+    try testing.expect((try Identity.take(.inode, testing.io, one))
+        .eql(try Identity.take(.inode, testing.io, one)));
+    try testing.expect((try by_content.take(testing.io, one)).eql(try by_content.take(testing.io, one)));
+
+    // Two files with the same bytes on them are two files by number and one
+    // file by content, which is the trade between the two answers.
+    try testing.expect(!(try Identity.take(.inode, testing.io, one))
+        .eql(try Identity.take(.inode, testing.io, copy)));
+    try testing.expect((try by_content.take(testing.io, one)).eql(try by_content.take(testing.io, copy)));
+
+    // A file with too few bytes to fingerprint is compared by number.
+    const shortly = try by_content.take(testing.io, short);
+    try testing.expectEqual(@as(?u64, null), shortly.fingerprint);
+    try testing.expect(!shortly.eql(try by_content.take(testing.io, one)));
+    try testing.expect(shortly.eql(try by_content.take(testing.io, short)));
+
+    // And the case no number can see: the same file, rewritten where it
+    // stands with something else of the same length. Taken before and after,
+    // the number says it is the file it was and the content says it is not.
+    const before = try by_content.take(testing.io, one);
+    const writer = try tmp.dir.openFile(testing.io, "one", .{ .mode = .read_write });
+    defer writer.close(testing.io);
+    try writer.writePositionalAll(testing.io, "{\"kind\":\"else\",\"at\":9}\n" ** 60, 0);
+    const after = try by_content.take(testing.io, one);
+    try testing.expectEqual(before.inode, after.inode);
+    try testing.expect(!before.eql(after));
+}
+
+test "a rotation that keeps the file's number is followed by its content" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    // Long enough to fingerprint, and the same length before and after, so
+    // that nothing but the bytes themselves can tell the two apart: not the
+    // number the system gives it, and not its length either.
+    const before = "{\"kind\":\"old\",\"at\":1}\n" ** 60;
+    const after = "{\"kind\":\"new\",\"at\":2}\n" ** 60;
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "log.jsonl", .data = before });
+
+    const file = try tmp.dir.openFile(testing.io, "log.jsonl", .{});
+    defer file.close(testing.io);
+    var buffer: [256]u8 = undefined;
+    var source = file.reader(testing.io, &buffer);
+
+    var path: PathOpener = .{ .dir = tmp.dir, .sub_path = "log.jsonl" };
+    var follower: Follower(Event) = .init(testing.allocator, testing.io, &source, .{
+        .wait = .{ .poll = .fromMicroseconds(100) },
+        .reopen = path.opener(),
+        .identity = .{ .fingerprint = .{} },
+    });
+    defer follower.deinit();
+
+    for (0..60) |_| try testing.expectEqualStrings("old", (try follower.next()).value.kind);
+
+    // The log is rotated by being rewritten where it stands, which is what
+    // a copy-and-truncate rotation looks like from here.
+    const writer = try tmp.dir.openFile(testing.io, "log.jsonl", .{ .mode = .read_write });
+    defer writer.close(testing.io);
+    try writer.writePositionalAll(testing.io, after, 0);
+
+    const line = try follower.next();
+    try testing.expectEqualStrings("new", line.value.kind);
+    // A different file is a different file: the numbering starts again.
+    try testing.expectEqual(@as(u64, 1), line.number);
+    try testing.expectEqual(@as(u64, 1), follower.rotations);
 }
 
 test "a follower given an opener follows the path across a rename" {

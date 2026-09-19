@@ -291,6 +291,82 @@ pub fn Follower(comptime T: type) type {
             ReopenFailed,
         } || std.Io.Cancelable;
 
+        /// Where a follower stands, and enough to build another one there.
+        ///
+        /// The thing that crashes is the follower, and the point of
+        /// `Line.offset` is to be able to start again where the last one
+        /// stopped. This is the four numbers that takes: which file, how far
+        /// into it, what the line after that is numbered, and how many files
+        /// the follower has been through to get here.
+        ///
+        /// It is an ordinary struct of integers, so a caller keeping one
+        /// between runs can write it with this package and read it back with
+        /// it — a registry of checkpoints is a JSON Lines file like any
+        /// other.
+        pub const Checkpoint = struct {
+            /// What the file being read is, under `Options.identity`. A
+            /// checkpoint taken under one identity and resumed under another
+            /// means nothing; keep the setting with it.
+            file: Identity.Taken,
+            /// The byte offset in that file at which the next line begins.
+            /// Everything before it has been read.
+            offset: u64 = 0,
+            /// How many lines have come off this file.
+            number: u64 = 0,
+            /// What `rotations` stood at.
+            rotations: u64 = 0,
+        };
+
+        /// Where this follower stands right now.
+        ///
+        /// Take it after `next` has returned a line and before the next call:
+        /// that is when the file position is a line boundary, which is what
+        /// makes the offset in it one a reader can be started at.
+        pub fn checkpoint(self: *Self) error{ReopenFailed}!Checkpoint {
+            return .{
+                .file = self.heldIdentity() catch return error.ReopenFailed,
+                .offset = self.source.logicalPos(),
+                .number = self.reader.number,
+                .rotations = self.rotations,
+            };
+        }
+
+        /// A follower that carries on from `point`.
+        ///
+        /// `source` is the file the path holds now, which is not necessarily
+        /// the file the checkpoint was taken on: a log can rotate while
+        /// nothing is following it. The two cases are told apart the way a
+        /// running follower tells them apart, by `Options.identity`, and the
+        /// answer is on the follower rather than in a flag — `rotations` is
+        /// the checkpoint's own when the file is the file it named, and one
+        /// more when it is not.
+        ///
+        /// Same file: the read carries on at the recorded offset with the
+        /// recorded numbering, so a line's number and offset mean across the
+        /// crash what they meant before it. Different file: it is read from
+        /// the start and numbered from 1, because none of it has been read.
+        ///
+        /// This one seeks `source`, which `init` does not: a follower resumed
+        /// at an offset it was not positioned at would read from the wrong
+        /// place, and there is no answer it could give instead.
+        pub fn resumeFrom(
+            allocator: Allocator,
+            io: std.Io,
+            source: *std.Io.File.Reader,
+            options: Options,
+            point: Checkpoint,
+        ) error{ SeekFailed, ReopenFailed }!Self {
+            const now = options.identity.take(io, source.file) catch return error.ReopenFailed;
+            const same = now.eql(point.file);
+            source.seekTo(if (same) point.offset else 0) catch return error.SeekFailed;
+
+            var self = Self.init(allocator, io, source, options);
+            self.held = now;
+            self.rotations = point.rotations + @intFromBool(!same);
+            if (same) self.reader.number = point.number;
+            return self;
+        }
+
         /// A follower over `source`, starting wherever `source` is positioned.
         ///
         /// Start it at 0 to read a log from the beginning and then keep up
@@ -668,6 +744,188 @@ test "a truncated file is reported rather than spliced onto the old one" {
     const after = try follower.next();
     try testing.expectEqualStrings("after", after.value.kind);
     try testing.expectEqual(@as(u64, 1), after.number);
+}
+
+//=========================================================================
+// Checkpoints: the thing that crashes is the follower.
+//=========================================================================
+
+/// The lines a plain reader makes of `bytes`, as "number:line" strings.
+fn readingOf(bytes: []const u8) !std.ArrayList([]const u8) {
+    var source: std.Io.Reader = .fixed(bytes);
+    var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{});
+    defer reader.deinit();
+
+    var out: std.ArrayList([]const u8) = .empty;
+    errdefer {
+        for (out.items) |item| testing.allocator.free(item);
+        out.deinit(testing.allocator);
+    }
+    while (try reader.next()) |line| {
+        try out.append(testing.allocator, try std.fmt.allocPrint(
+            testing.allocator,
+            "{d}:{s}",
+            .{ line.number, line.line },
+        ));
+    }
+    return out;
+}
+
+fn freeReading(items: *std.ArrayList([]const u8)) void {
+    for (items.items) |item| testing.allocator.free(item);
+    items.deinit(testing.allocator);
+}
+
+test "a follower resumed from a checkpoint reads every line exactly once" {
+    const lines = 40;
+    var log: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer log.deinit();
+    var writer: strand.Writer(Event) = .init(&log.writer, .{});
+    for (0..lines) |i| try writer.write(.{ .kind = "tick", .at = i });
+
+    var want = try readingOf(log.written());
+    defer freeReading(&want);
+    try testing.expectEqual(@as(usize, lines), want.items.len);
+
+    var fixture = try fixtures.Fixture.init(log.written(), 64);
+    defer fixture.deinit();
+
+    var got: std.ArrayList([]const u8) = .empty;
+    defer freeReading(&got);
+
+    // A follower that reads part of the file and is then interrupted, with
+    // a checkpoint taken at the line it had reached.
+    var point: Follower(Event).Checkpoint = undefined;
+    {
+        var follower: Follower(Event) = .init(testing.allocator, testing.io, &fixture.reader, .{
+            .wait = .{ .poll = .fromMicroseconds(100) },
+            .identity = .{ .fingerprint = .{ .length = 32 } },
+        });
+        defer follower.deinit();
+        for (0..17) |_| {
+            const line = try follower.next();
+            try got.append(testing.allocator, try std.fmt.allocPrint(
+                testing.allocator,
+                "{d}:{s}",
+                .{ line.number, line.line },
+            ));
+        }
+        point = try follower.checkpoint();
+    }
+
+    // A second follower, built from the checkpoint over a handle of its own
+    // — the first one is gone, as it would be after a crash.
+    var again = fixture.file.reader(testing.io, fixture.write_buffer);
+    var second: Follower(Event) = try .resumeFrom(
+        testing.allocator,
+        testing.io,
+        &again,
+        .{
+            .wait = .{ .poll = .fromMicroseconds(100) },
+            .identity = .{ .fingerprint = .{ .length = 32 } },
+        },
+        point,
+    );
+    defer second.deinit();
+
+    // The same file, so the numbering carries on rather than starting over.
+    try testing.expectEqual(point.rotations, second.rotations);
+    for (0..lines - 17) |_| {
+        const line = try second.next();
+        try got.append(testing.allocator, try std.fmt.allocPrint(
+            testing.allocator,
+            "{d}:{s}",
+            .{ line.number, line.line },
+        ));
+    }
+
+    // Every line, once, in order, under the number and with the bytes one
+    // uninterrupted reader gives it.
+    try testing.expectEqual(want.items.len, got.items.len);
+    for (want.items, got.items) |a, b| try testing.expectEqualStrings(a, b);
+}
+
+test "a checkpoint of a log that rotated while nothing read it begins the new file" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{
+        .sub_path = "log.jsonl",
+        .data = "{\"kind\":\"old\",\"at\":1}\n{\"kind\":\"old\",\"at\":2}\n",
+    });
+
+    const options: Follower(Event).Options = .{
+        .wait = .{ .poll = .fromMicroseconds(100) },
+        .identity = .{ .fingerprint = .{ .length = 20 } },
+    };
+
+    var point: Follower(Event).Checkpoint = undefined;
+    {
+        const file = try tmp.dir.openFile(testing.io, "log.jsonl", .{});
+        defer file.close(testing.io);
+        var buffer: [128]u8 = undefined;
+        var source = file.reader(testing.io, &buffer);
+
+        var follower: Follower(Event) = .init(testing.allocator, testing.io, &source, options);
+        defer follower.deinit();
+        try testing.expectEqualStrings("old", (try follower.next()).value.kind);
+        point = try follower.checkpoint();
+    }
+
+    // The log is rotated with nothing following it, which is the case a
+    // recorded offset is dangerous in: the offset is still a place in the
+    // new file, and it is not the place that line was.
+    try tmp.dir.rename("log.jsonl", tmp.dir, "log.1", testing.io);
+    try tmp.dir.writeFile(testing.io, .{
+        .sub_path = "log.jsonl",
+        .data = "{\"kind\":\"new\",\"at\":1}\n{\"kind\":\"new\",\"at\":2}\n",
+    });
+
+    const file = try tmp.dir.openFile(testing.io, "log.jsonl", .{});
+    defer file.close(testing.io);
+    var buffer: [128]u8 = undefined;
+    var source = file.reader(testing.io, &buffer);
+
+    var follower: Follower(Event) = try .resumeFrom(testing.allocator, testing.io, &source, options, point);
+    defer follower.deinit();
+
+    // Not the file the checkpoint named, so it is read from its start and
+    // numbered from 1, and the change is counted.
+    try testing.expectEqual(point.rotations + 1, follower.rotations);
+    const line = try follower.next();
+    try testing.expectEqualStrings("new", line.value.kind);
+    try testing.expectEqual(@as(u64, 1), line.number);
+    try testing.expectEqual(@as(u64, 0), line.offset);
+}
+
+test "a checkpoint is a line like any other" {
+    var fixture = try fixtures.Fixture.init("{\"kind\":\"one\"}\n{\"kind\":\"two\"}\n", 64);
+    defer fixture.deinit();
+
+    var follower: Follower(Event) = .init(testing.allocator, testing.io, &fixture.reader, .{
+        .wait = .{ .poll = .fromMicroseconds(100) },
+    });
+    defer follower.deinit();
+    _ = try follower.next();
+    const point = try follower.checkpoint();
+
+    // A registry of these is a JSON Lines file, so this package writes and
+    // reads one without being asked to do anything special about it.
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    try strand.writeLine(&out.writer, point);
+
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const read = try strand.parseLine(
+        Follower(Event).Checkpoint,
+        arena.allocator(),
+        out.written()[0 .. out.written().len - 1],
+        .{},
+    );
+    try testing.expectEqual(point.offset, read.offset);
+    try testing.expectEqual(point.number, read.number);
+    try testing.expectEqual(point.rotations, read.rotations);
+    try testing.expect(point.file.eql(read.file));
 }
 
 //=========================================================================

@@ -1350,3 +1350,135 @@ test "a non-seekable stream is read under the same guarantees as a file" {
         }
     }
 }
+
+//=========================================================================
+// What a line costs, held to a budget.
+//
+// Two loops over the same bytes: this package's reader, and the same parse
+// over a frame taken straight out of the input reader's buffer with nothing
+// in between. The second is the floor — `std.json` doing the work and the
+// line layer doing nothing — so the first divided by the second is what the
+// line layer costs, and that is the number a budget can be set on. An
+// absolute ns/line would only be a fact about the machine that ran it.
+//
+// On the machine the figures in the documents come from, the floor is 199
+// ns/line and this reader is 200: a budget of ten per cent over the floor.
+// A reader that copied every line into its own buffer measures 230, and a
+// reader whose control-byte scan was a byte loop measured 230 as well, so
+// either regression fails this test rather than showing up as a number
+// nobody reads.
+//=========================================================================
+
+/// The shape the figures were measured over: a short string, a number, an
+/// enum, and one line in seven carrying a note with escapes in it.
+const Timed = struct {
+    kind: []const u8,
+    at: u64 = 0,
+    level: enum { info, warn } = .info,
+    note: ?[]const u8 = null,
+};
+
+const timed_lines = 120_000;
+
+/// The budget, as a fraction of what the same parse costs with no line layer
+/// at all.
+const timed_budget = 1.10;
+
+fn timedInput(allocator: std.mem.Allocator) ![]u8 {
+    const kinds: []const []const u8 = &.{ "request", "open", "retry", "close", "flush" };
+    var out: std.Io.Writer.Allocating = .init(allocator);
+    errdefer out.deinit();
+    try out.ensureUnusedCapacity(timed_lines * 80);
+
+    var log: strand.Writer(Timed) = .init(&out.writer, .{});
+    for (0..timed_lines) |i| try log.write(.{
+        .kind = kinds[i % kinds.len],
+        .at = i,
+        .level = if (i % 1000 == 0) .warn else .info,
+        .note = if (i % 7 == 0) "user \"ada\" said \"no\"" else null,
+    });
+
+    var list = out.toArrayList();
+    return list.toOwnedSlice(allocator);
+}
+
+/// This package's reader over `input`, in nanoseconds.
+fn timeReader(input: []const u8) !u64 {
+    var source: std.Io.Reader = .fixed(input);
+    var reader: strand.Reader(Timed) = .init(testing.allocator, &source, .{});
+    defer reader.deinit();
+
+    var checksum: u64 = 0;
+    const started = std.Io.Clock.awake.now(testing.io);
+    while (try reader.next()) |line| checksum +%= line.value.at +% line.value.kind.len;
+    const elapsed = started.untilNow(testing.io, .awake);
+
+    try testing.expectEqual(@as(u64, timed_lines), reader.number);
+    std.mem.doNotOptimizeAway(checksum);
+    return @intCast(@max(elapsed.toNanoseconds(), 1));
+}
+
+/// The same parse with no line layer over it: the frame is a slice of the
+/// input reader's own buffer, and nothing is copied or checked.
+fn timeFloor(input: []const u8) !u64 {
+    var source: std.Io.Reader = .fixed(input);
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+
+    var checksum: u64 = 0;
+    var seen: u64 = 0;
+    const started = std.Io.Clock.awake.now(testing.io);
+    while (source.takeDelimiterInclusive('\n')) |framed| {
+        const line = framed[0 .. framed.len - 1];
+        _ = arena.reset(.retain_capacity);
+        const value = try std.json.parseFromSliceLeaky(Timed, arena.allocator(), line, .{
+            .ignore_unknown_fields = true,
+            .allocate = .alloc_if_needed,
+        });
+        checksum +%= value.at +% value.kind.len;
+        seen += 1;
+    } else |err| switch (err) {
+        error.EndOfStream => {},
+        else => return err,
+    }
+    const elapsed = started.untilNow(testing.io, .awake);
+
+    try testing.expectEqual(@as(u64, timed_lines), seen);
+    std.mem.doNotOptimizeAway(checksum);
+    return @intCast(@max(elapsed.toNanoseconds(), 1));
+}
+
+test "a line costs what the parse under it costs, within a tenth" {
+    const input = try timedInput(testing.allocator);
+    defer testing.allocator.free(input);
+
+    // Best of five, interleaved: a machine that is busy for a moment slows
+    // whichever loop it lands in, and the best run of each is the one the
+    // machine was not busy for.
+    var reader_ns: u64 = std.math.maxInt(u64);
+    var floor_ns: u64 = std.math.maxInt(u64);
+    for (0..5) |_| {
+        reader_ns = @min(reader_ns, try timeReader(input));
+        floor_ns = @min(floor_ns, try timeFloor(input));
+    }
+
+    const ratio = @as(f64, @floatFromInt(reader_ns)) / @as(f64, @floatFromInt(floor_ns));
+    if (!withinBudget(ratio)) {
+        std.debug.print(
+            "read {d} ns/line against a floor of {d} ns/line: {d:.2}x, over the budget of {d:.2}x\n",
+            .{ reader_ns / timed_lines, floor_ns / timed_lines, ratio, timed_budget },
+        );
+        return error.OverBudget;
+    }
+}
+
+/// Whether a measured ratio is acceptable in the mode the suite is built in.
+/// Debug and ReleaseSmall are not modes anything is measured in: one keeps
+/// every safety check and the other asks the compiler not to vectorise, so a
+/// budget set on optimized code would say nothing there.
+fn withinBudget(ratio: f64) bool {
+    return switch (@import("builtin").mode) {
+        .ReleaseFast, .ReleaseSafe => ratio <= timed_budget,
+        .Debug, .ReleaseSmall => true,
+    };
+}

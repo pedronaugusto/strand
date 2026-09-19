@@ -156,9 +156,11 @@ pub fn Line(comptime T: type) type {
         /// the reader's per-line arena; either way they die when `line` does.
         value: T,
         /// The line's bytes, without the `\n` or `\r\n` that ended it, and
-        /// without a leading byte-order mark. Owned by the reader, valid
-        /// until the next call to `next` or `deinit`. In `.pretty` mode this
-        /// is the whole record, newlines and all.
+        /// without a leading byte-order mark. Not owned by the caller and
+        /// valid until the next call to `next` or `deinit`: it is a slice of
+        /// the stream's own buffer when the whole line was already sitting in
+        /// it, and of the reader's line buffer when it was not. In `.pretty`
+        /// mode it is the whole record, newlines and all.
         line: []const u8,
         /// 1-based line number. `Reader` counts forwards from the start of
         /// the stream, blank and skipped lines included, so the number is the
@@ -239,6 +241,11 @@ pub fn Reader(comptime T: type) type {
         line_buf: std.Io.Writer.Allocating,
         /// Internal. What parsing the current line allocated, reset per line.
         arena: std.heap.ArenaAllocator,
+        /// Internal. Set while the current record is a slice of `input`'s own
+        /// buffer rather than a copy in `line_buf`. It says what a record
+        /// about to be joined to has to do first, and it is the whole of the
+        /// bookkeeping the zero-copy frame costs.
+        borrowed: bool = false,
         /// Internal. Whether the stream has been looked at for a byte-order
         /// mark, which happens once and before anything else is read.
         bom_checked: bool = false,
@@ -396,13 +403,15 @@ pub fn Reader(comptime T: type) type {
 
         /// The next line, or `null` at end of stream.
         ///
-        /// Ownership: the returned `Line` borrows from the reader. Its `line`
-        /// field is the reader's line buffer, and the value's strings point
-        /// either into that buffer (when they needed no unescaping) or into
-        /// the reader's arena (when they did). The next call to `next`
-        /// overwrites the buffer and resets the arena, so everything the
-        /// previous `Line` pointed at is gone by the time the next one is
-        /// returned. To keep a value past that point, call `keep`.
+        /// Ownership: the returned `Line` borrows. Its `line` field is a
+        /// slice of `input`'s own buffer when the whole line was already
+        /// there and of the reader's line buffer when it was not, and the
+        /// value's strings point either into that same line (when they needed
+        /// no unescaping) or into the reader's arena (when they did). The
+        /// next call to `next` reads the stream, overwrites the line buffer
+        /// and resets the arena, so everything the previous `Line` pointed at
+        /// is gone by the time the next one is returned. To keep a value past
+        /// that point, call `keep`.
         ///
         /// `error.MalformedLine`, `error.ControlByte` and
         /// `error.LineTooLong` do not desynchronize the stream: the offending
@@ -437,7 +446,7 @@ pub fn Reader(comptime T: type) type {
                         error.UnexpectedEndOfInput => if (self.options.format == .pretty) {
                             // A prefix of a value: the rest of it is on the
                             // lines that follow, unless there are none.
-                            if (try self.joinPhysical(number)) |joined| {
+                            if (try self.joinPhysical(number, record)) |joined| {
                                 record = joined;
                                 continue;
                             }
@@ -523,7 +532,15 @@ pub fn Reader(comptime T: type) type {
         /// Appends the next physical line to the current record, separated by
         /// the `\n` that ended the previous one. `null` when the stream ended
         /// first, in which case the record is left exactly as it was.
-        fn joinPhysical(self: *Self, number: u64) NextError!?[]const u8 {
+        fn joinPhysical(self: *Self, number: u64, record: []const u8) NextError!?[]const u8 {
+            if (self.borrowed) {
+                // The record so far is a slice of the input reader's buffer,
+                // and reading the line after it is what takes that buffer
+                // back: a record that is about to grow has to own its bytes.
+                self.line_buf.writer.end = 0;
+                self.line_buf.writer.writeAll(record) catch return error.OutOfMemory;
+                self.borrowed = false;
+            }
             const before = self.line_buf.writer.end;
             // The separator counts against the bound like any other byte.
             if (self.options.max_line_bytes -| before == 0) {
@@ -545,9 +562,10 @@ pub fn Reader(comptime T: type) type {
             return joined;
         }
 
-        /// Reads one physical line, appending its bytes to the line buffer
-        /// without its terminator, and returns the record so far. `null` at
-        /// end of stream, and at an unterminated final line under
+        /// Reads one physical line and returns the record so far: a slice of
+        /// `input`'s own buffer when the whole line was already sitting in
+        /// it, and the line buffer's contents when it was not. `null` at end
+        /// of stream, and at an unterminated final line under
         /// `require_terminator`. Counts the line.
         fn readPhysical(self: *Self) NextError!?[]const u8 {
             if (!self.bom_checked) {
@@ -565,6 +583,18 @@ pub fn Reader(comptime T: type) type {
             // Saturating, because `Limit` reads a saturated `usize` as
             // unlimited, which is what a bound of `maxInt(usize)` means.
             const room = max -| before;
+
+            // A whole line already in `input`'s buffer is handed back as a
+            // slice of it. The bytes have been read once and are not read
+            // again, and nothing below this is done at all: framing a line
+            // this way costs one scan for the terminator and no copy. What
+            // follows is for the line that straddles a refill, which is the
+            // only one whose bytes are not all in one place.
+            if (before == 0) {
+                if (self.frameBuffered()) |frame| return self.takeFrame(frame, room);
+            }
+            self.borrowed = false;
+
             const n = self.input.streamDelimiterLimit(
                 &self.line_buf.writer,
                 '\n',
@@ -620,6 +650,39 @@ pub fn Reader(comptime T: type) type {
             return self.line_buf.written();
         }
 
+        /// The whole of the next line, terminator included, when `input` is
+        /// already holding it; `null` when it is not, which is a line that
+        /// straddles a refill or a reader with nothing in hand yet.
+        ///
+        /// Nothing is read here: what is looked at is what an earlier read
+        /// left behind, so a reader whose buffer holds many lines gives all
+        /// of them up one after another without touching the stream.
+        fn frameBuffered(self: *Self) ?[]const u8 {
+            const contents = self.input.buffered();
+            const end = std.mem.findScalar(u8, contents, '\n') orelse return null;
+            return contents[0 .. end + 1];
+        }
+
+        /// Takes a framed line off `input` without copying it. `room` is what
+        /// is left of the bound; a line past it is discarded here in full,
+        /// since it is already known where it ends.
+        fn takeFrame(self: *Self, frame: []const u8, room: usize) NextError!?[]const u8 {
+            const line = frame[0 .. frame.len - 1];
+            self.number += 1;
+            self.input.toss(frame.len);
+            self.consumed += frame.len;
+            if (line.len > room) {
+                self.last_error_line = self.number;
+                self.last_error = null;
+                self.last_error_offset = null;
+                self.offset = self.record_offset;
+                return error.LineTooLong;
+            }
+            self.borrowed = true;
+            // Tolerate CRLF: the `\r` belongs to the terminator, not the JSON.
+            return trimCr(line);
+        }
+
         /// Consumes a UTF-8 byte-order mark if the stream opens with one.
         /// Called once, before anything else is read.
         ///
@@ -651,6 +714,12 @@ pub fn Reader(comptime T: type) type {
             };
         }
     };
+}
+
+/// A line without the `\r` of a `\r\n` terminator.
+fn trimCr(line: []const u8) []const u8 {
+    if (line.len > 0 and line[line.len - 1] == '\r') return line[0 .. line.len - 1];
+    return line;
 }
 
 /// True for a line with nothing on it but spaces and tabs.

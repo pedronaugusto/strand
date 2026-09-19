@@ -12,6 +12,7 @@
 const std = @import("std");
 const testing = std.testing;
 const strand = @import("strand.zig");
+const fixtures = @import("fixtures.zig");
 
 /// The shape a log line is parsed into here. Optional, defaulted and nested
 /// fields so that a generated line can go wrong in more than one way.
@@ -80,7 +81,23 @@ fn isBlank(line: []const u8) bool {
 /// reported — under the oracle's number, with the oracle's bytes.
 fn checkReaderFail(input: []const u8, max_line_bytes: usize) !void {
     var source: std.Io.Reader = .fixed(input);
-    var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{
+    try checkReaderFailOver(&source, input, max_line_bytes);
+
+    // And the same over a stream that hands its bytes over a few at a time
+    // through a buffer of its own. A line the reader can frame where it lies
+    // and a line it has to copy out of several reads are the same line, so
+    // the size of that buffer is not allowed to change a single answer:
+    // not the bytes, not the number, not the offset, not the bound.
+    for ([_]usize{ 1, 2, 7, 64, 4096 }) |buffer_len| {
+        const buffer = try testing.allocator.alloc(u8, buffer_len);
+        defer testing.allocator.free(buffer);
+        var chunked: fixtures.Chunked = .init(input, buffer, buffer_len);
+        try checkReaderFailOver(&chunked.interface, input, max_line_bytes);
+    }
+}
+
+fn checkReaderFailOver(source: *std.Io.Reader, input: []const u8, max_line_bytes: usize) !void {
+    var reader: strand.Reader(Event) = .init(testing.allocator, source, .{
         .max_line_bytes = max_line_bytes,
         // The oracle counts bytes, and a mark the reader drops is bytes the
         // oracle would still be counting. `a byte-order mark belongs to the

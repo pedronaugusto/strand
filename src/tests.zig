@@ -272,6 +272,58 @@ test "strings borrow from the line when they can, and are copied when they canno
     try testing.expect(!within(escaped.value.kind, escaped.line));
 }
 
+test "a line already in the stream's buffer is framed where it lies" {
+    const input =
+        \\{"kind":"one"}
+        \\{"kind":"two"}
+        \\{"kind":"three"}
+        \\{"kind":"four"}
+        \\{"kind":"a line with more bytes on it than the stream's buffer holds"}
+        \\{"kind":"five"}
+        \\
+    ;
+
+    // A stream holding the whole of its input — what a `.fixed` reader is,
+    // and what a reader with a buffer wider than its lines mostly is — is
+    // read without a single byte being copied anywhere: the line buffer is
+    // never written to at all.
+    {
+        var source: std.Io.Reader = .fixed(input);
+        var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{});
+        defer reader.deinit();
+
+        var seen: usize = 0;
+        while (try reader.next()) |line| : (seen += 1) {
+            try testing.expect(within(line.line, input));
+        }
+        try testing.expectEqual(@as(usize, 6), seen);
+        try testing.expectEqual(@as(usize, 0), reader.line_buf.written().len);
+    }
+
+    // And a stream whose buffer is narrower than some of its lines reads the
+    // same lines: the ones that are all there are framed where they lie, and
+    // the one that straddles a refill is assembled in the line buffer.
+    const buffer = try testing.allocator.alloc(u8, 32);
+    defer testing.allocator.free(buffer);
+    var chunked: fixtures.Chunked = .init(input, buffer, 32);
+    var reader: strand.Reader(Event) = .init(testing.allocator, &chunked.interface, .{});
+    defer reader.deinit();
+
+    var framed: usize = 0;
+    var assembled: usize = 0;
+    var long: ?bool = null;
+    while (try reader.next()) |line| {
+        if (within(line.line, buffer)) framed += 1 else assembled += 1;
+        if (line.line.len > buffer.len) long = within(line.line, reader.line_buf.written());
+    }
+    try testing.expectEqual(@as(u64, 6), reader.number);
+    try testing.expect(framed > 0);
+    try testing.expect(assembled > 0);
+    // The line that cannot fit in the stream's buffer is the one that has to
+    // be copied, and it is copied into the reader's own.
+    try testing.expectEqual(@as(?bool, true), long);
+}
+
 /// True when `inner` points into `outer`.
 fn within(inner: []const u8, outer: []const u8) bool {
     return @intFromPtr(inner.ptr) >= @intFromPtr(outer.ptr) and

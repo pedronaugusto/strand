@@ -239,10 +239,6 @@ pub fn Reader(comptime T: type) type {
         line_buf: std.Io.Writer.Allocating,
         /// Internal. What parsing the current line allocated, reset per line.
         arena: std.heap.ArenaAllocator,
-        /// Internal. Where in `line_buf` the current record starts. Always 0
-        /// today; the field is what `joinPhysical` measures the record
-        /// against, rather than the buffer.
-        record_start: usize = 0,
         /// Internal. Whether the stream has been looked at for a byte-order
         /// mark, which happens once and before anything else is read.
         bom_checked: bool = false,
@@ -417,7 +413,6 @@ pub fn Reader(comptime T: type) type {
         pub fn next(self: *Self) NextError!?Line(T) {
             record: while (true) {
                 self.line_buf.writer.end = 0;
-                self.record_start = 0;
 
                 var record = (try self.readPhysical()) orelse return null;
                 const number = self.number;
@@ -531,7 +526,7 @@ pub fn Reader(comptime T: type) type {
         fn joinPhysical(self: *Self, number: u64) NextError!?[]const u8 {
             const before = self.line_buf.writer.end;
             // The separator counts against the bound like any other byte.
-            if (self.options.max_line_bytes -| (before - self.record_start) == 0) {
+            if (self.options.max_line_bytes -| before == 0) {
                 // It is the record that is too long, and the record began at
                 // `number`, whatever line the reader has reached since.
                 self.last_error_line = number;
@@ -546,7 +541,7 @@ pub fn Reader(comptime T: type) type {
                 self.line_buf.writer.end = before;
                 return null;
             };
-            if (try self.checkControl(joined, before + 1 - self.record_start, number)) return null;
+            if (try self.checkControl(joined, before + 1, number)) return null;
             return joined;
         }
 
@@ -563,13 +558,13 @@ pub fn Reader(comptime T: type) type {
             const before = self.line_buf.writer.end;
             // The first physical line of a record is where the record begins,
             // and where it begins is what `Line.offset` reports.
-            if (before == self.record_start) self.record_offset = self.consumed;
+            if (before == 0) self.record_offset = self.consumed;
             const max = self.options.max_line_bytes;
             // One past the bound, so that a record of exactly `max` bytes is
             // accepted and the first byte over it is what trips the limit.
             // Saturating, because `Limit` reads a saturated `usize` as
             // unlimited, which is what a bound of `maxInt(usize)` means.
-            const room = max -| (before - self.record_start);
+            const room = max -| before;
             const n = self.input.streamDelimiterLimit(
                 &self.line_buf.writer,
                 '\n',
@@ -622,7 +617,7 @@ pub fn Reader(comptime T: type) type {
             {
                 self.line_buf.writer.end -= 1;
             }
-            return self.line_buf.written()[self.record_start..];
+            return self.line_buf.written();
         }
 
         /// Consumes a UTF-8 byte-order mark if the stream opens with one.

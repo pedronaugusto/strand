@@ -231,16 +231,14 @@ against losing up to *n*.
 
 A sync drains first, whatever `flush` says, and needs a file, so
 `Writer.initFile` is the constructor that can do it. What it calls depends on
-the platform, because the platforms do not agree about what `fsync` promises:
+the platform, because the platforms do not agree about what `fsync` promises
+and on one of them it is not the cheapest call that keeps the promise:
 
 | Platform | What a sync calls |
 |---|---|
-| Linux | `fsync`, which the filesystems in ordinary use turn into a write the drive has acknowledged |
+| Linux | `fdatasync`, by syscall, which the filesystems in ordinary use turn into a write the drive has acknowledged. It writes the record and the length that finds it and leaves out the timestamps, which `fsync` would write back as a second metadata write per record for a time no reader of this log consults. A file that declines the call gets `fsync` |
 | macOS | `fcntl(F_FULLFSYNC)`, because `fsync` there hands the bytes to the drive without waiting for the drive to write them down. A filesystem that has no such call gets `fsync`, which is then the strongest thing on it |
 | Windows | the system's own flush of the file's buffers |
-
-There is no `fdatasync` on any of them: it skips the timestamp writeback and
-is the cheaper call for a log, and `std.Io.File` does not expose one.
 
 A sync that fails is `error.SyncFailed`, and that writer takes no more
 records. A failed sync is not a thing to try again — the kernel may drop the
@@ -467,7 +465,7 @@ cost beyond the line buffer.
 
 | Platform | What it uses there | Tested |
 |---|---|---|
-| Linux | `std.Io.File` positional reads and seeks; the inode from `stat` identifies a file across a rotation; `fsync` for a sync | Suite on the Ubuntu CI runner in all four optimize modes, and in a Debian container by `ci/linux.sh` |
+| Linux | `std.Io.File` positional reads and seeks; the inode from `stat` identifies a file across a rotation; the `fdatasync` syscall for a sync | Suite on the Ubuntu CI runner in all four optimize modes, and in a Debian container by `ci/linux.sh` |
 | macOS | the same, except that a sync is `fcntl(F_FULLFSYNC)` | Suite on the macOS CI runner in all four optimize modes |
 | Windows | the same; the file index from `stat` stands in for the inode, and a sync is the system's own flush | Suite on the Windows CI runner in all four optimize modes |
 

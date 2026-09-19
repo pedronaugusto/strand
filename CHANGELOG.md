@@ -52,15 +52,20 @@ where it went wrong, and be findable again after a crash.
   the scanner's diagnostics on, so the first parse — the one every good line
   goes through — pays nothing for it. `parseLine` takes a `Diagnostics` of its
   own for a caller that wants the line and column too.
-- **A sync is the strongest flush the platform has.** The durability table
-  said a synced record survives the machine, and on macOS that was not true:
-  `fsync` there hands the bytes to the drive without making it write them
-  down. A sync asks for `fcntl(F_FULLFSYNC)` on that platform now, and a
+- **A sync is the call the platform means by it, and no more.** The durability
+  table said a synced record survives the machine, and on macOS that was not
+  true: `fsync` there hands the bytes to the drive without making it write
+  them down. A sync asks for `fcntl(F_FULLFSYNC)` on that platform now, and a
   filesystem with no such call gets `fsync`, which is then the strongest thing
-  on it. A sync that fails poisons the writer, because a failed sync is not a
-  thing to try again — the kernel may drop the error along with the data — and
-  not a thing to write past either. There is no `fdatasync` here on any
-  platform, and the reason is written down: `std.Io.File` exposes none.
+  on it. On Linux the table was true and the call was more than a log needs:
+  `fsync` writes the file's timestamps back as well, a second metadata write
+  per record for a time no reader of this log consults. A sync there is the
+  `fdatasync` syscall — the record and the length that finds it — made
+  directly, since `std.Io.File` exposes no such call, which also makes it the
+  same call whether or not libc is linked; a file that declines it gets
+  `fsync`. A sync that fails poisons the writer, because a failed sync is not
+  a thing to try again — the kernel may drop the error along with the data —
+  and not a thing to write past either.
 - **`Writer.flush` and `Writer.sync`**, the one-off beside the policy, for a
   barrier at a checkpoint or at the end of a run. A caller on `flush = .never`
   had to reach past the writer to the stream it does not own, which is the

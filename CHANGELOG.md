@@ -130,6 +130,10 @@ where it went wrong, and be findable again after a crash.
   `Versioned` through `Tail` and through `Follower`, a byte-order mark in the
   fuzz corpus and table, and `.pretty` with `.skip` and a control byte, which
   is the combination that was diagnosed wrongly.
+- Two recipes in `examples/logbook.zig`, so README.md shows them as code CI
+  runs rather than describing them: a follower checkpointed and resumed into a
+  second follower, and a torn record in front of a separated stream that the
+  reader drops without losing the records behind it.
 - Two internal files: `src/line.zig` for what a line is whichever direction it
   is read in — the mark, the terminator, the blank line, `keep`, where
   `std.json` gave up, and the `Fault` a reader records — and

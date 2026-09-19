@@ -11,7 +11,7 @@ along a file that is still being appended to.
 ## Usage
 
 The code blocks are regions of the examples, which `zig build examples` builds
-and runs: this one from [`examples/usage.zig`](examples/usage.zig), the three
+and runs: this one from [`examples/usage.zig`](examples/usage.zig), the five
 below from [`examples/logbook.zig`](examples/logbook.zig). `.fixed` is what
 makes this one self-contained; in a program the source is a file or a socket,
 and any `*std.Io.Reader` will do.
@@ -201,15 +201,47 @@ cannot take back, and a rotation that copies the log away and writes the same
 file again from the top is a rotation rather than a silence. A file with fewer
 bytes than the window is compared by number until it is long enough.
 
-**Starting again.** `Follower.checkpoint` is where a follower stands: which
-file, how far into it, what the next line is numbered, how many files it has
-been through. `Follower.resumeFrom` builds a follower from one. The file it is
-given is not necessarily the file the checkpoint was taken on, since a log can
-rotate while nothing is following it, so the two are told apart by
-`Options.identity`: the same file carries on at the recorded offset with the
-recorded numbering, and a different one is read from its start and counted as
-a rotation. A `Checkpoint` is a struct of integers, so a registry of them is a
-JSON Lines file like any other.
+**Starting again.** The thing that crashes is the follower.
+`Follower.checkpoint` is where one stands, and `Follower.resumeFrom` builds
+the next one from it.
+
+<!-- BEGIN GENERATED ci/readme_usage.sh examples/logbook.zig checkpoint --no-import -->
+```zig
+// Where this follower stands: which file, how far into it, what the next
+// line is numbered, how many files it has been through. Take it after
+// `next` has returned a line and before the next call, which is when the
+// offset in it is a line boundary. It is a struct of integers, so a
+// registry of them is a JSON Lines file like any other.
+const point = try follower.checkpoint();
+
+// The process ends here, and the log goes on growing without it.
+try log.write(.{ .value = .{ .kind = "tick", .at = 12 } });
+
+// The next run opens the path afresh. What it finds is not necessarily
+// the file the checkpoint was taken on — a log can rotate while nothing
+// is following it — so `resumeFrom` tells the two apart under
+// `Options.identity`: the same file carries on at the recorded offset
+// with the recorded numbering, a different one is read from its start
+// and counted as a rotation.
+const reopened = try dir.openFile(io, "log.jsonl", .{});
+defer reopened.close(io);
+var reopened_buffer: [4096]u8 = undefined;
+var reopened_reader = reopened.reader(io, &reopened_buffer);
+
+var resumed: strand.Follower(strand.Versioned(Entry)) = try .resumeFrom(gpa, io, &reopened_reader, .{
+    .wait = .{ .poll = .fromMilliseconds(5) },
+}, point);
+defer resumed.deinit();
+
+const line = try resumed.next();
+std.debug.print("resumed at line {d} of {d} rotation(s): {s} at {d}\n", .{
+    line.number,
+    resumed.rotations,
+    line.value.value.kind,
+    line.value.value.at,
+});
+```
+<!-- END GENERATED -->
 
 ## Durability
 
@@ -361,13 +393,7 @@ land. `examples/logbook.zig` has both recipes in full.
   one is not an improvement.
 - **A record separator** — ASCII RS, 0x1E — in front of every record is RFC
   7464's framing, and `record_separator` on the writer and on both readers is
-  how to use it. It is the only byte that cannot appear unescaped inside a
-  JSON value, so it is the only unambiguous "a record starts here" there is:
-  with it, a torn record is bytes before a separator and is dropped, and a
-  line carrying no record at all is `error.MissingSeparator` rather than a
-  line that might have been meant. Without it, a line that does not parse is
-  either damage or a record from a writer that knows something this reader
-  does not, and nothing in JSON Lines tells the two apart.
+  how to use it. It has a section of its own below.
 - **A newline inside a string** cannot break the framing: `std.json` escapes
   it, and `Writer` refuses no value on these grounds.
 - **Bytes that are not UTF-8** are a malformed line: this package rejects, it
@@ -384,6 +410,44 @@ land. `examples/logbook.zig` has both recipes in full.
 - **A record over several lines** is what `Writer`'s `.pretty` format emits. A
   `Reader` in `.pretty` mode joins lines until they parse, and reads minified
   lines too.
+
+### The record separator
+
+<!-- BEGIN GENERATED ci/readme_usage.sh examples/logbook.zig separator --no-import -->
+```zig
+const Event = struct { kind: []const u8, at: u64 = 0 };
+
+// A record left half-written by the process before this one. On a plain
+// JSON Lines log these bytes are a line that does not parse, and nothing
+// in the format says whether that is damage or a record from a writer
+// that knows something this reader does not.
+var out: std.Io.Writer.Allocating = .init(gpa);
+defer out.deinit();
+try out.writer.writeAll("{\"kind\":\"ope");
+
+// With a separator in front of every record there is no such question:
+// 0x1E is the one byte that cannot appear unescaped inside a JSON value,
+// so it marks where a record begins and nothing else can.
+var log: strand.Writer(Event) = .init(&out.writer, .{ .record_separator = true });
+try log.write(.{ .kind = "open", .at = 1 });
+try log.write(.{ .kind = "close", .at = 2 });
+
+// The reader is told what the writer was told. Every record that was
+// written comes back; what is dropped is exactly the torn bytes, and a
+// line carrying no record at all is `error.MissingSeparator` rather than
+// a line that might have been meant.
+var source: std.Io.Reader = .fixed(out.written());
+var events: strand.Reader(Event) = .init(gpa, &source, .{ .record_separator = true });
+defer events.deinit();
+while (try events.next()) |line| {
+    std.debug.print("record {d}: {s} at {d}\n", .{ line.number, line.value.kind, line.value.at });
+}
+```
+<!-- END GENERATED -->
+
+A reader in this mode does not read a stream without separators, and a reader
+not in it does not read one with them — the byte is then a raw control byte.
+It is a decision both ends make together, like the schema.
 
 ## Errors
 

@@ -1,9 +1,11 @@
 //! A log kept on disk: versioned records written and read back, the last few
-//! of them read off the end of the file without reading the rest, and one
-//! task following the file while another appends to it.
+//! of them read off the end of the file without reading the rest, a follower
+//! over a file being appended to and a second one resumed from where it
+//! stood, a tagged union that gained an arm, and a torn record in front of a
+//! separated stream.
 //!
 //! `zig build examples` builds AND runs this; `ci/readme_usage.sh` extracts
-//! its two marked regions into README.md, so the snippets a reader copies are
+//! its marked regions into README.md, so the snippets a reader copies are
 //! code CI executes.
 
 const std = @import("std");
@@ -112,10 +114,12 @@ pub fn main() !void {
     // --- README:tail ---
 
     try follow(gpa, io, dir, Entry);
+    try separated(gpa);
     try arms(arena);
 }
 
-/// Records appended to the log, and a follower that picks them up.
+/// Records appended to the log, a follower that picks them up, and a second
+/// follower that carries on from where the first one stood.
 fn follow(gpa: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, comptime Entry: type) !void {
     const appended = 2;
 
@@ -135,22 +139,20 @@ fn follow(gpa: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, comptime Entry: t
     // task; here it is the lines above the follower, so that the example
     // finishes on every platform instead of waiting on something that might
     // not come. `zig build test` runs a producer and a follower at once.
-    {
-        const sink = try dir.openFile(io, "log.jsonl", .{ .mode = .write_only });
-        defer sink.close(io);
-        var sink_buffer: [512]u8 = undefined;
-        var file_writer = sink.writer(io, &sink_buffer);
-        file_writer.pos = end;
+    const sink = try dir.openFile(io, "log.jsonl", .{ .mode = .write_only });
+    defer sink.close(io);
+    var sink_buffer: [512]u8 = undefined;
+    var file_writer = sink.writer(io, &sink_buffer);
+    file_writer.pos = end;
 
-        // `.per_record` is the policy a log another process is reading wants:
-        // every record is on the file, and on the disk under it, before the
-        // next one is written. It costs an `fsync` a record.
-        var log: strand.Writer(strand.Versioned(Entry)) = .initFile(&file_writer, .{
-            .sync = .per_record,
-        });
-        for (0..appended) |i| {
-            try log.write(.{ .value = .{ .kind = "tick", .at = 10 + i } });
-        }
+    // `.per_record` is the policy a log another process is reading wants:
+    // every record is on the file, and on the disk under it, before the next
+    // one is written. It costs a sync a record.
+    var log: strand.Writer(strand.Versioned(Entry)) = .initFile(&file_writer, .{
+        .sync = .per_record,
+    });
+    for (0..appended) |i| {
+        try log.write(.{ .value = .{ .kind = "tick", .at = 10 + i } });
     }
 
     // --- README:follow ---
@@ -168,6 +170,78 @@ fn follow(gpa: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, comptime Entry: t
         std.debug.print("followed: {s} at {d}\n", .{ line.value.value.kind, line.value.value.at });
     }
     // --- README:follow ---
+
+    // --- README:checkpoint ---
+
+    // Where this follower stands: which file, how far into it, what the next
+    // line is numbered, how many files it has been through. Take it after
+    // `next` has returned a line and before the next call, which is when the
+    // offset in it is a line boundary. It is a struct of integers, so a
+    // registry of them is a JSON Lines file like any other.
+    const point = try follower.checkpoint();
+
+    // The process ends here, and the log goes on growing without it.
+    try log.write(.{ .value = .{ .kind = "tick", .at = 12 } });
+
+    // The next run opens the path afresh. What it finds is not necessarily
+    // the file the checkpoint was taken on — a log can rotate while nothing
+    // is following it — so `resumeFrom` tells the two apart under
+    // `Options.identity`: the same file carries on at the recorded offset
+    // with the recorded numbering, a different one is read from its start
+    // and counted as a rotation.
+    const reopened = try dir.openFile(io, "log.jsonl", .{});
+    defer reopened.close(io);
+    var reopened_buffer: [4096]u8 = undefined;
+    var reopened_reader = reopened.reader(io, &reopened_buffer);
+
+    var resumed: strand.Follower(strand.Versioned(Entry)) = try .resumeFrom(gpa, io, &reopened_reader, .{
+        .wait = .{ .poll = .fromMilliseconds(5) },
+    }, point);
+    defer resumed.deinit();
+
+    const line = try resumed.next();
+    std.debug.print("resumed at line {d} of {d} rotation(s): {s} at {d}\n", .{
+        line.number,
+        resumed.rotations,
+        line.value.value.kind,
+        line.value.value.at,
+    });
+    // --- README:checkpoint ---
+}
+
+/// The framing that says where a record starts, for a log that has to survive
+/// a writer stopping in the middle of one.
+fn separated(gpa: std.mem.Allocator) !void {
+    // --- README:separator ---
+
+    const Event = struct { kind: []const u8, at: u64 = 0 };
+
+    // A record left half-written by the process before this one. On a plain
+    // JSON Lines log these bytes are a line that does not parse, and nothing
+    // in the format says whether that is damage or a record from a writer
+    // that knows something this reader does not.
+    var out: std.Io.Writer.Allocating = .init(gpa);
+    defer out.deinit();
+    try out.writer.writeAll("{\"kind\":\"ope");
+
+    // With a separator in front of every record there is no such question:
+    // 0x1E is the one byte that cannot appear unescaped inside a JSON value,
+    // so it marks where a record begins and nothing else can.
+    var log: strand.Writer(Event) = .init(&out.writer, .{ .record_separator = true });
+    try log.write(.{ .kind = "open", .at = 1 });
+    try log.write(.{ .kind = "close", .at = 2 });
+
+    // The reader is told what the writer was told. Every record that was
+    // written comes back; what is dropped is exactly the torn bytes, and a
+    // line carrying no record at all is `error.MissingSeparator` rather than
+    // a line that might have been meant.
+    var source: std.Io.Reader = .fixed(out.written());
+    var events: strand.Reader(Event) = .init(gpa, &source, .{ .record_separator = true });
+    defer events.deinit();
+    while (try events.next()) |line| {
+        std.debug.print("record {d}: {s} at {d}\n", .{ line.number, line.value.kind, line.value.at });
+    }
+    // --- README:separator ---
 }
 
 /// The other way a schema grows: a tagged union that gains an arm.

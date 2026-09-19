@@ -318,7 +318,7 @@ pub fn Tail(comptime T: type) type {
             if (self.exhausted) return null;
             var over = false;
             while (true) {
-                if (std.mem.lastIndexOfScalar(u8, self.buf.items[0..self.end], '\n')) |i| {
+                if (lastNewline(self.buf.items[0..self.end])) |i| {
                     const line = self.buf.items[i + 1 .. self.end];
                     self.offset = self.lo + i + 1;
                     // The newline at `i` terminates the line before this one.
@@ -391,6 +391,57 @@ pub fn Tail(comptime T: type) type {
             }
         }
     };
+}
+
+/// The offset of the last `\n` in `bytes`, or `null`.
+///
+/// Every line a backwards read returns is found by this, and the block it is
+/// looking in is as large as the caller made `block_bytes`, so it reads a
+/// register's worth of bytes at a time from the end rather than one. Nothing
+/// in `std` vectorises a scan that runs backwards; the forwards one is
+/// `std.mem.findScalarPos`, and this is its mirror.
+fn lastNewline(bytes: []const u8) ?usize {
+    var i = bytes.len;
+    if (!@inComptime() and !std.debug.inValgrind()) {
+        if (std.simd.suggestVectorLength(u8)) |block_len| {
+            const Block = @Vector(block_len, u8);
+            const wanted: Block = @splat('\n');
+            while (i >= block_len) : (i -= block_len) {
+                const block: Block = bytes[i - block_len ..][0..block_len].*;
+                const matches = block == wanted;
+                // The last line of a block is the first thing a backwards
+                // read wants, so the usual case is one block and one answer.
+                if (@reduce(.Or, matches)) {
+                    return i - block_len + std.simd.lastTrue(matches).?;
+                }
+            }
+        }
+    }
+    return std.mem.lastIndexOfScalar(u8, bytes[0..i], '\n');
+}
+
+test lastNewline {
+    // The same answer as the loop it replaces, for a terminator at every
+    // offset of every length up to four vectors, and for a buffer with none.
+    const block_len = std.simd.suggestVectorLength(u8) orelse 16;
+    var buf: [4 * 64 + 3]u8 = undefined;
+    const longest = @min(4 * block_len + 3, buf.len);
+
+    for (0..longest) |len| {
+        const bytes = buf[0..len];
+        @memset(bytes, 'x');
+        try testing.expectEqual(std.mem.lastIndexOfScalar(u8, bytes, '\n'), lastNewline(bytes));
+        for (0..len) |at| {
+            @memset(bytes, 'x');
+            bytes[at] = '\n';
+            try testing.expectEqual(@as(?usize, at), lastNewline(bytes));
+            // And with a second one before it, the later of the two.
+            if (at > 0) {
+                bytes[at - 1] = '\n';
+                try testing.expectEqual(@as(?usize, at), lastNewline(bytes));
+            }
+        }
+    }
 }
 
 /// True for a line with nothing on it but spaces and tabs. The same rule

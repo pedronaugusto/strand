@@ -421,78 +421,114 @@ pub fn Reader(comptime T: type) type {
         /// can arrive in the middle of a line, and leave the stream wherever
         /// they found it.
         pub fn next(self: *Self) NextError!?Line(T) {
-            record: while (true) {
+            while (true) {
+                const raw = (try self.nextRaw()) orelse return null;
+                if (try self.parse(raw)) |line| return line;
+                // The record was passed over under `.skip`; the next one.
+            }
+        }
+
+        /// The next line's bytes, its number and its place, without parsing
+        /// them into a `T`.
+        ///
+        /// This is `next` with the parse left out, and it is what routing a
+        /// stream is built from: `kindOf` or `tagOf` on `raw.line` says what
+        /// kind of line it is, and only the ones worth having need to become
+        /// values. A line that is not parsed costs no arena and no allocator
+        /// at all. `parse` is how one of them becomes a `Line(T)` afterwards.
+        ///
+        /// Everything about a line other than its type is decided here:
+        /// blank lines are passed over, the number and the offset are the
+        /// ones `next` would report, a line past `max_line_bytes` is
+        /// `error.LineTooLong`, and a raw control byte is `error.ControlByte`
+        /// or a skip, as `on_malformed` says.
+        ///
+        /// Ownership: `raw.line` borrows exactly as `Line.line` does, and is
+        /// gone at the next call to `next`, `nextRaw` or `deinit`.
+        ///
+        /// In `.pretty` mode a record is known to be finished only when it
+        /// parses, so what this hands back there is one physical line and not
+        /// a record. Routing a `.pretty` stream means parsing it.
+        pub fn nextRaw(self: *Self) NextError!?RawLine {
+            while (true) {
                 self.line_buf.writer.end = 0;
 
-                var record = (try self.readPhysical()) orelse return null;
+                const record = (try self.readPhysical()) orelse return null;
                 const number = self.number;
-                if (self.options.skip_blank and isBlank(record)) continue :record;
-                const offset = self.record_offset;
-                self.offset = offset;
+                if (self.options.skip_blank and isBlank(record)) continue;
+                self.offset = self.record_offset;
                 if (try self.checkControl(record, 0, number)) {
                     self.skipped += 1;
-                    continue :record;
+                    continue;
                 }
+                return .{ .line = record, .number = number, .offset = self.record_offset };
+            }
+        }
 
-                while (true) {
-                    _ = self.arena.reset(.retain_capacity);
-                    if (parseLine(T, self.arena.allocator(), record, .{
-                        .ignore_unknown_fields = self.options.ignore_unknown_fields,
-                        .duplicate_fields = self.options.duplicate_fields,
-                        .copy_strings = false,
-                    })) |value| {
-                        return .{ .value = value, .line = record, .number = number, .offset = offset };
-                    } else |err| switch (err) {
-                        error.OutOfMemory => return error.OutOfMemory,
-                        error.UnexpectedEndOfInput => if (self.options.format == .pretty) {
-                            // A prefix of a value: the rest of it is on the
-                            // lines that follow, unless there are none.
-                            switch (try self.joinPhysical(number, record)) {
-                                .grown => |joined| {
-                                    record = joined;
-                                    continue;
-                                },
-                                // The record is damaged rather than
-                                // unfinished, and `checkControl` has already
-                                // said where: saying anything else here would
-                                // replace the true diagnosis with a guess.
-                                .damaged => {
-                                    self.skipped += 1;
-                                    continue :record;
-                                },
-                                .ended => {
-                                    self.fault(number, error.UnexpectedEndOfInput);
-                                    switch (self.options.on_malformed) {
-                                        .fail => return error.MalformedLine,
-                                        .skip => {
-                                            self.skipped += 1;
-                                            continue :record;
-                                        },
-                                    }
-                                },
-                            }
-                        } else {
-                            self.fault(number, error.UnexpectedEndOfInput);
-                            switch (self.options.on_malformed) {
-                                .fail => return error.MalformedLine,
-                                .skip => {
-                                    self.skipped += 1;
-                                    continue :record;
-                                },
-                            }
-                        },
-                        else => |parse_err| {
-                            self.fault(number, parse_err);
-                            switch (self.options.on_malformed) {
-                                .fail => return error.MalformedLine,
-                                .skip => {
-                                    self.skipped += 1;
-                                    continue :record;
-                                },
-                            }
-                        },
-                    }
+        /// The value on a line `nextRaw` handed back, on this reader's own
+        /// arena. `null` when the line is not a `T` and `on_malformed` is
+        /// `.skip`, which is the one thing `next` does with it that a caller
+        /// routing lines itself would otherwise have to write out.
+        ///
+        /// Ownership: exactly `next`'s — the value borrows the line, the line
+        /// borrows the stream, and the next read takes both back.
+        ///
+        /// `raw` must be the line the reader last handed back. In `.pretty`
+        /// mode a record that is only a prefix of a value is joined to the
+        /// lines after it here, which means reading them.
+        pub fn parse(self: *Self, raw: RawLine) NextError!?Line(T) {
+            var record = raw.line;
+            while (true) {
+                _ = self.arena.reset(.retain_capacity);
+                if (parseLine(T, self.arena.allocator(), record, .{
+                    .ignore_unknown_fields = self.options.ignore_unknown_fields,
+                    .duplicate_fields = self.options.duplicate_fields,
+                    .copy_strings = false,
+                })) |value| {
+                    return .{
+                        .value = value,
+                        .line = record,
+                        .number = raw.number,
+                        .offset = raw.offset,
+                    };
+                } else |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    error.UnexpectedEndOfInput => if (self.options.format == .pretty) {
+                        // A prefix of a value: the rest of it is on the lines
+                        // that follow, unless there are none.
+                        switch (try self.joinPhysical(raw.number, record)) {
+                            .grown => |joined| {
+                                record = joined;
+                                continue;
+                            },
+                            // The record is damaged rather than unfinished,
+                            // and `checkControl` has already said where:
+                            // saying anything else here would replace the
+                            // true diagnosis with a guess.
+                            .damaged => {
+                                self.skipped += 1;
+                                return null;
+                            },
+                            .ended => return self.malformed(raw.number, error.UnexpectedEndOfInput),
+                        }
+                    } else {
+                        return self.malformed(raw.number, error.UnexpectedEndOfInput);
+                    },
+                    else => |parse_err| return self.malformed(raw.number, parse_err),
                 }
+            }
+        }
+
+        /// Records a parse failure against `number` and does what
+        /// `on_malformed` says about it: `null` is a record passed over.
+        fn malformed(self: *Self, number: u64, err: ParseLineError) NextError!?Line(T) {
+            self.fault(number, err);
+            switch (self.options.on_malformed) {
+                .fail => return error.MalformedLine,
+                .skip => {
+                    self.skipped += 1;
+                    return null;
+                },
             }
         }
 
@@ -1226,14 +1262,19 @@ test tagOf {
     try std.testing.expectEqual(@as(?std.meta.Tag(Message), null), tagOf(Message, "{\"other\":1}"));
 }
 
-/// One line of a buffer, as `lines` yields it: `Line` without the value,
-/// and named the same way.
+/// One line with nothing read out of it: `Line` without the value, and named
+/// the same way. `lines` yields these, and `Reader.nextRaw` hands them back.
 pub const RawLine = struct {
-    /// The line's bytes, without the `\n` or `\r\n` that ended it. Points
-    /// into the buffer given to `lines` and is valid as long as it is.
+    /// The line's bytes, without the `\n` or `\r\n` that ended it, and
+    /// without a leading byte-order mark. From `lines` it points into the
+    /// buffer and is valid as long as that is; from `Reader.nextRaw` it
+    /// borrows the way `Line.line` does.
     line: []const u8,
     /// 1-based line number.
     number: u64,
+    /// The byte offset the line began at, counted the way `Line.offset` is:
+    /// from the start of the buffer, or from wherever the reader started.
+    offset: u64 = 0,
 };
 
 /// Walks the lines of a buffer that is already in memory, numbering them.
@@ -1246,7 +1287,13 @@ pub const RawLine = struct {
 /// filter.
 pub fn lines(bytes: []const u8) LineIterator {
     const bom = "\xEF\xBB\xBF";
-    return .{ .rest = if (std.mem.startsWith(u8, bytes, bom)) bytes[bom.len..] else bytes };
+    const marked = std.mem.startsWith(u8, bytes, bom);
+    return .{
+        .rest = if (marked) bytes[bom.len..] else bytes,
+        // A mark is not part of the first line, so it is not where that line
+        // begins either — the same answer `Tail` gives.
+        .offset = if (marked) bom.len else 0,
+    };
 }
 
 /// The iterator `lines` returns.
@@ -1255,16 +1302,20 @@ pub const LineIterator = struct {
     rest: []const u8,
     /// The number of the line last yielded.
     number: u64 = 0,
+    /// The offset of the next line's first byte in the buffer.
+    offset: u64 = 0,
 
     /// The next line, or `null` when the buffer is spent.
     pub fn next(it: *LineIterator) ?RawLine {
         if (it.rest.len == 0) return null;
         const end = std.mem.indexOfScalar(u8, it.rest, '\n') orelse it.rest.len;
-        var line = it.rest[0..end];
-        it.rest = it.rest[@min(end + 1, it.rest.len)..];
-        if (std.mem.endsWith(u8, line, "\r")) line = line[0 .. line.len - 1];
+        const line = trimCr(it.rest[0..end]);
+        const offset = it.offset;
+        const taken = @min(end + 1, it.rest.len);
+        it.rest = it.rest[taken..];
+        it.offset += taken;
         it.number += 1;
-        return .{ .line = line, .number = it.number };
+        return .{ .line = line, .number = it.number, .offset = offset };
     }
 };
 

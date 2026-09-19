@@ -1351,6 +1351,98 @@ test "a schemaless line is bounded by max_line_bytes and not by the stack" {
 }
 
 //=========================================================================
+// Routing: what kind of line is this, answered before it is a value.
+//=========================================================================
+
+test "a reader that routes its own lines parses only the ones it wants" {
+    const input =
+        \\{"hello":{"version":1}}
+        \\{"ping":2}
+        \\
+        \\{"ping":3}
+        \\{"hello":{"version":4}}
+        \\{"ping":5}
+        \\
+    ;
+
+    // What every line is, according to a reader that parses all of them.
+    const Seen = struct { line: []const u8, number: u64, offset: u64 };
+    var all: std.ArrayList(Seen) = .empty;
+    defer {
+        for (all.items) |item| testing.allocator.free(item.line);
+        all.deinit(testing.allocator);
+    }
+    {
+        var source: std.Io.Reader = .fixed(input);
+        var reader: strand.Reader(std.json.Value) = .init(testing.allocator, &source, .{});
+        defer reader.deinit();
+        while (try reader.next()) |line| try all.append(testing.allocator, .{
+            .line = try testing.allocator.dupe(u8, line.line),
+            .number = line.number,
+            .offset = line.offset,
+        });
+    }
+    try testing.expectEqual(@as(usize, 5), all.items.len);
+
+    // And the same stream routed by the arm its first key names, parsing
+    // the two lines that are worth parsing and nothing else.
+    var counting: Counting = .{ .child = testing.allocator };
+    var source: std.Io.Reader = .fixed(input);
+    var reader: strand.Reader(Message) = .init(counting.allocator(), &source, .{});
+    defer reader.deinit();
+
+    var seen: usize = 0;
+    var greetings: usize = 0;
+    var after_first: ?usize = null;
+    while (try reader.nextRaw()) |raw| : (seen += 1) {
+        const want = all.items[seen];
+        try testing.expectEqualStrings(want.line, raw.line);
+        try testing.expectEqual(want.number, raw.number);
+        try testing.expectEqual(want.offset, raw.offset);
+
+        if (strand.tagOf(Message, raw.line) != .hello) {
+            // A line that is only looked at costs nothing at all: the
+            // allocator is not touched between one parse and the next.
+            if (after_first) |count| try testing.expectEqual(count, counting.allocations);
+            continue;
+        }
+        const line = (try reader.parse(raw)).?;
+        try testing.expectEqual(want.number, line.number);
+        try testing.expectEqual(want.offset, line.offset);
+        try testing.expectEqual(([_]u8{ 1, 4 })[greetings], line.value.hello.version);
+        greetings += 1;
+        after_first = counting.allocations;
+    }
+    try testing.expectEqual(@as(usize, 5), seen);
+    try testing.expectEqual(@as(usize, 2), greetings);
+    // Five lines framed, two parsed: the arena grew once, and the line
+    // buffer was never written to at all.
+    try testing.expect(counting.allocations <= 2);
+}
+
+test "lines and nextRaw place a line in the same way" {
+    const input = "\xEF\xBB\xBF{\"kind\":\"a\"}\r\n{\"kind\":\"b\"}\n{\"kind\":\"c\"}";
+
+    var source: std.Io.Reader = .fixed(input);
+    var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{});
+    defer reader.deinit();
+
+    var it = strand.lines(input);
+    while (it.next()) |want| {
+        const raw = (try reader.nextRaw()).?;
+        try testing.expectEqualStrings(want.line, raw.line);
+        try testing.expectEqual(want.number, raw.number);
+        // The offset a seek needs, from either side, mark and all.
+        try testing.expectEqual(want.offset, raw.offset);
+        try testing.expectEqualStrings(
+            want.line,
+            input[@intCast(want.offset)..][0..want.line.len],
+        );
+    }
+    try testing.expectEqual(@as(?strand.RawLine, null), try reader.nextRaw());
+}
+
+//=========================================================================
 // A stream that is not a file: no size, no seek, and a byte at a time.
 //=========================================================================
 

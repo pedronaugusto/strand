@@ -1065,6 +1065,71 @@ test "a repeated key is refused, kept first or kept last, as asked" {
 }
 
 //=========================================================================
+// The two encoding options, which had no test between them.
+//=========================================================================
+
+test "escape_unicode writes a line with nothing but ASCII on it" {
+    const event: Event = .{ .kind = "café \u{1f600}", .at = 1, .note = "naïve" };
+
+    var plain: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer plain.deinit();
+    var as_written: strand.Writer(Event) = .init(&plain.writer, .{});
+    try as_written.write(event);
+    // The default writes the characters themselves, which is what a log a
+    // person reads wants.
+    try testing.expect(std.mem.indexOf(u8, plain.written(), "café") != null);
+
+    var escaped: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer escaped.deinit();
+    var as_ascii: strand.Writer(Event) = .init(&escaped.writer, .{ .escape_unicode = true });
+    try as_ascii.write(event);
+
+    for (escaped.written()) |byte| try testing.expect(byte < 0x80);
+    try testing.expect(std.mem.indexOf(u8, escaped.written(), "caf\\u00e9") != null);
+    // A character outside the basic plane is a surrogate pair, which is how
+    // JSON spells one.
+    try testing.expect(std.mem.indexOf(u8, escaped.written(), "\\ud83d\\ude00") != null);
+
+    // Either way it reads back as the same value.
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    for ([_][]const u8{ plain.written(), escaped.written() }) |bytes| {
+        var parsed = try readAll(Event, arena.allocator(), bytes, .{});
+        defer parsed.deinit(testing.allocator);
+        try testing.expectEqual(@as(usize, 1), parsed.items.len);
+        try testing.expectEqualStrings(event.kind, parsed.items[0].kind);
+        try testing.expectEqualStrings(event.note.?, parsed.items[0].note.?);
+    }
+}
+
+test "emit_null_optional_fields writes the field rather than leaving it out" {
+    const event: Event = .{ .kind = "open", .at = 1 };
+
+    var left_out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer left_out.deinit();
+    var lean: strand.Writer(Event) = .init(&left_out.writer, .{});
+    try lean.write(event);
+    try testing.expectEqual(@as(?usize, null), std.mem.indexOf(u8, left_out.written(), "note"));
+
+    var written_out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer written_out.deinit();
+    var full: strand.Writer(Event) = .init(&written_out.writer, .{ .emit_null_optional_fields = true });
+    try full.write(event);
+    try testing.expect(std.mem.indexOf(u8, written_out.written(), "\"note\":null") != null);
+
+    // A reader that defaults its missing fields reads both as the same
+    // value, which is why leaving them out is the default.
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    for ([_][]const u8{ left_out.written(), written_out.written() }) |bytes| {
+        var parsed = try readAll(Event, arena.allocator(), bytes, .{});
+        defer parsed.deinit(testing.allocator);
+        try testing.expectEqual(@as(?[]const u8, null), parsed.items[0].note);
+        try testing.expectEqualStrings("open", parsed.items[0].kind);
+    }
+}
+
+//=========================================================================
 // Flushing, which is a decision about durability rather than about bytes.
 //=========================================================================
 

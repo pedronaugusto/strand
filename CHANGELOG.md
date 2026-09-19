@@ -111,14 +111,16 @@ where it went wrong, and be findable again after a crash.
   wrongly: the control byte and its offset were overwritten with
   `error.UnexpectedEndOfInput` and no offset at all. The join answers with a
   named outcome now.
-- **A corpus on disk and a campaign that does not need the fuzzer.** The
-  properties only ever saw five seeds and the table, and the documents said a
-  campaign was a `zig build test --fuzz` away. On Zig 0.16.0 that does not
-  compile — the test runner the compiler links in fuzz mode does not — so the
-  rounds are driven by a seed instead: `-Dcampaign=N` and `-Dseed=N`, with
-  both printed on a failure so the run repeats, and twenty thousand rounds in
-  CI on every push. The seeds are files under `src/corpus`, so an input a
-  campaign finds can be kept.
+- **Generated input two ways, and a corpus on disk.** The properties only ever
+  saw five seeds and the table. `zig build test --fuzz` builds and runs them
+  now: the test runner the compiler links in fuzz mode hands
+  `@errorReturnTrace()` to `std.debug.writeStackTrace`, and on 0.16.0 those
+  are two different `StackTrace` types, so the test build turns error return
+  tracing off and the branch goes with it. Beside it, a campaign that ends:
+  `-Dcampaign=N` seeded rounds, `-Dseed=N` choosing which, both printed on a
+  failure so the run repeats, twenty thousand of them in CI on every push. The
+  seeds are files under `src/corpus`, so an input either mode finds can be
+  kept. The documents said the fuzzer did not build here; it does.
 - Tests for what had none: `escape_unicode`, `emit_null_optional_fields`,
   `Versioned` through `Tail` and through `Follower`, a byte-order mark in the
   fuzz corpus and table, and `.pretty` with `.skip` and a control byte, which

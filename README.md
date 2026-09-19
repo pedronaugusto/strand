@@ -493,13 +493,23 @@ order, a record written over several lines comes back as one, and a separated
 stream gives up every record that was written to it whatever is torn in front
 of them.
 
-They run over a corpus in `src/corpus`, over a table of awkward inputs, and
-over generated rounds: `-Dcampaign=N` is how many and `-Dseed=N` is which, a
-failure prints both so the run repeats, and CI runs twenty thousand rounds on
-every push. `std.testing.fuzz` drives the same properties, and `zig build test
---fuzz` does not build on Zig 0.16.0 — the test runner the compiler links in
-fuzz mode does not compile — which is why the rounds are driven by a seed
-here.
+They run over a corpus in `src/corpus` and over a table of awkward inputs on
+every `zig build test`, and over generated input two ways:
+
+- `zig build test --fuzz` hands them to the compiler's fuzzer, which steers
+  the next input by the coverage the last one reached and writes what it finds
+  under `.zig-cache/f`. It runs until it is stopped, so it is the one to leave
+  running rather than the one CI waits on. The test build turns error return
+  tracing off, which is what it takes to compile the test runner the compiler
+  links in fuzz mode on 0.16.0.
+- `-Dcampaign=N` rounds of seeded input, `-Dseed=N` choosing which, driven
+  through the same properties by the same generator with no coverage to steer
+  it. This one ends, and a failure prints both numbers so the run repeats, so
+  it is the mode a build can wait on: thirty-two rounds on a plain `zig build
+  test`, twenty thousand in CI on every push.
+
+A `std.testing.Smith` can be driven from any bytes at all, which is what lets
+one set of properties take input from either.
 
 ## Requirements
 

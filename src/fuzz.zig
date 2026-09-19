@@ -6,8 +6,10 @@
 //! nothing leaks, a line is reported under its own number, and a line that
 //! could not be parsed does not cost the reader its place in the stream.
 //!
-//! `zig build test` runs each property over the corpus below and over the
-//! table, which is quick. `zig build test --fuzz` is what generates the rest.
+//! `zig build test` runs each property over the corpus below, over the table,
+//! and over as many seeded rounds as `-Dcampaign` asks for, which is quick.
+//! `zig build test --fuzz` runs the same properties under the compiler's
+//! fuzzer, which steers by coverage and does not stop.
 
 const std = @import("std");
 const testing = std.testing;
@@ -916,12 +918,12 @@ fn fuzzVersioned(_: void, smith: *std.testing.Smith) anyerror!void {
 //=========================================================================
 // The campaign: every property over generated inputs, driven by a seed.
 //
-// `zig build test --fuzz` is what a campaign is supposed to be, and on Zig
-// 0.16.0 it does not build — the test runner the compiler links in fuzz mode
-// does not compile — so the properties would only ever see the corpus and the
-// table. A `std.testing.Smith` can be driven from any bytes at all, so these
-// bytes come from a seeded generator instead: no coverage to steer it, and
-// every input it does reach is one the properties were never run over before.
+// `zig build test --fuzz` runs the properties under the compiler's fuzzer,
+// which steers the next input by the coverage the last one reached and runs
+// until it is stopped. That is the mode to leave running; it is not a mode a
+// build can wait on. A `std.testing.Smith` can be driven from any bytes at
+// all, so the same properties take bytes from a seeded generator here: no
+// coverage to steer it, and a run that ends.
 //
 // `-Dcampaign=N` is how many rounds, `-Dseed=N` is which ones. A round that
 // fails prints both, and a run with those two numbers is that round again.

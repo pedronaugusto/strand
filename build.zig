@@ -26,6 +26,14 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/strand.zig"),
             .target = target,
             .optimize = optimize,
+            // Off so that `zig build test --fuzz` compiles. The test runner
+            // the compiler links in fuzz mode hands `@errorReturnTrace()` to
+            // `std.debug.writeStackTrace`, and on 0.16.0 those are two
+            // different `StackTrace` types; with error return tracing off the
+            // branch is comptime-dead and the runner builds. The cost is the
+            // return trace on a test that fails with an error it did not
+            // expect — `std.testing`'s own reports are unaffected.
+            .error_tracing = false,
         }),
     });
 

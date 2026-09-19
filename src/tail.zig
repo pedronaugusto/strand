@@ -399,40 +399,9 @@ fn isBlank(line: []const u8) bool {
 
 const testing = std.testing;
 
-/// A file holding `bytes`, opened for reading, with a reader over it.
-const Fixture = struct {
-    tmp: testing.TmpDir,
-    file: std.Io.File,
-    reader: std.Io.File.Reader,
-    buffer: []u8,
-
-    fn init(bytes: []const u8, buffer_len: usize) !Fixture {
-        var tmp = testing.tmpDir(.{});
-        errdefer tmp.cleanup();
-        try tmp.dir.writeFile(testing.io, .{ .sub_path = "log.jsonl", .data = bytes });
-        const file = try tmp.dir.openFile(testing.io, "log.jsonl", .{});
-        errdefer file.close(testing.io);
-        const buffer = try testing.allocator.alloc(u8, buffer_len);
-        return .{
-            .tmp = tmp,
-            .file = file,
-            .reader = file.reader(testing.io, buffer),
-            .buffer = buffer,
-        };
-    }
-
-    fn deinit(self: *Fixture) void {
-        testing.allocator.free(self.buffer);
-        self.file.close(testing.io);
-        self.tmp.cleanup();
-        self.* = undefined;
-    }
-};
-
-const Event = struct {
-    kind: []const u8,
-    at: u64 = 0,
-};
+const fixtures = @import("fixtures.zig");
+const Fixture = fixtures.Fixture;
+const Event = fixtures.Event;
 
 /// Every line of `bytes` read backwards, as one string per line.
 fn backwards(bytes: []const u8, options: Tail(Event).Options) ![][]const u8 {

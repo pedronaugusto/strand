@@ -418,44 +418,9 @@ pub fn Follower(comptime T: type) type {
 
 const testing = std.testing;
 
-const Event = struct {
-    kind: []const u8,
-    at: u64 = 0,
-};
-
-/// A file in a temporary directory, open for writing and for reading.
-const Fixture = struct {
-    tmp: testing.TmpDir,
-    read_file: std.Io.File,
-    write_file: std.Io.File,
-    read_buffer: []u8,
-    write_buffer: []u8,
-
-    fn init() !Fixture {
-        var tmp = testing.tmpDir(.{});
-        errdefer tmp.cleanup();
-        const write_file = try tmp.dir.createFile(testing.io, "log.jsonl", .{});
-        errdefer write_file.close(testing.io);
-        const read_file = try tmp.dir.openFile(testing.io, "log.jsonl", .{});
-        errdefer read_file.close(testing.io);
-        return .{
-            .tmp = tmp,
-            .read_file = read_file,
-            .write_file = write_file,
-            .read_buffer = try testing.allocator.alloc(u8, 512),
-            .write_buffer = try testing.allocator.alloc(u8, 512),
-        };
-    }
-
-    fn deinit(self: *Fixture) void {
-        testing.allocator.free(self.read_buffer);
-        testing.allocator.free(self.write_buffer);
-        self.read_file.close(testing.io);
-        self.write_file.close(testing.io);
-        self.tmp.cleanup();
-        self.* = undefined;
-    }
-};
+const fixtures = @import("fixtures.zig");
+const Fixture = fixtures.Fixture;
+const Event = fixtures.Event;
 
 /// Writes `count` events into `file`, a few bytes at a time, so that the
 /// follower meets half-written lines rather than whole ones.
@@ -496,13 +461,12 @@ fn consume(io: std.Io, source: *std.Io.File.Reader, count: u64) !void {
 
 test "a producer task and a follower task over one growing file" {
     const count = 500;
-    var fixture = try Fixture.init();
+    var fixture = try Fixture.init("", 512);
     defer fixture.deinit();
 
-    var source = fixture.read_file.reader(testing.io, fixture.read_buffer);
     var consumer = testing.io.concurrent(consume, .{
         testing.io,
-        &source,
+        &fixture.reader,
         @as(u64, count),
     }) catch |err| switch (err) {
         // A single-threaded `Io` cannot run a producer and a consumer at
@@ -529,12 +493,11 @@ fn followUntilCanceled(io: std.Io, source: *std.Io.File.Reader) Follower(Event).
 }
 
 test "a follower waiting on a file that never grows is stopped by cancellation" {
-    var fixture = try Fixture.init();
+    var fixture = try Fixture.init("", 512);
     defer fixture.deinit();
     try fixture.write_file.writeStreamingAll(testing.io, "{\"kind\":\"only\"}\n");
 
-    var source = fixture.read_file.reader(testing.io, fixture.read_buffer);
-    var task = testing.io.concurrent(followUntilCanceled, .{ testing.io, &source }) catch |err| switch (err) {
+    var task = testing.io.concurrent(followUntilCanceled, .{ testing.io, &fixture.reader }) catch |err| switch (err) {
         error.ConcurrencyUnavailable => return error.SkipZigTest,
     };
     // The task reads the one line there is and then waits; cancelling it is
@@ -543,12 +506,11 @@ test "a follower waiting on a file that never grows is stopped by cancellation" 
 }
 
 test "a half-written line is not a line until it is finished" {
-    var fixture = try Fixture.init();
+    var fixture = try Fixture.init("", 512);
     defer fixture.deinit();
     try fixture.write_file.writeStreamingAll(testing.io, "{\"kind\":\"whole\"}\n{\"kind\":\"hal");
 
-    var source = fixture.read_file.reader(testing.io, fixture.read_buffer);
-    var follower: Follower(Event) = .init(testing.allocator, testing.io, &source, .{});
+    var follower: Follower(Event) = .init(testing.allocator, testing.io, &fixture.reader, .{});
     defer follower.deinit();
 
     try testing.expectEqualStrings("whole", (try follower.next()).value.kind);
@@ -561,13 +523,12 @@ test "a half-written line is not a line until it is finished" {
 }
 
 test "a wake is a way to wait that is not a sleep" {
-    var fixture = try Fixture.init();
+    var fixture = try Fixture.init("", 512);
     defer fixture.deinit();
     try fixture.write_file.writeStreamingAll(testing.io, "{\"kind\":\"first\"}\n");
 
     var event: std.Io.Event = .unset;
-    var source = fixture.read_file.reader(testing.io, fixture.read_buffer);
-    var follower: Follower(Event) = .init(testing.allocator, testing.io, &source, .{
+    var follower: Follower(Event) = .init(testing.allocator, testing.io, &fixture.reader, .{
         .wait = .{ .wake = .{ .event = &event, .timeout = .fromMilliseconds(50) } },
     });
     defer follower.deinit();
@@ -579,12 +540,11 @@ test "a wake is a way to wait that is not a sleep" {
 }
 
 test "a truncated file is reported rather than spliced onto the old one" {
-    var fixture = try Fixture.init();
+    var fixture = try Fixture.init("", 512);
     defer fixture.deinit();
     try fixture.write_file.writeStreamingAll(testing.io, "{\"kind\":\"before\"}\n");
 
-    var source = fixture.read_file.reader(testing.io, fixture.read_buffer);
-    var follower: Follower(Event) = .init(testing.allocator, testing.io, &source, .{
+    var follower: Follower(Event) = .init(testing.allocator, testing.io, &fixture.reader, .{
         .wait = .{ .poll = .fromMicroseconds(100) },
     });
     defer follower.deinit();

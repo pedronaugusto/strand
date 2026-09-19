@@ -6,6 +6,7 @@
 const std = @import("std");
 const testing = std.testing;
 const strand = @import("strand.zig");
+const fixtures = @import("fixtures.zig");
 
 /// A line of a log: an optional field, two defaults, an enum, a nested array
 /// and a nested struct.
@@ -1253,38 +1254,6 @@ test "a schemaless line is bounded by max_line_bytes and not by the stack" {
 // A stream that is not a file: no size, no seek, and a byte at a time.
 //=========================================================================
 
-/// A `std.Io.Reader` that hands over `chunk` bytes at a time and can neither
-/// seek nor say how long it is — a pipe, in other words, and the smallest
-/// chunk a pipe could plausibly give.
-const Trickle = struct {
-    rest: []const u8,
-    chunk: usize,
-    interface: std.Io.Reader,
-
-    fn init(bytes: []const u8, buffer: []u8, chunk: usize) Trickle {
-        return .{
-            .rest = bytes,
-            .chunk = chunk,
-            .interface = .{
-                .vtable = &.{ .stream = stream },
-                .buffer = buffer,
-                .seek = 0,
-                .end = 0,
-            },
-        };
-    }
-
-    fn stream(io_reader: *std.Io.Reader, w: *std.Io.Writer, limit: std.Io.Limit) std.Io.Reader.StreamError!usize {
-        const self: *Trickle = @alignCast(@fieldParentPtr("interface", io_reader));
-        if (self.rest.len == 0) return error.EndOfStream;
-        const room = @intFromEnum(limit.min(.limited(self.rest.len)));
-        const take = @max(@min(self.chunk, room), 1);
-        const n = try w.write(self.rest[0..take]);
-        self.rest = self.rest[n..];
-        return n;
-    }
-};
-
 test "a non-seekable stream is read under the same guarantees as a file" {
     const input =
         "\xEF\xBB\xBF" ++
@@ -1301,7 +1270,7 @@ test "a non-seekable stream is read under the same guarantees as a file" {
             const buffer = try testing.allocator.alloc(u8, buffer_len);
             defer testing.allocator.free(buffer);
 
-            var trickle: Trickle = .init(input, buffer, chunk);
+            var trickle: fixtures.Chunked = .init(input, buffer, chunk);
             var reader: strand.Reader(Event) = .init(testing.allocator, &trickle.interface, .{
                 .on_malformed = .skip,
             });

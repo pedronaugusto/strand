@@ -1995,12 +1995,16 @@ test "a line costs what the parse under it costs, within a tenth" {
     const input = try timedInput(testing.allocator);
     defer testing.allocator.free(input);
 
-    // Best of five, interleaved: a machine that is busy for a moment slows
-    // whichever loop it lands in, and the best run of each is the one the
-    // machine was not busy for.
+    // Best of fifteen, interleaved: a machine that is busy for a moment
+    // slows whichever loop it lands in, and the best run of each is the one
+    // the machine was not busy for. Five rounds were not enough to find
+    // that run on a shared CI machine -- the two bests came from rounds
+    // the load had hit unevenly, and the ratio between them read anywhere
+    // from 0.83x to 1.87x on one host. Fifteen settles it to within a few
+    // parts in a hundred, and costs about a second.
     var reader_ns: u64 = std.math.maxInt(u64);
     var floor_ns: u64 = std.math.maxInt(u64);
-    for (0..5) |_| {
+    for (0..15) |_| {
         reader_ns = @min(reader_ns, try timeReader(input));
         floor_ns = @min(floor_ns, try timeFloor(input));
     }

@@ -141,13 +141,47 @@ pub fn parseLine(
     line: []const u8,
     options: ParseOptions,
 ) ParseLineError!T {
+    if (options.diagnostics) |out| return parseDiagnosed(T, allocator, line, options, out);
+
+    var scanner: std.json.Scanner = .initCompleteInput(allocator, line);
+    defer scanner.deinit();
+    return std.json.parseFromTokenSourceLeaky(T, allocator, &scanner, jsonOptions(options));
+}
+
+/// `parseLine` for the caller who asked where a line gave up.
+///
+/// It is a function of its own rather than a branch inside `parseLine`
+/// because a scanner that has been handed a `Diagnostics` counts lines and
+/// columns as it goes, and a scanner that has not is free of that. Split
+/// here, the compiler sees a `null` it can fold away on the path every good
+/// line takes, and the counting lives only on the path that asked for it.
+fn parseDiagnosed(
+    comptime T: type,
+    allocator: Allocator,
+    line: []const u8,
+    options: ParseOptions,
+    out: *Diagnostics,
+) ParseLineError!T {
     var scanner: std.json.Scanner = .initCompleteInput(allocator, line);
     defer scanner.deinit();
 
     var where: std.json.Diagnostics = .{};
-    if (options.diagnostics != null) scanner.enableDiagnostics(&where);
+    scanner.enableDiagnostics(&where);
 
-    const parsed = std.json.parseFromTokenSourceLeaky(T, allocator, &scanner, .{
+    const parsed = std.json.parseFromTokenSourceLeaky(T, allocator, &scanner, jsonOptions(options));
+    // Read out before the scanner goes: what the diagnostics point at is the
+    // scanner's own cursor.
+    out.* = .{
+        .offset = @min(@as(usize, @intCast(where.getByteOffset())), line.len),
+        .line = where.getLine(),
+        .column = where.getColumn(),
+    };
+    return parsed;
+}
+
+/// This package's parse options as `std.json`'s.
+fn jsonOptions(options: ParseOptions) std.json.ParseOptions {
+    return .{
         .ignore_unknown_fields = options.ignore_unknown_fields,
         .allocate = if (options.copy_strings) .alloc_always else .alloc_if_needed,
         .duplicate_field_behavior = switch (options.duplicate_fields) {
@@ -155,15 +189,7 @@ pub fn parseLine(
             .use_first => .use_first,
             .use_last => .use_last,
         },
-    });
-    // Read out before the scanner goes: what the diagnostics point at is the
-    // scanner's own cursor.
-    if (options.diagnostics) |out| out.* = .{
-        .offset = @min(@as(usize, @intCast(where.getByteOffset())), line.len),
-        .line = where.getLine(),
-        .column = where.getColumn(),
     };
-    return parsed;
 }
 
 test parseLine {
@@ -570,11 +596,16 @@ pub fn Reader(comptime T: type) type {
             var record = raw.line;
             while (true) {
                 _ = self.arena.reset(.retain_capacity);
-                if (parseLine(T, self.arena.allocator(), record, .{
+                // Asked for by name: what is left of `parseLine` once the
+                // line is good is a scanner on the stack and one call under
+                // it, and a second call around that is a cost every line
+                // pays for nothing.
+                const how: ParseOptions = .{
                     .ignore_unknown_fields = self.options.ignore_unknown_fields,
                     .duplicate_fields = self.options.duplicate_fields,
                     .copy_strings = false,
-                })) |value| {
+                };
+                if (@call(.always_inline, parseLine, .{ T, self.arena.allocator(), record, how })) |value| {
                     return .{
                         .value = value,
                         .line = record,
@@ -649,10 +680,22 @@ pub fn Reader(comptime T: type) type {
         /// Looks for a control byte in `record[from..]`. Returns true when the
         /// caller should skip this record; returns `error.ControlByte` when it
         /// should fail.
-        fn checkControl(self: *Self, record: []const u8, from: usize, number: u64) NextError!bool {
+        ///
+        /// The option and the answer are in the caller's own code, because
+        /// every line goes through them; the scan is a call, since it holds a
+        /// vector loop at three widths and the reading loop is better off
+        /// without a copy of that in it. What to say about the byte, when
+        /// there is one, is a line nobody takes twice and is left where it is.
+        inline fn checkControl(self: *Self, record: []const u8, from: usize, number: u64) NextError!bool {
             if (!self.options.reject_control_bytes) return false;
             const offset = indexOfControl(record[from..]) orelse return false;
-            self.fault.control(number, from + offset);
+            return self.controlByte(from + offset, number);
+        }
+
+        /// Records the control byte `checkControl` found and does what
+        /// `on_malformed` says about it.
+        fn controlByte(self: *Self, at: usize, number: u64) NextError!bool {
+            self.fault.control(number, at);
             return switch (self.options.on_malformed) {
                 .fail => error.ControlByte,
                 .skip => true,
@@ -709,7 +752,29 @@ pub fn Reader(comptime T: type) type {
         /// it, and the line buffer's contents when it was not. `null` at end
         /// of stream, and at an unterminated final line under
         /// `require_terminator`. Counts the line.
-        fn readPhysical(self: *Self) NextError!?[]const u8 {
+        ///
+        /// The line that is already whole in `input`'s buffer is framed right
+        /// here, in the caller's own code: that is every line of a stream the
+        /// reader is keeping up with, and a call and its prologue are a real
+        /// part of what such a line costs. Everything else — the mark, the
+        /// line that straddles a refill, the bound, the terminator that has
+        /// not arrived — is in `readStreamed`, out of the way.
+        inline fn readPhysical(self: *Self) NextError!?[]const u8 {
+            if (self.bom_checked and self.line_buf.writer.end == 0) {
+                // The first physical line of a record is where the record
+                // begins, and where it begins is what `Line.offset` reports.
+                self.record_offset = self.consumed;
+                if (self.frameBuffered()) |frame| {
+                    return self.takeFrame(frame, self.options.max_line_bytes);
+                }
+            }
+            return self.readStreamed();
+        }
+
+        /// `readPhysical` for every line the frame above did not take: the
+        /// first line of a stream, a line that straddles a refill, a record
+        /// being joined to in `.pretty` mode, and the end of the stream.
+        fn readStreamed(self: *Self) NextError!?[]const u8 {
             if (!self.bom_checked) {
                 self.bom_checked = true;
                 if (self.options.skip_bom) try self.skipBom();
@@ -797,7 +862,7 @@ pub fn Reader(comptime T: type) type {
         /// Nothing is read here: what is looked at is what an earlier read
         /// left behind, so a reader whose buffer holds many lines gives all
         /// of them up one after another without touching the stream.
-        fn frameBuffered(self: *Self) ?[]const u8 {
+        inline fn frameBuffered(self: *Self) ?[]const u8 {
             const contents = self.input.buffered();
             const end = std.mem.findScalar(u8, contents, '\n') orelse return null;
             return contents[0 .. end + 1];
@@ -806,7 +871,7 @@ pub fn Reader(comptime T: type) type {
         /// Takes a framed line off `input` without copying it. `room` is what
         /// is left of the bound; a line past it is discarded here in full,
         /// since it is already known where it ends.
-        fn takeFrame(self: *Self, frame: []const u8, room: usize) NextError!?[]const u8 {
+        inline fn takeFrame(self: *Self, frame: []const u8, room: usize) NextError!?[]const u8 {
             const line = frame[0 .. frame.len - 1];
             self.number += 1;
             self.input.toss(frame.len);
@@ -867,57 +932,76 @@ pub fn Reader(comptime T: type) type {
 /// worth of bytes at a time rather than one: a byte is control when it is
 /// below 0x20 and is not a tab, and both halves of that predicate answer a
 /// whole vector at once. `scalarControl` is the same predicate written out,
-/// and the tail of a line shorter than a vector goes through it.
+/// and only the last few bytes of a short line go through it.
+///
+/// The register is as wide as the machine has, and then half of it, and half
+/// of that: a log line is often shorter than one register of a machine with
+/// wide ones, and such a line still has to be read a register at a time.
+/// Taking the widest and giving up on anything narrower would put every line
+/// under sixty-four bytes through the byte loop on a machine with 512-bit
+/// registers, which is where the lines and the machines both are.
 pub fn indexOfControl(bytes: []const u8) ?usize {
-    var i: usize = 0;
     if (!@inComptime() and !std.debug.inValgrind()) {
-        if (std.simd.suggestVectorLength(u8)) |block_len| {
-            const Block = @Vector(block_len, u8);
-            const highest: Block = @splat(0x20);
-            const tab: Block = @splat('\t');
-            const group = 4 * block_len;
-            // Four blocks are folded into one answer before anything leaves
-            // the vector registers, because asking a vector "did any lane
-            // match" is the expensive instruction here and the compares are
-            // not. A line that has no control byte in it — which is every
-            // line of an undamaged log — pays one of those per group.
-            while (i + group <= bytes.len) : (i += group) {
-                var any = @as(@Vector(block_len, bool), @splat(false));
-                inline for (0..4) |k| {
-                    const block: Block = bytes[i + k * block_len ..][0..block_len].*;
-                    any = any | ((block < highest) & (block != tab));
+        if (std.simd.suggestVectorLength(u8)) |widest| {
+            inline for (0..4) |halvings| {
+                const block_len = widest >> halvings;
+                if (comptime block_len >= 8) {
+                    if (bytes.len >= block_len) return controlInBlocks(block_len, bytes);
                 }
-                // One of these four blocks holds it; which byte it is, is
-                // worth finding the slow way, since it ends the scan.
-                if (@reduce(.Or, any)) return i + scalarControl(bytes[i..][0..group]).?;
-            }
-            // What is left of the line is folded the same way, in one go: the
-            // last block is read overlapping the one before it rather than a
-            // byte at a time, so a line of any length at all costs at most
-            // one more of those instructions.
-            if (i < bytes.len and bytes.len >= block_len) {
-                const rest = i;
-                var any = @as(@Vector(block_len, bool), @splat(false));
-                while (i + block_len <= bytes.len) : (i += block_len) {
-                    const block: Block = bytes[i..][0..block_len].*;
-                    any = any | ((block < highest) & (block != tab));
-                }
-                if (i < bytes.len) {
-                    const block: Block = bytes[bytes.len - block_len ..][0..block_len].*;
-                    any = any | ((block < highest) & (block != tab));
-                }
-                if (!@reduce(.Or, any)) return null;
-                // The overlap may reach back over bytes already cleared, so
-                // what it found is at `rest` or after it, or was never here.
-                return if (scalarControl(bytes[rest..])) |at| rest + at else null;
             }
         }
     }
-    return if (scalarControl(bytes[i..])) |at| i + at else null;
+    return scalarControl(bytes);
 }
 
-/// `indexOfControl`'s predicate, one byte at a time: the tail of a line, and
-/// the whole of one where there are no vectors to use.
+/// `indexOfControl` over `bytes`, which is at least `block_len` long, a
+/// vector of that width at a time.
+fn controlInBlocks(comptime block_len: usize, bytes: []const u8) ?usize {
+    const Block = @Vector(block_len, u8);
+    const highest: Block = @splat(0x20);
+    const tab: Block = @splat('\t');
+    const group = 4 * block_len;
+
+    var i: usize = 0;
+    // Four blocks are folded into one answer before anything leaves the
+    // vector registers, because asking a vector "did any lane match" is the
+    // expensive instruction here and the compares are not. A line that has no
+    // control byte in it — which is every line of an undamaged log — pays one
+    // of those per group.
+    while (i + group <= bytes.len) : (i += group) {
+        var any: @Vector(block_len, bool) = @splat(false);
+        inline for (0..4) |k| {
+            const block: Block = bytes[i + k * block_len ..][0..block_len].*;
+            any = any | ((block < highest) & (block != tab));
+        }
+        // One of these four blocks holds it; which byte it is, is worth
+        // finding the slow way, since it ends the scan.
+        if (@reduce(.Or, any)) return i + scalarControl(bytes[i..][0..group]).?;
+    }
+
+    // What is left of the line is folded the same way, in one go: the last
+    // block is read overlapping the one before it rather than a byte at a
+    // time, so a line of any length at all costs at most one more of those
+    // instructions.
+    const rest = i;
+    var any: @Vector(block_len, bool) = @splat(false);
+    while (i + block_len <= bytes.len) : (i += block_len) {
+        const block: Block = bytes[i..][0..block_len].*;
+        any = any | ((block < highest) & (block != tab));
+    }
+    if (i < bytes.len) {
+        const block: Block = bytes[bytes.len - block_len ..][0..block_len].*;
+        any = any | ((block < highest) & (block != tab));
+    }
+    if (!@reduce(.Or, any)) return null;
+    // The overlap may reach back over bytes already cleared, so what it found
+    // is at `rest` or after it, or was never here.
+    return if (scalarControl(bytes[rest..])) |at| rest + at else null;
+}
+
+/// `indexOfControl`'s predicate, one byte at a time: the last few bytes of a
+/// line, and the whole of one too short for the narrowest vector or on a
+/// machine with no vectors to use.
 fn scalarControl(bytes: []const u8) ?usize {
     for (bytes, 0..) |byte, i| {
         if (byte < 0x20 and byte != '\t') return i;

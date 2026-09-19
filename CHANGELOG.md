@@ -179,6 +179,14 @@ when it goes wrong, and how it is found again after a crash.
   `error.UnexpectedEndOfInput` and no offset at all. The join answers with a
   named outcome now.
 
+- **A line shorter than one vector register was scanned for control bytes a
+  byte at a time.** The scan took the widest register the machine has and
+  gave up on anything narrower, so on a machine with 512-bit registers every
+  line under sixty-four bytes — which is most log lines — went through the
+  byte loop, and a line cost a fifth more than the parse under it rather than
+  a thirtieth. The scan now takes the widest register, then half of it, and
+  half of that.
+
 ## [0.4.0] - 2026-09-14
 
 A reader that resumes at an offset, and a follower that reopens.

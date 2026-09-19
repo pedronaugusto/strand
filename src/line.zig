@@ -24,8 +24,15 @@ pub fn trimCr(line: []const u8) []const u8 {
 }
 
 /// True for a line with nothing on it but spaces and tabs.
+///
+/// Written out rather than handed to `std.mem.indexOfNone`, whose set of
+/// bytes is a slice read at run time: every line a reader frames goes
+/// through this, and all but the blank ones leave it on the first byte.
 pub fn isBlank(line: []const u8) bool {
-    return std.mem.indexOfNone(u8, line, " \t") == null;
+    for (line) |byte| {
+        if (byte != ' ' and byte != '\t') return false;
+    }
+    return true;
 }
 
 /// A copy of the value on `line` that borrows nothing from it: every string

@@ -672,7 +672,41 @@ fn isBlank(line: []const u8) bool {
 /// and `\n` reach this test only when they are not the terminator, which is
 /// exactly when they are damage too. DEL and the C1 range are left alone:
 /// they are ordinary characters inside a JSON string.
+///
+/// Every line a reader returns is scanned by this, so it reads a register's
+/// worth of bytes at a time rather than one: a byte is control when it is
+/// below 0x20 and is not a tab, and both halves of that predicate answer a
+/// whole vector at once. `scalarControl` is the same predicate written out,
+/// and the tail of a line shorter than a vector goes through it.
 pub fn indexOfControl(bytes: []const u8) ?usize {
+    var i: usize = 0;
+    if (!@inComptime() and !std.debug.inValgrind()) {
+        if (std.simd.suggestVectorLength(u8)) |block_len| {
+            const Block = @Vector(block_len, u8);
+            const highest: Block = @splat(0x20);
+            const tab: Block = @splat('\t');
+            // Two blocks a turn, so one bounds check covers both.
+            while (i + 2 * block_len <= bytes.len) {
+                inline for (0..2) |_| {
+                    const block: Block = bytes[i..][0..block_len].*;
+                    const matches = (block < highest) & (block != tab);
+                    if (@reduce(.Or, matches)) return i + std.simd.firstTrue(matches).?;
+                    i += block_len;
+                }
+            }
+            while (i + block_len <= bytes.len) : (i += block_len) {
+                const block: Block = bytes[i..][0..block_len].*;
+                const matches = (block < highest) & (block != tab);
+                if (@reduce(.Or, matches)) return i + std.simd.firstTrue(matches).?;
+            }
+        }
+    }
+    return if (scalarControl(bytes[i..])) |at| i + at else null;
+}
+
+/// `indexOfControl`'s predicate, one byte at a time: the tail of a line, and
+/// the whole of one where there are no vectors to use.
+fn scalarControl(bytes: []const u8) ?usize {
     for (bytes, 0..) |byte, i| {
         if (byte < 0x20 and byte != '\t') return i;
     }
@@ -686,6 +720,30 @@ test indexOfControl {
     try std.testing.expectEqual(@as(?usize, 0), indexOfControl("\r"));
     // DEL is an ordinary character as far as JSON is concerned.
     try std.testing.expectEqual(@as(?usize, null), indexOfControl("\x7f"));
+}
+
+test "indexOfControl reads a line by the vector the way it reads it by the byte" {
+    // Every length up to four vectors, with every awkward byte at every
+    // offset of every one of them: the unrolled pair, the single block and
+    // the tail all have to answer what the loop they replace answers.
+    const block_len = std.simd.suggestVectorLength(u8) orelse 16;
+    var buf: [4 * 64 + 3]u8 = undefined;
+    const longest = @min(4 * block_len + 3, buf.len);
+
+    for (0..longest) |len| {
+        const bytes = buf[0..len];
+        for ([_]u8{ 0x00, 0x01, 0x1f, '\n', '\r', '\t', ' ', 'x', 0x7f, 0xff }) |byte| {
+            for (0..len) |at| {
+                @memset(bytes, 'x');
+                bytes[at] = byte;
+                try std.testing.expectEqual(scalarControl(bytes), indexOfControl(bytes));
+            }
+        }
+        // A line that is nothing but tabs is the case the second half of the
+        // predicate is there for.
+        @memset(bytes, '\t');
+        try std.testing.expectEqual(scalarControl(bytes), indexOfControl(bytes));
+    }
 }
 
 /// Writes values as JSON Lines to a `*std.Io.Writer`, and counts them.

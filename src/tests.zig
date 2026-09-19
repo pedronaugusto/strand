@@ -159,6 +159,51 @@ test "a malformed line is reported by number, and the stream survives it" {
     try testing.expectEqual(@as(?strand.Line(Event), null), try reader.next());
 }
 
+test "a malformed line says where in it the parse gave up" {
+    const input =
+        \\{"kind":"open",}
+        \\{"kind":"open","at":}
+        \\{"kind":"open"
+        \\{"kind":"open"}
+        \\
+    ;
+
+    var source: std.Io.Reader = .fixed(input);
+    var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{});
+    defer reader.deinit();
+
+    // The brace that turned out to be where a key had to be.
+    try testing.expectError(error.MalformedLine, reader.next());
+    try testing.expectEqual(error.SyntaxError, reader.last_error.?);
+    try testing.expectEqual(@as(?usize, 15), reader.last_error_offset);
+
+    // A value that is not there at all: the brace again, further along.
+    try testing.expectError(error.MalformedLine, reader.next());
+    try testing.expectEqual(@as(?usize, 20), reader.last_error_offset);
+
+    // A line cut off at its end has nowhere further to point than its end.
+    try testing.expectError(error.MalformedLine, reader.next());
+    try testing.expectEqual(error.UnexpectedEndOfInput, reader.last_error.?);
+    try testing.expectEqual(@as(?usize, 14), reader.last_error_offset);
+
+    // And a good line clears none of it and reports none of it.
+    const good = (try reader.next()).?;
+    try testing.expectEqualStrings("open", good.value.kind);
+    try testing.expectEqual(@as(u64, 4), good.number);
+}
+
+test "an over-long line has no offset in it to report" {
+    var source: std.Io.Reader = .fixed("{\"kind\":\"far too long for this\"}\n{\"kind\":\"ok\"}\n");
+    var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{ .max_line_bytes = 8 });
+    defer reader.deinit();
+
+    // The line never reached `std.json`, so there is nothing to have a
+    // place in: an invented one would be worse than none.
+    try testing.expectError(error.LineTooLong, reader.next());
+    try testing.expectEqual(@as(?usize, null), reader.last_error_offset);
+    try testing.expectEqual(@as(?strand.ParseLineError, null), reader.last_error);
+}
+
 test "on_malformed = .skip passes over the bad line" {
     const input =
         \\{"kind":"first"}

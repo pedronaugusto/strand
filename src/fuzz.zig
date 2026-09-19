@@ -134,6 +134,9 @@ fn checkReaderFailOver(source: *std.Io.Reader, input: []const u8, max_line_bytes
                 try testing.expectEqual(physical.number, reader.last_error_line);
                 try testing.expectEqual(physical.offset, reader.offset);
                 try testing.expect(reader.last_error != null);
+                // Where the parse gave up is a place in the line, or is not
+                // reported at all. It is never a place outside it.
+                if (reader.last_error_offset) |at| try testing.expect(at <= physical.line.len);
                 // The control byte scan runs first, so a line that parsed
                 // badly is a line that had no control byte to blame.
                 try testing.expectEqual(@as(?usize, null), control);

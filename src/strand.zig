@@ -77,6 +77,28 @@ pub const ParseOptions = struct {
     /// written by a language whose own encoder allows duplicates needs, since
     /// those encoders resolve a repeat by keeping one of the two.
     duplicate_fields: DuplicateFields = .@"error",
+    /// Where to put what `std.json` can say about where it got to. Filled in
+    /// whether the parse succeeded or not; see `Diagnostics`.
+    ///
+    /// Asking costs the scan a little bookkeeping per line, which is why the
+    /// readers ask only about a line that has already failed.
+    diagnostics: ?*Diagnostics = null,
+};
+
+/// How far into a line `std.json` got.
+///
+/// On a line that did not parse, this is where it gave up — which is not
+/// always the byte that is wrong, but is always at or after it, and is what
+/// turns "line 402 is malformed" into something a person can look at.
+pub const Diagnostics = struct {
+    /// The 0-based byte offset in the line. `line.len` means the parse ran
+    /// off the end, which is what a truncated line does.
+    offset: usize = 0,
+    /// The 1-based line within what was parsed, which is 1 for every
+    /// minified line and counts within the record in `.pretty` mode.
+    line: u64 = 1,
+    /// The 1-based column within that line.
+    column: u64 = 1,
 };
 
 /// What a repeated key in one line means. The names are `std.json`'s.
@@ -112,7 +134,13 @@ pub fn parseLine(
     line: []const u8,
     options: ParseOptions,
 ) ParseLineError!T {
-    return std.json.parseFromSliceLeaky(T, allocator, line, .{
+    var scanner: std.json.Scanner = .initCompleteInput(allocator, line);
+    defer scanner.deinit();
+
+    var where: std.json.Diagnostics = .{};
+    if (options.diagnostics != null) scanner.enableDiagnostics(&where);
+
+    const parsed = std.json.parseFromTokenSourceLeaky(T, allocator, &scanner, .{
         .ignore_unknown_fields = options.ignore_unknown_fields,
         .allocate = if (options.copy_strings) .alloc_always else .alloc_if_needed,
         .duplicate_field_behavior = switch (options.duplicate_fields) {
@@ -121,6 +149,14 @@ pub fn parseLine(
             .use_last => .use_last,
         },
     });
+    // Read out before the scanner goes: what the diagnostics point at is the
+    // scanner's own cursor.
+    if (options.diagnostics) |out| out.* = .{
+        .offset = @min(@as(usize, @intCast(where.getByteOffset())), line.len),
+        .line = where.getLine(),
+        .column = where.getColumn(),
+    };
+    return parsed;
 }
 
 test parseLine {
@@ -233,9 +269,13 @@ pub fn Reader(comptime T: type) type {
         /// for `error.LineTooLong` and `error.ControlByte`, neither of which
         /// reached `std.json`.
         last_error: ?ParseLineError = null,
-        /// The 0-based offset within the line of the byte that tripped
-        /// `error.ControlByte`. `null` for every other failure: `std.json`
-        /// reports no offset, and this reader does not invent one.
+        /// The 0-based offset within the line at which the last failure was:
+        /// the control byte itself for `error.ControlByte`, and the byte
+        /// `std.json` gave up at for `error.MalformedLine` — which is not
+        /// always the byte that is wrong, but is never before it. The line's
+        /// own length means the parse ran off the end, which is what a
+        /// truncated line does. `null` for `error.LineTooLong`, which never
+        /// reached `std.json`, and for a line the reader has not failed on.
         last_error_offset: ?usize = null,
 
         /// Internal. The current record's bytes; `Line.line` is a view of it.
@@ -509,20 +549,21 @@ pub fn Reader(comptime T: type) type {
                                 self.skipped += 1;
                                 return null;
                             },
-                            .ended => return self.malformed(raw.number, error.UnexpectedEndOfInput),
+                            .ended => return self.malformed(raw.number, record, error.UnexpectedEndOfInput),
                         }
                     } else {
-                        return self.malformed(raw.number, error.UnexpectedEndOfInput);
+                        return self.malformed(raw.number, record, error.UnexpectedEndOfInput);
                     },
-                    else => |parse_err| return self.malformed(raw.number, parse_err),
+                    else => |parse_err| return self.malformed(raw.number, record, parse_err),
                 }
             }
         }
 
         /// Records a parse failure against `number` and does what
         /// `on_malformed` says about it: `null` is a record passed over.
-        fn malformed(self: *Self, number: u64, err: ParseLineError) NextError!?Line(T) {
+        fn malformed(self: *Self, number: u64, record: []const u8, err: ParseLineError) NextError!?Line(T) {
             self.fault(number, err);
+            self.last_error_offset = whereItFailed(T, self.arena.allocator(), record, self.options);
             switch (self.options.on_malformed) {
                 .fail => return error.MalformedLine,
                 .skip => {
@@ -556,7 +597,9 @@ pub fn Reader(comptime T: type) type {
             });
         }
 
-        /// Records a parse failure against `number`, whatever is done about it.
+        /// Records a parse failure against `number`, whatever is done about
+        /// it. The offset is the caller's to fill in, since only a line that
+        /// reached `std.json` has one.
         fn fault(self: *Self, number: u64, err: ParseLineError) void {
             self.last_error_line = number;
             self.last_error = err;
@@ -778,6 +821,29 @@ pub fn Reader(comptime T: type) type {
             };
         }
     };
+}
+
+/// Where `std.json` gave up on a line that has already failed to parse.
+///
+/// The line is parsed a second time with the scanner's diagnostics on, which
+/// is what makes the first parse — the one every good line goes through —
+/// cost nothing for this. The answer is an offset in `line`; `null` when the
+/// second parse disagrees with the first and succeeds, which only a `T` with
+/// a `jsonParse` of its own can arrange.
+pub fn whereItFailed(
+    comptime T: type,
+    allocator: Allocator,
+    line: []const u8,
+    options: anytype,
+) ?usize {
+    var where: Diagnostics = .{};
+    _ = parseLine(T, allocator, line, .{
+        .ignore_unknown_fields = options.ignore_unknown_fields,
+        .duplicate_fields = options.duplicate_fields,
+        .copy_strings = false,
+        .diagnostics = &where,
+    }) catch return where.offset;
+    return null;
 }
 
 /// A line without the `\r` of a `\r\n` terminator.

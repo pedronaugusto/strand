@@ -58,8 +58,10 @@ pub fn Tail(comptime T: type) type {
         /// What `std.json` said about the line at `last_error_line`. `null`
         /// when it never reached `std.json`.
         last_error: ?ParseLineError = null,
-        /// The 0-based offset within the line of the byte that tripped
-        /// `error.ControlByte`; `null` for every other failure.
+        /// The 0-based offset within the line at which the last failure was:
+        /// the control byte for `error.ControlByte`, and the byte `std.json`
+        /// gave up at for `error.MalformedLine`. See
+        /// `Reader.last_error_offset`, whose rule this is.
         last_error_offset: ?usize = null,
 
         /// Internal. The allocator behind `buf` and `arena`.
@@ -258,7 +260,12 @@ pub fn Tail(comptime T: type) type {
                     else => |parse_err| {
                         self.last_error_line = number;
                         self.last_error = parse_err;
-                        self.last_error_offset = null;
+                        self.last_error_offset = strand.whereItFailed(
+                            T,
+                            self.arena.allocator(),
+                            raw,
+                            self.options,
+                        );
                         switch (self.options.on_malformed) {
                             .fail => return error.MalformedLine,
                             .skip => {
@@ -528,6 +535,8 @@ test "a malformed line names itself and does not cost the reader its place" {
     try testing.expectError(error.MalformedLine, tail.prev());
     // Numbered from the end: the bad line is the second from last.
     try testing.expectEqual(@as(u64, 2), tail.last_error_line);
+    // And placed within itself, the same way a forwards read places it.
+    try testing.expectEqual(@as(?usize, 1), tail.last_error_offset);
     try testing.expectEqual(error.SyntaxError, tail.last_error.?);
     try testing.expectEqualStrings("first", (try tail.prev()).?.value.kind);
     try testing.expectEqual(@as(?Line(Event), null), try tail.prev());

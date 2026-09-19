@@ -321,6 +321,11 @@ pub fn Reader(comptime T: type) type {
         /// about to be joined to has to do first, and it is the whole of the
         /// bookkeeping the zero-copy frame costs.
         borrowed: bool = false,
+        /// Internal. Set when the scan that framed the current record also
+        /// cleared it of control bytes, which is what the one scan in
+        /// `frameBuffered` does. It says that `nextRaw` has nothing left to
+        /// look for.
+        cleared: bool = false,
         /// Internal. Whether the stream has been looked at for a byte-order
         /// mark, which happens once and before anything else is read.
         bom_checked: bool = false,
@@ -573,7 +578,7 @@ pub fn Reader(comptime T: type) type {
                     offset += at;
                 }
                 self.offset = offset;
-                if (try self.checkControl(record, 0, number)) {
+                if (!self.cleared and try self.checkControl(record, 0, number)) {
                     self.skipped += 1;
                     continue;
                 }
@@ -801,6 +806,7 @@ pub fn Reader(comptime T: type) type {
                 if (self.frameBuffered()) |frame| return self.takeFrame(frame, room);
             }
             self.borrowed = false;
+            self.cleared = false;
 
             const n = self.input.streamDelimiterLimit(
                 &self.line_buf.writer,
@@ -855,6 +861,17 @@ pub fn Reader(comptime T: type) type {
             return self.line_buf.written();
         }
 
+        /// A line off `input`'s own buffer: its bytes with the terminator on
+        /// the end, and whether framing it also cleared it.
+        const Framed = struct {
+            /// The line and the `\n` that ends it, `\r` included when there
+            /// is one.
+            bytes: []const u8,
+            /// Whether the scan that found the terminator also passed over
+            /// every byte before it and found no control byte among them.
+            cleared: bool,
+        };
+
         /// The whole of the next line, terminator included, when `input` is
         /// already holding it; `null` when it is not, which is a line that
         /// straddles a refill or a reader with nothing in hand yet.
@@ -862,26 +879,49 @@ pub fn Reader(comptime T: type) type {
         /// Nothing is read here: what is looked at is what an earlier read
         /// left behind, so a reader whose buffer holds many lines gives all
         /// of them up one after another without touching the stream.
-        inline fn frameBuffered(self: *Self) ?[]const u8 {
+        ///
+        /// One scan, not two. The byte that ends a line and the byte that
+        /// must not appear raw inside one are the same predicate — below
+        /// 0x20 and not a tab — so the first byte that answers it is either
+        /// the end of the line or the damage in it, and a line that ends at
+        /// its terminator is a line with nothing wrong in it. A reader told
+        /// to leave control bytes alone, or reading a stream whose records
+        /// begin with a separator that is itself a control byte, looks for
+        /// the terminator on its own and says nothing about the rest.
+        inline fn frameBuffered(self: *Self) ?Framed {
             const contents = self.input.buffered();
+            if (self.options.reject_control_bytes and !self.options.record_separator) {
+                var at = firstControlOrTerminator(contents) orelse return null;
+                // A `\r` with the terminator behind it is the terminator.
+                if (contents[at] == '\r' and at + 1 < contents.len and contents[at + 1] == '\n') {
+                    at += 1;
+                }
+                if (contents[at] == '\n') return .{ .bytes = contents[0 .. at + 1], .cleared = true };
+                // A control byte before the terminator: where the line ends
+                // is still worth knowing, and the scan over it that says
+                // where the byte is happens where it always did.
+                const end = std.mem.findScalarPos(u8, contents, at, '\n') orelse return null;
+                return .{ .bytes = contents[0 .. end + 1], .cleared = false };
+            }
             const end = std.mem.findScalar(u8, contents, '\n') orelse return null;
-            return contents[0 .. end + 1];
+            return .{ .bytes = contents[0 .. end + 1], .cleared = false };
         }
 
         /// Takes a framed line off `input` without copying it. `room` is what
         /// is left of the bound; a line past it is discarded here in full,
         /// since it is already known where it ends.
-        inline fn takeFrame(self: *Self, frame: []const u8, room: usize) NextError!?[]const u8 {
-            const line = frame[0 .. frame.len - 1];
+        inline fn takeFrame(self: *Self, frame: Framed, room: usize) NextError!?[]const u8 {
+            const line = frame.bytes[0 .. frame.bytes.len - 1];
             self.number += 1;
-            self.input.toss(frame.len);
-            self.consumed += frame.len;
+            self.input.toss(frame.bytes.len);
+            self.consumed += frame.bytes.len;
             if (line.len > room) {
                 self.fault.framing(self.number);
                 self.offset = self.record_offset;
                 return error.LineTooLong;
             }
             self.borrowed = true;
+            self.cleared = frame.cleared;
             // Tolerate CRLF: the `\r` belongs to the terminator, not the JSON.
             return trimCr(line);
         }
@@ -952,6 +992,62 @@ pub fn indexOfControl(bytes: []const u8) ?usize {
         }
     }
     return scalarControl(bytes);
+}
+
+/// The offset of the first byte in `bytes` that is a C0 control other than
+/// tab, `\r` and `\n` among them, or `null`.
+///
+/// `indexOfControl`'s predicate, answered for a caller who expects to find
+/// one and wants the first: framing a line means stopping at its terminator,
+/// and a terminator answers this predicate. `indexOfControl` folds four
+/// vectors into one answer because it is written for a line that holds none
+/// of these bytes at all; this one asks each vector on its own, because the
+/// answer is usually in the first.
+fn firstControlOrTerminator(bytes: []const u8) ?usize {
+    var i: usize = 0;
+    if (!@inComptime() and !std.debug.inValgrind()) {
+        if (std.simd.suggestVectorLength(u8)) |block_len| {
+            const Block = @Vector(block_len, u8);
+            const highest: Block = @splat(0x20);
+            const tab: Block = @splat('\t');
+            while (i + block_len <= bytes.len) : (i += block_len) {
+                const block: Block = bytes[i..][0..block_len].*;
+                const hits = (block < highest) & (block != tab);
+                if (@reduce(.Or, hits)) return i + std.simd.firstTrue(hits).?;
+            }
+        }
+    }
+    return if (scalarControl(bytes[i..])) |at| i + at else null;
+}
+
+test firstControlOrTerminator {
+    try std.testing.expectEqual(@as(?usize, null), firstControlOrTerminator("{\"a\":\"b\"}"));
+    try std.testing.expectEqual(@as(?usize, 9), firstControlOrTerminator("{\"a\":\"b\"}\n{}"));
+    // A tab is not one of these bytes; every other C0 control is.
+    try std.testing.expectEqual(@as(?usize, null), firstControlOrTerminator("{\"a\":\t1}"));
+    try std.testing.expectEqual(@as(?usize, 0), firstControlOrTerminator("\r\n"));
+}
+
+test "firstControlOrTerminator stops where the byte loop stops" {
+    // Every length up to four vectors, with every awkward byte at every
+    // offset: the first byte the vectors answer for has to be the first byte
+    // the predicate written out answers for.
+    const block_len = std.simd.suggestVectorLength(u8) orelse 16;
+    var buf: [4 * 64 + 3]u8 = undefined;
+    const longest = @min(4 * block_len + 3, buf.len);
+
+    for (0..longest) |len| {
+        const bytes = buf[0..len];
+        for ([_]u8{ 0x00, 0x1f, '\n', '\r', '\t', ' ', 'x', 0x7f, 0xff }) |byte| {
+            for (0..len) |at| {
+                @memset(bytes, 'x');
+                bytes[at] = byte;
+                try std.testing.expectEqual(scalarControl(bytes), firstControlOrTerminator(bytes));
+            }
+        }
+        @memset(bytes, '\t');
+        try std.testing.expectEqual(scalarControl(bytes), firstControlOrTerminator(bytes));
+    }
 }
 
 /// `indexOfControl` over `bytes`, which is at least `block_len` long, a

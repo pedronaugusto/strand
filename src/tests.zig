@@ -257,6 +257,19 @@ test "CRLF is tolerated, and the terminator is not part of the line" {
     const first = (try reader.next()).?;
     try testing.expectEqualStrings("{\"kind\":\"first\"}", first.line);
     try testing.expectEqualStrings("second", (try reader.next()).?.value.kind);
+
+    // A `\r` that is not the terminator is a control byte like any other,
+    // whether it stands alone in the middle of a line or doubles up before
+    // the one that does end it.
+    var stray: std.Io.Reader = .fixed("{\"kind\":\"a\rb\"}\n{\"kind\":\"c\"}\r\r\n");
+    var strays: strand.Reader(Event) = .init(testing.allocator, &stray, .{});
+    defer strays.deinit();
+    try testing.expectError(error.ControlByte, strays.next());
+    try testing.expectEqual(@as(u64, 1), strays.fault.line);
+    try testing.expectEqual(@as(?usize, 10), strays.fault.offset);
+    try testing.expectError(error.ControlByte, strays.next());
+    try testing.expectEqual(@as(u64, 2), strays.fault.line);
+    try testing.expectEqual(@as(?usize, 12), strays.fault.offset);
 }
 
 test "max_line_bytes is enforced, and the reader continues after the long line" {

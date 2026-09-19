@@ -185,7 +185,10 @@ when it goes wrong, and how it is found again after a crash.
   line under sixty-four bytes — which is most log lines — went through the
   byte loop, and a line cost a fifth more than the parse under it rather than
   a thirtieth. The scan now takes the widest register, then half of it, and
-  half of that.
+  half of that, and a reader that frames a line off the stream's own buffer
+  scans it once rather than twice: the byte that ends a line and the byte
+  that must not appear raw inside one are the same predicate, so the first
+  byte that answers it is either the terminator or the damage.
 
 ## [0.4.0] - 2026-09-14
 

@@ -1002,6 +1002,24 @@ pub fn Writer(comptime T: type) type {
             /// See `Format`. `.pretty` writes a record over several lines,
             /// which only a reader in `.pretty` mode reads back.
             format: Format = .minified,
+            /// The longest record this writer will emit, in bytes, not
+            /// counting the terminator; `null` for no bound, which is the
+            /// default. A longer one is `error.LineTooLong` and **none of it
+            /// is written**, so the log is left where the record before it
+            /// left it.
+            ///
+            /// A writer with no bound can write a log a reader will not read
+            /// back: `Reader.Options.max_line_bytes` is a megabyte by
+            /// default, and a record over it is discarded whole at the far
+            /// end, where nothing knows what was meant. Set this to the
+            /// bound the readers use and the mistake is an error at the
+            /// place it is made.
+            ///
+            /// It costs a second pass: the record is encoded once into a
+            /// writer that counts and keeps nothing, to find out how long it
+            /// is before any of it is written. That is why there is no bound
+            /// unless one is asked for.
+            max_line_bytes: ?usize = null,
             /// When the destination is asked to drain what it is holding.
             ///
             /// The default is never, because this writer does not own the
@@ -1089,9 +1107,10 @@ pub fn Writer(comptime T: type) type {
         };
 
         /// What `write` can report. `WriteFailed` is the destination refusing
-        /// the bytes and `SyncFailed` is the file refusing to put them on the
-        /// disk; ask the destination or the file for diagnostics.
-        pub const Error = std.Io.Writer.Error || error{SyncFailed};
+        /// the bytes, `SyncFailed` is the file refusing to put them on the
+        /// disk — ask the destination or the file for diagnostics — and
+        /// `LineTooLong` is this writer's own bound, if it was given one.
+        pub const Error = std.Io.Writer.Error || error{ SyncFailed, LineTooLong };
 
         /// A writer over `output`. Writes nothing.
         ///
@@ -1124,14 +1143,8 @@ pub fn Writer(comptime T: type) type {
         /// on the writer it owns.
         pub fn write(self: *Self, value: T) Error!void {
             if (self.sync_failed) return error.SyncFailed;
-            try std.json.Stringify.value(value, .{
-                .whitespace = switch (self.options.format) {
-                    .minified => .minified,
-                    .pretty => .indent_2,
-                },
-                .emit_null_optional_fields = self.options.emit_null_optional_fields,
-                .escape_unicode = self.options.escape_unicode,
-            }, self.output);
+            if (self.options.max_line_bytes) |max| try self.checkLength(value, max);
+            try std.json.Stringify.value(value, self.encoding(), self.output);
             try self.output.writeByte('\n');
             self.count += 1;
             if (self.options.sync == .per_record) return self.drainAndSync();
@@ -1150,6 +1163,29 @@ pub fn Writer(comptime T: type) type {
             for (values) |value| try self.write(value);
             if (self.options.sync == .per_batch) return self.drainAndSync();
             if (self.options.flush == .per_batch) try self.output.flush();
+        }
+
+        /// How `std.json` is asked to lay a value out.
+        fn encoding(self: *const Self) std.json.Stringify.Options {
+            return .{
+                .whitespace = switch (self.options.format) {
+                    .minified => .minified,
+                    .pretty => .indent_2,
+                },
+                .emit_null_optional_fields = self.options.emit_null_optional_fields,
+                .escape_unicode = self.options.escape_unicode,
+            };
+        }
+
+        /// Refuses a record longer than the bound before a byte of it is
+        /// written. Measured by encoding it into a writer that counts and
+        /// keeps nothing, which is the second pass `Options.max_line_bytes`
+        /// costs — and why there is no bound unless one is asked for.
+        fn checkLength(self: *Self, value: T, max: usize) Error!void {
+            var counter: std.Io.Writer.Discarding = .init(&.{});
+            std.json.Stringify.value(value, self.encoding(), &counter.writer) catch
+                return error.WriteFailed;
+            if (counter.fullCount() > max) return error.LineTooLong;
         }
 
         /// Drains the destination now, whatever `Options.flush` says.
@@ -1254,8 +1290,9 @@ pub fn writeLine(output: *std.Io.Writer, value: anytype) std.Io.Writer.Error!voi
     w.write(value) catch |err| switch (err) {
         error.WriteFailed => return error.WriteFailed,
         // The default sync policy is `.never`, so nothing here ever asks a
-        // file for anything and this writer has no file to ask.
-        error.SyncFailed => unreachable,
+        // file for anything and this writer has no file to ask; the default
+        // bound is no bound.
+        error.SyncFailed, error.LineTooLong => unreachable,
     };
 }
 

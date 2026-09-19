@@ -1065,6 +1065,79 @@ test "a repeated key is refused, kept first or kept last, as asked" {
 }
 
 //=========================================================================
+// The bound on what a writer will emit, which is the reader's bound seen
+// from the other end.
+//=========================================================================
+
+test "a writer can be held to the bound its readers are held to" {
+    const bound = 64;
+    const small: Event = .{ .kind = "open", .at = 1 };
+    const large: Event = .{ .kind = "x" ** bound, .at = 2 };
+
+    // With no bound, a writer will happily emit a record no reader with the
+    // matching bound will read back.
+    {
+        var out: std.Io.Writer.Allocating = .init(testing.allocator);
+        defer out.deinit();
+        var log: strand.Writer(Event) = .init(&out.writer, .{});
+        try log.write(large);
+
+        var source: std.Io.Reader = .fixed(out.written());
+        var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{
+            .max_line_bytes = bound,
+        });
+        defer reader.deinit();
+        try testing.expectError(error.LineTooLong, reader.next());
+    }
+
+    // With one, the record is refused where it is written, and none of it
+    // is written: the log is left where the record before it left it.
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    var log: strand.Writer(Event) = .init(&out.writer, .{ .max_line_bytes = bound });
+
+    try log.write(small);
+    const after_small = out.written().len;
+    try testing.expect(after_small <= bound + 1);
+
+    try testing.expectError(error.LineTooLong, log.write(large));
+    try testing.expectEqual(after_small, out.written().len);
+    try testing.expectEqual(@as(u64, 1), log.count);
+
+    // And the writer is still a writer: the record after the refused one
+    // goes on the end as if nothing had happened.
+    try log.write(.{ .kind = "close", .at = 3 });
+    try testing.expectEqual(@as(u64, 2), log.count);
+
+    var source: std.Io.Reader = .fixed(out.written());
+    var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{ .max_line_bytes = bound });
+    defer reader.deinit();
+    try testing.expectEqualStrings("open", (try reader.next()).?.value.kind);
+    try testing.expectEqualStrings("close", (try reader.next()).?.value.kind);
+    try testing.expectEqual(@as(?strand.Line(Event), null), try reader.next());
+}
+
+test "the bound is on the record, whatever shape it is written in" {
+    // A record indented over several lines is longer than the same record
+    // minified, and the bound is on the bytes either way.
+    const event: Event = .{ .kind = "open", .at = 1, .tags = &.{ "a", "b" } };
+
+    var minified: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer minified.deinit();
+    var lean: strand.Writer(Event) = .init(&minified.writer, .{ .max_line_bytes = 1 << 20 });
+    try lean.write(event);
+
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    var wide: strand.Writer(Event) = .init(&out.writer, .{
+        .format = .pretty,
+        .max_line_bytes = minified.written().len,
+    });
+    try testing.expectError(error.LineTooLong, wide.write(event));
+    try testing.expectEqual(@as(usize, 0), out.written().len);
+}
+
+//=========================================================================
 // The two encoding options, which had no test between them.
 //=========================================================================
 

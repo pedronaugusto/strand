@@ -1146,6 +1146,28 @@ test "a sync policy with no file to sync says so rather than pretending" {
     try testing.expectEqualStrings("{\"kind\":\"one\",\"at\":1,\"level\":\"info\",\"tags\":[],\"span\":{\"id\":0}}\n", out.written());
 }
 
+test "a writer whose sync has failed is not written to again" {
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+
+    var log: strand.Writer(Event) = .{
+        .output = &out.writer,
+        .file = null,
+        .options = .{ .sync = .per_record },
+    };
+    try testing.expectError(error.SyncFailed, log.write(.{ .kind = "one", .at = 1 }));
+    try testing.expect(log.sync_failed);
+
+    // A log whose sync has failed is a log that is not what it was asked to
+    // be, and the records after it would be claiming a durability the file
+    // does not have. The bytes of the first one are all there is.
+    const after = out.written().len;
+    try testing.expectError(error.SyncFailed, log.write(.{ .kind = "two", .at = 2 }));
+    try testing.expectError(error.SyncFailed, log.writeAll(&.{.{ .kind = "three", .at = 3 }}));
+    try testing.expectEqual(after, out.written().len);
+    try testing.expectEqual(@as(u64, 1), log.count);
+}
+
 //=========================================================================
 // Bytes that are not UTF-8. The format is UTF-8 by definition, so the
 // question is only what happens when the bytes are not, and the answer has

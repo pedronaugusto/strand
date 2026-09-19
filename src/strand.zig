@@ -38,6 +38,7 @@
 //! line means. There is no global state and no dependency beyond `std`.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const assert = std.debug.assert;
 
@@ -847,6 +848,14 @@ pub fn Writer(comptime T: type) type {
         options: Options,
         /// Records written so far.
         count: u64 = 0,
+        /// Set once a sync has failed, after which this writer refuses every
+        /// record: see `Options.sync`. A failed sync is not a thing to try
+        /// again — the kernel may have dropped the error with the data, so a
+        /// second call can come back clean over a log that lost a record —
+        /// and it is not a thing to write past either, since what follows
+        /// would be a log claiming a durability it does not have. Deal with
+        /// the file, then build a writer over it.
+        sync_failed: bool = false,
 
         const Self = @This();
 
@@ -887,12 +896,32 @@ pub fn Writer(comptime T: type) type {
             /// | | Survives the process | Survives the machine | Costs |
             /// |---|---|---|---|
             /// | `.never` | only what the caller drains | no | nothing |
-            /// | `.per_record` | yes | yes, to the last record | one `fsync` per record, which is a disk write and a wait: on a spinning disk single-digit milliseconds, on an SSD tens to hundreds of microseconds, and on either it is the slowest thing a log does |
-            /// | `.per_batch` | yes | yes, to the last batch | one `fsync` per `writeAll`, so a batch of a thousand records pays once and risks losing the batch |
+            /// | `.per_record` | yes | yes, to the last record | one sync per record, which is a disk write and a wait: on a spinning disk single-digit milliseconds, on an SSD tens to hundreds of microseconds, and on either it is the slowest thing a log does |
+            /// | `.per_batch` | yes | yes, to the last batch | one sync per `writeAll`, so a batch of a thousand records pays once and risks losing the batch |
             ///
             /// A sync drains first, whatever `flush` says: bytes still in
             /// this program's buffer have not reached the file at all, so
             /// there would be nothing on it to sync.
+            ///
+            /// What the call is, platform by platform:
+            ///
+            /// | | |
+            /// |---|---|
+            /// | Linux | `fsync`, which the filesystems in ordinary use turn into a write the drive has acknowledged |
+            /// | macOS | `fcntl(F_FULLFSYNC)`, because `fsync` there hands the bytes to the drive without making it write them down. A filesystem with no such call gets `fsync`, which is then the strongest thing on it |
+            /// | Windows | the system's own flush of the file's buffers |
+            ///
+            /// There is no `fdatasync` here, on any platform. It skips the
+            /// timestamp writeback and is the cheaper call for a log, and
+            /// `std.Io.File` does not expose one; this package asks for what
+            /// it is given to ask for.
+            ///
+            /// A sync that fails is `error.SyncFailed`, and that writer
+            /// refuses every record after it. A failed sync is not a thing to
+            /// try again — the kernel may drop the error along with the data,
+            /// so a second call can come back clean over a log that lost a
+            /// record — and it is not a thing to write past either. Deal with
+            /// the file, then build a writer over it.
             ///
             /// Only a writer made with `initFile` has a file to sync. `init`
             /// refuses any other setting than `.never`, and a writer built by
@@ -964,6 +993,7 @@ pub fn Writer(comptime T: type) type {
         /// `Options.sync` says so; otherwise draining is the caller's to do,
         /// on the writer it owns.
         pub fn write(self: *Self, value: T) Error!void {
+            if (self.sync_failed) return error.SyncFailed;
             try std.json.Stringify.value(value, .{
                 .whitespace = switch (self.options.format) {
                     .minified => .minified,
@@ -997,10 +1027,69 @@ pub fn Writer(comptime T: type) type {
         /// file that has not been given the bytes syncs nothing.
         fn drainAndSync(self: *Self) Error!void {
             try self.output.flush();
-            const dest = self.file orelse return error.SyncFailed;
-            dest.file.sync(dest.io) catch return error.SyncFailed;
+            const dest = self.file orelse return self.syncFault();
+            _ = syncFile(dest.file, dest.io) catch return self.syncFault();
+        }
+
+        /// Records that this writer's log is not what it was asked to be, and
+        /// says so. Every later call says so too; see `sync_failed`.
+        fn syncFault(self: *Self) error{SyncFailed} {
+            self.sync_failed = true;
+            return error.SyncFailed;
         }
     };
+}
+
+/// Which call put the file's bytes on the disk under it. See `syncFile`.
+const SyncKind = enum {
+    /// The platform's strongest: the drive was told to write its own cache
+    /// out, not merely told about the bytes.
+    full,
+    /// The ordinary one, which is all the platform or the filesystem has.
+    plain,
+};
+
+/// Puts what a file has been given onto the disk under it, as completely as
+/// the platform allows, and says which call did it.
+///
+/// `std.Io.File.sync` is `fsync` where there is one. On Darwin that is not
+/// the end of the story: `fsync` there hands the bytes to the drive and does
+/// not make the drive write them down, so a machine that loses power can lose
+/// a record an `fsync` returned success for. `fcntl(F_FULLFSYNC)` is the call
+/// that waits for the media, and it is what a sync asks for there.
+///
+/// A filesystem that has no such call — a network mount, an image — refuses
+/// it, and then `fsync` is the strongest thing there is on that filesystem
+/// and is what it gets. Any other failure is reported rather than retried: a
+/// failed sync can clear the error the kernel was holding, so asking a second
+/// time is how the loss gets lost rather than how it gets fixed.
+fn syncFile(file: std.Io.File, io: std.Io) !SyncKind {
+    if (comptime builtin.os.tag.isDarwin()) {
+        while (true) {
+            switch (std.posix.errno(std.c.fcntl(file.handle, std.c.F.FULLFSYNC, @as(c_int, 0)))) {
+                .SUCCESS => return .full,
+                .INTR => continue,
+                // This filesystem cannot be asked. Everything else is the
+                // file saying the bytes are not down.
+                .OPNOTSUPP, .INVAL, .NOTTY, .PERM => break,
+                else => return error.SyncFailed,
+            }
+        }
+    }
+    try file.sync(io);
+    return .plain;
+}
+
+test syncFile {
+    var fixture = try @import("fixtures.zig").Fixture.init("{\"kind\":\"one\"}\n", 64);
+    defer fixture.deinit();
+
+    // The platform's strongest flush is the one a sync makes, and on the one
+    // platform where that is not what `std` calls a sync, this is the test
+    // that it is asked for.
+    const kind = try syncFile(fixture.write_file, std.testing.io);
+    const expected: SyncKind = if (builtin.os.tag.isDarwin()) .full else .plain;
+    try std.testing.expectEqual(expected, kind);
 }
 
 /// Writes one value as one JSON Lines line, for a caller with nothing to

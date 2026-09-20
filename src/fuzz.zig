@@ -148,6 +148,8 @@ fn checkReaderFailOver(source: *std.Io.Reader, input: []const u8, max_line_bytes
         .skip_bom = false,
     });
     defer reader.deinit();
+    var oracle_arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer oracle_arena.deinit();
 
     var oracle: PhysicalLines = .{ .rest = input };
     while (oracle.next()) |physical| {
@@ -168,7 +170,12 @@ fn checkReaderFailOver(source: *std.Io.Reader, input: []const u8, max_line_bytes
             // The offset is where the line's bytes actually are.
             try testing.expectEqual(physical.offset, line.offset);
             try testing.expectEqual(physical.offset, reader.offset);
-            try testing.expectEqualStrings(line.value.kind, line.value.kind);
+            _ = oracle_arena.reset(.retain_capacity);
+            const expected = try std.json.parseFromSliceLeaky(Event, oracle_arena.allocator(), physical.line, .{
+                .ignore_unknown_fields = true,
+                .allocate = .alloc_if_needed,
+            });
+            try testing.expectEqualStrings(expected.kind, line.value.kind);
             // A line that came back is a line with nothing raw in it.
             try testing.expectEqual(@as(?usize, null), control);
         } else |err| switch (err) {

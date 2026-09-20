@@ -1912,7 +1912,7 @@ test "a non-seekable stream is read under the same guarantees as a file" {
 //
 // Two loops over the same bytes: this package's reader, and the same parse
 // over a frame taken straight out of the input reader's buffer with nothing
-// in between. The second is the floor — `std.json` doing the work and the
+// in between. The second is the floor — the typed decoder doing the work and the
 // line layer doing nothing — so the first divided by the second is what the
 // line layer costs, and that is the number a budget can be set on. An
 // absolute ns/line would only be a fact about the machine that ran it.
@@ -1987,10 +1987,7 @@ fn timeFloor(input: []const u8) !u64 {
     while (source.takeDelimiterInclusive('\n')) |framed| {
         const line = framed[0 .. framed.len - 1];
         _ = arena.reset(.retain_capacity);
-        const value = try std.json.parseFromSliceLeaky(Timed, arena.allocator(), line, .{
-            .ignore_unknown_fields = true,
-            .allocate = .alloc_if_needed,
-        });
+        const value = try strand.parseLine(Timed, arena.allocator(), line, .{});
         checksum +%= value.at +% value.kind.len;
         seen += 1;
     } else |err| switch (err) {

@@ -4,8 +4,9 @@
 //! The format is the one append-only logs and line protocols already use — a
 //! complete JSON value, then `\n`, and nothing else on the line. That makes a
 //! file greppable, tailable and appendable, and it makes a stream framable
-//! without a length prefix. `std.json` parses and emits the values; this
-//! package is the line layer over it:
+//! without a length prefix. strand decodes ordinary reflected types from the
+//! complete line, keeps `std.json` as the oracle and custom-parser path, and
+//! uses `std.json` to emit values. Around that is the line layer:
 //!
 //! * `Reader` turns a `*std.Io.Reader` into a stream of typed values, one per
 //!   line, each carrying its 1-based line number, its raw bytes and the byte
@@ -30,8 +31,8 @@
 //! * `Versioned` puts a schema version on a record and migrates an older one
 //!   forward.
 //!
-//! What this package does NOT do: it does not parse JSON (`std.json` does),
-//! does not buffer or own a stream, does not open a file except through an
+//! What this package does NOT do: it does not buffer or own a stream, does
+//! not open a file except through an
 //! `Opener` a caller hands it, does not lock or compress one, does not index
 //! a log or seek to line *n*, does not
 //! validate a line it is not asked to parse, and has no opinion about what a
@@ -41,6 +42,9 @@ const std = @import("std");
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const assert = std.debug.assert;
+const Scanner = @import("scanner.zig");
+const typed_parse = @import("parse.zig");
+const decode = @import("decode.zig");
 
 const line_mod = @import("line.zig");
 pub const Fault = line_mod.Fault;
@@ -142,10 +146,19 @@ pub fn parseLine(
     options: ParseOptions,
 ) ParseLineError!T {
     if (options.diagnostics) |out| return parseDiagnosed(T, allocator, line, options, out);
+    if (comptime decode.supports(T)) {
+        return decode.parse(T, allocator, line, jsonOptions(options, line.len)) catch {
+            // The direct path is for good lines. On a refusal, the token
+            // source remains the oracle for the precise public error.
+            var oracle: Scanner = .initCompleteInput(allocator, line);
+            defer oracle.deinit();
+            return typed_parse.parse(T, allocator, &oracle, jsonOptions(options, line.len));
+        };
+    }
 
-    var scanner: std.json.Scanner = .initCompleteInput(allocator, line);
+    var scanner: Scanner = .initCompleteInput(allocator, line);
     defer scanner.deinit();
-    return std.json.parseFromTokenSourceLeaky(T, allocator, &scanner, jsonOptions(options));
+    return typed_parse.parse(T, allocator, &scanner, jsonOptions(options, line.len));
 }
 
 /// `parseLine` for the caller who asked where a line gave up.
@@ -162,13 +175,13 @@ fn parseDiagnosed(
     options: ParseOptions,
     out: *Diagnostics,
 ) ParseLineError!T {
-    var scanner: std.json.Scanner = .initCompleteInput(allocator, line);
+    var scanner: Scanner = .initCompleteInput(allocator, line);
     defer scanner.deinit();
 
     var where: std.json.Diagnostics = .{};
     scanner.enableDiagnostics(&where);
 
-    const parsed = std.json.parseFromTokenSourceLeaky(T, allocator, &scanner, jsonOptions(options));
+    const parsed = typed_parse.parse(T, allocator, &scanner, jsonOptions(options, line.len));
     // Read out before the scanner goes: what the diagnostics point at is the
     // scanner's own cursor.
     out.* = .{
@@ -180,7 +193,7 @@ fn parseDiagnosed(
 }
 
 /// This package's parse options as `std.json`'s.
-fn jsonOptions(options: ParseOptions) std.json.ParseOptions {
+fn jsonOptions(options: ParseOptions, max_value_len: usize) std.json.ParseOptions {
     return .{
         .ignore_unknown_fields = options.ignore_unknown_fields,
         .allocate = if (options.copy_strings) .alloc_always else .alloc_if_needed,
@@ -189,6 +202,7 @@ fn jsonOptions(options: ParseOptions) std.json.ParseOptions {
             .use_first => .use_first,
             .use_last => .use_last,
         },
+        .max_value_len = max_value_len,
     };
 }
 

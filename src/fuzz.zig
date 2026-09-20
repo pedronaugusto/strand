@@ -33,6 +33,42 @@ const Message = union(enum) {
     goodbye: struct { reason: []const u8 },
 };
 
+/// The scanner is an implementation detail; `std.json` remains its oracle.
+/// Successful parses must produce the same typed value, and neither scanner
+/// may accept bytes the other rejects.
+fn checkScanner(line: []const u8) !void {
+    var std_arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer std_arena.deinit();
+    var strand_arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer strand_arena.deinit();
+
+    var std_err: ?anyerror = null;
+    const expected: ?Event = std.json.parseFromSliceLeaky(Event, std_arena.allocator(), line, .{
+        .ignore_unknown_fields = true,
+        .allocate = .alloc_if_needed,
+    }) catch |err| result: {
+        std_err = err;
+        break :result null;
+    };
+    var strand_err: ?anyerror = null;
+    const actual: ?Event = strand.parseLine(Event, strand_arena.allocator(), line, .{}) catch |err| result: {
+        strand_err = err;
+        break :result null;
+    };
+
+    try testing.expectEqual(std_err == null, strand_err == null);
+    if (expected) |want| {
+        const got = actual.?;
+        try testing.expectEqualStrings(want.kind, got.kind);
+        try testing.expectEqual(want.at, got.at);
+        try testing.expectEqual(want.level, got.level);
+        try testing.expectEqual(want.note == null, got.note == null);
+        if (want.note) |note| try testing.expectEqualStrings(note, got.note.?);
+        try testing.expectEqual(want.tags.len, got.tags.len);
+        for (want.tags, got.tags) |want_tag, got_tag| try testing.expectEqualStrings(want_tag, got_tag);
+    }
+}
+
 //=========================================================================
 // The properties.
 //=========================================================================
@@ -793,6 +829,19 @@ test "fuzz: Reader.next over generated lines" {
     try std.testing.fuzz({}, fuzzReader, .{ .corpus = corpus });
 }
 
+test "fuzz: strand scanner agrees with std.json" {
+    try std.testing.fuzz({}, fuzzScanner, .{ .corpus = corpus });
+}
+
+fn fuzzScanner(_: void, smith: *std.testing.Smith) anyerror!void {
+    @disableInstrumentation();
+    var buf: [2048]u8 = undefined;
+    const input = generate(smith, &buf);
+    try checkScanner(input);
+    var it: PhysicalLines = .{ .rest = input };
+    while (it.next()) |line| try checkScanner(line.line);
+}
+
 fn fuzzReader(_: void, smith: *std.testing.Smith) anyerror!void {
     @disableInstrumentation();
     var buf: [2048]u8 = undefined;
@@ -951,6 +1000,7 @@ fn seedBytes(random: std.Random, out: []u8) void {
 fn oneRound(bytes: []const u8) !void {
     inline for (.{
         fuzzReader,
+        fuzzScanner,
         fuzzResume,
         fuzzKindOf,
         fuzzTagOf,
@@ -1031,6 +1081,7 @@ const table: []const []const u8 = &.{
 
 test "the properties hold on a table of awkward inputs" {
     for (table) |input| {
+        try checkScanner(input);
         try checkLines(input);
         try checkReaderFail(input, 1 << 20);
         try checkReaderFail(input, 8);

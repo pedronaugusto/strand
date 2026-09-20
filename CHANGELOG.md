@@ -4,6 +4,17 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Changed
+
+- Typed decoding scans unescaped strings a vector at a time, borrows them
+  directly, and decodes ordinary reflected types from the complete line.
+  Fixed-width positive integers use a checked decimal path; floats and types
+  with custom parsing keep the standard-library paths. On the cross-language
+  fixtures, regular records rose from 370.9 to 1034.8 MB/s and long-string
+  records from 758.0 to 3700.2 MB/s.
+
 ## [0.5.0] - 2026-09-19
 
 A pass over the package asking what a line should cost, what it should say

@@ -4,9 +4,10 @@
 
 strand reads and writes [JSON Lines](https://jsonlines.org) as a stream of
 typed values: one JSON value per line, for append-only logs, line protocols
-and event streams. `std.json` parses and emits the values; this is the line
-layer over it, forwards over a stream, backwards from the end of a seekable
-file, or along a file that is still being appended to.
+and event streams. strand decodes ordinary typed values directly and uses
+`std.json` as its compatibility oracle and extension path; `std.json` emits
+the values. The line layer runs forwards over a stream, backwards from the
+end of a seekable file, or along a file that is still being appended to.
 
 ## Usage
 
@@ -325,8 +326,8 @@ this reader against that parse, and fails if the gap opens up.
 
 ## Scope
 
-- It does not parse JSON. `std.json` does, and every parse option that matters
-  is forwarded.
+- Its decoder implements `std.json`'s typed field rules. Types with a custom
+  `jsonParse` method use `std.json`'s token parser directly.
 - It does not own, buffer or lock a stream, and opens a file only through an
   `Opener` you hand it.
 - It does not index a log or seek to line *n*. `Line.offset` and

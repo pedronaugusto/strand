@@ -533,6 +533,11 @@ test "parseLine with copy_strings borrows nothing" {
     try testing.expect(!within(event.kind, line));
 }
 
+test "parseLine rejects a trailing line terminator" {
+    try testing.expectError(error.SyntaxError, strand.parseLine(bool, testing.allocator, "true\n", .{}));
+    try testing.expectError(error.SyntaxError, strand.parseLine(bool, testing.allocator, "true\r\n", .{}));
+}
+
 test "large unsigned integers accept exponent notation" {
     const value = try strand.parseLine(u128, testing.allocator, "2e38", .{});
     try testing.expectEqual(@as(u128, 200_000_000_000_000_000_000_000_000_000_000_000_000), value);

@@ -43,7 +43,12 @@ fn checkScanner(line: []const u8) !void {
     defer strand_arena.deinit();
 
     var std_err: ?anyerror = null;
-    const expected: ?Event = std.json.parseFromSliceLeaky(Event, std_arena.allocator(), line, .{
+    const expected: ?Event = if (std.mem.endsWith(u8, line, "\n")) result: {
+        // `parseLine` takes bytes without their JSON Lines terminator; this
+        // is the one deliberate difference from a general JSON parser.
+        std_err = error.SyntaxError;
+        break :result null;
+    } else std.json.parseFromSliceLeaky(Event, std_arena.allocator(), line, .{
         .ignore_unknown_fields = true,
         .allocate = .alloc_if_needed,
     }) catch |err| result: {
@@ -146,9 +151,8 @@ fn checkReaderFailOver(source: *std.Io.Reader, input: []const u8, max_line_bytes
 
     var oracle: PhysicalLines = .{ .rest = input };
     while (oracle.next()) |physical| {
-        // The bound is measured before the `\r` is dropped, because the reader
-        // has to read the byte before it can know it was a terminator.
-        if (physical.raw.len > max_line_bytes) {
+        // The `\r` half of a CRLF terminator is not a record byte.
+        if (physical.line.len > max_line_bytes) {
             try testing.expectError(error.LineTooLong, reader.next());
             try testing.expectEqual(physical.number, reader.fault.line);
             try testing.expectEqual(physical.number, reader.number);

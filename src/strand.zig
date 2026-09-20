@@ -147,6 +147,7 @@ pub fn parseLine(
     line: []const u8,
     options: ParseOptions,
 ) ParseLineError!T {
+    if (line.len != 0 and line[line.len - 1] == '\n') return error.SyntaxError;
     if (options.diagnostics) |out| return parseDiagnosed(T, allocator, line, options, out);
     if (comptime decode.supports(T)) {
         return decode.parse(T, allocator, line, jsonOptions(options, line.len)) catch {

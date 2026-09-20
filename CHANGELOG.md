@@ -14,6 +14,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `Tail` treats `block_bytes = 0` as a one-byte block instead of panicking.
+
 - `Versioned` applies `duplicate_fields` to both `v` and `data` envelope
   keys.
 

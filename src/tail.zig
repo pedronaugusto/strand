@@ -146,7 +146,7 @@ pub fn Tail(comptime T: type) type {
             /// How many bytes one read asks the file for. The buffer holds
             /// one of these plus the line being assembled, so this trades a
             /// syscall per block against the memory a `Tail` costs while it
-            /// is open.
+            /// is open. Zero means the smallest supported block, one byte.
             block_bytes: usize = 64 * 1024,
         };
 
@@ -192,13 +192,14 @@ pub fn Tail(comptime T: type) type {
         /// read meaningful at all — it is a view of the file as it was when
         /// the tail opened.
         pub fn init(allocator: Allocator, source: *std.Io.File.Reader, options: Options) InitError!Self {
-            assert(options.block_bytes > 0);
+            var normalized = options;
+            if (normalized.block_bytes == 0) normalized.block_bytes = 1;
             if (source.size_err) |err| return err;
             const size = try source.file.length(source.io);
             source.size = size;
             return .{
                 .source = source,
-                .options = options,
+                .options = normalized,
                 .allocator = allocator,
                 .arena = .init(allocator),
                 .lo = size,
@@ -569,6 +570,15 @@ test "the block size does not change what is read" {
         }
         try testing.expectEqual(@as(u64, 0), expected);
     }
+}
+
+test "a zero block size uses the smallest supported block" {
+    var fixture = try Fixture.init("{\"kind\":\"only\"}\n", 64);
+    defer fixture.deinit();
+
+    var tail: Tail(Event) = try .init(testing.allocator, &fixture.reader, .{ .block_bytes = 0 });
+    defer tail.deinit();
+    try testing.expectEqualStrings("only", (try tail.prev()).?.value.kind);
 }
 
 test "the tail bound excludes CRLF and a leading byte-order mark" {

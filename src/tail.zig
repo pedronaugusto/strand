@@ -354,7 +354,7 @@ pub fn Tail(comptime T: type) type {
                     self.number += 1;
                     return self.emit(line, over);
                 }
-                if (!over and self.end > self.options.max_line_bytes) {
+                if (!over and self.end > self.options.max_line_bytes +| line_mod.bom.len +| 1) {
                     // Longer than the bound allows to be held: drop what has
                     // been read of it and keep scanning back for where it
                     // began, so that the line before it is still reachable.
@@ -372,7 +372,15 @@ pub fn Tail(comptime T: type) type {
         /// the line was already too long to hold, in which case its bytes
         /// have been dropped and only its extent is known.
         fn emit(self: *Self, line: []const u8, over: bool) NextError!?[]const u8 {
-            if (!over and line.len <= self.options.max_line_bytes) return line;
+            if (!over) {
+                var record = line_mod.trimCr(line);
+                if (self.options.skip_bom and self.offset == 0 and
+                    std.mem.startsWith(u8, record, line_mod.bom))
+                {
+                    record = record[line_mod.bom.len..];
+                }
+                if (record.len <= self.options.max_line_bytes) return line;
+            }
             self.fault.framing(self.number);
             return error.LineTooLong;
         }
@@ -561,6 +569,19 @@ test "the block size does not change what is read" {
         }
         try testing.expectEqual(@as(u64, 0), expected);
     }
+}
+
+test "the tail bound excludes CRLF and a leading byte-order mark" {
+    var fixture = try Fixture.init("\xEF\xBB\xBF{}\r\n", 64);
+    defer fixture.deinit();
+
+    var tail: Tail(std.json.Value) = try .init(testing.allocator, &fixture.reader, .{
+        .max_line_bytes = 2,
+    });
+    defer tail.deinit();
+    const line = (try tail.prev()).?;
+    try testing.expectEqualStrings("{}", line.line);
+    try testing.expectEqual(@as(u64, 3), line.offset);
 }
 
 test "last(n) reads the end of the file and nothing else" {

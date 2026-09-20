@@ -8,6 +8,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Line bounds exclude a CRLF terminator and the first record's byte-order
+  mark in both forward and backward readers.
+
 - Null tuple elements are emitted as `null` so later elements keep their
   positions.
 

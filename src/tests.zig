@@ -308,6 +308,25 @@ test "max_line_bytes is enforced, and the reader continues after the long line" 
     try testing.expectError(error.LineTooLong, too_strict.next());
 }
 
+test "the line bound excludes a CRLF terminator" {
+    {
+        var source: std.Io.Reader = .fixed("{}\r\n");
+        var reader: strand.Reader(std.json.Value) = .init(testing.allocator, &source, .{
+            .max_line_bytes = 2,
+        });
+        defer reader.deinit();
+        try testing.expect((try reader.next()).?.value == .object);
+    }
+
+    var buffer: [2]u8 = undefined;
+    var chunked: fixtures.Chunked = .init("{}\r\n", &buffer, 1);
+    var streamed: strand.Reader(std.json.Value) = .init(testing.allocator, &chunked.interface, .{
+        .max_line_bytes = 2,
+    });
+    defer streamed.deinit();
+    try testing.expect((try streamed.next()).?.value == .object);
+}
+
 test "strings borrow from the line when they can, and are copied when they cannot" {
     const input =
         \\{"kind":"plain"}

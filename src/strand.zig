@@ -837,7 +837,10 @@ pub fn Reader(comptime T: type) type {
             const n = self.input.streamDelimiterLimit(
                 &self.line_buf.writer,
                 '\n',
-                .limited(room +| 1),
+                // One byte beyond the record bound may be the `\r` half of
+                // its terminator; the next byte distinguishes that from an
+                // over-long record.
+                .limited(room +| 2),
             ) catch |err| switch (err) {
                 error.ReadFailed => return error.ReadFailed,
                 // The only writer is `line_buf`, which fails only to allocate.
@@ -851,7 +854,6 @@ pub fn Reader(comptime T: type) type {
                     return error.LineTooLong;
                 },
             };
-            assert(n <= room);
             self.consumed += n;
 
             // `streamDelimiterLimit` stops before the delimiter, so what is
@@ -875,6 +877,18 @@ pub fn Reader(comptime T: type) type {
                     self.line_buf.writer.end = before;
                     return null;
                 }
+            }
+
+            const physical = self.line_buf.writer.buffer[before..self.line_buf.writer.end];
+            const record_len = if (terminated and physical.len > 0 and physical[physical.len - 1] == '\r')
+                physical.len - 1
+            else
+                physical.len;
+            if (record_len > room) {
+                self.number += 1;
+                self.fault.framing(self.number);
+                self.offset = self.record_offset;
+                return error.LineTooLong;
             }
 
             self.number += 1;
@@ -938,10 +952,11 @@ pub fn Reader(comptime T: type) type {
         /// since it is already known where it ends.
         inline fn takeFrame(self: *Self, frame: Framed, room: usize) NextError!?[]const u8 {
             const line = frame.bytes[0 .. frame.bytes.len - 1];
+            const record = trimCr(line);
             self.number += 1;
             self.input.toss(frame.bytes.len);
             self.consumed += frame.bytes.len;
-            if (line.len > room) {
+            if (record.len > room) {
                 self.fault.framing(self.number);
                 self.offset = self.record_offset;
                 return error.LineTooLong;
@@ -949,7 +964,7 @@ pub fn Reader(comptime T: type) type {
             self.borrowed = true;
             self.cleared = frame.cleared;
             // Tolerate CRLF: the `\r` belongs to the terminator, not the JSON.
-            return trimCr(line);
+            return record;
         }
 
         /// Consumes a UTF-8 byte-order mark if the stream opens with one.

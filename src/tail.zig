@@ -76,6 +76,9 @@ pub fn Tail(comptime T: type) type {
         trimmed: bool = false,
         /// Internal. What parsing the current line allocated, reset per line.
         arena: std.heap.ArenaAllocator,
+        /// Internal. `last` parses owned values straight onto its caller's
+        /// allocator, avoiding the second parse that `keep` otherwise needs.
+        batch_allocator: ?Allocator = null,
 
         const Self = @This();
 
@@ -144,7 +147,7 @@ pub fn Tail(comptime T: type) type {
             /// one of these plus the line being assembled, so this trades a
             /// syscall per block against the memory a `Tail` costs while it
             /// is open.
-            block_bytes: usize = 4096,
+            block_bytes: usize = 64 * 1024,
         };
 
         /// What `init` can report: the file could not be measured. A stream
@@ -268,11 +271,11 @@ pub fn Tail(comptime T: type) type {
                     }
                 }
 
-                _ = self.arena.reset(.retain_capacity);
-                const value = strand.parseLine(T, self.arena.allocator(), raw, .{
+                if (self.batch_allocator == null) _ = self.arena.reset(.retain_capacity);
+                const value = strand.parseLine(T, self.batch_allocator orelse self.arena.allocator(), raw, .{
                     .ignore_unknown_fields = self.options.ignore_unknown_fields,
                     .duplicate_fields = self.options.duplicate_fields,
-                    .copy_strings = false,
+                    .copy_strings = self.batch_allocator != null,
                 }) catch |err| switch (err) {
                     error.OutOfMemory => return error.OutOfMemory,
                     else => |parse_err| {
@@ -316,9 +319,12 @@ pub fn Tail(comptime T: type) type {
             var out: std.ArrayList(T) = .empty;
             errdefer out.deinit(allocator);
             try out.ensureTotalCapacity(allocator, @min(n, 1024));
+            assert(self.batch_allocator == null);
+            self.batch_allocator = allocator;
+            defer self.batch_allocator = null;
             while (out.items.len < n) {
                 const line = (try self.prev()) orelse break;
-                try out.append(allocator, try self.keep(allocator, line));
+                try out.append(allocator, line.value);
             }
             std.mem.reverse(T, out.items);
             return out.toOwnedSlice(allocator);

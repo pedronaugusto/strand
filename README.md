@@ -307,20 +307,19 @@ reads a million small lines and prints the numbers. On an Apple M3 Max, Zig
 
 | | |
 |---|---|
-| write | 16.6M lines/s, 0.76 GB/s, 60 ns/line |
-| read | 5.9M lines/s, 0.27 GB/s, 168 ns/line, 1000000 of 1000000 strings borrowed |
-| `writeAll` | 16.9M lines/s |
-| `Tail.last(100)` of 1M lines | 820 µs, 8.19 kB of 45.89 MB touched |
-| one 100 MB line | 143 ms, borrowed, 232 bytes of arena |
+| write | 44.7M lines/s, 2.05 GB/s, 22 ns/line |
+| read | 13.7M lines/s, 0.63 GB/s, 72 ns/line, 1000000 of 1000000 strings borrowed |
+| `writeAll` | 43.8M lines/s |
+| `Tail.last(100)` of 1M lines | 67 µs, 65.54 kB of 45.89 MB touched |
+| one 100 MB line | 66 ms, borrowed, 0 bytes of arena |
 
 The borrowed count is how many string fields pointed into the line rather than
 into the arena; a line that is already whole in the stream's buffer is not
 copied anywhere before it is parsed. The arena figure is what one 100 MB line
 cost beyond the line buffer. Those are one uniform line shape. Over mixed
 lines — five kinds, one in seven carrying a note with escapes in it — the read
-is 200 ns/line against a floor of 199 for the same parse with no line layer
-over it at all, and what does not change is where the time goes, which is
-`std.json`. The suite holds the line layer to that floor rather than to an
+is 78 ns/line against a floor of 75 for the same parse with no line layer
+over it at all. The suite holds the line layer to that floor rather than to an
 absolute: *a line costs what the parse under it costs, within a tenth* times
 this reader against that parse, and fails if the gap opens up.
 

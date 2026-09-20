@@ -21,6 +21,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   MB/s, and per-record flushing from 241.0 to 286.5 MB/s; custom stringifiers
   and pretty output keep the standard-library path.
 
+- `Tail` reads backwards in 64 KiB blocks by default, and `last` decodes
+  owned values directly onto the caller's allocator instead of parsing every
+  line twice. Returning the last 1,000 typed records fell from 1.321 ms to
+  0.302 ms.
+
 ## [0.5.0] - 2026-09-19
 
 A pass over the package asking what a line should cost, what it should say

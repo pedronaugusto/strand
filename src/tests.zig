@@ -1218,6 +1218,32 @@ test "a torn record is what a separator makes visible" {
     try testing.expectEqual(@as(?strand.Line(Event), null), try reader.next());
 }
 
+test "a torn prefix does not count against a separated record's bound" {
+    var input: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer input.deinit();
+    try input.writer.splatByteAll('x', 1024);
+    try input.writer.writeAll("\x1e{}\n");
+
+    {
+        var source: std.Io.Reader = .fixed(input.written());
+        var reader: strand.Reader(std.json.Value) = .init(testing.allocator, &source, .{
+            .record_separator = true,
+            .max_line_bytes = 2,
+        });
+        defer reader.deinit();
+        try testing.expect((try reader.next()).?.value == .object);
+    }
+
+    var buffer: [7]u8 = undefined;
+    var chunked: fixtures.Chunked = .init(input.written(), &buffer, 3);
+    var streamed: strand.Reader(std.json.Value) = .init(testing.allocator, &chunked.interface, .{
+        .record_separator = true,
+        .max_line_bytes = 2,
+    });
+    defer streamed.deinit();
+    try testing.expect((try streamed.next()).?.value == .object);
+}
+
 test "a separator is a decision both ends make" {
     var out: std.Io.Writer.Allocating = .init(testing.allocator);
     defer out.deinit();

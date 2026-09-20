@@ -574,28 +574,34 @@ pub fn Reader(comptime T: type) type {
             while (true) {
                 self.line_buf.writer.end = 0;
 
-                var record = (try self.readPhysical()) orelse return null;
-                const number = self.number;
-                if (self.options.skip_blank and isBlank(record)) continue;
-                var offset = self.record_offset;
+                var record: []const u8 = undefined;
+                var offset: u64 = undefined;
                 if (self.options.record_separator) {
-                    // What is before the separator is the tail of a record
-                    // that was torn; the record is what comes after it, and
-                    // the separator is where the record begins.
-                    const at = std.mem.indexOfScalar(u8, record, separator) orelse {
-                        self.offset = offset;
-                        self.fault.framing(number);
-                        switch (self.options.on_malformed) {
-                            .fail => return error.MissingSeparator,
-                            .skip => {
-                                self.skipped += 1;
-                                continue;
-                            },
-                        }
-                    };
-                    record = record[at + 1 ..];
-                    offset += at;
+                    switch (try self.readSeparatedPhysical()) {
+                        .record => |framed| {
+                            record = framed.bytes;
+                            offset = framed.offset;
+                        },
+                        .missing => |blank| {
+                            if (blank and self.options.skip_blank) continue;
+                            self.offset = self.record_offset;
+                            self.fault.framing(self.number);
+                            switch (self.options.on_malformed) {
+                                .fail => return error.MissingSeparator,
+                                .skip => {
+                                    self.skipped += 1;
+                                    continue;
+                                },
+                            }
+                        },
+                        .ended => return null,
+                    }
+                } else {
+                    record = (try self.readPhysical()) orelse return null;
+                    if (self.options.skip_blank and isBlank(record)) continue;
+                    offset = self.record_offset;
                 }
+                const number = self.number;
                 self.offset = offset;
                 if (!self.cleared and try self.checkControl(record, 0, number)) {
                     self.skipped += 1;
@@ -772,6 +778,97 @@ pub fn Reader(comptime T: type) type {
             };
             if (try self.checkControl(joined, before + 1, number)) return .damaged;
             return .{ .grown = joined };
+        }
+
+        const SeparatedPhysical = union(enum) {
+            record: struct { bytes: []const u8, offset: u64 },
+            missing: bool,
+            ended,
+        };
+
+        /// Discards a torn prefix without storing it, then frames only the
+        /// record following the first separator on the physical line.
+        fn readSeparatedPhysical(self: *Self) NextError!SeparatedPhysical {
+            if (!self.bom_checked) {
+                self.bom_checked = true;
+                if (self.options.skip_bom) try self.skipBom();
+            }
+
+            self.record_offset = self.consumed;
+            self.record_number = self.number;
+            var discarded = false;
+            var blank = true;
+            var pending_cr = false;
+            while (true) {
+                const contents = self.input.buffered();
+                if (contents.len == 0) {
+                    _ = self.input.peekByte() catch |err| switch (err) {
+                        error.ReadFailed => return error.ReadFailed,
+                        error.EndOfStream => {
+                            if (!discarded) return .ended;
+                            if (self.options.require_terminator) return .ended;
+                            self.number += 1;
+                            return .{ .missing = blank };
+                        },
+                    };
+                    continue;
+                }
+
+                const separator_at = std.mem.findScalar(u8, contents, separator);
+                const newline_at = std.mem.findScalar(u8, contents, '\n');
+                const at = if (separator_at) |sep|
+                    if (newline_at) |newline| @min(sep, newline) else sep
+                else
+                    newline_at orelse contents.len;
+
+                if (at == contents.len) {
+                    for (contents) |byte| {
+                        discarded = true;
+                        if (byte == '\r') {
+                            pending_cr = true;
+                        } else {
+                            if (pending_cr) blank = false;
+                            pending_cr = false;
+                            if (byte != ' ' and byte != '\t') blank = false;
+                        }
+                    }
+                    self.input.toss(contents.len);
+                    self.consumed += contents.len;
+                    continue;
+                }
+
+                const byte = contents[at];
+                if (byte == '\n') {
+                    for (contents[0..at]) |prefix_byte| {
+                        discarded = true;
+                        if (prefix_byte == '\r') {
+                            pending_cr = true;
+                        } else {
+                            if (pending_cr) blank = false;
+                            pending_cr = false;
+                            if (prefix_byte != ' ' and prefix_byte != '\t') blank = false;
+                        }
+                    }
+                    self.input.toss(at + 1);
+                    self.consumed += at + 1;
+                    self.number += 1;
+                    return .{ .missing = blank };
+                }
+
+                self.input.toss(at + 1);
+                self.consumed += at + 1;
+                const offset = self.consumed - 1;
+                const after_separator = self.consumed;
+                const framed = try self.readPhysical();
+                self.record_offset = offset;
+                self.record_number = self.number -| @intFromBool(framed != null);
+                if (framed) |bytes| return .{ .record = .{ .bytes = bytes, .offset = offset } };
+                if (!self.options.require_terminator and self.consumed == after_separator) {
+                    self.number += 1;
+                    return .{ .record = .{ .bytes = "", .offset = offset } };
+                }
+                return .ended;
+            }
         }
 
         /// Reads one physical line and returns the record so far: a slice of

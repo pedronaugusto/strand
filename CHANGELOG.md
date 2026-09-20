@@ -14,6 +14,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Separated readers discard a torn prefix before applying `max_line_bytes` to
+  the framed record.
+
 - `Follower.next` preserves `error.Canceled` from length, identity and seek
   operations as well as from reads and waits.
 

@@ -14,6 +14,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Byte-order marks are recognized on streams whose reader buffer is smaller
+  than three bytes.
+
 - A zero-length follower fingerprint falls back to inode identity instead of
   making every file identical.
 

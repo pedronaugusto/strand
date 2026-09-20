@@ -2012,8 +2012,8 @@ test "a non-seekable stream is read under the same guarantees as a file" {
         "{\"kind\":\"two\",\"at\":2}\n" ++
         "{\"kind\":\"three\"}";
 
-    // The reader's own buffer is what a BOM is peeked through, so this runs
-    // from too small to hold one up to comfortably large.
+    // Recognition is independent of the reader's own buffer capacity, so
+    // this runs from smaller than a BOM to comfortably large.
     for ([_]usize{ 1, 2, 3, 4, 16, 512 }) |buffer_len| {
         for ([_]usize{ 1, 3, 64 }) |chunk| {
             const buffer = try testing.allocator.alloc(u8, buffer_len);
@@ -2032,16 +2032,11 @@ test "a non-seekable stream is read under the same guarantees as a file" {
             }
             defer for (kinds[0..seen]) |kind| testing.allocator.free(kind);
 
-            // A buffer too small to peek a byte-order mark through leaves
-            // the mark on the first line, which then does not parse. That is
-            // the one thing a tiny buffer changes, and it is documented on
-            // `skipBom`; everything else is what a file gives.
-            const bom_seen = buffer_len >= 3;
-            try testing.expectEqual(@as(usize, if (bom_seen) 3 else 2), seen);
-            if (bom_seen) try testing.expectEqualStrings("one", kinds[0]);
-            try testing.expectEqualStrings("two", kinds[seen - 2]);
-            try testing.expectEqualStrings("three", kinds[seen - 1]);
-            try testing.expectEqual(@as(u64, if (bom_seen) 1 else 2), reader.skipped);
+            try testing.expectEqual(@as(usize, 3), seen);
+            try testing.expectEqualStrings("one", kinds[0]);
+            try testing.expectEqualStrings("two", kinds[1]);
+            try testing.expectEqualStrings("three", kinds[2]);
+            try testing.expectEqual(@as(u64, 1), reader.skipped);
             // Every physical line was counted, blank and broken alike.
             try testing.expectEqual(@as(u64, 5), reader.number);
         }

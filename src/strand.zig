@@ -789,18 +789,22 @@ pub fn Reader(comptime T: type) type {
         /// Discards a torn prefix without storing it, then frames only the
         /// record following the first separator on the physical line.
         fn readSeparatedPhysical(self: *Self) NextError!SeparatedPhysical {
+            var prefix: BomPrefix = .{};
+            const before_bom = self.consumed;
             if (!self.bom_checked) {
                 self.bom_checked = true;
-                if (self.options.skip_bom) try self.skipBom();
+                if (self.options.skip_bom) prefix = try self.skipBom();
             }
 
-            self.record_offset = self.consumed;
+            self.record_offset = if (prefix.len == 0) self.consumed else before_bom;
             self.record_number = self.number;
             var discarded = false;
             var blank = true;
             var pending_cr = false;
+            var pending = prefix.slice();
             while (true) {
-                const contents = self.input.buffered();
+                const from_prefix = pending.len != 0;
+                const contents = if (from_prefix) pending else self.input.buffered();
                 if (contents.len == 0) {
                     _ = self.input.peekByte() catch |err| switch (err) {
                         error.ReadFailed => return error.ReadFailed,
@@ -832,8 +836,12 @@ pub fn Reader(comptime T: type) type {
                             if (byte != ' ' and byte != '\t') blank = false;
                         }
                     }
-                    self.input.toss(contents.len);
-                    self.consumed += contents.len;
+                    if (from_prefix) {
+                        pending = pending[contents.len..];
+                    } else {
+                        self.input.toss(contents.len);
+                        self.consumed += contents.len;
+                    }
                     continue;
                 }
 
@@ -849,15 +857,22 @@ pub fn Reader(comptime T: type) type {
                             if (prefix_byte != ' ' and prefix_byte != '\t') blank = false;
                         }
                     }
-                    self.input.toss(at + 1);
-                    self.consumed += at + 1;
+                    if (!from_prefix) {
+                        self.input.toss(at + 1);
+                        self.consumed += at + 1;
+                    }
                     self.number += 1;
                     return .{ .missing = blank };
                 }
 
-                self.input.toss(at + 1);
-                self.consumed += at + 1;
-                const offset = self.consumed - 1;
+                const offset = if (from_prefix)
+                    self.record_offset + at
+                else
+                    self.consumed + at;
+                if (!from_prefix) {
+                    self.input.toss(at + 1);
+                    self.consumed += at + 1;
+                }
                 const after_separator = self.consumed;
                 const framed = try self.readPhysical();
                 self.record_offset = offset;
@@ -900,9 +915,17 @@ pub fn Reader(comptime T: type) type {
         /// first line of a stream, a line that straddles a refill, a record
         /// being joined to in `.pretty` mode, and the end of the stream.
         fn readStreamed(self: *Self) NextError!?[]const u8 {
+            const prior = self.line_buf.writer.end;
+            var prefix: BomPrefix = .{};
+            if (prior == 0) {
+                self.record_offset = self.consumed;
+                self.record_number = self.number;
+            }
             if (!self.bom_checked) {
                 self.bom_checked = true;
-                if (self.options.skip_bom) try self.skipBom();
+                if (self.options.skip_bom) prefix = try self.skipBom();
+                if (prefix.len != 0)
+                    self.line_buf.writer.writeAll(prefix.slice()) catch return error.OutOfMemory;
             }
 
             const before = self.line_buf.writer.end;
@@ -970,18 +993,18 @@ pub fn Reader(comptime T: type) type {
             if (!terminated) {
                 // Nothing at all is the end of the stream; a final line with
                 // no newline is a line unless the caller said otherwise.
-                if (n == 0 or self.options.require_terminator) {
-                    self.line_buf.writer.end = before;
+                if ((n == 0 and prefix.len == 0) or self.options.require_terminator) {
+                    self.line_buf.writer.end = prior;
                     return null;
                 }
             }
 
-            const physical = self.line_buf.writer.buffer[before..self.line_buf.writer.end];
-            const record_len = if (terminated and physical.len > 0 and physical[physical.len - 1] == '\r')
-                physical.len - 1
+            const record_len = if (self.line_buf.writer.end > 0 and
+                self.line_buf.writer.buffer[self.line_buf.writer.end - 1] == '\r')
+                self.line_buf.writer.end - 1
             else
-                physical.len;
-            if (record_len > room) {
+                self.line_buf.writer.end;
+            if (record_len > max) {
                 self.number += 1;
                 self.fault.framing(self.number);
                 self.offset = self.record_offset;
@@ -1067,19 +1090,47 @@ pub fn Reader(comptime T: type) type {
         /// Consumes a UTF-8 byte-order mark if the stream opens with one.
         /// Called once, before anything else is read.
         ///
-        /// A stream whose own buffer cannot hold three bytes cannot be asked
-        /// to peek at three, and cannot be carrying a mark worth finding, so
-        /// it is left alone.
-        fn skipBom(self: *Self) NextError!void {
-            if (self.input.buffer.len < bom.len) return;
-            const head = self.input.peek(bom.len) catch |err| switch (err) {
-                error.EndOfStream => return,
-                error.ReadFailed => return error.ReadFailed,
-            };
-            if (std.mem.eql(u8, head, bom)) {
-                self.input.toss(bom.len);
-                self.consumed += bom.len;
+        const BomPrefix = struct {
+            bytes: [bom.len]u8 = undefined,
+            len: usize = 0,
+
+            fn slice(self: *const BomPrefix) []const u8 {
+                return self.bytes[0..self.len];
             }
+        };
+
+        /// Consumes a UTF-8 byte-order mark one byte at a time. When the
+        /// opening bytes are not a mark, returns the bytes already consumed
+        /// so the caller can treat them as the start of the first line.
+        fn skipBom(self: *Self) NextError!BomPrefix {
+            if (self.input.buffer.len >= bom.len) {
+                if (self.input.peek(bom.len)) |head| {
+                    if (!std.mem.eql(u8, head, bom)) return .{};
+                    self.input.toss(bom.len);
+                    self.consumed += bom.len;
+                    return .{};
+                } else |err| switch (err) {
+                    error.EndOfStream => {},
+                    error.ReadFailed => return error.ReadFailed,
+                }
+            }
+
+            var prefix: BomPrefix = .{};
+            while (prefix.len < bom.len) {
+                const byte = self.input.takeByte() catch |err| switch (err) {
+                    error.EndOfStream => return prefix,
+                    error.ReadFailed => return error.ReadFailed,
+                };
+                prefix.bytes[prefix.len] = byte;
+                self.consumed += 1;
+                if (byte != bom[prefix.len]) {
+                    prefix.len += 1;
+                    return prefix;
+                }
+                prefix.len += 1;
+            }
+            prefix.len = 0;
+            return prefix;
         }
 
         /// Discards the remainder of an over-long line, terminator included,

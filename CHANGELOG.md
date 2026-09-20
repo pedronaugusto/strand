@@ -6,6 +6,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Unreleased
 
+### Fixed
+
+- Large unsigned integers written with exponent notation decode without an
+  intermediate signed range limit.
+
 ### Changed
 
 - Typed decoding scans unescaped strings a vector at a time, borrows them

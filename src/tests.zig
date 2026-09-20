@@ -494,6 +494,15 @@ test "parseLine with copy_strings borrows nothing" {
     try testing.expect(!within(event.kind, line));
 }
 
+test "large unsigned integers accept exponent notation" {
+    const value = try strand.parseLine(u128, testing.allocator, "2e38", .{});
+    try testing.expectEqual(@as(u128, 200_000_000_000_000_000_000_000_000_000_000_000_000), value);
+
+    var diagnostics: strand.Diagnostics = .{};
+    const diagnosed = try strand.parseLine(u128, testing.allocator, "2e38", .{ .diagnostics = &diagnostics });
+    try testing.expectEqual(value, diagnosed);
+}
+
 test "an empty stream is a stream" {
     var source: std.Io.Reader = .fixed("");
     var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{});

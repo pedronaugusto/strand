@@ -279,7 +279,7 @@ const Parser = struct {
         if (@round(float) != float) return error.InvalidNumber;
         if (float > @as(f128, @floatFromInt(std.math.maxInt(T))) or
             float < @as(f128, @floatFromInt(std.math.minInt(T)))) return error.Overflow;
-        return @intCast(@as(i128, @intFromFloat(float)));
+        return @as(T, @intFromFloat(float));
     }
 
     fn scalar(self: *Parser) ![]const u8 {

@@ -228,7 +228,7 @@ fn parseInt(
     if (@round(float) != float) return error.InvalidNumber;
     if (float > @as(f128, @floatFromInt(std.math.maxInt(T))) or
         float < @as(f128, @floatFromInt(std.math.minInt(T)))) return error.Overflow;
-    return @intCast(@as(i128, @intFromFloat(float)));
+    return @as(T, @intFromFloat(float));
 }
 
 fn freeAllocated(allocator: Allocator, token: Token) void {

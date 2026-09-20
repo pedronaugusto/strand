@@ -651,7 +651,10 @@ pub fn Reader(comptime T: type) type {
                                 self.skipped += 1;
                                 return null;
                             },
-                            .ended => return self.malformed(raw.number, record, error.UnexpectedEndOfInput),
+                            .ended => if (self.options.require_terminator)
+                                return null
+                            else
+                                return self.malformed(raw.number, record, error.UnexpectedEndOfInput),
                         }
                     } else {
                         return self.malformed(raw.number, record, error.UnexpectedEndOfInput);

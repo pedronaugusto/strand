@@ -637,6 +637,22 @@ test "pretty: a record that never finishes is one malformed record" {
     try testing.expectEqual(@as(?strand.Line(Event), null), try reader.next());
 }
 
+test "pretty: a terminated prefix remains unfinished when a terminator is required" {
+    const input =
+        \\{
+        \\  "kind": "waiting"
+        \\
+    ;
+    var source: std.Io.Reader = .fixed(input);
+    var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{
+        .format = .pretty,
+        .require_terminator = true,
+    });
+    defer reader.deinit();
+
+    try testing.expectEqual(@as(?strand.Line(Event), null), try reader.next());
+}
+
 test "pretty: a control byte on a joined line is what the reader says it is" {
     // A record whose first line is only the start of a value, whose second
     // line carries a raw NUL, and a reader told to pass damage over. The

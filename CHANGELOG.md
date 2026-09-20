@@ -8,6 +8,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Followers retain a partially written pretty record until its closing lines
+  arrive.
+
 - Deeply nested unknown fields are skipped with a heap-backed scanner rather
   than consuming the process stack.
 

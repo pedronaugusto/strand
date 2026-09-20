@@ -425,12 +425,10 @@ pub fn Follower(comptime T: type) type {
                 _ = self.heldIdentity() catch return error.ReopenFailed;
             }
             while (true) {
-                // Where the line about to be read begins, and what it will be
-                // numbered — so that a line the writer has not finished can
-                // be un-read, bytes and number alike.
-                const position = self.source.logicalPos();
-                const number = self.reader.number;
-                if (position == 0 and number == 0) self.reader.bom_checked = false;
+                // A BOM check that reached an empty file is retried until
+                // there is a first record to decide it against.
+                if (self.source.logicalPos() == 0 and self.reader.number == 0)
+                    self.reader.bom_checked = false;
 
                 if (self.reader.next()) |maybe_line| {
                     if (maybe_line) |line| return line;
@@ -439,8 +437,12 @@ pub fn Follower(comptime T: type) type {
                     else => |other| return other,
                 }
 
+                // `Reader.next` can pass over complete blank or skipped
+                // records before finding an unfinished one. Rewind only the
+                // current record, preserving that completed progress.
+                const position = self.reader.record_offset;
                 self.source.seekTo(position) catch return error.SeekFailed;
-                self.reader.number = number;
+                self.reader.number = self.reader.record_number;
                 self.reader.consumed = position;
                 try self.waitForGrowth(position);
             }
@@ -562,6 +564,8 @@ pub fn Follower(comptime T: type) type {
             self.reader.number = 0;
             self.reader.consumed = 0;
             self.reader.offset = 0;
+            self.reader.record_offset = 0;
+            self.reader.record_number = 0;
             self.reader.bom_checked = false;
             self.size_seen = null;
             self.held = null;
@@ -718,6 +722,33 @@ test "a follower still recognizes a byte-order mark after starting empty" {
     try fixture.write_file.writeStreamingAll(testing.io, "\xEF\xBB\xBF{\"kind\":\"first\"}\n");
 
     try testing.expectEqualStrings("first", (try follower.next()).value.kind);
+}
+
+test "a follower does not revisit a skipped complete line while waiting" {
+    var fixture = try Fixture.init("not json\n", 512);
+    defer fixture.deinit();
+
+    var follower: Follower(Event) = .init(testing.allocator, testing.io, &fixture.reader, .{
+        .reader = .{ .on_malformed = .skip },
+        .wait = .{ .poll = .fromMicroseconds(100) },
+    });
+    defer follower.deinit();
+
+    const Next = struct {
+        fn run(active: *Follower(Event)) !void {
+            const line = try active.next();
+            try testing.expectEqualStrings("after", line.value.kind);
+            try testing.expectEqual(@as(u64, 2), line.number);
+        }
+    };
+    var task = testing.io.concurrent(Next.run, .{&follower}) catch |err| switch (err) {
+        error.ConcurrencyUnavailable => return error.SkipZigTest,
+    };
+    try testing.io.sleep(.fromMilliseconds(10), .awake);
+    try fixture.write_file.writePositionalAll(testing.io, "{\"kind\":\"after\"}\n", "not json\n".len);
+    try task.await(testing.io);
+
+    try testing.expectEqual(@as(u64, 1), follower.reader.skipped);
 }
 
 test "a wake is a way to wait that is not a sleep" {

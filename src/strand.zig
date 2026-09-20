@@ -350,6 +350,8 @@ pub fn Reader(comptime T: type) type {
         consumed: u64 = 0,
         /// Internal. What `consumed` was when the current record began.
         record_offset: u64 = 0,
+        /// Internal. How many physical lines preceded the current record.
+        record_number: u64 = 0,
 
         const Self = @This();
 
@@ -505,6 +507,7 @@ pub fn Reader(comptime T: type) type {
                 .arena = .init(allocator),
                 .consumed = start.offset,
                 .record_offset = start.offset,
+                .record_number = start.lines_before,
                 // A mark belongs to the very start of a file, so a reader
                 // that begins anywhere else must not eat three bytes of a
                 // line looking for one.
@@ -788,6 +791,7 @@ pub fn Reader(comptime T: type) type {
                 // The first physical line of a record is where the record
                 // begins, and where it begins is what `Line.offset` reports.
                 self.record_offset = self.consumed;
+                self.record_number = self.number;
                 if (self.frameBuffered()) |frame| {
                     return self.takeFrame(frame, self.options.max_line_bytes);
                 }
@@ -807,7 +811,10 @@ pub fn Reader(comptime T: type) type {
             const before = self.line_buf.writer.end;
             // The first physical line of a record is where the record begins,
             // and where it begins is what `Line.offset` reports.
-            if (before == 0) self.record_offset = self.consumed;
+            if (before == 0) {
+                self.record_offset = self.consumed;
+                self.record_number = self.number;
+            }
             const max = self.options.max_line_bytes;
             // One past the bound, so that a record of exactly `max` bytes is
             // accepted and the first byte over it is what trips the limit.

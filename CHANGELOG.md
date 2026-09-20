@@ -8,6 +8,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Followers preserve progress over complete blank or skipped records while
+  waiting for an unfinished record to grow.
+
 - Followers started on an empty file still recognize a byte-order mark when
   the first record arrives.
 

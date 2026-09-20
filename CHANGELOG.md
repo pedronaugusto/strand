@@ -8,6 +8,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Followers started on an empty file still recognize a byte-order mark when
+  the first record arrives.
+
 - Followers retain a partially written pretty record until its closing lines
   arrive.
 

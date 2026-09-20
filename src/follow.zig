@@ -430,6 +430,7 @@ pub fn Follower(comptime T: type) type {
                 // be un-read, bytes and number alike.
                 const position = self.source.logicalPos();
                 const number = self.reader.number;
+                if (position == 0 and number == 0) self.reader.bom_checked = false;
 
                 if (self.reader.next()) |maybe_line| {
                     if (maybe_line) |line| return line;
@@ -701,6 +702,22 @@ test "a half-written line is not a line until it is finished" {
     const second = try follower.next();
     try testing.expectEqualStrings("half", second.value.kind);
     try testing.expectEqual(@as(u64, 2), second.number);
+}
+
+test "a follower still recognizes a byte-order mark after starting empty" {
+    var fixture = try Fixture.init("", 512);
+    defer fixture.deinit();
+
+    var follower: Follower(Event) = .init(testing.allocator, testing.io, &fixture.reader, .{
+        .wait = .{ .poll = .fromMicroseconds(100) },
+    });
+    defer follower.deinit();
+
+    // Reach the empty file once, as `Follower.next` does before it waits.
+    try testing.expectEqual(@as(?strand.Line(Event), null), try follower.reader.next());
+    try fixture.write_file.writeStreamingAll(testing.io, "\xEF\xBB\xBF{\"kind\":\"first\"}\n");
+
+    try testing.expectEqualStrings("first", (try follower.next()).value.kind);
 }
 
 test "a wake is a way to wait that is not a sleep" {

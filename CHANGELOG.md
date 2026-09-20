@@ -8,6 +8,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `Tail` snapshots the file's current length even when its file reader cached
+  an earlier end.
+
 - Followers preserve progress over complete blank or skipped records while
   waiting for an unfinished record to grow.
 

@@ -185,7 +185,7 @@ pub fn Tail(comptime T: type) type {
 
         /// A backwards reader over `source`, positioned at its end.
         ///
-        /// Measures the file once, with `std.Io.File.Reader.getSize`, and
+        /// Measures the file once, from the file handle's current length, and
         /// works within that size for the rest of its life: a file that grows
         /// afterwards is not read, and a file that shrinks is
         /// `error.Truncated`. That is the contract that makes a backwards
@@ -193,7 +193,9 @@ pub fn Tail(comptime T: type) type {
         /// the tail opened.
         pub fn init(allocator: Allocator, source: *std.Io.File.Reader, options: Options) InitError!Self {
             assert(options.block_bytes > 0);
-            const size = try source.getSize();
+            if (source.size_err) |err| return err;
+            const size = try source.file.length(source.io);
+            source.size = size;
             return .{
                 .source = source,
                 .options = options,
@@ -522,6 +524,20 @@ test "an empty file has no last line" {
     const got = try backwards("", .{});
     defer freeAll(got);
     try testing.expectEqual(@as(usize, 0), got.len);
+}
+
+test "tail snapshots the current file length rather than a reader's cached size" {
+    const first = "{\"kind\":\"first\"}\n";
+    const second = "{\"kind\":\"second\"}\n";
+    var fixture = try Fixture.init(first, 64);
+    defer fixture.deinit();
+
+    try testing.expectEqual(@as(u64, first.len), try fixture.reader.getSize());
+    try fixture.write_file.writePositionalAll(testing.io, second, first.len);
+
+    var tail: Tail(Event) = try .init(testing.allocator, &fixture.reader, .{});
+    defer tail.deinit();
+    try testing.expectEqualStrings("second", (try tail.prev()).?.value.kind);
 }
 
 test "the block size does not change what is read" {

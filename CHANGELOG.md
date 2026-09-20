@@ -8,6 +8,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Deeply nested unknown fields are skipped with a heap-backed scanner rather
+  than consuming the process stack.
+
 - Large unsigned integers written with exponent notation decode without an
   intermediate signed range limit.
 

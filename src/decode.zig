@@ -406,51 +406,10 @@ const Parser = struct {
 
     fn skipValue(self: *Parser) !void {
         self.space();
-        if (self.cursor == self.input.len) return error.UnexpectedEndOfInput;
-        switch (self.input[self.cursor]) {
-            '"' => _ = try self.string(false),
-            '{' => {
-                self.cursor += 1;
-                self.space();
-                if (self.cursor < self.input.len and self.input[self.cursor] == '}') {
-                    self.cursor += 1;
-                    return;
-                }
-                while (true) {
-                    _ = try self.string(false);
-                    try self.take(':');
-                    try self.skipValue();
-                    self.space();
-                    if (self.cursor == self.input.len) return error.UnexpectedEndOfInput;
-                    const c = self.input[self.cursor];
-                    self.cursor += 1;
-                    if (c == '}') break;
-                    if (c != ',') return error.SyntaxError;
-                }
-            },
-            '[' => {
-                self.cursor += 1;
-                self.space();
-                if (self.cursor < self.input.len and self.input[self.cursor] == ']') {
-                    self.cursor += 1;
-                    return;
-                }
-                while (true) {
-                    try self.skipValue();
-                    self.space();
-                    if (self.cursor == self.input.len) return error.UnexpectedEndOfInput;
-                    const c = self.input[self.cursor];
-                    self.cursor += 1;
-                    if (c == ']') break;
-                    if (c != ',') return error.SyntaxError;
-                }
-            },
-            't' => if (!self.word("true")) return error.SyntaxError,
-            'f' => if (!self.word("false")) return error.SyntaxError,
-            'n' => if (!self.word("null")) return error.SyntaxError,
-            '-', '0'...'9' => _ = try self.scalar(),
-            else => return error.SyntaxError,
-        }
+        var scanner: Scanner = .initCompleteInput(self.allocator, self.input[self.cursor..]);
+        defer scanner.deinit();
+        try scanner.skipValue();
+        self.cursor += scanner.cursor;
     }
 };
 

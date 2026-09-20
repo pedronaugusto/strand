@@ -1793,6 +1793,21 @@ test "a schemaless line is bounded by max_line_bytes and not by the stack" {
     try testing.expectEqual(@as(?strand.Line(std.json.Value), null), try bounded.next());
 }
 
+test "a deeply nested unknown field is ignored without using the call stack" {
+    const depth = 50_000;
+    var input: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer input.deinit();
+    try input.writer.writeAll("{\"kind\":\"x\",\"ignored\":");
+    try input.writer.splatByteAll('[', depth);
+    try input.writer.writeByte('0');
+    try input.writer.splatByteAll(']', depth);
+    try input.writer.writeByte('}');
+
+    const Parsed = struct { kind: []const u8 };
+    const parsed = try strand.parseLine(Parsed, testing.allocator, input.written(), .{});
+    try testing.expectEqualStrings("x", parsed.kind);
+}
+
 //=========================================================================
 // Routing: what kind of line is this, answered before it is a value.
 //=========================================================================

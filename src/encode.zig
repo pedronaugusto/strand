@@ -5,23 +5,29 @@
 const std = @import("std");
 
 pub fn supports(comptime T: type) bool {
+    return supportsType(T, .{});
+}
+
+fn supportsType(comptime T: type, comptime ancestors: anytype) bool {
+    inline for (ancestors) |ancestor| if (T == ancestor) return false;
     if (std.meta.hasFn(T, "jsonStringify")) return false;
+    const next = ancestors ++ .{T};
     return switch (@typeInfo(T)) {
         .bool, .int, .comptime_int, .float, .comptime_float, .@"enum", .enum_literal, .error_set => true,
-        .optional => |i| supports(i.child),
-        .array => |i| supports(i.child),
-        .vector => |i| supports(i.child),
+        .optional => |i| supportsType(i.child, next),
+        .array => |i| supportsType(i.child, next),
+        .vector => |i| supportsType(i.child, next),
         .pointer => |i| switch (i.size) {
-            .one, .many, .slice => supports(i.child),
+            .one, .many, .slice => supportsType(i.child, next),
             else => false,
         },
         .@"struct" => |i| fields: {
-            for (i.fields) |field| if (!supports(field.type)) break :fields false;
+            for (i.fields) |field| if (!supportsType(field.type, next)) break :fields false;
             break :fields true;
         },
         .@"union" => |i| fields: {
             if (i.tag_type == null) break :fields false;
-            for (i.fields) |field| if (field.type != void and !supports(field.type)) break :fields false;
+            for (i.fields) |field| if (field.type != void and !supportsType(field.type, next)) break :fields false;
             break :fields true;
         },
         else => false,

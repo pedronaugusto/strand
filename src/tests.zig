@@ -108,6 +108,26 @@ test "round trip: tagged unions" {
     try testing.expectEqualStrings("done", parsed.items[2].goodbye.reason);
 }
 
+test "recursive pointer schemas use the standard JSON extension path" {
+    const Node = struct {
+        value: u8,
+        next: ?*@This() = null,
+    };
+    const node: Node = .{ .value = 7 };
+
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    var writer: strand.Writer(Node) = .init(&out.writer, .{});
+    try writer.write(node);
+
+    var source: std.Io.Reader = .fixed(out.written());
+    var reader: strand.Reader(Node) = .init(testing.allocator, &source, .{});
+    defer reader.deinit();
+    const decoded = (try reader.next()).?.value;
+    try testing.expectEqual(@as(u8, 7), decoded.value);
+    try testing.expectEqual(@as(?*Node, null), decoded.next);
+}
+
 test "unknown fields are ignored, missing fields take their defaults" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();

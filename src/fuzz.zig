@@ -399,14 +399,36 @@ fn checkLines(input: []const u8) !void {
 /// only ever hands the line to `std.json` as a whole.
 fn isShallow(line: []const u8) bool {
     var depth: usize = 0;
-    for (line) |byte| switch (byte) {
-        '[', '{' => {
-            depth += 1;
-            if (depth > 32) return false;
-        },
-        else => {},
-    };
+    var in_string = false;
+    var escaped = false;
+    for (line) |byte| {
+        if (in_string) {
+            if (escaped) {
+                escaped = false;
+            } else if (byte == '\\') {
+                escaped = true;
+            } else if (byte == '"') {
+                in_string = false;
+            }
+            continue;
+        }
+        switch (byte) {
+            '"' => in_string = true,
+            '[', '{' => {
+                depth += 1;
+                if (depth > 32) return false;
+            },
+            ']', '}' => depth -|= 1,
+            else => {},
+        }
+    }
     return true;
+}
+
+test "the shallow guard ignores delimiters in strings and completed containers" {
+    try testing.expect(isShallow("{\"text\":\"[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[\"}"));
+    try testing.expect(isShallow("{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}"));
+    try testing.expect(!isShallow("[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[["));
 }
 
 /// A `.pretty` reader over any bytes at all reads the stream to its end,

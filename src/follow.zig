@@ -123,6 +123,7 @@ pub const Identity = union(enum) {
         /// Where the window starts.
         offset: u64 = 0,
         /// How many bytes of it are hashed.
+        /// Zero disables the content comparison and falls back to `.inode`.
         length: usize = 1024,
     },
 
@@ -166,6 +167,7 @@ pub const Identity = union(enum) {
 /// does not reach that far yet. Read positionally, so nothing that is reading
 /// the file moves.
 fn fingerprintOf(io: std.Io, file: std.Io.File, offset: u64, length: usize) !?u64 {
+    if (length == 0) return null;
     var hash: std.hash.Wyhash = .init(0);
     var buffer: [512]u8 = undefined;
     var taken: usize = 0;
@@ -1118,6 +1120,13 @@ test "what a file is, by its number or by what is on it" {
     try testing.expectEqual(@as(?u64, null), shortly.fingerprint);
     try testing.expect(!shortly.eql(try by_content.take(testing.io, one)));
     try testing.expect(shortly.eql(try by_content.take(testing.io, short)));
+
+    // An empty fingerprint window has no content with which to identify a
+    // file, so distinct handles still fall back to their numbers.
+    const empty_window: Identity = .{ .fingerprint = .{ .length = 0 } };
+    const empty_one = try empty_window.take(testing.io, one);
+    const empty_copy = try empty_window.take(testing.io, copy);
+    try testing.expect(!empty_one.eql(empty_copy));
 
     // And the case no number can see: the same file, rewritten where it
     // stands with something else of the same length. Taken before and after,

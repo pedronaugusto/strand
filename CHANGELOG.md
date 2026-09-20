@@ -14,6 +14,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A zero-length follower fingerprint falls back to inode identity instead of
+  making every file identical.
+
 - Separated readers discard a torn prefix before applying `max_line_bytes` to
   the framed record.
 

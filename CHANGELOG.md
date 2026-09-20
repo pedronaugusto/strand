@@ -14,6 +14,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `Versioned` applies `duplicate_fields` to both `v` and `data` envelope
+  keys.
+
 - Byte-order marks are recognized on streams whose reader buffer is smaller
   than three bytes.
 

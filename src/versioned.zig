@@ -124,11 +124,28 @@ pub fn Versioned(comptime T: type) type {
                 };
 
                 if (std.mem.eql(u8, key, version_key)) {
-                    if (from != null) return error.DuplicateField;
+                    if (from != null) switch (options.duplicate_field_behavior) {
+                        .@"error" => return error.DuplicateField,
+                        .use_first => {
+                            try source.skipValue();
+                            continue;
+                        },
+                        .use_last => {},
+                    };
                     from = try std.json.innerParse(u32, allocator, source, options);
                 } else if (std.mem.eql(u8, key, data_key)) {
-                    if (parsed != null or stashed != null) return error.DuplicateField;
-                    if (from != null and from.? == current) {
+                    if (parsed != null or stashed != null) switch (options.duplicate_field_behavior) {
+                        .@"error" => return error.DuplicateField,
+                        .use_first => {
+                            try source.skipValue();
+                            continue;
+                        },
+                        .use_last => {},
+                    };
+                    if (options.duplicate_field_behavior == .use_last) {
+                        parsed = null;
+                        stashed = try std.json.innerParse(std.json.Value, allocator, source, options);
+                    } else if (from != null and from.? == current) {
                         parsed = try std.json.innerParse(T, allocator, source, options);
                     } else {
                         stashed = try std.json.innerParse(std.json.Value, allocator, source, options);
@@ -332,6 +349,56 @@ test "the envelope's keys may arrive in either order" {
         try testing.expectEqual(@as(u32, 5), record.value.count);
         try testing.expectEqualStrings("open", record.value.kind);
     }
+}
+
+test "the envelope honors every duplicate-field policy" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+
+    const first_version = try strand.parseLine(
+        Versioned(Event),
+        arena.allocator(),
+        "{\"v\":1,\"v\":2,\"data\":{\"kind\":\"old\",\"count\":\"4\"}}",
+        .{ .duplicate_fields = .use_first },
+    );
+    try testing.expectEqual(@as(u32, 1), first_version.from);
+    try testing.expectEqualStrings("old", first_version.value.kind);
+    try testing.expectEqual(@as(u32, 4), first_version.value.count);
+
+    const last_version = try strand.parseLine(
+        Versioned(Event),
+        arena.allocator(),
+        "{\"v\":1,\"v\":2,\"data\":{\"kind\":\"new\",\"count\":5}}",
+        .{ .duplicate_fields = .use_last },
+    );
+    try testing.expectEqual(@as(u32, 2), last_version.from);
+    try testing.expectEqualStrings("new", last_version.value.kind);
+
+    const duplicate_data =
+        "{\"v\":2,\"data\":{\"kind\":\"first\",\"count\":1}," ++
+        "\"data\":{\"kind\":\"last\",\"count\":2}}";
+    const first_data = try strand.parseLine(
+        Versioned(Event),
+        arena.allocator(),
+        duplicate_data,
+        .{ .duplicate_fields = .use_first },
+    );
+    try testing.expectEqualStrings("first", first_data.value.kind);
+    const last_data = try strand.parseLine(
+        Versioned(Event),
+        arena.allocator(),
+        duplicate_data,
+        .{ .duplicate_fields = .use_last },
+    );
+    try testing.expectEqualStrings("last", last_data.value.kind);
+    try testing.expectEqual(@as(u32, 2), last_data.value.count);
+
+    try testing.expectError(error.DuplicateField, strand.parseLine(
+        Versioned(Event),
+        arena.allocator(),
+        duplicate_data,
+        .{},
+    ));
 }
 
 test "a version from the future is a malformed line, by number" {

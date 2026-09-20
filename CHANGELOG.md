@@ -15,6 +15,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   fixtures, regular records rose from 370.9 to 1034.8 MB/s and long-string
   records from 758.0 to 3700.2 MB/s.
 
+- Typed writing encodes ordinary minified values directly into the caller's
+  unused buffer, scans plain ASCII strings a vector at a time and publishes a
+  complete record at once. Buffered throughput rose from 1066.7 to 3321.5
+  MB/s, and per-record flushing from 241.0 to 286.5 MB/s; custom stringifiers
+  and pretty output keep the standard-library path.
+
 ## [0.5.0] - 2026-09-19
 
 A pass over the package asking what a line should cost, what it should say

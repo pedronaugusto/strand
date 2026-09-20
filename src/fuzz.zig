@@ -458,6 +458,28 @@ fn checkPrettyRoundTrip(events: []const Event) !void {
     try testing.expectEqual(@as(?strand.Line(Event), null), try reader.next());
 }
 
+/// The direct writer is byte-for-byte the standard-library stringifier with
+/// strand's defaults, including escaping and omitted null optionals.
+fn checkWriter(events: []const Event) !void {
+    inline for (.{ false, true }) |escape_unicode| {
+        var actual: std.Io.Writer.Allocating = .init(testing.allocator);
+        defer actual.deinit();
+        var writer: strand.Writer(Event) = .init(&actual.writer, .{ .escape_unicode = escape_unicode });
+        try writer.writeAll(events);
+
+        var expected: std.Io.Writer.Allocating = .init(testing.allocator);
+        defer expected.deinit();
+        for (events) |event| {
+            try std.json.Stringify.value(event, .{
+                .emit_null_optional_fields = false,
+                .escape_unicode = escape_unicode,
+            }, &expected.writer);
+            try expected.writer.writeByte('\n');
+        }
+        try testing.expectEqualStrings(expected.written(), actual.written());
+    }
+}
+
 /// The versioned record this package writes is the versioned record it reads,
 /// and a version it does not know is refused rather than guessed at.
 const Versioned2 = struct {
@@ -910,6 +932,17 @@ test "fuzz: a pretty round trip over generated values" {
     try std.testing.fuzz({}, fuzzPrettyRoundTrip, .{ .corpus = corpus });
 }
 
+test "fuzz: typed writer agrees with std.json" {
+    try std.testing.fuzz({}, fuzzWriter, .{ .corpus = corpus });
+}
+
+fn fuzzWriter(_: void, smith: *std.testing.Smith) anyerror!void {
+    @disableInstrumentation();
+    var text: [512]u8 = undefined;
+    var events: [16]Event = undefined;
+    try checkWriter(generateEvents(smith, &events, &text));
+}
+
 fn fuzzPrettyRoundTrip(_: void, smith: *std.testing.Smith) anyerror!void {
     @disableInstrumentation();
     var text: [512]u8 = undefined;
@@ -1007,6 +1040,7 @@ fn oneRound(bytes: []const u8) !void {
         fuzzLines,
         fuzzPretty,
         fuzzPrettyRoundTrip,
+        fuzzWriter,
         fuzzSeparated,
         fuzzRotation,
         fuzzTail,
@@ -1116,6 +1150,11 @@ test "the properties hold on a table of awkward inputs" {
         .{ .kind = "plain", .at = 1 },
         .{ .kind = "with \"quotes\" and a\nbreak", .at = 2, .level = .warn, .note = "x" },
         .{ .kind = "", .at = std.math.maxInt(u64), .tags = &.{ "a", "b" } },
+    });
+    try checkWriter(&.{});
+    try checkWriter(&.{
+        .{ .kind = "plain", .at = 1 },
+        .{ .kind = "quote \" slash \\ newline\n", .at = std.math.maxInt(u64), .note = "\u{1f600}" },
     });
 }
 

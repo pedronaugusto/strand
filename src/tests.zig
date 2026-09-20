@@ -1289,6 +1289,24 @@ test "escape_unicode writes a line with nothing but ASCII on it" {
     }
 }
 
+test "quoted Zig field names use JSON escaping" {
+    const Odd = struct { @"quote\"slash\\é": u8 };
+    const value: Odd = .{ .@"quote\"slash\\é" = 7 };
+
+    inline for (.{ false, true }) |escape_unicode| {
+        var actual: std.Io.Writer.Allocating = .init(testing.allocator);
+        defer actual.deinit();
+        var writer: strand.Writer(Odd) = .init(&actual.writer, .{ .escape_unicode = escape_unicode });
+        try writer.write(value);
+
+        var expected: std.Io.Writer.Allocating = .init(testing.allocator);
+        defer expected.deinit();
+        try std.json.Stringify.value(value, .{ .escape_unicode = escape_unicode }, &expected.writer);
+        try expected.writer.writeByte('\n');
+        try testing.expectEqualStrings(expected.written(), actual.written());
+    }
+}
+
 test "emit_null_optional_fields writes the field rather than leaving it out" {
     const event: Event = .{ .kind = "open", .at = 1 };
 

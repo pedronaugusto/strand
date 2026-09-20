@@ -6,7 +6,8 @@
 //! file greppable, tailable and appendable, and it makes a stream framable
 //! without a length prefix. strand decodes ordinary reflected types from the
 //! complete line, keeps `std.json` as the oracle and custom-parser path, and
-//! uses `std.json` to emit values. Around that is the line layer:
+//! emits ordinary reflected values directly while keeping `std.json` as the
+//! custom-stringifier and pretty-output path. Around that is the line layer:
 //!
 //! * `Reader` turns a `*std.Io.Reader` into a stream of typed values, one per
 //!   line, each carrying its 1-based line number, its raw bytes and the byte
@@ -45,6 +46,7 @@ const assert = std.debug.assert;
 const Scanner = @import("scanner.zig");
 const typed_parse = @import("parse.zig");
 const decode = @import("decode.zig");
+const encode = @import("encode.zig");
 
 const line_mod = @import("line.zig");
 pub const Fault = line_mod.Fault;
@@ -1389,12 +1391,10 @@ pub fn Writer(comptime T: type) type {
         pub fn write(self: *Self, value: T) Error!void {
             if (self.sync_failed) return error.SyncFailed;
             if (self.options.max_line_bytes) |max| try self.checkLength(value, max);
-            if (self.options.record_separator) try self.output.writeByte(separator);
-            try std.json.Stringify.value(value, self.encoding(), self.output);
-            try self.output.writeByte('\n');
+            try self.writeRecord(value);
             self.count += 1;
             if (self.due(self.options.sync)) return self.drainAndSync();
-            if (self.due(self.options.flush)) try self.output.flush();
+            if (self.due(self.options.flush)) try self.flushOutput();
         }
 
         /// Writes every value in `values`, in order.
@@ -1408,7 +1408,7 @@ pub fn Writer(comptime T: type) type {
         pub fn writeAll(self: *Self, values: []const T) Error!void {
             for (values) |value| try self.write(value);
             if (dueForBatch(self.options.sync)) return self.drainAndSync();
-            if (dueForBatch(self.options.flush)) try self.output.flush();
+            if (dueForBatch(self.options.flush)) try self.flushOutput();
         }
 
         /// How `std.json` is asked to lay a value out.
@@ -1423,13 +1423,49 @@ pub fn Writer(comptime T: type) type {
             };
         }
 
+        /// The direct encoder is the minified ordinary-type path. Pretty
+        /// output and custom `jsonStringify` methods keep std's stateful
+        /// stringifier, which defines those extension contracts.
+        fn encodeValue(self: *const Self, value: T, output: *std.Io.Writer) std.Io.Writer.Error!void {
+            if (comptime encode.supports(T)) {
+                if (self.options.format == .minified) return encode.value(value, self.encoding(), output);
+            }
+            return std.json.Stringify.value(value, self.encoding(), output);
+        }
+
+        /// Encode a common record wholly inside the destination's unused
+        /// buffer, then publish its length in one step. If the record does
+        /// not fit, the ordinary writer path drains and carries on.
+        fn writeRecord(self: *const Self, value: T) std.Io.Writer.Error!void {
+            if (comptime encode.supports(T)) {
+                if (self.options.format == .minified and self.output.end < self.output.buffer.len) {
+                    var fixed: std.Io.Writer = .fixed(self.output.buffer[self.output.end..]);
+                    if (self.options.record_separator) fixed.writeByte(separator) catch
+                        return self.writeRecordSlow(value);
+                    const encoded = encode.valueBuffer(value, self.encoding(), fixed.buffer[fixed.end..]) catch
+                        return self.writeRecordSlow(value);
+                    fixed.end += encoded;
+                    fixed.writeByte('\n') catch return self.writeRecordSlow(value);
+                    self.output.end += fixed.end;
+                    return;
+                }
+            }
+            return self.writeRecordSlow(value);
+        }
+
+        fn writeRecordSlow(self: *const Self, value: T) std.Io.Writer.Error!void {
+            if (self.options.record_separator) try self.output.writeByte(separator);
+            try self.encodeValue(value, self.output);
+            try self.output.writeByte('\n');
+        }
+
         /// Refuses a record longer than the bound before a byte of it is
         /// written. Measured by encoding it into a writer that counts and
         /// keeps nothing, which is the second pass `Options.max_line_bytes`
         /// costs — and why there is no bound unless one is asked for.
         fn checkLength(self: *Self, value: T, max: usize) Error!void {
             var counter: std.Io.Writer.Discarding = .init(&.{});
-            std.json.Stringify.value(value, self.encoding(), &counter.writer) catch
+            self.encodeValue(value, &counter.writer) catch
                 return error.WriteFailed;
             const written = counter.fullCount() + @intFromBool(self.options.record_separator);
             if (written > max) return error.LineTooLong;
@@ -1445,7 +1481,7 @@ pub fn Writer(comptime T: type) type {
         /// reason one level further in.
         pub fn flush(self: *Self) Error!void {
             if (self.sync_failed) return error.SyncFailed;
-            try self.output.flush();
+            try self.flushOutput();
         }
 
         /// Drains the destination and puts what the file then holds onto the
@@ -1464,9 +1500,21 @@ pub fn Writer(comptime T: type) type {
         /// holds onto the disk. The order is the whole of it: a sync of a
         /// file that has not been given the bytes syncs nothing.
         fn drainAndSync(self: *Self) Error!void {
-            try self.output.flush();
+            try self.flushOutput();
             const dest = self.file orelse return self.syncFault();
             _ = syncFile(dest.file, dest.io) catch return self.syncFault();
+        }
+
+        /// `initFile` knows the concrete writer behind `output`. Calling its
+        /// drain directly avoids two indirect calls on a per-record flush;
+        /// writers supplied through `init` retain their own flush semantics.
+        fn flushOutput(self: *Self) std.Io.Writer.Error!void {
+            if (self.file != null) {
+                while (self.output.end != 0)
+                    _ = try std.Io.File.Writer.drain(self.output, &.{""}, 1);
+                return;
+            }
+            return self.output.flush();
         }
 
         /// Records that this writer's log is not what it was asked to be, and

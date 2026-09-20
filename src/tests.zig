@@ -936,7 +936,9 @@ test "a line knows the byte offset it began at" {
     defer reader.deinit();
 
     var seen: usize = 0;
+    var first_offset: ?u64 = null;
     while (try reader.next()) |line| : (seen += 1) {
+        if (first_offset == null) first_offset = line.offset;
         // The offset is the place a seek would have to land for the line to
         // be read again, so the bytes there are the line's own bytes.
         try testing.expectEqualStrings(line.line, input[@intCast(line.offset)..][0..line.line.len]);
@@ -944,7 +946,7 @@ test "a line knows the byte offset it began at" {
     }
     try testing.expectEqual(@as(usize, 3), seen);
     // Three bytes of mark, then the first line: the mark belongs to the file.
-    try testing.expectEqual(@as(u64, 3), 3);
+    try testing.expectEqual(@as(?u64, 3), first_offset);
 }
 
 test "an offset names the line a reader refused" {

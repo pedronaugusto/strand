@@ -6,7 +6,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Unreleased
 
+### Breaking
+
+- `Opener.OpenError`, `Follower.checkpoint`, `resumeFrom`, `truncated` and
+  `restart` now expose `error.Canceled` instead of translating cancellation
+  into an unrelated operation failure.
+
 ### Fixed
+
+- `Follower.next` preserves `error.Canceled` from length, identity and seek
+  operations as well as from reads and waits.
 
 - Recursive pointer schemas fall back to the standard JSON paths without
   exhausting compile-time evaluation.

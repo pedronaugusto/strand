@@ -52,7 +52,7 @@ pub const Opener = struct {
     /// What an opener may report. One member, on purpose: the reasons a file
     /// will not open are the caller's to know and to report, the way
     /// `error.ReadFailed` leaves diagnostics to the stream.
-    pub const OpenError = error{OpenFailed};
+    pub const OpenError = error{OpenFailed} || std.Io.Cancelable;
 
     pub fn open(self: Opener, io: std.Io) OpenError!std.Io.File {
         return self.openFn(self.context, io);
@@ -81,7 +81,10 @@ pub const PathOpener = struct {
 
     fn openPath(context: *anyopaque, io: std.Io) Opener.OpenError!std.Io.File {
         const self: *PathOpener = @ptrCast(@alignCast(context));
-        return self.dir.openFile(io, self.sub_path, .{}) catch error.OpenFailed;
+        return self.dir.openFile(io, self.sub_path, .{}) catch |err| switch (err) {
+            error.Canceled => error.Canceled,
+            else => error.OpenFailed,
+        };
     }
 
     fn closePath(context: *anyopaque, io: std.Io, file: std.Io.File) void {
@@ -322,9 +325,12 @@ pub fn Follower(comptime T: type) type {
         /// Take it after `next` has returned a line and before the next call:
         /// that is when the file position is a line boundary, which is what
         /// makes the offset in it one a reader can be started at.
-        pub fn checkpoint(self: *Self) error{ReopenFailed}!Checkpoint {
+        pub fn checkpoint(self: *Self) (error{ReopenFailed} || std.Io.Cancelable)!Checkpoint {
             return .{
-                .file = self.heldIdentity() catch return error.ReopenFailed,
+                .file = self.heldIdentity() catch |err| switch (err) {
+                    error.Canceled => return error.Canceled,
+                    else => return error.ReopenFailed,
+                },
                 .offset = self.source.logicalPos(),
                 .number = self.reader.number,
                 .rotations = self.rotations,
@@ -355,10 +361,16 @@ pub fn Follower(comptime T: type) type {
             source: *std.Io.File.Reader,
             options: Options,
             point: Checkpoint,
-        ) error{ SeekFailed, ReopenFailed }!Self {
-            const now = options.identity.take(io, source.file) catch return error.ReopenFailed;
+        ) (error{ SeekFailed, ReopenFailed } || std.Io.Cancelable)!Self {
+            const now = options.identity.take(io, source.file) catch |err| switch (err) {
+                error.Canceled => return error.Canceled,
+                else => return error.ReopenFailed,
+            };
             const same = now.eql(point.file);
-            source.seekTo(if (same) point.offset else 0) catch return error.SeekFailed;
+            source.seekTo(if (same) point.offset else 0) catch |err| switch (err) {
+                error.Canceled => return error.Canceled,
+                else => return error.SeekFailed,
+            };
 
             var self = Self.init(allocator, io, source, options);
             self.held = now;
@@ -422,7 +434,10 @@ pub fn Follower(comptime T: type) type {
             // the question is asked: a file rewritten where it stands would
             // otherwise be measured after the rewrite and match itself.
             if (self.held == null and self.options.reopen != null) {
-                _ = self.heldIdentity() catch return error.ReopenFailed;
+                _ = self.heldIdentity() catch |err| switch (err) {
+                    error.Canceled => return error.Canceled,
+                    else => return error.ReopenFailed,
+                };
             }
             while (true) {
                 // A BOM check that reached an empty file is retried until
@@ -441,7 +456,10 @@ pub fn Follower(comptime T: type) type {
                 // records before finding an unfinished one. Rewind only the
                 // current record, preserving that completed progress.
                 const position = self.reader.record_offset;
-                self.source.seekTo(position) catch return error.SeekFailed;
+                self.source.seekTo(position) catch |err| switch (err) {
+                    error.Canceled => return error.Canceled,
+                    else => return error.SeekFailed,
+                };
                 self.reader.number = self.reader.record_number;
                 self.reader.consumed = position;
                 try self.waitForGrowth(position);
@@ -457,8 +475,11 @@ pub fn Follower(comptime T: type) type {
         /// and following the path across that is the caller's to do — reopen
         /// the path, and make a new `Follower` over the new handle. This
         /// package does not open files, so it cannot do it for you.
-        pub fn truncated(self: *Self) error{ ReadFailed, SeekFailed }!bool {
-            const size = self.currentSize() catch return error.ReadFailed;
+        pub fn truncated(self: *Self) (error{ ReadFailed, SeekFailed } || std.Io.Cancelable)!bool {
+            const size = self.currentSize() catch |err| switch (err) {
+                error.Canceled => return error.Canceled,
+                else => return error.ReadFailed,
+            };
             return size < self.source.logicalPos();
         }
 
@@ -468,8 +489,11 @@ pub fn Follower(comptime T: type) type {
         /// This is what to do about a `error.Truncated` or a `truncated` of
         /// true: the file was emptied and is being written again from the
         /// top, so what is on it now has never been read.
-        pub fn restart(self: *Self) error{SeekFailed}!void {
-            self.source.seekTo(0) catch return error.SeekFailed;
+        pub fn restart(self: *Self) (error{SeekFailed} || std.Io.Cancelable)!void {
+            self.source.seekTo(0) catch |err| switch (err) {
+                error.Canceled => return error.Canceled,
+                else => return error.SeekFailed,
+            };
             self.source.size = null;
             self.atStart();
         }
@@ -492,7 +516,10 @@ pub fn Follower(comptime T: type) type {
                 },
             }
 
-            const size = self.currentSize() catch return error.ReadFailed;
+            const size = self.currentSize() catch |err| switch (err) {
+                error.Canceled => return error.Canceled,
+                else => return error.ReadFailed,
+            };
             // Two waits with the same size is a file that has stopped. One
             // wait is not enough to say so, and the length alone is not
             // either: a file whose last line the writer never finished has
@@ -520,12 +547,21 @@ pub fn Follower(comptime T: type) type {
         /// what has been read from it, which is a reason to begin again on it
         /// even when the path still names it.
         fn rotate(self: *Self, opener: Opener, emptied: bool) NextError!void {
-            const fresh = opener.open(self.io) catch return error.ReopenFailed;
+            const fresh = opener.open(self.io) catch |err| switch (err) {
+                error.Canceled => return error.Canceled,
+                else => return error.ReopenFailed,
+            };
             var adopted = false;
             defer if (!adopted) opener.close(self.io, fresh);
 
-            const held = self.heldIdentity() catch return error.ReopenFailed;
-            const there = self.options.identity.take(self.io, fresh) catch return error.ReopenFailed;
+            const held = self.heldIdentity() catch |err| switch (err) {
+                error.Canceled => return error.Canceled,
+                else => return error.ReopenFailed,
+            };
+            const there = self.options.identity.take(self.io, fresh) catch |err| switch (err) {
+                error.Canceled => return error.Canceled,
+                else => return error.ReopenFailed,
+            };
             if (!held.eql(there)) {
                 // The old file has been read to its end — that is what
                 // brought us here — so the new one starts from its own.

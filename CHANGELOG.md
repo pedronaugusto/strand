@@ -8,6 +8,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Null tuple elements are emitted as `null` so later elements keep their
+  positions.
+
 - `Tail` snapshots the file's current length even when its file reader cached
   an earlier end.
 

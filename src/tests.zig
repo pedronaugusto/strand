@@ -1359,6 +1359,24 @@ test "emit_null_optional_fields writes the field rather than leaving it out" {
     }
 }
 
+test "null tuple elements keep their positions" {
+    const Pair = struct { ?u8, u8 };
+    const pair: Pair = .{ null, 1 };
+
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    var writer: strand.Writer(Pair) = .init(&out.writer, .{});
+    try writer.write(pair);
+    try testing.expectEqualStrings("[null,1]\n", out.written());
+
+    var source: std.Io.Reader = .fixed(out.written());
+    var reader: strand.Reader(Pair) = .init(testing.allocator, &source, .{});
+    defer reader.deinit();
+    const decoded = (try reader.next()).?.value;
+    try testing.expectEqual(@as(?u8, null), decoded[0]);
+    try testing.expectEqual(@as(u8, 1), decoded[1]);
+}
+
 //=========================================================================
 // Flushing, which is a decision about durability rather than about bytes.
 //=========================================================================

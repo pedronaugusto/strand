@@ -60,7 +60,7 @@ pub fn value(v: anytype, options: std.json.Stringify.Options, writer: *std.Io.Wr
             inline for (info.fields) |field| {
                 if (field.type == void) continue;
                 var emit = true;
-                if (@typeInfo(field.type) == .optional and !options.emit_null_optional_fields) {
+                if (!info.is_tuple and @typeInfo(field.type) == .optional and !options.emit_null_optional_fields) {
                     if (@field(v, field.name) == null) emit = false;
                 }
                 if (emit) {
@@ -206,7 +206,7 @@ fn bufferValue(v: anytype, options: std.json.Stringify.Options, out: *Buffer) Bu
             inline for (info.fields) |field| {
                 if (field.type == void) continue;
                 var emit = true;
-                if (@typeInfo(field.type) == .optional and !options.emit_null_optional_fields) {
+                if (!info.is_tuple and @typeInfo(field.type) == .optional and !options.emit_null_optional_fields) {
                     if (@field(v, field.name) == null) emit = false;
                 }
                 if (emit) {

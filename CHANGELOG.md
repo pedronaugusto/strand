@@ -12,6 +12,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   default comptime budget. Deciding whether a type takes the direct path
   walks every field reachable from it, and a line protocol of sixty
   requests ran past a thousand steps and failed to compile.
+- A line read by `Reader` costs what its parse costs on x86_64 too. It
+  measured 1.06x to 1.13x the parse on GitHub's x86_64 runners, past the
+  tenth the suite holds it to: the decoder copied each value out and the
+  reader copied it again into its `Line`, and there a load that spans two
+  recent stores waits for both to reach the cache. Values are now decoded
+  in place, and the end of a line is found with a bitmask rather than a
+  vector reduction. A line measures 0.95x to 0.98x its parse there, and
+  `parseLine` itself is faster.
 
 ## [0.6.0] - 2026-09-20
 

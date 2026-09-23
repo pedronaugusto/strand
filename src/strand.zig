@@ -147,21 +147,46 @@ pub fn parseLine(
     line: []const u8,
     options: ParseOptions,
 ) ParseLineError!T {
+    var value: T = undefined;
+    try parseLineInto(T, allocator, line, options, &value);
+    return value;
+}
+
+/// `parseLine`, with the value decoded into `out` where it lies. `Reader`
+/// calls this with the `value` of the `Line` it is about to hand back.
+///
+/// A value decoded somewhere else and then copied is a value whose fields
+/// were just stored one at a time and are loaded straight back a register
+/// at a time. On x86_64 a load that spans two stores still in flight is not
+/// forwarded from them; it waits for both to reach the cache. The decoder
+/// copied its value out once, which every parse paid, and the reader copied
+/// it again into its `Line`, which was the gap between a line and its parse
+/// there. Decoded in place, a field is stored once, where it is read from.
+fn parseLineInto(
+    comptime T: type,
+    allocator: Allocator,
+    line: []const u8,
+    options: ParseOptions,
+    out: *T,
+) ParseLineError!void {
     if (line.len != 0 and line[line.len - 1] == '\n') return error.SyntaxError;
-    if (options.diagnostics) |out| return parseDiagnosed(T, allocator, line, options, out);
+    if (options.diagnostics) |where| {
+        out.* = try parseDiagnosed(T, allocator, line, options, where);
+        return;
+    }
     if (comptime decode.supports(T)) {
-        return decode.parse(T, allocator, line, jsonOptions(options, line.len)) catch {
+        return decode.parseInto(T, allocator, line, jsonOptions(options, line.len), out) catch {
             // The direct path is for good lines. On a refusal, the token
             // source remains the oracle for the precise public error.
             var oracle: Scanner = .initCompleteInput(allocator, line);
             defer oracle.deinit();
-            return typed_parse.parse(T, allocator, &oracle, jsonOptions(options, line.len));
+            out.* = try typed_parse.parse(T, allocator, &oracle, jsonOptions(options, line.len));
         };
     }
 
     var scanner: Scanner = .initCompleteInput(allocator, line);
     defer scanner.deinit();
-    return typed_parse.parse(T, allocator, &scanner, jsonOptions(options, line.len));
+    out.* = try typed_parse.parse(T, allocator, &scanner, jsonOptions(options, line.len));
 }
 
 /// `parseLine` for the caller who asked where a line gave up.
@@ -636,13 +661,16 @@ pub fn Reader(comptime T: type) type {
                     .duplicate_fields = self.options.duplicate_fields,
                     .copy_strings = false,
                 };
-                if (@call(.always_inline, parseLine, .{ T, self.arena.allocator(), record, how })) |value| {
-                    return .{
-                        .value = value,
-                        .line = record,
-                        .number = raw.number,
-                        .offset = raw.offset,
-                    };
+                // The value is decoded into the `Line` it is handed back in,
+                // not copied into it; `parseLineInto` says what a copy costs.
+                var line: Line(T) = .{
+                    .value = undefined,
+                    .line = record,
+                    .number = raw.number,
+                    .offset = raw.offset,
+                };
+                if (@call(.always_inline, parseLineInto, .{ T, self.arena.allocator(), record, how, &line.value })) {
+                    return line;
                 } else |err| switch (err) {
                     error.OutOfMemory => return error.OutOfMemory,
                     error.UnexpectedEndOfInput => if (self.options.format == .pretty) {
@@ -1203,11 +1231,28 @@ fn firstControlOrTerminator(bytes: []const u8) ?usize {
             while (i + block_len <= bytes.len) : (i += block_len) {
                 const block: Block = bytes[i..][0..block_len].*;
                 const hits = (block < highest) & (block != tab);
-                if (@reduce(.Or, hits)) return i + std.simd.firstTrue(hits).?;
+                if (firstHit(block_len, hits)) |at| return i + at;
             }
         }
     }
     return if (scalarControl(bytes[i..])) |at| i + at else null;
+}
+
+/// The index of the first true lane of `hits`, or `null` when there is none.
+///
+/// `std.simd.firstTrue` asks the vector for its smallest matching index, and
+/// on x86_64 that is a blend and then a minimum taken across the register
+/// by halves: over a dozen instructions, each waiting on the one before, on
+/// every line a reader frames. x86 turns a compare into a bitmask in one
+/// instruction and finds the lowest set bit of it in another, and those two
+/// are the whole answer. NEON has no such mask and is good at the reduction,
+/// so everywhere else the question is asked of the vector.
+inline fn firstHit(comptime n: usize, hits: @Vector(n, bool)) ?usize {
+    if (comptime builtin.cpu.arch.isX86()) {
+        const mask: std.meta.Int(.unsigned, n) = @bitCast(hits);
+        return if (mask == 0) null else @ctz(mask);
+    }
+    return if (@reduce(.Or, hits)) std.simd.firstTrue(hits).? else null;
 }
 
 test firstControlOrTerminator {

@@ -44,17 +44,21 @@ fn supportsType(comptime T: type, comptime ancestors: anytype) bool {
     };
 }
 
-pub fn parse(
+/// Decodes `input` into `out`, where it lies: a struct is written a field
+/// at a time into the place it is going to be read from, rather than built
+/// somewhere else and copied there whole. On an error `out` holds whatever
+/// had been decoded before it, and nothing about that is promised.
+pub fn parseInto(
     comptime T: type,
     allocator: Allocator,
     input: []const u8,
     options: std.json.ParseOptions,
-) std.json.ParseError(std.json.Scanner)!T {
+    out: *T,
+) std.json.ParseError(std.json.Scanner)!void {
     var p: Parser = .{ .allocator = allocator, .input = input, .options = options };
-    const value = try p.value(T);
+    try p.valueInto(T, out);
     p.space();
     if (p.cursor != input.len) return error.SyntaxError;
-    return value;
 }
 
 const Parser = struct {
@@ -75,6 +79,16 @@ const Parser = struct {
         if (self.cursor == self.input.len) return error.UnexpectedEndOfInput;
         if (self.input[self.cursor] != want) return error.UnexpectedToken;
         self.cursor += 1;
+    }
+
+    /// `value`, into `out`. A struct is filled in place; anything else is
+    /// decoded and stored.
+    fn valueInto(self: *Parser, comptime T: type, out: *T) !void {
+        switch (@typeInfo(T)) {
+            .@"struct" => |i| if (!i.is_tuple) return self.object(T, out),
+            else => {},
+        }
+        out.* = try self.value(T);
     }
 
     fn value(self: *Parser, comptime T: type) !T {
@@ -114,7 +128,9 @@ const Parser = struct {
                     try self.take(']');
                     return result;
                 }
-                return self.object(T);
+                var result: T = undefined;
+                try self.object(T, &result);
+                return result;
             },
             .array => |i| {
                 self.space();
@@ -202,10 +218,9 @@ const Parser = struct {
         }
     }
 
-    fn object(self: *Parser, comptime T: type) !T {
+    fn object(self: *Parser, comptime T: type, result: *T) !void {
         const fields = @typeInfo(T).@"struct".fields;
         try self.take('{');
-        var result: T = undefined;
         var seen = [_]bool{false} ** fields.len;
         var hint: usize = 0;
         self.space();
@@ -217,7 +232,7 @@ const Parser = struct {
 
             inline for (fields, 0..) |field, i| {
                 if (i == hint and std.mem.eql(u8, field.name, name)) {
-                    try self.putField(T, &result, &seen, field, i);
+                    try self.putField(T, result, &seen, field, i);
                     hint = (i + 1) % fields.len;
                     try self.objectEnd();
                     if (self.input[self.cursor - 1] == '}') break :fields_loop;
@@ -228,7 +243,7 @@ const Parser = struct {
                 if (field.is_comptime)
                     @compileError("comptime fields are not supported: " ++ @typeName(T) ++ "." ++ field.name);
                 if (std.mem.eql(u8, field.name, name)) {
-                    try self.putField(T, &result, &seen, field, i);
+                    try self.putField(T, result, &seen, field, i);
                     hint = (i + 1) % fields.len;
                     try self.objectEnd();
                     if (self.input[self.cursor - 1] == '}') break :fields_loop;
@@ -244,7 +259,6 @@ const Parser = struct {
         inline for (fields, 0..) |field, i| if (!seen[i]) {
             if (field.defaultValue()) |default| @field(result, field.name) = default else return error.MissingField;
         };
-        return result;
     }
 
     fn putField(self: *Parser, comptime T: type, result: *T, seen: anytype, comptime field: std.builtin.Type.StructField, comptime i: usize) !void {
@@ -256,7 +270,7 @@ const Parser = struct {
             .@"error" => return error.DuplicateField,
             .use_last => {},
         };
-        @field(result, field.name) = try self.value(field.type);
+        try self.valueInto(field.type, &@field(result, field.name));
         seen[i] = true;
     }
 

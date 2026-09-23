@@ -55,6 +55,15 @@ jobs:
       - name: Test — ReleaseSmall
         run: zig build test -Doptimize=ReleaseSmall
 
+      # The suite under ThreadSanitizer. A follower's cancellation is a second
+      # task ending a wait the first is in, and a race there is a claim a
+      # detector can check and a reader cannot. Debug, because that is the
+      # mode the detector instruments most completely; not on Windows,
+      # because the runtime does not exist there.
+      - name: Test — ThreadSanitizer
+        if: runner.os != 'Windows'
+        run: zig build test -Dthread-sanitizer -Doptimize=Debug --test-timeout 120s
+
       # Built AND run: an example that only compiles proves the names still
       # resolve, and running it is what proves the code does what the text
       # around it says.

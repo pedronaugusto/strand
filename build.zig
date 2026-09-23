@@ -20,12 +20,22 @@ pub fn build(b: *std.Build) void {
     // or a double free is a failing test rather than a silent habit.
     //=====================================================================
 
+    // A follower's cancellation is a second task ending a wait the first is
+    // in, so it is the one claim here a race detector can check rather than
+    // a reader: `zig build test -Dthread-sanitizer`.
+    const thread_sanitizer = b.option(
+        bool,
+        "thread-sanitizer",
+        "Build the tests with ThreadSanitizer",
+    ) orelse false;
+
     const tests = b.addTest(.{
         .name = "strand-tests",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/strand.zig"),
             .target = target,
             .optimize = optimize,
+            .sanitize_thread = if (thread_sanitizer) true else null,
             // Off so that `zig build test --fuzz` compiles. The test runner
             // the compiler links in fuzz mode hands `@errorReturnTrace()` to
             // `std.debug.writeStackTrace`, and on 0.16.0 those are two

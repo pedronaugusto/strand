@@ -2060,12 +2060,12 @@ test "a non-seekable stream is read under the same guarantees as a file" {
 // line layer costs, and that is the number a budget can be set on. An
 // absolute ns/line would only be a fact about the machine that ran it.
 //
-// On the machine the figures in the documents come from, the floor is 199
-// ns/line and this reader is 200: a budget of ten per cent over the floor.
-// A reader that copied every line into its own buffer measures 230, and a
-// reader whose control-byte scan was a byte loop measured 230 as well, so
-// either regression fails this test rather than showing up as a number
-// nobody reads.
+// The reader measures within a few per cent of the floor on aarch64 and
+// x86_64 alike (README.md's figures are 78 ns/line against 75), and the
+// budget is ten per cent over the floor. A reader that copied every line
+// into its own buffer measured about 1.15x, and so did one whose
+// control-byte scan was a byte loop, so either regression fails this test
+// rather than showing up as a number nobody reads.
 //=========================================================================
 
 /// The shape the figures were measured over: a short string, a number, an

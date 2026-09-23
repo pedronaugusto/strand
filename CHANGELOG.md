@@ -4,6 +4,15 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- `parseLine` and `Writer` accept a schema too large for the compiler's
+  default comptime budget. Deciding whether a type takes the direct path
+  walks every field reachable from it, and a line protocol of sixty
+  requests ran past a thousand steps and failed to compile.
+
 ## [0.6.0] - 2026-09-20
 
 Typed decoding and writing several times faster, cancellation reported as

@@ -9,6 +9,12 @@ const Allocator = std.mem.Allocator;
 const Scanner = @import("scanner.zig");
 
 pub fn supports(comptime T: type) bool {
+    // The walk visits every field of every type reachable from `T`, once
+    // per path to it: a line protocol of sixty requests is thousands of
+    // steps, past the compiler's default of a thousand. The ceiling is
+    // for a schema's size, never a loop that does not end: the walk
+    // stops at any type it is already inside.
+    @setEvalBranchQuota(1_000_000);
     return supportsType(T, .{});
 }
 

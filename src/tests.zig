@@ -2182,3 +2182,34 @@ fn withinBudget(ratio: f64) bool {
         .Debug, .ReleaseSmall => true,
     };
 }
+
+/// A tagged union of `arms` arms, each a struct of `fields` integer fields:
+/// the shape of a line protocol with many requests, built at comptime.
+fn Wide(comptime arms: usize, comptime fields: usize) type {
+    // for the names this builds, not for anything strand does
+    @setEvalBranchQuota(100_000);
+    var field_names: [fields][]const u8 = undefined;
+    for (&field_names, 0..) |*name, i| name.* = std.fmt.comptimePrint("f{d}", .{i});
+    const Arm = @Struct(.auto, null, &field_names, &@splat(u32), &@splat(.{}));
+    var arm_names: [arms][]const u8 = undefined;
+    for (&arm_names, 0..) |*name, i| name.* = std.fmt.comptimePrint("arm{d}", .{i});
+    const Tag = @Enum(u8, .exhaustive, &arm_names, &std.simd.iota(u8, arms));
+    return @Union(.auto, Tag, &arm_names, &@splat(Arm), &@splat(.{}));
+}
+
+test "a protocol of many arms decodes and encodes without raising a comptime quota" {
+    // Sixty arms of eight fields: the reflection that decides which path
+    // a type takes walks every field, and a schema this size is ordinary.
+    const Request = Wide(60, 8);
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const line = "{\"arm59\":{\"f0\":1,\"f1\":2,\"f2\":3,\"f3\":4,\"f4\":5,\"f5\":6,\"f6\":7,\"f7\":8}}";
+    const request = try strand.parseLine(Request, arena.allocator(), line, .{});
+    try std.testing.expectEqual(@as(u32, 8), request.arm59.f7);
+    try std.testing.expectEqual(std.meta.Tag(Request).arm59, strand.tagOf(Request, line).?);
+
+    var out: std.Io.Writer.Allocating = .init(arena.allocator());
+    var writer: strand.Writer(Request) = .init(&out.writer, .{});
+    try writer.write(request);
+    try std.testing.expectEqualStrings(line ++ "\n", out.written());
+}

@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-09-23
+
 ### Fixed
 
 - `parseLine` and `Writer` accept a schema too large for the compiler's
@@ -528,6 +530,8 @@ First release: the line layer over `std.json`, and nothing else.
   awkward inputs, with the line numbering checked against an index scan that
   shares no code with the package.
 
+[0.6.1]: https://github.com/pedronaugusto/strand/releases/tag/v0.6.1
+[0.6.0]: https://github.com/pedronaugusto/strand/releases/tag/v0.6.0
 [0.5.0]: https://github.com/pedronaugusto/strand/releases/tag/v0.5.0
 [0.4.0]: https://github.com/pedronaugusto/strand/releases/tag/v0.4.0
 [0.3.0]: https://github.com/pedronaugusto/strand/releases/tag/v0.3.0

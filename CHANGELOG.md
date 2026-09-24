@@ -19,6 +19,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   digits are written into was worked out in a type too narrow to hold it,
   and a record with such a field failed to compile.
 
+- A struct holding a packed struct decodes. Since values are decoded in
+  place, each field was decoded through its address, and the fields of a
+  packed struct are bits of one integer with no address of their own, so
+  such a type failed to compile for `parseLine` and the readers. Its fields
+  are decoded and then stored.
+
 ## [0.6.1] - 2026-09-23
 
 ### Fixed

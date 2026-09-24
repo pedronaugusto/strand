@@ -2262,3 +2262,24 @@ test "an integer of any width is written as its digits" {
     const back = try strand.parseLine(Widths, arena.allocator(), line[0 .. line.len - 1], .{});
     try testing.expectEqual(value, back);
 }
+
+test "a packed struct is read and written as any struct is" {
+    // Its fields are bits of one integer, with no address to decode into
+    // one at a time; the value is the same object on the line either way.
+    const Caps = packed struct { plan: bool = false, stream: bool = false, level: u3 = 0 };
+    const Row = struct { name: []const u8, caps: Caps = .{} };
+    const line = "{\"name\":\"claude\",\"caps\":{\"plan\":true,\"stream\":false,\"level\":5}}";
+
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const row = try strand.parseLine(Row, arena.allocator(), line, .{});
+    try testing.expect(row.caps.plan and !row.caps.stream);
+    try testing.expectEqual(@as(u3, 5), row.caps.level);
+    const partial = try strand.parseLine(Row, arena.allocator(), "{\"name\":\"x\",\"caps\":{\"stream\":true}}", .{});
+    try testing.expect(!partial.caps.plan and partial.caps.stream);
+    try testing.expectError(error.Overflow, strand.parseLine(Row, arena.allocator(), "{\"name\":\"x\",\"caps\":{\"level\":8}}", .{}));
+
+    var out: std.Io.Writer.Allocating = .init(arena.allocator());
+    try strand.writeLine(&out.writer, row);
+    try testing.expectEqualStrings(line ++ "\n", out.written());
+}

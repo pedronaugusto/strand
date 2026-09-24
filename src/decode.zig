@@ -270,7 +270,11 @@ const Parser = struct {
             .@"error" => return error.DuplicateField,
             .use_last => {},
         };
-        try self.valueInto(field.type, &@field(result, field.name));
+        // A field of a packed struct is bits inside an integer and has no
+        // address to decode into, so it is decoded and then stored.
+        if (@typeInfo(T).@"struct".layout == .@"packed") {
+            @field(result, field.name) = try self.value(field.type);
+        } else try self.valueInto(field.type, &@field(result, field.name));
         seen[i] = true;
     }
 

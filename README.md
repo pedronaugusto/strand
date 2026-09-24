@@ -342,6 +342,11 @@ over it at all. The suite holds the line layer to that floor rather than to an
 absolute: *a line costs what the parse under it costs, within a tenth* times
 this reader against that parse, and fails if the gap opens up.
 
+A line that carries a small object it does not read is 105 ns/line as a `Raw`
+and 455 with a `std.json.Value` in the same place, which takes the line to
+`std.json`'s token parser; the bench prints the two as `carried, Raw` and
+`carried, Value`.
+
 ## Scope
 
 - Its decoder implements `std.json`'s typed field rules. Types with a custom

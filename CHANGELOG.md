@@ -21,6 +21,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   writer, where a `std.json.Value` in its place takes the whole line to
   `std.json`.
 
+### Changed
+
+- Passing over a value — an unknown field, or a `Raw` — checks it in the
+  decoder's own loop rather than token by token through the scanner, with
+  nothing allocated, to a depth of sixty-four; a deeper value goes to the
+  scanner as before. In `zig build bench` on an Apple M3 Max, a line
+  carrying a small object reads as a `Raw` in 105 ns rather than 165, and
+  in 455 with a `std.json.Value` in the same place.
+
 ### Fixed
 
 - A type whose largest value is one digit — `u1` to `u3`, `i2` to `i4` —

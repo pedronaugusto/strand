@@ -454,8 +454,102 @@ const Parser = struct {
         return .{ .bytes = bytes };
     }
 
+    /// Steps over one value, checking it as the scanner would, without a
+    /// token or an allocation: what an unknown field and a `Raw` cost. The
+    /// nesting is a bit a level in one word, so a value deeper than that
+    /// goes to the scanner, whose stack is on the heap, from its start.
     fn skipValue(self: *Parser) !void {
         self.space();
+        const start = self.cursor;
+        // One bit a level, set for an object.
+        var objects: u64 = 0;
+        var depth: u8 = 0;
+        values: while (true) {
+            self.space();
+            if (self.cursor == self.input.len) return error.UnexpectedEndOfInput;
+            switch (self.input[self.cursor]) {
+                '{', '[' => |open| {
+                    if (depth == 64) {
+                        self.cursor = start;
+                        return self.skipDeep();
+                    }
+                    const in_object = open == '{';
+                    objects = (objects << 1) | @intFromBool(in_object);
+                    depth += 1;
+                    self.cursor += 1;
+                    self.space();
+                    if (self.cursor == self.input.len) return error.UnexpectedEndOfInput;
+                    if (self.input[self.cursor] == @as(u8, if (in_object) '}' else ']')) {
+                        self.cursor += 1;
+                        objects >>= 1;
+                        depth -= 1;
+                    } else {
+                        if (in_object) try self.skipKey();
+                        continue :values;
+                    }
+                },
+                '"' => try self.skipString(),
+                't' => if (!self.word("true")) return error.SyntaxError,
+                'f' => if (!self.word("false")) return error.SyntaxError,
+                'n' => if (!self.word("null")) return error.SyntaxError,
+                '-', '0'...'9' => _ = try self.scalar(),
+                else => return error.SyntaxError,
+            }
+            // A value is done: close what it closes, until a comma says
+            // another value follows or nothing is left open.
+            while (depth > 0) {
+                self.space();
+                if (self.cursor == self.input.len) return error.UnexpectedEndOfInput;
+                const in_object = objects & 1 == 1;
+                const byte = self.input[self.cursor];
+                self.cursor += 1;
+                if (byte == ',') {
+                    if (in_object) try self.skipKey();
+                    continue :values;
+                }
+                if (byte != @as(u8, if (in_object) '}' else ']')) return error.SyntaxError;
+                objects >>= 1;
+                depth -= 1;
+            }
+            return;
+        }
+    }
+
+    /// A key and its colon, checked and passed over.
+    fn skipKey(self: *Parser) !void {
+        self.space();
+        if (self.cursor == self.input.len) return error.UnexpectedEndOfInput;
+        if (self.input[self.cursor] != '"') return error.SyntaxError;
+        try self.skipString();
+        try self.take(':');
+    }
+
+    /// A string, checked as `string` checks it and not copied anywhere.
+    /// The cursor is on its opening quote.
+    fn skipString(self: *Parser) !void {
+        self.cursor += 1;
+        while (true) {
+            const found = Scanner.stringSpecial(self.input[self.cursor..]);
+            const at = self.cursor + found.at;
+            if (found.non_ascii and !std.unicode.utf8ValidateSlice(self.input[self.cursor..at])) return error.SyntaxError;
+            if (at == self.input.len) return error.UnexpectedEndOfInput;
+            if (self.input[at] < 0x20) return error.SyntaxError;
+            self.cursor = at + 1;
+            if (self.input[at] == '"') return;
+            if (self.cursor == self.input.len) return error.UnexpectedEndOfInput;
+            switch (self.input[self.cursor]) {
+                '"', '\\', '/', 'b', 'f', 'n', 'r', 't' => self.cursor += 1,
+                'u' => {
+                    self.cursor += 1;
+                    _ = try self.unicodeEscape();
+                },
+                else => return error.SyntaxError,
+            }
+        }
+    }
+
+    /// `skipValue` past the depth it tracks itself.
+    fn skipDeep(self: *Parser) !void {
         var scanner: Scanner = .initCompleteInput(self.allocator, self.input[self.cursor..]);
         defer scanner.deinit();
         try scanner.skipValue();

@@ -1,8 +1,10 @@
 //! Direct minified JSON encoding for ordinary Zig values.
 //!
 //! Custom `jsonStringify` types and pretty output stay with `std.json`.
+//! `Raw` has a `jsonStringify` for that path and is written here directly.
 
 const std = @import("std");
+const Raw = @import("raw.zig").Raw;
 
 pub fn supports(comptime T: type) bool {
     // The walk visits every field of every type reachable from `T`, once
@@ -15,6 +17,7 @@ pub fn supports(comptime T: type) bool {
 }
 
 fn supportsType(comptime T: type, comptime ancestors: anytype) bool {
+    if (T == Raw) return true;
     inline for (ancestors) |ancestor| if (T == ancestor) return false;
     if (std.meta.hasFn(T, "jsonStringify")) return false;
     const next = ancestors ++ .{T};
@@ -42,6 +45,7 @@ fn supportsType(comptime T: type, comptime ancestors: anytype) bool {
 
 pub fn value(v: anytype, options: std.json.Stringify.Options, writer: *std.Io.Writer) std.Io.Writer.Error!void {
     const T = @TypeOf(v);
+    if (T == Raw) return raw(v.bytes, options, writer);
     switch (@typeInfo(T)) {
         .bool => try writer.writeAll(if (v) "true" else "false"),
         .int => try writer.printInt(v, 10, .lower, .{}),
@@ -190,6 +194,13 @@ const Buffer = struct {
         self.end += fixed.end;
     }
 
+    fn raw(self: *Buffer, bytes: []const u8, options: std.json.Stringify.Options) BufferError!void {
+        if (rawAsIs(bytes, options)) return self.write(bytes);
+        var fixed: std.Io.Writer = .fixed(self.bytes[self.end..]);
+        rawChanged(bytes, options, &fixed) catch return error.NoSpace;
+        self.end += fixed.end;
+    }
+
     fn stdString(self: *Buffer, s: []const u8, options: std.json.Stringify.Options) BufferError!void {
         var fixed: std.Io.Writer = .fixed(self.bytes[self.end..]);
         std.json.Stringify.encodeJsonString(s, options, &fixed) catch return error.NoSpace;
@@ -199,6 +210,7 @@ const Buffer = struct {
 
 fn bufferValue(v: anytype, options: std.json.Stringify.Options, out: *Buffer) BufferError!void {
     const T = @TypeOf(v);
+    if (T == Raw) return out.raw(v.bytes, options);
     switch (@typeInfo(T)) {
         .bool => try out.write(if (v) "true" else "false"),
         .int => try out.integer(v),
@@ -357,4 +369,83 @@ fn array(items: anytype, options: std.json.Stringify.Options, writer: *std.Io.Wr
 
 fn string(bytes: []const u8, options: std.json.Stringify.Options, writer: *std.Io.Writer) !void {
     try std.json.Stringify.encodeJsonString(bytes, options, writer);
+}
+
+/// A `Raw`'s bytes, written as its documentation says: as they are, except
+/// that a line break is a space in minified output, where a record is one
+/// line, and a character that is not ASCII is its `\u` escape under
+/// `escape_unicode`. JSON allows a line break only between tokens and a
+/// character only inside a string, where its escape means the same thing,
+/// so neither changes the value.
+pub fn raw(bytes: []const u8, options: std.json.Stringify.Options, writer: *std.Io.Writer) std.Io.Writer.Error!void {
+    if (rawAsIs(bytes, options)) return writer.writeAll(bytes);
+    return rawChanged(bytes, options, writer);
+}
+
+/// Whether `raw` has nothing to change in `bytes`, which is the case every
+/// value read from a minified line is in unless `escape_unicode` is on. A
+/// vector at a time, as a string is.
+fn rawAsIs(bytes: []const u8, options: std.json.Stringify.Options) bool {
+    const breaks = options.whitespace == .minified;
+    const escape = options.escape_unicode;
+    if (!breaks and !escape) return true;
+    const width = 16;
+    const V = @Vector(width, u8);
+    var i: usize = 0;
+    while (i + width <= bytes.len) : (i += width) {
+        const v: V = bytes[i..][0..width].*;
+        if (breaks and (@reduce(.Or, v == @as(V, @splat('\n'))) or @reduce(.Or, v == @as(V, @splat('\r'))))) return false;
+        if (escape and @reduce(.Or, v >= @as(V, @splat(0x80)))) return false;
+    }
+    for (bytes[i..]) |b| {
+        if (breaks and (b == '\n' or b == '\r')) return false;
+        if (escape and b >= 0x80) return false;
+    }
+    return true;
+}
+
+fn rawChanged(bytes: []const u8, options: std.json.Stringify.Options, writer: *std.Io.Writer) std.Io.Writer.Error!void {
+    const breaks = options.whitespace == .minified;
+    var start: usize = 0;
+    var i: usize = 0;
+    while (i < bytes.len) {
+        const b = bytes[i];
+        if (breaks and (b == '\n' or b == '\r')) {
+            try writer.writeAll(bytes[start..i]);
+            try writer.writeByte(' ');
+            i += 1;
+            start = i;
+        } else if (options.escape_unicode and b >= 0x80) {
+            // Bytes that are not UTF-8 are not a value this could have
+            // read, and are written as they are.
+            const len = std.unicode.utf8ByteSequenceLength(b) catch {
+                i += 1;
+                continue;
+            };
+            const codepoint = if (bytes.len - i < len) null else std.unicode.utf8Decode(bytes[i..][0..len]) catch null;
+            if (codepoint) |c| {
+                try writer.writeAll(bytes[start..i]);
+                try unicodeEscape(c, writer);
+                i += len;
+                start = i;
+            } else i += 1;
+        } else i += 1;
+    }
+    try writer.writeAll(bytes[start..]);
+}
+
+/// `std.json`'s escape for a character: lowercase hex, and a surrogate pair
+/// past the Basic Multilingual Plane.
+fn unicodeEscape(codepoint: u21, writer: *std.Io.Writer) std.Io.Writer.Error!void {
+    if (codepoint <= 0xFFFF) {
+        try writer.writeAll("\\u");
+        try writer.printInt(codepoint, 16, .lower, .{ .width = 4, .fill = '0' });
+        return;
+    }
+    const high = @as(u16, @intCast((codepoint - 0x10000) >> 10)) + 0xD800;
+    const low = @as(u16, @intCast(codepoint & 0x3FF)) + 0xDC00;
+    try writer.writeAll("\\u");
+    try writer.printInt(high, 16, .lower, .{ .width = 4, .fill = '0' });
+    try writer.writeAll("\\u");
+    try writer.printInt(low, 16, .lower, .{ .width = 4, .fill = '0' });
 }

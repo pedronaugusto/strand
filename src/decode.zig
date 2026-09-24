@@ -2,11 +2,13 @@
 //!
 //! Types with a custom `jsonParse` stay on the token-source path. This path
 //! removes token construction between a contiguous JSON line and the same
-//! reflected field rules.
+//! reflected field rules. `Raw` has a `jsonParse` for that path and is read
+//! here directly: skipping a value checks it, and what was skipped is kept.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Scanner = @import("scanner.zig");
+const Raw = @import("raw.zig").Raw;
 
 pub fn supports(comptime T: type) bool {
     // The walk visits every field of every type reachable from `T`, once
@@ -19,6 +21,7 @@ pub fn supports(comptime T: type) bool {
 }
 
 fn supportsType(comptime T: type, comptime ancestors: anytype) bool {
+    if (T == Raw) return true;
     inline for (ancestors) |ancestor| if (T == ancestor) return false;
     if (std.meta.hasFn(T, "jsonParse")) return false;
     const next = ancestors ++ .{T};
@@ -84,6 +87,10 @@ const Parser = struct {
     /// `value`, into `out`. A struct is filled in place; anything else is
     /// decoded and stored.
     fn valueInto(self: *Parser, comptime T: type, out: *T) !void {
+        if (T == Raw) {
+            out.* = try self.raw();
+            return;
+        }
         switch (@typeInfo(T)) {
             .@"struct" => |i| if (!i.is_tuple) return self.object(T, out),
             else => {},
@@ -92,6 +99,7 @@ const Parser = struct {
     }
 
     fn value(self: *Parser, comptime T: type) !T {
+        if (T == Raw) return self.raw();
         switch (@typeInfo(T)) {
             .bool => {
                 self.space();
@@ -432,6 +440,18 @@ const Parser = struct {
         if (!std.mem.eql(u8, self.input[self.cursor..][0..word_bytes.len], word_bytes)) return false;
         self.cursor += word_bytes.len;
         return true;
+    }
+
+    /// A value, checked and kept as its bytes. They borrow from the input
+    /// under the rule a string follows: a view unless every string is to be
+    /// copied.
+    fn raw(self: *Parser) !Raw {
+        self.space();
+        const start = self.cursor;
+        try self.skipValue();
+        const bytes = self.input[start..self.cursor];
+        if (self.options.allocate.? == .alloc_always) return .{ .bytes = try self.allocator.dupe(u8, bytes) };
+        return .{ .bytes = bytes };
     }
 
     fn skipValue(self: *Parser) !void {

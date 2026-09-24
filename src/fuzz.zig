@@ -569,6 +569,112 @@ fn checkVersioned(line: []const u8) !void {
     try testing.expectEqual(record.value.at, round.value.at);
 }
 
+/// A record carrying values it does not read, and the same record typed the
+/// way `std.json` would type it without this package, which is the oracle.
+const Carrying = struct {
+    kind: []const u8 = "",
+    data: strand.Raw = .null,
+    more: []const strand.Raw = &.{},
+};
+
+const CarryingValues = struct {
+    kind: []const u8 = "",
+    data: std.json.Value = .null,
+    more: []const std.json.Value = &.{},
+};
+
+/// A value kept as its bytes is refused where `std.json` refuses the same
+/// value as a `std.json.Value`, and anywhere else its bytes are that value:
+/// the same value when they are parsed, a view into the line, with nothing
+/// before or after them, and the same bytes when the record is written and
+/// read again.
+///
+/// Both sides keep the last of a repeated key. A `Raw` checks that its value
+/// is JSON and leaves a key repeated inside it to whoever parses it, so the
+/// oracle is `std.json` with repeats allowed.
+fn checkRaw(line: []const u8) !void {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // A line on its own, as a `Raw`: the line less its outer whitespace.
+    const oracle_value: ?std.json.Value = if (std.mem.endsWith(u8, line, "\n"))
+        null
+    else
+        std.json.parseFromSliceLeaky(std.json.Value, a, line, .{ .duplicate_field_behavior = .use_last }) catch null;
+    const alone: ?strand.Raw = strand.parseLine(strand.Raw, a, line, .{}) catch null;
+    try testing.expectEqual(oracle_value == null, alone == null);
+    if (alone) |raw| try testing.expectEqualStrings(std.mem.trim(u8, line, " \t\r\n"), raw.bytes);
+
+    // Inside a record.
+    const want: ?CarryingValues = if (std.mem.endsWith(u8, line, "\n"))
+        null
+    else
+        std.json.parseFromSliceLeaky(CarryingValues, a, line, .{
+            .ignore_unknown_fields = true,
+            .allocate = .alloc_if_needed,
+            .duplicate_field_behavior = .use_last,
+        }) catch null;
+    const got: ?Carrying = strand.parseLine(Carrying, a, line, .{ .duplicate_fields = .use_last }) catch null;
+    try testing.expectEqual(want == null, got == null);
+    const record = got orelse return;
+
+    try checkRawValue(a, line, record.data, want.?.data);
+    try testing.expectEqual(want.?.more.len, record.more.len);
+    for (record.more, want.?.more) |raw, value| try checkRawValue(a, line, raw, value);
+
+    // Written and read again, the values are the same bytes, but for the
+    // line breaks a minified line cannot hold.
+    var out: std.Io.Writer.Allocating = .init(a);
+    try strand.writeLine(&out.writer, record);
+    const again = try strand.parseLine(Carrying, a, out.written()[0 .. out.written().len - 1], .{ .duplicate_fields = .use_last });
+    try expectSameRaw(record.data, again.data);
+    try testing.expectEqual(record.more.len, again.more.len);
+    for (record.more, again.more) |before, after| try expectSameRaw(before, after);
+}
+
+fn checkRawValue(a: std.mem.Allocator, line: []const u8, raw: strand.Raw, value: std.json.Value) !void {
+    try testing.expect(inLineOrDefault(raw, line));
+    try testing.expectEqualStrings(std.mem.trim(u8, raw.bytes, " \t\r\n"), raw.bytes);
+    // The same value, compared as `std.json` writes it; the writer recurses,
+    // so only over values shallow enough to write.
+    if (!isShallow(raw.bytes)) return;
+    const parsed = try raw.parse(std.json.Value, a, .{ .duplicate_fields = .use_last });
+    try testing.expectEqualStrings(
+        try std.json.Stringify.valueAlloc(a, value, .{}),
+        try std.json.Stringify.valueAlloc(a, parsed, .{}),
+    );
+}
+
+fn expectSameRaw(before: strand.Raw, after: strand.Raw) !void {
+    try testing.expectEqual(before.bytes.len, after.bytes.len);
+    for (before.bytes, after.bytes) |b, c| try testing.expectEqual(if (b == '\n' or b == '\r') ' ' else b, c);
+}
+
+/// A reader over lines that carry values reads the lines `parseLine` reads,
+/// and every value it keeps is a view into the line it came from.
+fn checkRawReader(input: []const u8) !void {
+    var source: std.Io.Reader = .fixed(input);
+    var reader: strand.Reader(Carrying) = .init(testing.allocator, &source, .{ .on_malformed = .skip });
+    defer reader.deinit();
+    while (try reader.next()) |line| {
+        try testing.expect(inLineOrDefault(line.value.data, line.line));
+        for (line.value.more) |raw| try testing.expect(inLineOrDefault(raw, line.line));
+        var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+        defer arena.deinit();
+        const alone = try strand.parseLine(Carrying, arena.allocator(), line.line, .{});
+        try testing.expectEqualStrings(alone.data.bytes, line.value.data.bytes);
+        try testing.expectEqual(alone.more.len, line.value.more.len);
+    }
+}
+
+/// A view into `line`, or the default, which is in no line at all.
+fn inLineOrDefault(raw: strand.Raw, line: []const u8) bool {
+    if (raw.bytes.ptr == strand.Raw.null.bytes.ptr) return true;
+    return @intFromPtr(raw.bytes.ptr) >= @intFromPtr(line.ptr) and
+        @intFromPtr(raw.bytes.ptr) + raw.bytes.len <= @intFromPtr(line.ptr) + line.len;
+}
+
 /// A separated stream is the same stream with one byte in front of every
 /// record: what the writer marks, the reader finds, and what lies between two
 /// records is dropped rather than read as one.
@@ -828,6 +934,69 @@ fn generateVersioned(smith: *std.testing.Smith, buf: []u8) []u8 {
     return buf[0..end];
 }
 
+/// Writes generated lines carrying values into `buf` and returns what was
+/// written: a record whose `data`, and sometimes whose `more`, is a value
+/// that is nearly JSON, nested a few deep.
+fn generateCarrying(smith: *std.testing.Smith, buf: []u8) []u8 {
+    @disableInstrumentation();
+    var end: usize = 0;
+    while (end < buf.len and !smith.eos()) {
+        append(buf, &end, "{\"kind\":\"k\",\"data\":");
+        generateValue(smith, buf, &end, 3);
+        if (smith.valueRangeAtMost(u8, 0, 1) == 0) {
+            append(buf, &end, ",\"more\":[");
+            generateValue(smith, buf, &end, 2);
+            append(buf, &end, ",");
+            generateValue(smith, buf, &end, 2);
+            append(buf, &end, "]");
+        }
+        append(buf, &end, "}");
+        switch (smith.valueRangeAtMost(u8, 0, 2)) {
+            0 => append(buf, &end, "\n"),
+            1 => append(buf, &end, "\r\n"),
+            else => {},
+        }
+    }
+    return buf[0..end];
+}
+
+/// One value, most of the time: the scalars, containers of more of them,
+/// whitespace where JSON allows it and where it does not, the ways a value
+/// goes wrong, and bytes with no intentions at all.
+fn generateValue(smith: *std.testing.Smith, buf: []u8, end: *usize, depth: u8) void {
+    @disableInstrumentation();
+    switch (smith.valueRangeAtMost(u8, 0, 10)) {
+        0 => append(buf, end, "null"),
+        1 => append(buf, end, "true"),
+        2 => append(buf, end, "-12.50e+3"),
+        3 => append(buf, end, "\"t\\u00e9xt\\n\u{1f600}\""),
+        4 => append(buf, end, " { }\t"),
+        5 => if (depth == 0) append(buf, end, "{}") else {
+            append(buf, end, "{\"a\" : ");
+            generateValue(smith, buf, end, depth - 1);
+            append(buf, end, ", \"b\":");
+            generateValue(smith, buf, end, depth - 1);
+            append(buf, end, "}");
+        },
+        6 => if (depth == 0) append(buf, end, "[]") else {
+            append(buf, end, "[ ");
+            generateValue(smith, buf, end, depth - 1);
+            append(buf, end, ",");
+            generateValue(smith, buf, end, depth - 1);
+            append(buf, end, " ]");
+        },
+        7 => {
+            const broken: []const []const u8 = &.{ "[1,", "{\"a\"", "tru", "01", "\"\\q\"", "\"\xff\"", "}", "", "1 2", "\"\\ud800\"" };
+            append(buf, end, broken[smith.valueRangeAtMost(u8, 0, broken.len - 1)]);
+        },
+        8 => append(buf, end, "  \r "),
+        else => {
+            var chunk: [8]u8 = undefined;
+            append(buf, end, chunk[0..smith.slice(&chunk)]);
+        },
+    }
+}
+
 /// Fills `events` with generated values, drawing their strings out of `text`,
 /// and returns the ones that fit. The strings are where a round trip can go
 /// wrong, so they are where the awkward bytes go.
@@ -1030,6 +1199,19 @@ fn fuzzVersioned(_: void, smith: *std.testing.Smith) anyerror!void {
     while (it.next()) |line| try checkVersioned(line.line);
 }
 
+test "fuzz: raw values over generated lines" {
+    try std.testing.fuzz({}, fuzzRaw, .{ .corpus = corpus });
+}
+
+fn fuzzRaw(_: void, smith: *std.testing.Smith) anyerror!void {
+    @disableInstrumentation();
+    var buf: [1024]u8 = undefined;
+    const input = generateCarrying(smith, &buf);
+    try checkRawReader(input);
+    var it: PhysicalLines = .{ .rest = input };
+    while (it.next()) |line| try checkRaw(line.line);
+}
+
 //=========================================================================
 // The campaign: every property over generated inputs, driven by a seed.
 //
@@ -1078,6 +1260,7 @@ fn oneRound(bytes: []const u8) !void {
         fuzzRotation,
         fuzzTail,
         fuzzVersioned,
+        fuzzRaw,
     }) |property| {
         var smith: std.testing.Smith = .{ .in = bytes };
         try property({}, &smith);
@@ -1164,7 +1347,9 @@ test "the properties hold on a table of awkward inputs" {
             try checkKindOf(line.line);
             try checkTagOf(line.line);
             try checkVersioned(line.line);
+            try checkRaw(line.line);
         }
+        try checkRawReader(input);
     }
 
     // Rotation takes two files, so the table is walked in pairs: every input
@@ -1173,6 +1358,7 @@ test "the properties hold on a table of awkward inputs" {
     for (table, 0..) |before, i| try checkRotation(before, table[(i + 1) % table.len]);
 
     for (versioned_table) |line| try checkVersioned(line);
+    for (raw_table) |line| try checkRaw(line);
     try checkSeparated(&.{}, "");
     try checkSeparated(&.{
         .{ .kind = "plain", .at = 1 },
@@ -1203,4 +1389,28 @@ const versioned_table: []const []const u8 = &.{
     "{\"v\":\"2\",\"data\":{}}",
     "{\"data\":{\"kind\":\"first\"},\"data\":{\"kind\":\"again\"}}",
     "[{\"v\":2,\"data\":{}}]",
+};
+
+/// Values chosen by hand, inside a record and on their own.
+const raw_table: []const []const u8 = &.{
+    "{\"data\":{}}",
+    "{\"data\": [ ] ,\"more\":[ null , 0 ]}",
+    "{\"data\":\"\\u0000\"}",
+    "{\"data\":\"\\ud83d\\ude00\"}",
+    "{\"data\":\"\\ud83d\"}",
+    "{\"data\":1e400}",
+    "{\"data\":-0}",
+    "{\"data\":[1,[2,[3,[4]]]]}",
+    "{\"data\":{\"a\":1,\"a\":2}}",
+    "{\"data\":{\"a\"\r:\r1}}",
+    "{\"data\":1,\"data\":2}",
+    "{\"data\":}",
+    "{\"data\"}",
+    "{\"more\":[,]}",
+    "{\"more\":{}}",
+    " [\"x\"] ",
+    "\t{\"k\":true}\r",
+    "\"",
+    "tru",
+    "[1]]",
 };

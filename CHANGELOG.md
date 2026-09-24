@@ -6,6 +6,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `Raw`, a JSON value kept as its bytes, for a line that carries something
+  it does not read: another program's record passed along, a plugin's
+  payload, a request handed on as it came. A field of it is checked when its
+  line is read — a value that is not JSON is the line's error — and holds
+  the value from its first byte to its last, whitespace inside it included,
+  borrowed from the line as a string is and copied by `keep`. It is written
+  back as it came, except that a line break inside it is a space in a
+  minified line and `escape_unicode` escapes what is not ASCII. `Raw.parse`
+  decodes it as any type when it is wanted, and `Raw.encode` makes one from
+  a value. A struct or union holding one stays on the direct decoder and
+  writer, where a `std.json.Value` in its place takes the whole line to
+  `std.json`.
+
 ### Fixed
 
 - A type whose largest value is one digit — `u1` to `u3`, `i2` to `i4` —

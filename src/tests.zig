@@ -2051,6 +2051,245 @@ test "a non-seekable stream is read under the same guarantees as a file" {
 }
 
 //=========================================================================
+// A value kept as its bytes: `Raw`.
+//=========================================================================
+
+/// A line that carries values it does not read: a plugin's own record, a
+/// list of them, one that may be absent, and one inside a union arm.
+const Carried = struct {
+    kind: []const u8,
+    data: strand.Raw = .null,
+    rest: []const strand.Raw = &.{},
+    maybe: ?strand.Raw = null,
+    inner: struct { at: u64 = 0, payload: strand.Raw = .null } = .{},
+    route: union(enum) { local: u32, onward: strand.Raw } = .{ .local = 0 },
+};
+
+test "a raw value is read and written back byte for byte" {
+    // Whitespace inside a value is the value's; a line written by this
+    // package has none outside one, so the whole line comes back.
+    const input =
+        \\{"kind":"a","data":{ "who" : "ada",  "n": [1, 2.50, -0e+1] },"rest":[true,"x\u0041",[ ]],"maybe":{"k":null},"inner":{"at":3,"payload":"\u00e9\n"},"route":{"onward":{"to":  [ {} ]}}}
+        \\{"kind":"b","data":null,"route":{"local":7}}
+        \\{"kind":"c","data":12345678901234567890123,"inner":{"payload":[[[[]]]]},"route":{"onward":"far"}}
+        \\
+    ;
+    var source: std.Io.Reader = .fixed(input);
+    var reader: strand.Reader(Carried) = .init(testing.allocator, &source, .{});
+    defer reader.deinit();
+
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    var writer: strand.Writer(Carried) = .init(&out.writer, .{});
+
+    const first = (try reader.next()).?;
+    try testing.expectEqualStrings("{ \"who\" : \"ada\",  \"n\": [1, 2.50, -0e+1] }", first.value.data.bytes);
+    try testing.expectEqual(@as(usize, 3), first.value.rest.len);
+    try testing.expectEqualStrings("\"x\\u0041\"", first.value.rest[1].bytes);
+    try testing.expectEqualStrings("[ ]", first.value.rest[2].bytes);
+    try testing.expectEqualStrings("{\"k\":null}", first.value.maybe.?.bytes);
+    try testing.expectEqualStrings("\"\\u00e9\\n\"", first.value.inner.payload.bytes);
+    try testing.expectEqualStrings("{\"to\":  [ {} ]}", first.value.route.onward.bytes);
+    try writer.write(first.value);
+
+    // A JSON null is a value like any other; for an optional it is absent.
+    const second = (try reader.next()).?;
+    try testing.expectEqualStrings("null", second.value.data.bytes);
+    try testing.expectEqual(@as(?strand.Raw, null), second.value.maybe);
+    try writer.write(second.value);
+
+    // A number is its digits, however many there are.
+    const third = (try reader.next()).?;
+    try testing.expectEqualStrings("12345678901234567890123", third.value.data.bytes);
+    try writer.write(third.value);
+
+    // What was written is what was read, less the defaults the writer
+    // spells out: an absent `inner` and `rest` read back as their
+    // defaults, so write the same records from the same defaults.
+    var expected: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer expected.deinit();
+    var it = strand.lines(input);
+    while (it.next()) |line| {
+        if (line.line.len == 0) continue;
+        var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+        defer arena.deinit();
+        try strand.writeLine(&expected.writer, try strand.parseLine(Carried, arena.allocator(), line.line, .{}));
+    }
+    try testing.expectEqualStrings(expected.written(), out.written());
+    // The first line has every field, so it is its own bytes exactly.
+    try testing.expectEqualStrings(input[0 .. std.mem.indexOfScalar(u8, input, '\n').? + 1], out.written()[0 .. std.mem.indexOfScalar(u8, out.written(), '\n').? + 1]);
+}
+
+test "a raw value borrows from its line as a string does, and keep copies it" {
+    const input =
+        \\{"kind":"a","data":{"x":[1,2,3]},"rest":["y"]}
+        \\
+    ;
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+
+    var source: std.Io.Reader = .fixed(input);
+    var reader: strand.Reader(Carried) = .init(testing.allocator, &source, .{});
+    defer reader.deinit();
+    const line = (try reader.next()).?;
+    try testing.expect(within(line.value.data.bytes, line.line));
+    try testing.expect(within(line.value.rest[0].bytes, line.line));
+
+    const kept = try reader.keep(arena.allocator(), line);
+    try testing.expect(!within(kept.data.bytes, line.line));
+    try testing.expectEqualStrings("{\"x\":[1,2,3]}", kept.data.bytes);
+    try testing.expectEqualStrings("\"y\"", kept.rest[0].bytes);
+
+    const copied = try strand.parseLine(Carried, arena.allocator(), input[0 .. input.len - 1], .{ .copy_strings = true });
+    try testing.expect(!within(copied.data.bytes, input));
+
+    // Read later, as whatever the reader wants it to be, borrowing from the
+    // raw bytes rather than the line.
+    const X = struct { x: bool };
+    try testing.expectError(error.UnexpectedToken, kept.data.parse(X, arena.allocator(), .{}));
+    const Xs = struct { x: []const u32 };
+    try testing.expectEqual(@as(u32, 3), (try kept.data.parse(Xs, arena.allocator(), .{})).x[2]);
+}
+
+test "a malformed raw value is a malformed line, under the error std.json gives it" {
+    // Each of these is refused as `std.json` refuses the same line with a
+    // `std.json.Value` where the `Raw` is, and the stream carries on.
+    const Mirror = struct {
+        kind: []const u8,
+        data: std.json.Value = .null,
+    };
+    const Held = struct {
+        kind: []const u8,
+        data: strand.Raw = .null,
+    };
+    const bad = [_][]const u8{
+        "{\"kind\":\"a\",\"data\":}",
+        "{\"kind\":\"a\",\"data\":[1,}",
+        "{\"kind\":\"a\",\"data\":[1 2]}",
+        "{\"kind\":\"a\",\"data\":tru}",
+        "{\"kind\":\"a\",\"data\":{\"k\"}}",
+        "{\"kind\":\"a\",\"data\":{\"k\":1,}}",
+        "{\"kind\":\"a\",\"data\":\"\\q\"}",
+        "{\"kind\":\"a\",\"data\":\"\\ud800\"}",
+        "{\"kind\":\"a\",\"data\":\"\xff\"}",
+        "{\"kind\":\"a\",\"data\":01}",
+        "{\"kind\":\"a\",\"data\":-}",
+        "{\"kind\":\"a\",\"data\":[[[",
+        "{\"kind\":\"a\",\"data\":1",
+    };
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+
+    var input: std.ArrayList(u8) = .empty;
+    for (bad) |line| {
+        const want = std.json.parseFromSliceLeaky(Mirror, arena.allocator(), line, .{});
+        try testing.expect(std.meta.isError(want));
+        const want_err = if (want) |_| unreachable else |err| err;
+        try testing.expectError(want_err, strand.parseLine(Held, arena.allocator(), line, .{}));
+        try input.appendSlice(arena.allocator(), line);
+        try input.appendSlice(arena.allocator(), "\n{\"kind\":\"good\"}\n");
+    }
+
+    var source: std.Io.Reader = .fixed(input.items);
+    var reader: strand.Reader(Held) = .init(testing.allocator, &source, .{});
+    defer reader.deinit();
+    for (bad, 0..) |_, i| {
+        try testing.expectError(error.MalformedLine, reader.next());
+        try testing.expectEqual(@as(u64, 2 * i + 1), reader.fault.line);
+        try testing.expect(reader.fault.err != null);
+        try testing.expectEqualStrings("good", (try reader.next()).?.value.kind);
+    }
+    try testing.expectEqual(@as(?strand.Line(Held), null), try reader.next());
+}
+
+test "a type holding a raw value stays on the direct path both ways" {
+    // The point of the type: a `std.json.Value` in the same place sends the
+    // whole line to the token parser.
+    const decode = @import("decode.zig");
+    const encode = @import("encode.zig");
+    try testing.expect(comptime decode.supports(Carried));
+    try testing.expect(comptime encode.supports(Carried));
+    try testing.expect(comptime decode.supports(strand.Raw));
+    try testing.expect(comptime encode.supports(strand.Raw));
+    const Valued = struct { kind: []const u8, data: std.json.Value = .null };
+    try testing.expect(!comptime decode.supports(Valued));
+    try testing.expect(!comptime encode.supports(Valued));
+}
+
+test "a raw value is written as one line whatever its bytes hold" {
+    const Held = struct { data: strand.Raw };
+    const value: Held = .{ .data = .{ .bytes = "{\n  \"who\": \"\u{e9}\u{1f600}\",\r\n  \"n\": 1\n}" } };
+
+    // Minified: a line break is a space, and the value means what it meant.
+    const line = "{\"data\":{   \"who\": \"\u{e9}\u{1f600}\",    \"n\": 1 }}\n";
+    try expectWritten(Held, value, .{}, line);
+    // Under escape_unicode, nothing but ASCII.
+    try expectWritten(Held, value, .{ .escape_unicode = true }, "{\"data\":{   \"who\": \"\\u00e9\\ud83d\\ude00\",    \"n\": 1 }}\n");
+    // A value with nothing to change is its bytes, in either mode.
+    try expectWritten(Held, .{ .data = .{ .bytes = "[1,  \"x\"]" } }, .{ .escape_unicode = true }, "{\"data\":[1,  \"x\"]}\n");
+
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+
+    // The minified line reads back to the same value.
+    const back = try strand.parseLine(Held, arena.allocator(), line[0 .. line.len - 1], .{});
+    const Who = struct { who: []const u8, n: u8 };
+    try testing.expectEqualStrings("\u{e9}\u{1f600}", (try back.data.parse(Who, arena.allocator(), .{})).who);
+
+    // Pretty: written as it is, not re-indented, and read back by a pretty
+    // reader, which takes `\r\n` for a terminator as every reader here does.
+    var pretty: std.Io.Writer.Allocating = .init(arena.allocator());
+    var pretty_writer: strand.Writer(Held) = .init(&pretty.writer, .{ .format = .pretty });
+    try pretty_writer.write(value);
+    try testing.expect(std.mem.indexOf(u8, pretty.written(), value.data.bytes) != null);
+    var source: std.Io.Reader = .fixed(pretty.written());
+    var reader: strand.Reader(Held) = .init(testing.allocator, &source, .{ .format = .pretty });
+    defer reader.deinit();
+    try testing.expectEqualStrings(
+        "{\n  \"who\": \"\u{e9}\u{1f600}\",\n  \"n\": 1\n}",
+        (try reader.next()).?.value.data.bytes,
+    );
+}
+
+test "a raw value comes through a versioned record and its migration" {
+    const Now = struct {
+        kind: []const u8,
+        data: strand.Raw = .null,
+        pub const jsonl_version: u32 = 2;
+        pub fn jsonlMigrate(allocator: std.mem.Allocator, from: u32, data: std.json.Value) std.json.ParseFromValueError!@This() {
+            _ = from;
+            return strand.payloadOf(@This(), allocator, data);
+        }
+    };
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // The current version is read straight into the record: bytes kept.
+    const now = try strand.parseLine(strand.Versioned(Now), a, "{\"v\":2,\"data\":{\"kind\":\"k\",\"data\":[1, 2]}}", .{});
+    try testing.expectEqualStrings("[1, 2]", now.value.data.bytes);
+    // An older one goes through a `std.json.Value`, and is kept encoded.
+    const old = try strand.parseLine(strand.Versioned(Now), a, "{\"v\":1,\"data\":{\"kind\":\"k\",\"data\":[1, 2]}}", .{});
+    try testing.expectEqualStrings("[1,2]", old.value.data.bytes);
+    try testing.expect(old.migrated());
+}
+
+test "a raw value comes off the end of a file owned" {
+    const input = "{\"kind\":\"a\",\"data\":[1]}\n{\"kind\":\"b\",\"data\":{\"z\":2}}\n";
+    var fixture: fixtures.Fixture = try .init(input, 64);
+    defer fixture.deinit();
+
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+
+    var tail: strand.Tail(Carried) = try .init(testing.allocator, &fixture.reader, .{});
+    defer tail.deinit();
+    const last = try tail.last(arena.allocator(), 2);
+    try testing.expectEqualStrings("[1]", last[0].data.bytes);
+    try testing.expectEqualStrings("{\"z\":2}", last[1].data.bytes);
+}
+
+//=========================================================================
 // What a line costs, held to a budget.
 //
 // Two loops over the same bytes: this package's reader, and the same parse

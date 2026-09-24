@@ -31,6 +31,8 @@
 //!   handle into a file nobody writes to any more.
 //! * `Versioned` puts a schema version on a record and migrates an older one
 //!   forward.
+//! * `Raw` holds a value the reader does not read as its bytes: checked with
+//!   the line, written back as it came, and decoded when it is wanted.
 //!
 //! What this package does NOT do: it does not buffer or own a stream, does
 //! not open a file except through an
@@ -61,6 +63,7 @@ pub const PathOpener = @import("follow.zig").PathOpener;
 pub const Identity = @import("follow.zig").Identity;
 pub const Versioned = @import("versioned.zig").Versioned;
 pub const payloadOf = @import("versioned.zig").payloadOf;
+pub const Raw = @import("raw.zig").Raw;
 
 test {
     _ = @import("tests.zig");
@@ -68,6 +71,7 @@ test {
     _ = @import("tail.zig");
     _ = @import("follow.zig");
     _ = @import("versioned.zig");
+    _ = @import("raw.zig");
 }
 
 /// How a line's bytes are turned into a `T`.

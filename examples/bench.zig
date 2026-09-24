@@ -4,7 +4,7 @@
 //! test`: a number that varies with the machine is not a thing to fail a
 //! build over, and these numbers exist to be read.
 //!
-//! Five measurements, each one a claim the README makes:
+//! Six measurements, each one a claim the README makes:
 //!
 //! 1. A million small values written, minified, one line each.
 //! 2. The same million read back and parsed, with strings borrowing from the
@@ -14,6 +14,9 @@
 //! 4. The last hundred lines of the million, read backwards off a file, to
 //!    show that it costs a block and not a file.
 //! 5. One line of a hundred megabytes, read with the borrow intact.
+//! 6. A million lines each carrying a value the reader does not read, typed
+//!    as a `strand.Raw` and as a `std.json.Value`: the first stays on the
+//!    direct path, the second takes the whole line to `std.json`.
 //!
 //! Run it in ReleaseFast for numbers worth quoting:
 //!
@@ -59,6 +62,7 @@ pub fn main() !void {
     try benchWriteAll(gpa, io, stdout);
     try benchTail(gpa, io, stdout, written);
     try benchBigLine(gpa, io, stdout);
+    try benchCarried(gpa, io, stdout);
 
     // The scratch files live under `.zig-cache`, which a build already owns,
     // and they are not worth keeping once the numbers are printed.
@@ -180,6 +184,41 @@ fn benchBigLine(gpa: std.mem.Allocator, io: std.Io, stdout: *std.Io.Writer) !voi
             reader.arena.queryCapacity(),
         },
     );
+}
+
+/// A line of a log that carries another program's record, passed along.
+fn Carried(comptime Data: type) type {
+    return struct {
+        kind: []const u8,
+        at: u64,
+        data: Data,
+    };
+}
+
+/// A million lines with a small object in each that nobody reads, typed as a
+/// `strand.Raw` and then as a `std.json.Value`.
+fn benchCarried(gpa: std.mem.Allocator, io: std.Io, stdout: *std.Io.Writer) !void {
+    var out: std.Io.Writer.Allocating = .init(gpa);
+    defer out.deinit();
+    try out.ensureUnusedCapacity(line_count * 96);
+    var log: strand.Writer(Carried(strand.Raw)) = .init(&out.writer, .{});
+    for (0..line_count) |i| try log.write(.{
+        .kind = "mark",
+        .at = i,
+        .data = .{ .bytes = "{\"who\":\"ada\",\"beat\":3,\"tags\":[\"a\",\"b\"]}" },
+    });
+
+    inline for (.{ strand.Raw, std.json.Value }, .{ "carried, Raw", "carried, Value" }) |Data, name| {
+        var source: std.Io.Reader = .fixed(out.written());
+        var reader: strand.Reader(Carried(Data)) = .init(gpa, &source, .{});
+        defer reader.deinit();
+        var checksum: u64 = 0;
+        const started = std.Io.Clock.awake.now(io);
+        while (try reader.next()) |line| checksum +%= line.value.at;
+        const elapsed = started.untilNow(io, .awake);
+        try report(stdout, name, elapsed, reader.number, out.written().len);
+        std.mem.doNotOptimizeAway(checksum);
+    }
 }
 
 /// A file under `.zig-cache`, which is where a build already puts things it

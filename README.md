@@ -91,6 +91,7 @@ Every allocation anywhere here is on an allocator you passed in.
 | `Follower(T)` | Read to the end, wait, carry on. `Opener` and `PathOpener` are how it follows a path across a rotation, and `Identity` is what makes two handles the same file. |
 | `Follower.checkpoint`, `Follower.resumeFrom` | Where a follower stands, and a follower that carries on from there. |
 | `Versioned(T)`, `payloadOf` | The `{"v":N,"data":...}` envelope, with a migration hook for an older shape and the parse of that older shape inside it. |
+| `Raw` | A JSON value kept as its bytes: checked when its line is read, written back as it came, and decoded when it is wanted (`Raw.parse`). `Raw.encode` makes one from a value. |
 | `parseLine`, `lines` | One line, and a buffer of lines, already in memory. |
 | `kindOf`, `tagOf` | The first key of an object, and the union arm it names, without parsing the value. |
 | `indexOfControl`, `separator` | The first byte that must not appear raw in a line, and the one that marks where a record starts. |
@@ -227,6 +228,24 @@ tagged union grows without an envelope instead: `std.json` writes
 parsing the payload, and an `unknown: std.json.Value` arm gives a line from a
 newer writer somewhere to land.
 
+**A value the reader does not read is kept as its bytes.** A line often
+carries something that belongs to someone else: another program's record
+passed along, a plugin's payload, a request handed on as it came. `Raw` is
+that value's bytes. Reading a field of it checks the value as JSON — a value
+that is not JSON is the line's error, as anything else on the line would be —
+and keeps it from its first byte to its last, whitespace inside it included,
+borrowed from the line as a string is and copied by `keep`. Writing it writes
+those bytes, except where the writer promises something about every line: a
+line break inside the value, which JSON allows only between tokens, is a
+space in `.minified`, and `escape_unicode` escapes what is not ASCII. Neither
+changes the value. `Raw.parse` decodes the bytes as any type when they are
+wanted, and applies `duplicate_fields` then; reading the line does not look
+for a key repeated inside the value. A `std.json.Value` in the same place
+builds a tree nobody reads, and since it parses itself it takes the whole
+line to `std.json`'s token parser; a type holding a `Raw` stays on the direct
+path both ways. `Raw.encode` makes one from a value, and `parseLine(Raw, ...)`
+makes one from bytes and checks them. A `Raw` made by hand is trusted.
+
 **What a line may contain.**
 
 - A UTF-8 byte-order mark at the start of the stream is not part of the first
@@ -326,7 +345,8 @@ this reader against that parse, and fails if the gap opens up.
 ## Scope
 
 - Its decoder implements `std.json`'s typed field rules. Types with a custom
-  `jsonParse` method use `std.json`'s token parser directly.
+  `jsonParse` method use `std.json`'s token parser directly; `Raw` has one for
+  `std.json`'s own entry points and is read directly here.
 - It does not own, buffer or lock a stream, and opens a file only through an
   `Opener` you hand it.
 - It does not index a log or seek to line *n*. `Line.offset` and
@@ -354,21 +374,22 @@ from a machine that is not Linux; it is a local script and no CI job calls it.
 
 ## Testing
 
-`zig build test` runs 124 tests and the examples, every one under
+`zig build test` runs 161 tests and the examples, every one under
 `std.testing.allocator`, so a leak or an invalid free fails the test rather
 than the process. CI runs that four times, in Debug, ReleaseSafe, ReleaseFast
 and ReleaseSmall, with `zig fmt --check` beside it, and
 [`ci/check-readme.sh`](ci/check-readme.sh) regenerates the code blocks above
 from the examples and fails on a difference.
 
-Eleven of the tests are properties over generated lines: every line is
+Fourteen of the tests are properties over generated lines: every line is
 reported under its own number and at its own byte offset, a reader resumed at
 an offset agrees with one that read the whole stream, a bad line does not cost
 the reader its place, a file read backwards is the same lines in the other
 order and in the same places, a follower reads a replaced file in the right
-order, a record written over several lines comes back as one, and a separated
+order, a record written over several lines comes back as one, a separated
 stream gives up every record that was written to it whatever is torn in front
-of them.
+of them, and a value kept as its bytes is refused where `std.json` refuses it
+and is otherwise the value `std.json` read.
 
 They run over a corpus in `src/corpus` and over a table of awkward inputs on
 every `zig build test`, and over generated input two ways:

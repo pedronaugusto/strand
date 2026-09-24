@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-24
+
 ### Added
 
 - `Raw`, a JSON value kept as its bytes, for a line that carries something
@@ -573,6 +575,7 @@ First release: the line layer over `std.json`, and nothing else.
   awkward inputs, with the line numbering checked against an index scan that
   shares no code with the package.
 
+[0.7.0]: https://github.com/pedronaugusto/strand/releases/tag/v0.7.0
 [0.6.1]: https://github.com/pedronaugusto/strand/releases/tag/v0.6.1
 [0.6.0]: https://github.com/pedronaugusto/strand/releases/tag/v0.6.0
 [0.5.0]: https://github.com/pedronaugusto/strand/releases/tag/v0.5.0

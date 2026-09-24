@@ -2230,3 +2230,35 @@ test "an integer a few bits wide is held to its range on every path" {
     }
     try testing.expectError(error.Overflow, strand.parseLine(Small, a, "{\"c\":-5}", .{}));
 }
+
+/// Writes `value` twice with `options`: once into a destination with room
+/// in its buffer, which is where the writer encodes a record whole, and
+/// once into one with none, where it streams. Both must be `want`.
+fn expectWritten(comptime T: type, value: T, options: strand.Writer(T).Options, want: []const u8) !void {
+    var room: [512]u8 = undefined;
+    var fixed: std.Io.Writer = .fixed(&room);
+    var buffered: strand.Writer(T) = .init(&fixed, options);
+    try buffered.write(value);
+    try testing.expectEqualStrings(want, fixed.buffered());
+
+    var sink: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer sink.deinit();
+    var streamed: strand.Writer(T) = .init(&sink.writer, options);
+    try streamed.write(value);
+    try testing.expectEqualStrings(want, sink.written());
+}
+
+test "an integer of any width is written as its digits" {
+    // One, three, seven, fifteen, thirty-one and sixty-three bits are each
+    // one short of a power of two, where the length of the digit buffer
+    // was worked out in a type too narrow to hold it.
+    const Widths = struct { a: u3, b: u7, c: i7, d: u15, e: i31, f: u63, g: u1, h: i2 };
+    const value: Widths = .{ .a = 7, .b = 127, .c = -64, .d = 32767, .e = -1073741824, .f = std.math.maxInt(u63), .g = 1, .h = -2 };
+    const line = "{\"a\":7,\"b\":127,\"c\":-64,\"d\":32767,\"e\":-1073741824,\"f\":9223372036854775807,\"g\":1,\"h\":-2}\n";
+    try expectWritten(Widths, value, .{}, line);
+
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const back = try strand.parseLine(Widths, arena.allocator(), line[0 .. line.len - 1], .{});
+    try testing.expectEqual(value, back);
+}

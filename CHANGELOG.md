@@ -14,6 +14,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   direct decoder refuses is read again on that path, so such a line
   panicked in Debug and ReleaseSafe and was undefined in the fast modes.
 
+- `Writer` writes an integer one bit narrower than a power of two — `u1`,
+  `u3`, `i7`, `u15`, `i31`, `u63` and the rest. The length of the buffer its
+  digits are written into was worked out in a type too narrow to hold it,
+  and a record with such a field failed to compile.
+
 ## [0.6.1] - 2026-09-23
 
 ### Fixed

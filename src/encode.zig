@@ -161,7 +161,10 @@ const Buffer = struct {
         const info = @typeInfo(I).int;
         const U = std.meta.Int(.unsigned, @max(info.bits, 8));
         var n: U = @abs(v);
-        var tmp: [1 + @max(info.bits, 1)]u8 = undefined;
+        // A comptime `@max` narrows its result to the smallest type that
+        // holds it, which for seven bits is a `u3` that the one added to it
+        // overflows; the length is a `usize` before anything is added.
+        var tmp: [1 + @as(usize, @max(info.bits, 1))]u8 = undefined;
         var at = tmp.len;
         while (n >= 100) : (n /= 100) {
             at -= 2;

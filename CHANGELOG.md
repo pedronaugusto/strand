@@ -6,6 +6,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- A type whose largest value is one digit — `u1` to `u3`, `i2` to `i4` —
+  refuses a digit it cannot hold with `error.Overflow` on every path. The
+  path that names a line's error let the digit through, and every line the
+  direct decoder refuses is read again on that path, so such a line
+  panicked in Debug and ReleaseSafe and was undefined in the fast modes.
+
 ## [0.6.1] - 2026-09-23
 
 ### Fixed

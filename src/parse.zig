@@ -216,7 +216,9 @@ fn parseInt(
             for (slice) |c| {
                 if (c < '0' or c > '9') break;
                 const digit = c - '0';
-                if (value > (limit -| digit) / 10) return error.Overflow;
+                // Stated as the direct decoder states it: a type whose
+                // largest value is one digit long overflows on its first.
+                if (value > limit / 10 or (value == limit / 10 and digit > limit % 10)) return error.Overflow;
                 value = value * 10 + digit;
             } else return @intCast(value);
         }

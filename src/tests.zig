@@ -2213,3 +2213,20 @@ test "a protocol of many arms decodes and encodes without raising a comptime quo
     try writer.write(request);
     try std.testing.expectEqualStrings(line ++ "\n", out.written());
 }
+
+test "an integer a few bits wide is held to its range on every path" {
+    // A type whose largest value is a single digit overflows on the first
+    // digit, which is the case a check stated for longer numbers missed.
+    const Small = struct { a: u3 = 0, b: u1 = 0, c: i3 = 0 };
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    try testing.expectEqual(Small{ .a = 7, .b = 1, .c = 3 }, try strand.parseLine(Small, a, "{\"a\":7,\"b\":1,\"c\":3}", .{}));
+    for ([_][]const u8{ "{\"a\":8}", "{\"a\":9}", "{\"a\":10}", "{\"b\":2}", "{\"c\":4}" }) |line| {
+        try testing.expectError(error.Overflow, strand.parseLine(Small, a, line, .{}));
+        // and where the reader asks where it failed, which is the other path
+        var where: strand.Diagnostics = .{};
+        try testing.expectError(error.Overflow, strand.parseLine(Small, a, line, .{ .diagnostics = &where }));
+    }
+    try testing.expectError(error.Overflow, strand.parseLine(Small, a, "{\"c\":-5}", .{}));
+}

@@ -6,6 +6,46 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `LineReader`, the line layer on its own: a `*std.Io.Reader` as a stream of
+  lines, framed at the terminator, held to `max_line_bytes`, checked for raw
+  control bytes and missing separators, numbered and placed, and not parsed.
+  It is for bytes whose meaning is somebody else's — a line protocol with its
+  own decoder, a child process's output — which until now had to name a type
+  for a `Reader` they never parsed into. A line past the bound is
+  `error.LineTooLong` with the line consumed to its end, so the caller answers
+  it and reads on; the stream's own buffer can be much smaller than the
+  longest line. `LineReader.recordStart` and `LineReader.reset` are how a
+  file still being written is read: where the record the reader was last on
+  began, and carrying on from a place the stream has been put back to.
+  `LineReader.join` appends the next physical line to a record, for a reader
+  that knows when a record spread over several lines is finished.
+- A line-protocol recipe in `examples/logbook.zig`: requests read with a
+  `LineReader`, one past the bound answered, and the replies written a record
+  at a time.
+
+### Changed
+
+- `Reader(T)` is a `LineReader` with a parse on top, and keeps it as
+  `Reader.lines`. The reader's place in the stream is kept there:
+  `reader.number`, `reader.offset`, `reader.skipped`, `reader.fault` and
+  `reader.input` are now `reader.lines.number`, `reader.lines.offset`,
+  `reader.lines.skipped`, `reader.lines.fault` and `reader.lines.input`.
+  `Reader.Options` is unchanged. `Reader.Joined` is `LineReader.Joined`. The
+  framing is one piece of code, no longer compiled once for every `T`.
+- `Follower` rewinds a half-written record and begins again after a
+  truncation through `LineReader.reset`, rather than by setting the reader's
+  fields.
+
+### Fixed
+
+- A reader that meets a stream with no byte on it yet looks for a byte-order
+  mark when the first bytes arrive. It used to decide there was none, so a
+  file that was empty when it was first read, and was then written mark
+  first, read its first line with the mark in it and refused it. `Follower`
+  had worked around this for itself.
+
 ## [0.7.0] - 2026-09-24
 
 ### Added

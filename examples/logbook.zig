@@ -2,7 +2,9 @@
 //! of them read off the end of the file without reading the rest, a follower
 //! over a file being appended to and a second one resumed from where it
 //! stood, a tagged union that gained an arm, and a torn record in front of a
-//! separated stream.
+//! separated stream. And the same format as a line protocol, where a message
+//! past the bound is answered rather than taken for the end of the
+//! connection.
 //!
 //! `zig build examples` builds AND runs this; `ci/readme_usage.sh` extracts
 //! its marked regions into README.md, so the snippets a reader copies are
@@ -116,6 +118,7 @@ pub fn main() !void {
     try follow(gpa, io, dir, Entry);
     try separated(gpa);
     try arms(arena);
+    try protocol(gpa, arena);
 }
 
 /// Records appended to the log, a follower that picks them up, and a second
@@ -272,4 +275,58 @@ fn arms(arena: std.mem.Allocator) !void {
     std.debug.print("unrecognised arm kept whole: {s}\n", .{
         message.unknown.object.keys()[0],
     });
+}
+
+/// A line protocol: requests read off a stream as lines, parsed by their own
+/// rules, and one far past the bound answered rather than taken for the end
+/// of the connection.
+fn protocol(gpa: std.mem.Allocator, arena: std.mem.Allocator) !void {
+    // --- README:protocol ---
+
+    const Request = union(enum) {
+        say: struct { text: []const u8 },
+        bye: struct {},
+    };
+    const Reply = struct { ok: bool, line: u64, message: []const u8 = "" };
+
+    // What a client sent: a request, one far past what this server takes, and
+    // one after it. In a program this is a socket's reader.
+    var sent: std.Io.Writer.Allocating = .init(gpa);
+    defer sent.deinit();
+    try strand.writeLine(&sent.writer, Request{ .say = .{ .text = "hello" } });
+    try sent.writer.writeAll("{\"say\":{\"text\":\"");
+    try sent.writer.splatByteAll('x', 100_000);
+    try sent.writer.writeAll("\"}}\n");
+    try strand.writeLine(&sent.writer, Request{ .bye = .{} });
+    var socket: std.Io.Reader = .fixed(sent.written());
+
+    // Replies go back a record at a time, each one drained as it is written.
+    var answered: std.Io.Writer.Allocating = .init(gpa);
+    defer answered.deinit();
+    var replies: strand.Writer(Reply) = .init(&answered.writer, .{ .flush = .per_record });
+
+    // The lines, framed and bounded. What a line means is the server's own
+    // business, so nothing here is parsed until the server parses it.
+    var requests: strand.LineReader = .init(gpa, &socket, .{ .max_line_bytes = 64 * 1024 });
+    defer requests.deinit();
+    while (true) {
+        const raw = requests.next() catch |err| switch (err) {
+            // That line is gone, and the stream is at the start of the next
+            // one: answer it and read on.
+            error.LineTooLong => {
+                try replies.write(.{ .ok = false, .line = requests.fault.line, .message = "too long" });
+                continue;
+            },
+            else => |e| return e,
+        } orelse break;
+        const request = strand.parseLine(Request, arena, raw.line, .{}) catch {
+            try replies.write(.{ .ok = false, .line = raw.number, .message = "not a request" });
+            continue;
+        };
+        try replies.write(.{ .ok = true, .line = raw.number, .message = @tagName(request) });
+    }
+    // --- README:protocol ---
+
+    var it = strand.lines(answered.written());
+    while (it.next()) |line| std.debug.print("reply: {s}\n", .{line.line});
 }

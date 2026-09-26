@@ -156,8 +156,8 @@ fn checkReaderFailOver(source: *std.Io.Reader, input: []const u8, max_line_bytes
         // The `\r` half of a CRLF terminator is not a record byte.
         if (physical.line.len > max_line_bytes) {
             try testing.expectError(error.LineTooLong, reader.next());
-            try testing.expectEqual(physical.number, reader.fault.line);
-            try testing.expectEqual(physical.number, reader.number);
+            try testing.expectEqual(physical.number, reader.lines.fault.line);
+            try testing.expectEqual(physical.number, reader.lines.number);
             continue;
         }
         if (isBlank(physical.line)) continue;
@@ -169,7 +169,7 @@ fn checkReaderFailOver(source: *std.Io.Reader, input: []const u8, max_line_bytes
             try testing.expectEqualStrings(physical.line, line.line);
             // The offset is where the line's bytes actually are.
             try testing.expectEqual(physical.offset, line.offset);
-            try testing.expectEqual(physical.offset, reader.offset);
+            try testing.expectEqual(physical.offset, reader.lines.offset);
             _ = oracle_arena.reset(.retain_capacity);
             const expected = try std.json.parseFromSliceLeaky(Event, oracle_arena.allocator(), physical.line, .{
                 .ignore_unknown_fields = true,
@@ -180,27 +180,108 @@ fn checkReaderFailOver(source: *std.Io.Reader, input: []const u8, max_line_bytes
             try testing.expectEqual(@as(?usize, null), control);
         } else |err| switch (err) {
             error.MalformedLine => {
-                try testing.expectEqual(physical.number, reader.fault.line);
-                try testing.expectEqual(physical.offset, reader.offset);
-                try testing.expect(reader.fault.err != null);
+                try testing.expectEqual(physical.number, reader.lines.fault.line);
+                try testing.expectEqual(physical.offset, reader.lines.offset);
+                try testing.expect(reader.lines.fault.err != null);
                 // Where the parse gave up is a place in the line, or is not
                 // reported at all. It is never a place outside it.
-                if (reader.fault.offset) |at| try testing.expect(at <= physical.line.len);
+                if (reader.lines.fault.offset) |at| try testing.expect(at <= physical.line.len);
                 // The control byte scan runs first, so a line that parsed
                 // badly is a line that had no control byte to blame.
                 try testing.expectEqual(@as(?usize, null), control);
             },
             error.ControlByte => {
-                try testing.expectEqual(physical.number, reader.fault.line);
-                try testing.expectEqual(physical.offset, reader.offset);
-                try testing.expectEqual(control, reader.fault.offset);
-                try testing.expectEqual(@as(?strand.ParseLineError, null), reader.fault.err);
+                try testing.expectEqual(physical.number, reader.lines.fault.line);
+                try testing.expectEqual(physical.offset, reader.lines.offset);
+                try testing.expectEqual(control, reader.lines.fault.offset);
+                try testing.expectEqual(@as(?strand.ParseLineError, null), reader.lines.fault.err);
             },
             else => return err,
         }
     }
     try testing.expectEqual(@as(?strand.Line(Event), null), try reader.next());
+    try testing.expectEqual(oracle.number, reader.lines.number);
+}
+
+/// A `LineReader` moves in lockstep with the oracle in both modes: every line
+/// the oracle sees is passed over as blank, refused for its length, refused
+/// or passed over for a control byte, or handed back under the oracle's
+/// number and offset with the oracle's bytes. A refusal is never the end of
+/// the stream — the lines after an over-long one are all still read — and
+/// the size of the stream's own buffer changes nothing, since a line the
+/// reader can frame where it lies and one it copies out of several reads are
+/// the same line.
+fn checkLineReader(input: []const u8, max_line_bytes: usize) !void {
+    for ([_]@FieldType(strand.LineReader.Options, "on_malformed"){ .fail, .skip }) |on_malformed| {
+        var source: std.Io.Reader = .fixed(input);
+        try checkLineReaderOver(&source, input, max_line_bytes, on_malformed);
+        for ([_]usize{ 1, 2, 7, 64, 4096 }) |buffer_len| {
+            const buffer = try testing.allocator.alloc(u8, buffer_len);
+            defer testing.allocator.free(buffer);
+            var chunked: fixtures.Chunked = .init(input, buffer, buffer_len);
+            try checkLineReaderOver(&chunked.interface, input, max_line_bytes, on_malformed);
+        }
+    }
+}
+
+fn checkLineReaderOver(
+    source: *std.Io.Reader,
+    input: []const u8,
+    max_line_bytes: usize,
+    on_malformed: @FieldType(strand.LineReader.Options, "on_malformed"),
+) !void {
+    var reader: strand.LineReader = .init(testing.allocator, source, .{
+        .max_line_bytes = max_line_bytes,
+        .on_malformed = on_malformed,
+        // The oracle counts bytes, and a mark the reader drops is bytes the
+        // oracle would still be counting.
+        .skip_bom = false,
+    });
+    defer reader.deinit();
+
+    var damaged: u64 = 0;
+    var oracle: PhysicalLines = .{ .rest = input };
+    while (oracle.next()) |physical| {
+        if (physical.line.len > max_line_bytes) {
+            // Refused in either mode: a bound is not damage to pass over.
+            try testing.expectError(error.LineTooLong, reader.next());
+            try testing.expectEqual(physical.number, reader.fault.line);
+            try testing.expectEqual(physical.number, reader.number);
+            try testing.expectEqual(physical.offset, reader.offset);
+            try testing.expectEqual(@as(?usize, null), reader.fault.offset);
+            continue;
+        }
+        if (isBlank(physical.line)) continue;
+
+        if (strand.indexOfControl(physical.line)) |control| {
+            damaged += 1;
+            switch (on_malformed) {
+                .fail => {
+                    try testing.expectError(error.ControlByte, reader.next());
+                    try testing.expectEqual(physical.number, reader.fault.line);
+                    try testing.expectEqual(physical.offset, reader.offset);
+                    try testing.expectEqual(@as(?usize, control), reader.fault.offset);
+                    try testing.expectEqual(@as(?strand.ParseLineError, null), reader.fault.err);
+                },
+                // Passed over, and said nothing about until the line after
+                // it, which is where the next answer comes from.
+                .skip => {},
+            }
+            continue;
+        }
+
+        const line = (try reader.next()) orelse return error.TestReaderEndedEarly;
+        try testing.expectEqual(physical.number, line.number);
+        try testing.expectEqualStrings(physical.line, line.line);
+        try testing.expectEqual(physical.offset, line.offset);
+        try testing.expectEqual(physical.offset, reader.offset);
+        // A line that is handed back is where the next read begins.
+        try testing.expectEqual(physical.offset, reader.recordStart().offset);
+        try testing.expectEqual(physical.number - 1, reader.recordStart().lines_before);
+    }
+    try testing.expectEqual(@as(?strand.RawLine, null), try reader.next());
     try testing.expectEqual(oracle.number, reader.number);
+    try testing.expectEqual(if (on_malformed == .skip) damaged else 0, reader.skipped);
 }
 
 /// In `.skip` mode the lines that come back are a subsequence of the oracle's,
@@ -235,7 +316,7 @@ fn checkReaderSkip(input: []const u8) !void {
 
     var all: PhysicalLines = .{ .rest = input };
     while (all.next()) |_| {}
-    try testing.expectEqual(all.number, reader.number);
+    try testing.expectEqual(all.number, reader.lines.number);
 }
 
 /// A reader resumed at a line's offset reports that line under the number and
@@ -276,8 +357,8 @@ fn checkResume(input: []const u8) !void {
             // A line that is not a `T` is still that line, under its own
             // number and at its own offset.
             error.MalformedLine, error.ControlByte => {
-                try testing.expectEqual(physical.number, reader.fault.line);
-                try testing.expectEqual(physical.offset, reader.offset);
+                try testing.expectEqual(physical.number, reader.lines.fault.line);
+                try testing.expectEqual(physical.offset, reader.lines.offset);
             },
             else => return err,
         }
@@ -299,8 +380,8 @@ fn checkResume(input: []const u8) !void {
                 try testing.expectEqualStrings(after.line, line.line);
             } else |err| switch (err) {
                 error.MalformedLine, error.ControlByte => {
-                    try testing.expectEqual(after.number, reader.fault.line);
-                    try testing.expectEqual(after.offset, reader.offset);
+                    try testing.expectEqual(after.number, reader.lines.fault.line);
+                    try testing.expectEqual(after.offset, reader.lines.offset);
                 },
                 else => return err,
             }
@@ -308,7 +389,7 @@ fn checkResume(input: []const u8) !void {
         try testing.expectEqual(@as(?strand.Line(Event), null), try reader.next());
         // Having read to the end from the middle, it has counted the whole
         // file: the lines behind it plus the lines it read.
-        try testing.expectEqual(total, reader.number);
+        try testing.expectEqual(total, reader.lines.number);
     }
 }
 
@@ -461,7 +542,7 @@ fn checkPretty(input: []const u8) !void {
         previous = line.number;
         try testing.expect(line.number <= all.number);
     }
-    try testing.expect(reader.number <= all.number);
+    try testing.expect(reader.lines.number <= all.number);
 }
 
 /// A round trip through `.pretty`: what the writer indents over several lines,
@@ -763,7 +844,7 @@ fn checkTail(input: []const u8) !void {
         try forward_numbers.append(testing.allocator, line.number);
         try forward_offsets.append(testing.allocator, line.offset);
     }
-    const total = reader.number;
+    const total = reader.lines.number;
 
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -1066,6 +1147,20 @@ fn fuzzScanner(_: void, smith: *std.testing.Smith) anyerror!void {
     while (it.next()) |line| try checkScanner(line.line);
 }
 
+test "fuzz: LineReader over generated lines" {
+    try std.testing.fuzz({}, fuzzLineReader, .{ .corpus = corpus });
+}
+
+fn fuzzLineReader(_: void, smith: *std.testing.Smith) anyerror!void {
+    @disableInstrumentation();
+    var buf: [2048]u8 = undefined;
+    const input = generate(smith, &buf);
+    // A bound the input can reach, so that a refusal and the lines read
+    // after it are part of the property, and one it cannot.
+    try checkLineReader(input, smith.valueRangeAtMost(u32, 1, 128));
+    try checkLineReader(input, buf.len + 1);
+}
+
 fn fuzzReader(_: void, smith: *std.testing.Smith) anyerror!void {
     @disableInstrumentation();
     var buf: [2048]u8 = undefined;
@@ -1247,6 +1342,7 @@ fn seedBytes(random: std.Random, out: []u8) void {
 /// Every property, over one generated input.
 fn oneRound(bytes: []const u8) !void {
     inline for (.{
+        fuzzLineReader,
         fuzzReader,
         fuzzScanner,
         fuzzResume,
@@ -1337,6 +1433,9 @@ test "the properties hold on a table of awkward inputs" {
         try checkReaderFail(input, 8);
         try checkReaderFail(input, 1);
         try checkReaderSkip(input);
+        try checkLineReader(input, 1 << 20);
+        try checkLineReader(input, 8);
+        try checkLineReader(input, 1);
         try checkResume(input);
 
         try checkPretty(input);

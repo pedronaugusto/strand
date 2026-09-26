@@ -52,7 +52,7 @@ pub fn Tail(comptime T: type) type {
         /// last returned.
         offset: u64 = 0,
         /// How many records `prev` passed over under
-        /// `on_malformed = .skip`. See `Reader.skipped`.
+        /// `on_malformed = .skip`. See `LineReader.skipped`.
         skipped: u64 = 0,
         /// What this reader would not hand over, and why, in the same
         /// backwards numbering. See `Fault`.

@@ -61,7 +61,7 @@ pub fn main() !void {
     const kind = strand.kindOf("{\"kind\":\"open\",\"at\":1}");
     // --- README:usage ---
 
-    std.debug.print("read {d} lines, {d} warning(s)\n", .{ events.number, warnings });
+    std.debug.print("read {d} lines, {d} warning(s)\n", .{ events.lines.number, warnings });
     std.debug.print("kept past its line: {s} at {d}, note {?s}\n", .{
         last_open.?.kind,
         last_open.?.at,

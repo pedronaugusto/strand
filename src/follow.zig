@@ -199,8 +199,8 @@ pub fn Follower(comptime T: type) type {
         /// owned and is never closed; a handle the follower opened for itself
         /// across a rotation is, and this points at whichever it is reading.
         source: *std.Io.File.Reader,
-        /// The line layer. Public so that `number` and `fault` are
-        /// readable, and read-only otherwise.
+        /// The line layer. Public so that `reader.lines.number` and
+        /// `reader.lines.fault` are readable, and read-only otherwise.
         reader: strand.Reader(T),
         /// Read-only after `init`.
         options: Options,
@@ -334,7 +334,7 @@ pub fn Follower(comptime T: type) type {
                     else => return error.ReopenFailed,
                 },
                 .offset = self.source.logicalPos(),
-                .number = self.reader.number,
+                .number = self.reader.lines.number,
                 .rotations = self.rotations,
             };
         }
@@ -377,7 +377,7 @@ pub fn Follower(comptime T: type) type {
             var self = Self.init(allocator, io, source, options);
             self.held = now;
             self.rotations = point.rotations + @intFromBool(!same);
-            if (same) self.reader.number = point.number;
+            if (same) self.reader.lines.reset(.{ .offset = point.offset, .lines_before = point.number });
             return self;
         }
 
@@ -442,11 +442,6 @@ pub fn Follower(comptime T: type) type {
                 };
             }
             while (true) {
-                // A BOM check that reached an empty file is retried until
-                // there is a first record to decide it against.
-                if (self.source.logicalPos() == 0 and self.reader.number == 0)
-                    self.reader.bom_checked = false;
-
                 if (self.reader.next()) |maybe_line| {
                     if (maybe_line) |line| return line;
                 } else |err| switch (err) {
@@ -456,15 +451,17 @@ pub fn Follower(comptime T: type) type {
 
                 // `Reader.next` can pass over complete blank or skipped
                 // records before finding an unfinished one. Rewind only the
-                // current record, preserving that completed progress.
-                const position = self.reader.record_offset;
-                self.source.seekTo(position) catch |err| switch (err) {
+                // current record, preserving that completed progress. A
+                // record rewound to the top of the file is where a
+                // byte-order mark may still arrive, and `reset` looks for
+                // one again there.
+                const unfinished = self.reader.lines.recordStart();
+                self.source.seekTo(unfinished.offset) catch |err| switch (err) {
                     error.Canceled => return error.Canceled,
                     else => return error.SeekFailed,
                 };
-                self.reader.number = self.reader.record_number;
-                self.reader.consumed = position;
-                try self.waitForGrowth(position);
+                self.reader.lines.reset(unfinished);
+                try self.waitForGrowth(unfinished.offset);
             }
         }
 
@@ -599,12 +596,7 @@ pub fn Follower(comptime T: type) type {
 
         /// Puts the line layer back to where it stands at the top of a file.
         fn atStart(self: *Self) void {
-            self.reader.number = 0;
-            self.reader.consumed = 0;
-            self.reader.offset = 0;
-            self.reader.record_offset = 0;
-            self.reader.record_number = 0;
-            self.reader.bom_checked = false;
+            self.reader.lines.reset(.{});
             self.size_seen = null;
             self.held = null;
         }
@@ -786,7 +778,7 @@ test "a follower does not revisit a skipped complete line while waiting" {
     try fixture.write_file.writePositionalAll(testing.io, "{\"kind\":\"after\"}\n", "not json\n".len);
     try task.await(testing.io);
 
-    try testing.expectEqual(@as(u64, 1), follower.reader.skipped);
+    try testing.expectEqual(@as(u64, 1), follower.reader.lines.skipped);
 }
 
 test "a wake is a way to wait that is not a sleep" {

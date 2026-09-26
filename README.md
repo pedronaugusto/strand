@@ -57,8 +57,9 @@ const kind = strand.kindOf("{\"kind\":\"open\",\"at\":1}");
 [`examples/logbook.zig`](examples/logbook.zig) is built and run by the same
 command and carries the longer recipes: the end of a log read backwards, a
 follower checkpointed and resumed into a second follower, a record migrated
-from an older shape, a tagged union routed by its arm, and a torn record in
-front of a separated stream.
+from an older shape, a tagged union routed by its arm, a torn record in front
+of a separated stream, and a line protocol that answers a request past its
+bound and reads on.
 
 ## Install
 
@@ -78,11 +79,13 @@ Every allocation anywhere here is on an allocator you passed in.
 
 | | |
 |---|---|
-| `Reader(T)` | A `*std.Io.Reader` as a stream of typed lines. `next` returns a `Line(T)`: the value, the raw bytes, the 1-based number, the byte offset. |
+| `LineReader` | A `*std.Io.Reader` as a stream of lines, framed at the terminator, held to a bound, checked for damage, numbered and placed, and not parsed: `next` returns a `RawLine`. For bytes whose meaning is somebody else's: a protocol with its own decoder, a child process's output. |
+| `LineReader.recordStart`, `LineReader.reset` | Where the record the reader was last on began, and carrying on from a place the stream has been put back to. How a file still being written is read. |
+| `Reader(T)` | A `LineReader` with a parse on top: a stream of typed lines. `next` returns a `Line(T)`: the value, the raw bytes, the 1-based number, the byte offset. |
 | `Reader.resumeAt` | The same, starting at an offset with a line count behind it, so an index entry reads back as the line it named. |
 | `Reader.nextRaw`, `Reader.parse` | A line's bytes with no type for them, and the value when the caller decides it wants one. This is how a stream is routed: `kindOf` or `tagOf` on the bytes, and a parse only for the lines worth parsing. |
 | `Reader.keep`, `Tail.keep` | A copy of a value that outlives the line it came from. |
-| `Reader.fault`, `Reader.skipped` | Which line the reader last refused and why, and how many it has passed over. |
+| `Reader.lines` | The line reader under a `Reader`, and where its place is kept: `lines.number`, `lines.offset`, `lines.fault` (which line was last refused and why) and `lines.skipped` (how many were passed over). |
 | `Writer(T)`, `Writer.initFile` | One value per line, minified or indented, counted. `initFile` is the one with a file to sync. |
 | `Writer.write`, `Writer.writeAll` | One record, and a batch written byte for byte as the loop would have written it. |
 | `Writer.flush`, `Writer.sync` | The one-off, beside `Options.flush` and `Options.sync`, which are the policy. |
@@ -91,12 +94,24 @@ Every allocation anywhere here is on an allocator you passed in.
 | `Follower(T)` | Read to the end, wait, carry on. `Opener` and `PathOpener` are how it follows a path across a rotation, and `Identity` is what makes two handles the same file. |
 | `Follower.checkpoint`, `Follower.resumeFrom` | Where a follower stands, and a follower that carries on from there. |
 | `Versioned(T)`, `payloadOf` | The `{"v":N,"data":...}` envelope, with a migration hook for an older shape and the parse of that older shape inside it. |
-| `Raw` | A JSON value kept as its bytes: checked when its line is read, written back as it came, and decoded when it is wanted (`Raw.parse`). `Raw.encode` makes one from a value. |
+| `Raw` | A JSON value kept as its bytes: checked when its line is read, written back as it came, and decoded when it is wanted (`Raw.parse`). `Raw.encode` makes one from a value. `Writer(Raw)` writes records that are already encoded, under every policy a `Writer` has. |
 | `parseLine`, `lines` | One line, and a buffer of lines, already in memory. |
 | `kindOf`, `tagOf` | The first key of an object, and the union arm it names, without parsing the value. |
 | `indexOfControl`, `separator` | The first byte that must not appear raw in a line, and the one that marks where a record starts. |
 
 ## Design
+
+**Framing is a layer of its own.** Finding where a line ends, holding it to a
+bound, refusing a damaged one, and counting and placing it are the same work
+whatever the line means, so `LineReader` does that work and parses nothing.
+`Reader(T)` is a `LineReader` with a parse on top, kept as its `lines`, and
+`Follower` is a `Reader` that waits. A line past `max_line_bytes` is
+`error.LineTooLong` at every level, and by then the line has been consumed to
+its end, so the caller answers it and calls `next` again: an over-long line is
+never the end of the stream, and never grows the reader's buffer past the
+bound. The stream's own buffer can be much smaller than the longest line; a
+line that does not fit in it is copied out of the reads it arrived in, and one
+that does is not copied at all.
 
 **A value borrows from the reader, and the next line takes it back.**
 `Line.line` is a slice of the stream's own buffer when the whole line was
@@ -302,12 +317,13 @@ byte. It is a decision both ends make together, like the schema.
 | `error.ReadFailed` | The underlying `std.Io.Reader` failed; ask it for diagnostics. |
 | `error.OutOfMemory` | The allocator failed. |
 
-`Reader.fault` says which line the last of those was on (`fault.line`), what
-`std.json` made of it (`fault.err`, null for a line it was never shown), and
-where in the line it was (`fault.offset`: the control byte itself, or the byte
-`std.json` gave up at). `Reader.skipped` counts the lines passed over under
-`on_malformed = .skip`, and `Reader.offset` is where the line `next` last
-returned or refused began. The first four do not desynchronize the stream: the
+`LineReader.fault` — `Reader.lines.fault` on a reader — says which line the
+last of those was on (`fault.line`), what `std.json` made of it (`fault.err`,
+null for a line it was never shown), and where in the line it was
+(`fault.offset`: the control byte itself, or the byte `std.json` gave up at).
+`skipped` counts the lines passed over under `on_malformed = .skip`, and
+`offset` is where the line `next` last returned or refused began.
+`error.MalformedLine` is `Reader`'s alone; a `LineReader` parses nothing. The first four do not desynchronize the stream: the
 offending line has been consumed in full, so `next` can be called again. The
 other two can arrive mid-line and leave the stream where they found it.
 `Tail.prev` adds `error.SeekFailed` and `error.Truncated`; `Follower.next`
@@ -379,15 +395,16 @@ from a machine that is not Linux; it is a local script and no CI job calls it.
 
 ## Testing
 
-`zig build test` runs 161 tests and the examples, every one under
+`zig build test` runs 164 tests and the examples, every one under
 `std.testing.allocator`, so a leak or an invalid free fails the test rather
 than the process. CI runs that four times, in Debug, ReleaseSafe, ReleaseFast
 and ReleaseSmall, with `zig fmt --check` beside it, and
 [`ci/check-readme.sh`](ci/check-readme.sh) regenerates the code blocks above
 from the examples and fails on a difference.
 
-Fourteen of the tests are properties over generated lines: every line is
-reported under its own number and at its own byte offset, a reader resumed at
+Fifteen of the tests are properties over generated lines: every line is
+reported under its own number and at its own byte offset, a line past the
+bound is refused without costing the reader a line after it, a reader resumed at
 an offset agrees with one that read the whole stream, a bad line does not cost
 the reader its place, a file read backwards is the same lines in the other
 order and in the same places, a follower reads a replaced file in the right

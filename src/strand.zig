@@ -9,10 +9,14 @@
 //! emits ordinary reflected values directly while keeping `std.json` as the
 //! custom-stringifier and pretty-output path. Around that is the line layer:
 //!
-//! * `Reader` turns a `*std.Io.Reader` into a stream of typed values, one per
-//!   line, each carrying its 1-based line number, its raw bytes and the byte
-//!   offset it began at — and `Reader.resumeAt` starts again from one of
-//!   those offsets with the numbering intact.
+//! * `LineReader` turns a `*std.Io.Reader` into a stream of lines: framed at
+//!   the terminator, held to a bound, checked for damage, numbered and
+//!   placed, and not parsed. A line past the bound is an error the caller
+//!   answers, never the end of the stream.
+//! * `Reader` is a `LineReader` with a parse on top: a stream of typed values,
+//!   one per line, each carrying its 1-based line number, its raw bytes and
+//!   the byte offset it began at — and `Reader.resumeAt` starts again from
+//!   one of those offsets with the numbering intact.
 //! * A malformed line is an error naming the line, not an abort, and can be
 //!   skipped instead (`Options.on_malformed`).
 //! * Strings borrow from the line's bytes when they need no unescaping, so
@@ -57,6 +61,7 @@ pub const separator = line.separator;
 pub const lines = line.lines;
 pub const LineIterator = line.LineIterator;
 
+pub const LineReader = @import("line_reader.zig").LineReader;
 pub const Reader = @import("reader.zig").Reader;
 pub const Writer = @import("writer.zig").Writer;
 pub const writeLine = @import("writer.zig").writeLine;
@@ -75,6 +80,7 @@ pub const indexOfControl = @import("control.zig").indexOfControl;
 test {
     _ = @import("parse_line.zig");
     _ = @import("line.zig");
+    _ = @import("line_reader.zig");
     _ = @import("reader.zig");
     _ = @import("writer.zig");
     _ = @import("sync.zig");

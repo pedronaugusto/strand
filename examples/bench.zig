@@ -108,10 +108,10 @@ fn benchRead(gpa: std.mem.Allocator, io: std.Io, stdout: *std.Io.Writer, input: 
     }
     const elapsed = started.untilNow(io, .awake);
 
-    try report(stdout, "read", elapsed, reader.number, input.len);
+    try report(stdout, "read", elapsed, reader.lines.number, input.len);
     try stdout.print(
         "                 {d} of {d} strings borrowed the line, checksum {d}\n",
-        .{ borrowed, reader.number, checksum },
+        .{ borrowed, reader.lines.number, checksum },
     );
 }
 
@@ -216,7 +216,7 @@ fn benchCarried(gpa: std.mem.Allocator, io: std.Io, stdout: *std.Io.Writer) !voi
         const started = std.Io.Clock.awake.now(io);
         while (try reader.next()) |line| checksum +%= line.value.at;
         const elapsed = started.untilNow(io, .awake);
-        try report(stdout, name, elapsed, reader.number, out.written().len);
+        try report(stdout, name, elapsed, reader.lines.number, out.written().len);
         std.mem.doNotOptimizeAway(checksum);
     }
 }

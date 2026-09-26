@@ -1,7 +1,7 @@
 //! The behaviour of `strand` spelled out as scenarios. The short tests that
-//! introduce each declaration live beside it in `strand.zig`; these are the
-//! ones that need a stream, a malformed line, or a look at where memory came
-//! from.
+//! introduce each declaration live beside it, in the file that declares it;
+//! these are the ones that need a stream, a malformed line, or a look at
+//! where memory came from.
 
 const std = @import("std");
 const testing = std.testing;

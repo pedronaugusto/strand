@@ -359,10 +359,10 @@ const Shape = union(enum) {
     @"caf\xc3\xa9": u8,
 };
 
-/// `v` written by a `Writer` under each combination of the options that
-/// change bytes, into a destination with room for the record and into one
-/// with none, and by `std.json`: the same bytes every time. Written on `a`,
-/// an arena the caller drops.
+/// `v` written by a `Writer` and by `writeValue` under each combination of
+/// the options that change bytes, into a destination with room for the
+/// record and into one with none, and by `std.json`: the same bytes every
+/// time. Written on `a`, an arena the caller drops.
 pub fn expectSameAsStdJson(a: std.mem.Allocator, v: anytype) !void {
     inline for (.{ false, true }) |emit_null| {
         inline for (.{ false, true }) |escape_unicode| {
@@ -380,6 +380,14 @@ pub fn expectSameAsStdJson(a: std.mem.Allocator, v: anytype) !void {
                 });
                 try writer.write(v);
                 try testing.expectEqualStrings(theirs.written(), ours.written());
+
+                // The value alone, framed by nobody.
+                var alone: std.Io.Writer.Allocating = try .initCapacity(a, room);
+                try strand.writeValue(&alone.writer, v, .{
+                    .emit_null_optional_fields = emit_null,
+                    .escape_unicode = escape_unicode,
+                });
+                try testing.expectEqualStrings(theirs.written()[0 .. theirs.written().len - 1], alone.written());
             }
         }
     }

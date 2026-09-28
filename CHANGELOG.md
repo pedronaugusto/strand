@@ -21,6 +21,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   began, and carrying on from a place the stream has been put back to.
   `LineReader.join` appends the next physical line to a record, for a reader
   that knows when a record spread over several lines is finished.
+- `writeValue`, one value's JSON with no terminator, for a caller that
+  frames the line itself — an envelope around the value, a checksum after
+  it — with `ValueOptions` for the two settings that change its bytes.
+  `emit_null_optional_fields = true` is `std.json`'s default spelling. A
+  value that fits in the unused part of the destination's buffer is encoded
+  there, as `Writer` does.
 - A line-protocol recipe in `examples/logbook.zig`: requests read with a
   `LineReader`, one past the bound answered, and the replies written a record
   at a time.

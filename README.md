@@ -90,6 +90,7 @@ Every allocation anywhere here is on an allocator you passed in.
 | `Writer.write`, `Writer.writeAll` | One record, and a batch written byte for byte as the loop would have written it. |
 | `Writer.flush`, `Writer.sync` | The one-off, beside `Options.flush` and `Options.sync`, which are the policy. |
 | `writeLine` | One value, one line, nothing to count. |
+| `writeValue` | One value's JSON with no terminator, for a caller that frames the line itself: an envelope around the value, a checksum after it. `ValueOptions.emit_null_optional_fields` makes the bytes `std.json`'s default ones. |
 | `Tail(T)` | A seekable file read backwards: `prev` for one line, `last(n)` for the end of the log. |
 | `Follower(T)` | Read to the end, wait, carry on. `Opener` and `PathOpener` are how it follows a path across a rotation, and `Identity` is what makes two handles the same file. |
 | `Follower.checkpoint`, `Follower.resumeFrom` | Where a follower stands, and a follower that carries on from there. |
@@ -398,7 +399,7 @@ from a machine that is not Linux; it is a local script and no CI job calls it.
 
 ## Testing
 
-`zig build test` runs 173 tests and the examples, every one under
+`zig build test` runs 174 tests and the examples, every one under
 `std.testing.allocator`, so a leak or an invalid free fails the test rather
 than the process. CI runs that four times, in Debug, ReleaseSafe, ReleaseFast
 and ReleaseSmall, with `zig fmt --check` beside it, and

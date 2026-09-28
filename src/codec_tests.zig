@@ -318,3 +318,131 @@ test "a whole number std.json cannot cast is read as the number it is, or refuse
     // std.json refuses the unknown member before it reaches the number.
     try testing.expectError(error.UnknownField, strand.parseLine(struct { a: u128 }, a, "{\"b\":1,\"a\":1.8e38}", .{ .ignore_unknown_fields = false }));
 }
+
+//=========================================================================
+// The bytes a value is written as.
+//=========================================================================
+
+/// A type with its own `jsonStringify`, which is handed to `std.json`.
+const Custom = struct {
+    n: u8,
+    pub fn jsonStringify(self: Custom, jw: anytype) !void {
+        try jw.write(.{ .custom = self.n });
+    }
+};
+
+pub const Inner = struct { a: ?u8, b: []const []const u8, c: void, d: Hue };
+
+/// Every shape the encoder writes itself, and a few it hands on.
+const Shape = union(enum) {
+    empty,
+    flag: bool,
+    small: i8,
+    wide: u64,
+    signed: i64,
+    huge: u128,
+    negative: i128,
+    vast: u256,
+    text: []const u8,
+    maybe: ?[]const u8,
+    hue: Hue,
+    list: []const u32,
+    fixed: [3]u16,
+    nested: Inner,
+    pointer: *const Inner,
+    many: []const ?Hue,
+    real: f64,
+    tuple: struct { u8, bool },
+    custom: Custom,
+    value: std.json.Value,
+    @"odd \"tag\"": u8,
+    @"caf\xc3\xa9": u8,
+};
+
+/// `v` written by a `Writer` under each combination of the options that
+/// change bytes, into a destination with room for the record and into one
+/// with none, and by `std.json`: the same bytes every time. Written on `a`,
+/// an arena the caller drops.
+pub fn expectSameAsStdJson(a: std.mem.Allocator, v: anytype) !void {
+    inline for (.{ false, true }) |emit_null| {
+        inline for (.{ false, true }) |escape_unicode| {
+            var theirs: std.Io.Writer.Allocating = .init(a);
+            try std.json.Stringify.value(v, .{
+                .emit_null_optional_fields = emit_null,
+                .escape_unicode = escape_unicode,
+            }, &theirs.writer);
+            try theirs.writer.writeByte('\n');
+            inline for (.{ 0, 4096 }) |room| {
+                var ours: std.Io.Writer.Allocating = try .initCapacity(a, room);
+                var writer: strand.Writer(@TypeOf(v)) = .init(&ours.writer, .{
+                    .emit_null_optional_fields = emit_null,
+                    .escape_unicode = escape_unicode,
+                });
+                try writer.write(v);
+                try testing.expectEqualStrings(theirs.written(), ours.written());
+            }
+        }
+    }
+}
+
+test "a value is written as std.json writes it, whatever its shape" {
+    var prng: std.Random.DefaultPrng = .init(0x5eed_c4a0);
+    const random = prng.random();
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+
+    for (0..5_000) |_| {
+        _ = arena.reset(.retain_capacity);
+        const a = arena.allocator();
+        const text = try a.dupe(u8, awkward(random, try a.alloc(u8, 96)));
+        const inner: Inner = .{
+            .a = if (random.boolean()) random.int(u8) else null,
+            .b = &.{ text, awkward(random, try a.alloc(u8, 48)) },
+            .c = {},
+            .d = random.enumValue(Hue),
+        };
+        const boxed = try a.create(Inner);
+        boxed.* = inner;
+        const shapes = [_]Shape{
+            .empty,
+            .{ .flag = random.boolean() },
+            .{ .small = random.int(i8) },
+            .{ .wide = random.int(u64) >> random.int(u6) },
+            .{ .signed = random.int(i64) >> random.int(u6) },
+            .{ .huge = random.int(u128) >> random.int(u7) },
+            .{ .negative = random.int(i128) >> random.int(u7) },
+            .{ .vast = random.int(u256) >> random.int(u8) },
+            .{ .text = text },
+            .{ .maybe = if (random.boolean()) text else null },
+            .{ .hue = random.enumValue(Hue) },
+            .{ .list = &.{ random.int(u32), 0, std.math.maxInt(u32) } },
+            .{ .fixed = .{ random.int(u16), 0, 7 } },
+            .{ .nested = inner },
+            .{ .pointer = boxed },
+            .{ .many = &.{ null, random.enumValue(Hue) } },
+            .{ .real = @bitCast(random.int(u64)) },
+            .{ .tuple = .{ random.int(u8), random.boolean() } },
+            .{ .custom = .{ .n = random.int(u8) } },
+            .{ .value = .{ .string = text } },
+            .{ .@"odd \"tag\"" = random.int(u8) },
+            .{ .@"caf\xc3\xa9" = random.int(u8) },
+        };
+        for (shapes) |shape| try expectSameAsStdJson(a, shape);
+        try expectSameAsStdJson(a, text);
+        try expectSameAsStdJson(a, Pair{ .value = random.int(u64), .padding = text });
+    }
+    // The edges of the integers, which a random draw rarely lands on.
+    _ = arena.reset(.retain_capacity);
+    const a = arena.allocator();
+    inline for (.{ u0, u1, i1, u8, i8, u63, u64, i64, u65, i65, u127, u128, i128, u129, i256 }) |Int| {
+        try expectSameAsStdJson(a, @as(Int, std.math.minInt(Int)));
+        try expectSameAsStdJson(a, @as(Int, std.math.maxInt(Int)));
+    }
+    for ([_]u128{ 9_999_999_999_999_999_999, 10_000_000_000_000_000_000, std.math.maxInt(u64), std.math.maxInt(u64) + 1, 100_000_000_000_000_000_000_000_000_000_000_000_000 }) |edge| {
+        try expectSameAsStdJson(a, edge);
+    }
+    try expectSameAsStdJson(a, @as([]const u8, ""));
+    try expectSameAsStdJson(a, @as([]const u32, &.{}));
+    try expectSameAsStdJson(a, struct {}{});
+    try expectSameAsStdJson(a, struct { a: void }{ .a = {} });
+}

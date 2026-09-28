@@ -49,29 +49,44 @@ pub fn fromSlice(comptime T: type, slice: []const u8) Error!T {
 }
 
 /// Plain digits, with a minus or without, read into a type of 65 to 128
-/// bits without `std.fmt.parseInt`'s generality. Null for anything else,
-/// which `parseInt` then answers: an underscore, a plus sign, an empty
-/// string.
+/// bits without `std.fmt.parseInt`'s generality: nineteen digits at a time
+/// in 64 bits, and one 128-bit multiply to put two runs together. Null for
+/// anything else, which `parseInt` then answers: an underscore, a plus
+/// sign, an empty string, more than 39 digits.
 fn wide(comptime T: type, slice: []const u8) ?Error!T {
     const negative = slice.len != 0 and slice[0] == '-';
     const digits = slice[@intFromBool(negative)..];
-    if (digits.len == 0) return null;
-    var magnitude: u128 = 0;
-    for (digits) |c| {
-        if (c < '0' or c > '9') return null;
-        const times = @mulWithOverflow(magnitude, 10);
-        const plus = @addWithOverflow(times[0], c - '0');
-        // Past `u128`, and so past `T`. `parseInt` would say the same once
-        // it had seen every digit, and every byte left is a digit or not
-        // this answer's to give.
-        if (times[1] != 0 or plus[1] != 0) {
-            for (digits) |rest| if (rest < '0' or rest > '9') return null;
-            return error.Overflow;
+    if (digits.len == 0 or digits.len > 39) return null;
+    const magnitude: u128 = if (digits.len <= 19)
+        run(digits) orelse return null
+    else blk: {
+        const split = digits.len - 19;
+        const low = run(digits[split..]) orelse return null;
+        if (split <= 19) {
+            const high = run(digits[0..split]) orelse return null;
+            break :blk @as(u128, high) * 10_000_000_000_000_000_000 + low;
         }
-        magnitude = plus[0];
-    }
+        // 39 digits: the first, then 19 and 19.
+        const middle = run(digits[1..split]) orelse return null;
+        const top = run(digits[0..1]) orelse return null;
+        const below = @as(u128, middle) * 10_000_000_000_000_000_000 + low;
+        const scaled = @mulWithOverflow(@as(u128, top), 100_000_000_000_000_000_000_000_000_000_000_000_000);
+        const sum = @addWithOverflow(scaled[0], below);
+        if (scaled[1] != 0 or sum[1] != 0) return error.Overflow;
+        break :blk sum[0];
+    };
     const signed: i129 = if (negative) -@as(i129, magnitude) else magnitude;
     return std.math.cast(T, signed) orelse error.Overflow;
+}
+
+/// Up to nineteen decimal digits as a `u64`; null if any byte is not one.
+inline fn run(digits: []const u8) ?u64 {
+    var n: u64 = 0;
+    for (digits) |c| {
+        if (c < '0' or c > '9') return null;
+        n = n * 10 + (c - '0');
+    }
+    return n;
 }
 
 /// A whole `float` as a `T`, or `error.Overflow` outside `T`'s range, which

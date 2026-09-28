@@ -1325,6 +1325,34 @@ fn fuzzDecode(_: void, smith: *std.testing.Smith) anyerror!void {
     try codec.expectSameParse(codec.Pair, arena.allocator(), bytes);
 }
 
+test "fuzz: a string is written as std.json writes it" {
+    try std.testing.fuzz({}, fuzzEncode, .{ .corpus = &encode_corpus });
+}
+
+/// Any bytes, as a string, a struct's member and a union's payload,
+/// written as `std.json` writes them under every option that changes bytes
+/// (`codec_tests.expectSameAsStdJson`).
+fn fuzzEncode(_: void, smith: *std.testing.Smith) anyerror!void {
+    var buffer: [512]u8 = undefined;
+    const bytes = buffer[0..smith.slice(&buffer)];
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    try codec.expectSameAsStdJson(a, bytes);
+    try codec.expectSameAsStdJson(a, codec.Pair{ .value = 7, .padding = bytes });
+    try codec.expectSameAsStdJson(a, codec.Inner{ .a = null, .b = &.{ bytes, bytes }, .c = {}, .d = .blue });
+}
+
+const encode_corpus = [_][]const u8{
+    smithSlice(""),
+    smithSlice("plain"),
+    smithSlice("a quote \" and a backslash \\ past the first sixteen bytes"),
+    smithSlice("\x00\x01\x1f\x7f\n\r\t"),
+    smithSlice("caf\xc3\xa9 \xe2\x82\xac \xf0\x9f\x98\x80"),
+    smithSlice("\xff\xfe not UTF-8"),
+    smithSlice("\xed\xa0\x80 a surrogate half"),
+};
+
 /// Bytes as `std.testing.Smith.slice` reads them: a little-endian length,
 /// then the bytes.
 fn smithSlice(comptime body: []const u8) []const u8 {
@@ -1403,6 +1431,7 @@ fn oneRound(bytes: []const u8) !void {
         fuzzVersioned,
         fuzzRaw,
         fuzzDecode,
+        fuzzEncode,
     }) |property| {
         var smith: std.testing.Smith = .{ .in = bytes };
         try property({}, &smith);
@@ -1415,6 +1444,7 @@ test "the properties hold over generated inputs" {
     for (corpus) |seed| try oneRound(seed);
     for (versioned_corpus) |seed| try oneRound(seed);
     for (decode_corpus) |seed| try oneRound(seed);
+    for (encode_corpus) |seed| try oneRound(seed);
 
     var prng: std.Random.DefaultPrng = .init(build_options.seed);
     var bytes: [1024]u8 = undefined;

@@ -398,14 +398,14 @@ from a machine that is not Linux; it is a local script and no CI job calls it.
 
 ## Testing
 
-`zig build test` runs 171 tests and the examples, every one under
+`zig build test` runs 173 tests and the examples, every one under
 `std.testing.allocator`, so a leak or an invalid free fails the test rather
 than the process. CI runs that four times, in Debug, ReleaseSafe, ReleaseFast
 and ReleaseSmall, with `zig fmt --check` beside it, and
 [`ci/check-readme.sh`](ci/check-readme.sh) regenerates the code blocks above
 from the examples and fails on a difference.
 
-Sixteen of the tests are properties over generated lines: every line is
+Seventeen of the tests are properties over generated lines: every line is
 reported under its own number and at its own byte offset, a line past the
 bound is refused without costing the reader a line after it, a reader resumed at
 an offset agrees with one that read the whole stream, a bad line does not cost
@@ -414,9 +414,9 @@ order and in the same places, a follower reads a replaced file in the right
 order, a record written over several lines comes back as one, a separated
 stream gives up every record that was written to it whatever is torn in front
 of them, a value kept as its bytes is refused where `std.json` refuses it
-and is otherwise the value `std.json` read, and any bytes at all are read by
+and is otherwise the value `std.json` read, any bytes at all are read by
 both parsers as `std.json` reads them, or read at all where `std.json`
-panics.
+panics, and any string is written as `std.json` writes it.
 
 They run over a corpus in `src/corpus` and over a table of awkward inputs on
 every `zig build test`, and over generated input two ways:

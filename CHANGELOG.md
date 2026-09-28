@@ -37,6 +37,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `Follower` rewinds a half-written record and begins again after a
   truncation through `LineReader.reset`, rather than by setting the reader's
   fields.
+- Faster where chronicle's own codec was faster, and the same bytes. A
+  string with something to escape in it is scanned a vector at a time and
+  written in runs, each escape `std.json`'s own spelling, where it used to
+  go to `std.json` whole, a byte at a time; a member's key, with its comma
+  where the comma is certain, and an enum's name are one constant each; an
+  integer past 64 bits is written nineteen digits a division and read
+  nineteen digits at a time. The decoder matches the key it expects next
+  as the constant it is before reading one. The same property over every
+  shape, under every option that changes bytes, and a fuzz target hold the
+  writer to `std.json`'s bytes.
 
 ### Fixed
 

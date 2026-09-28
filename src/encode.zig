@@ -48,7 +48,12 @@ pub fn value(v: anytype, options: std.json.Stringify.Options, writer: *std.Io.Wr
     if (T == Raw) return raw(v.bytes, options, writer);
     switch (@typeInfo(T)) {
         .bool => try writer.writeAll(if (v) "true" else "false"),
-        .int => try writer.printInt(v, 10, .lower, .{}),
+        .int => |info| if (info.bits > 128) {
+            try writer.printInt(v, 10, .lower, .{});
+        } else {
+            var digits: [decimal_max]u8 = undefined;
+            try writer.writeAll(decimal(&digits, v));
+        },
         .comptime_int => try value(@as(std.math.IntFittingRange(v, v), v), options, writer),
         .float, .comptime_float => {
             if (@as(f64, @floatCast(v)) == v) {
@@ -83,8 +88,12 @@ pub fn value(v: anytype, options: std.json.Stringify.Options, writer: *std.Io.Wr
                     if (!first) try writer.writeByte(',');
                     first = false;
                     if (!info.is_tuple) {
-                        try string(field.name, options, writer);
-                        try writer.writeByte(':');
+                        if (comptime safeFieldName(field.name)) {
+                            try writer.writeAll(comptime "\"" ++ field.name ++ "\":");
+                        } else {
+                            try string(field.name, options, writer);
+                            try writer.writeByte(':');
+                        }
                     }
                     try value(@field(v, field.name), options, writer);
                 }
@@ -96,8 +105,12 @@ pub fn value(v: anytype, options: std.json.Stringify.Options, writer: *std.Io.Wr
             try writer.writeByte('{');
             inline for (info.fields) |field| {
                 if (v == @field(Tag, field.name)) {
-                    try string(field.name, options, writer);
-                    try writer.writeByte(':');
+                    if (comptime safeFieldName(field.name)) {
+                        try writer.writeAll(comptime "\"" ++ field.name ++ "\":");
+                    } else {
+                        try string(field.name, options, writer);
+                        try writer.writeByte(':');
+                    }
                     if (field.type == void) {
                         try writer.writeAll("{}");
                     } else {
@@ -117,8 +130,8 @@ pub fn value(v: anytype, options: std.json.Stringify.Options, writer: *std.Io.Wr
                 if (info.size == .many and info.sentinel() == null)
                     @compileError("unable to stringify type '" ++ @typeName(T) ++ "' without sentinel");
                 const slice = if (info.size == .many) std.mem.span(v) else v;
-                if (info.child == u8 and std.unicode.utf8ValidateSlice(slice)) {
-                    try string(slice, options, writer);
+                if (info.child == u8) {
+                    if (!try text(WriterSink{ .writer = writer }, slice, options)) try array(slice, options, writer);
                 } else {
                     try array(slice, options, writer);
                 }
@@ -161,31 +174,14 @@ const Buffer = struct {
     }
 
     fn integer(self: *Buffer, v: anytype) BufferError!void {
-        const I = @TypeOf(v);
-        const info = @typeInfo(I).int;
-        const U = std.meta.Int(.unsigned, @max(info.bits, 8));
-        var n: U = @abs(v);
-        // A comptime `@max` narrows its result to the smallest type that
-        // holds it, which for seven bits is a `u3` that the one added to it
-        // overflows; the length is a `usize` before anything is added.
-        var tmp: [1 + @as(usize, @max(info.bits, 1))]u8 = undefined;
-        var at = tmp.len;
-        while (n >= 100) : (n /= 100) {
-            at -= 2;
-            tmp[at..][0..2].* = std.fmt.digits2(@intCast(n % 100));
+        if (@typeInfo(@TypeOf(v)).int.bits > 128) {
+            var fixed: std.Io.Writer = .fixed(self.bytes[self.end..]);
+            fixed.printInt(v, 10, .lower, .{}) catch return error.NoSpace;
+            self.end += fixed.end;
+            return;
         }
-        if (n < 10) {
-            at -= 1;
-            tmp[at] = '0' + @as(u8, @intCast(n));
-        } else {
-            at -= 2;
-            tmp[at..][0..2].* = std.fmt.digits2(@intCast(n));
-        }
-        if (info.signedness == .signed and v < 0) {
-            at -= 1;
-            tmp[at] = '-';
-        }
-        try self.write(tmp[at..]);
+        var digits: [decimal_max]u8 = undefined;
+        try self.write(decimal(&digits, v));
     }
 
     fn stdValue(self: *Buffer, v: anytype, options: std.json.Stringify.Options) BufferError!void {
@@ -223,34 +219,50 @@ fn bufferValue(v: anytype, options: std.json.Stringify.Options, out: *Buffer) Bu
                     if (v == @field(T, field.name)) break;
                 } else return bufferValue(@intFromEnum(v), options, out);
             }
-            try bufferString(@tagName(v), options, out);
+            // A name is known when this is compiled, and so is its JSON
+            // when it needs no escaping.
+            switch (v) {
+                inline else => |tag| if (comptime safeFieldName(@tagName(tag)))
+                    try out.write(comptime "\"" ++ @tagName(tag) ++ "\"")
+                else
+                    try bufferString(@tagName(tag), options, out),
+            }
         },
         .enum_literal => try bufferString(@tagName(v), options, out),
         .error_set => try bufferString(@errorName(v), options, out),
         .@"struct" => |info| {
             try out.byte(if (info.is_tuple) '[' else '{');
             var first = true;
+            // Whether a member before this one is always written, which
+            // makes the comma in front of this one a constant.
+            comptime var written_before = false;
             inline for (info.fields) |field| {
                 if (field.type == void) continue;
+                const optional = !info.is_tuple and @typeInfo(field.type) == .optional;
                 var emit = true;
-                if (!info.is_tuple and @typeInfo(field.type) == .optional and !options.emit_null_optional_fields) {
+                if (optional and !options.emit_null_optional_fields) {
                     if (@field(v, field.name) == null) emit = false;
                 }
                 if (emit) {
-                    if (!first) try out.byte(',');
-                    first = false;
-                    if (!info.is_tuple) {
-                        if (comptime safeFieldName(field.name)) {
-                            try out.byte('"');
-                            try out.write(field.name);
-                            try out.write("\":");
+                    if (!info.is_tuple and comptime safeFieldName(field.name)) {
+                        const key = comptime "\"" ++ field.name ++ "\":";
+                        if (written_before) {
+                            try out.write("," ++ key);
                         } else {
+                            if (!first) try out.byte(',');
+                            try out.write(key);
+                        }
+                    } else {
+                        if (!first) try out.byte(',');
+                        if (!info.is_tuple) {
                             try bufferString(field.name, options, out);
                             try out.byte(':');
                         }
                     }
+                    first = false;
                     try bufferValue(@field(v, field.name), options, out);
                 }
+                if (!optional) written_before = true;
             }
             try out.byte(if (info.is_tuple) ']' else '}');
         },
@@ -260,9 +272,7 @@ fn bufferValue(v: anytype, options: std.json.Stringify.Options, out: *Buffer) Bu
             inline for (info.fields) |field| {
                 if (v == @field(Tag, field.name)) {
                     if (comptime safeFieldName(field.name)) {
-                        try out.byte('"');
-                        try out.write(field.name);
-                        try out.write("\":");
+                        try out.write(comptime "\"" ++ field.name ++ "\":");
                     } else {
                         try bufferString(field.name, options, out);
                         try out.byte(':');
@@ -287,11 +297,7 @@ fn bufferValue(v: anytype, options: std.json.Stringify.Options, out: *Buffer) Bu
                     @compileError("unable to stringify type '" ++ @typeName(T) ++ "' without sentinel");
                 const slice = if (info.size == .many) std.mem.span(v) else v;
                 if (info.child == u8) {
-                    if (try bufferAsciiString(slice, out)) return;
-                    if (std.unicode.utf8ValidateSlice(slice))
-                        try bufferString(slice, options, out)
-                    else
-                        try bufferArray(slice, options, out);
+                    if (!try text(out, slice, options)) try bufferArray(slice, options, out);
                 } else try bufferArray(slice, options, out);
             },
             else => @compileError("Unable to stringify type '" ++ @typeName(T) ++ "'"),
@@ -314,43 +320,159 @@ fn bufferArray(items: anytype, options: std.json.Stringify.Options, out: *Buffer
     try out.byte(']');
 }
 
+/// A name — a field's, a tag's, an error's — as `std.json` writes it,
+/// whatever its bytes.
 fn bufferString(bytes: []const u8, options: std.json.Stringify.Options, out: *Buffer) BufferError!void {
-    var escaped = false;
-    for (bytes) |b| {
-        if (b < 0x20 or b == '"' or b == '\\' or (options.escape_unicode and b >= 0x7f)) {
-            escaped = true;
-            break;
-        }
-    }
-    if (escaped) return out.stdString(bytes, options);
-    try out.byte('"');
-    try out.write(bytes);
-    try out.byte('"');
+    if (!try text(out, bytes, options)) try out.stdString(bytes, options);
 }
 
-/// The overwhelmingly common string needs neither UTF-8 decoding nor an
-/// escaping pass: ASCII is already valid UTF-8, and a vector comparison can
-/// establish that no JSON-special byte is present while reading each run
-/// once. Returns false for the uncommon path, which the full validator and
-/// escaper handle.
-fn bufferAsciiString(bytes: []const u8, out: *Buffer) BufferError!bool {
+/// Where a `WriterSink` or a `Buffer` is written to: a byte, a run of bytes,
+/// and a string `std.json` escapes itself.
+const WriterSink = struct {
+    writer: *std.Io.Writer,
+
+    fn byte(self: WriterSink, b: u8) std.Io.Writer.Error!void {
+        return self.writer.writeByte(b);
+    }
+    fn write(self: WriterSink, bytes: []const u8) std.Io.Writer.Error!void {
+        return self.writer.writeAll(bytes);
+    }
+    fn stdString(self: WriterSink, bytes: []const u8, options: std.json.Stringify.Options) std.Io.Writer.Error!void {
+        return std.json.Stringify.encodeJsonString(bytes, options, self.writer);
+    }
+};
+
+/// A byte string as `std.json` writes one, when it is UTF-8: quoted,
+/// escaping only what JSON requires. False, and nothing written, when it
+/// is not UTF-8, which `std.json` writes as an array of numbers instead.
+///
+/// `std.json` looks at a string a byte at a time. Here it is scanned a
+/// vector at a time for the three things a string must escape — a control
+/// byte, a quote, a backslash — and the runs between them are written
+/// whole, each escape being `std.json`'s own spelling of it. A string with
+/// none of them and nothing past ASCII, which is most, is one scan and one
+/// copy. Under `escape_unicode` a string with anything past ASCII in it is
+/// `std.json`'s.
+fn text(sink: anytype, bytes: []const u8, options: std.json.Stringify.Options) !bool {
+    const first = nextSpecial(bytes, 0, true);
+    if (first == bytes.len) {
+        try sink.byte('"');
+        try sink.write(bytes);
+        try sink.byte('"');
+        return true;
+    }
+    // The bytes in front of `first` are ASCII, so whether the string is
+    // UTF-8 is whether the rest of it is.
+    if (!std.unicode.utf8ValidateSlice(bytes[first..])) return false;
+    if (options.escape_unicode) {
+        try sink.stdString(bytes, options);
+        return true;
+    }
+    try sink.byte('"');
+    var from: usize = 0;
+    var at = first;
+    while (true) {
+        at = nextSpecial(bytes, at, false);
+        try sink.write(bytes[from..at]);
+        if (at == bytes.len) break;
+        try sink.write(escapes[bytes[at]]);
+        at += 1;
+        from = at;
+    }
+    try sink.byte('"');
+    return true;
+}
+
+/// The index of the first byte at or after `from` that a JSON string has to
+/// escape — a control byte, a quote, a backslash — or, when `ascii`, that
+/// is not ASCII either (0x7f included, which `escape_unicode` escapes).
+/// `bytes.len` when there is none.
+fn nextSpecial(bytes: []const u8, from: usize, comptime ascii: bool) usize {
     const width = 16;
     const V = @Vector(width, u8);
-    var i: usize = 0;
-    while (i + width <= bytes.len) : (i += width) {
-        const v: V = bytes[i..][0..width].*;
-        if (@reduce(.Or, v < @as(V, @splat(0x20))) or
-            @reduce(.Or, v == @as(V, @splat('"'))) or
-            @reduce(.Or, v == @as(V, @splat('\\'))) or
-            @reduce(.Or, v >= @as(V, @splat(0x7f)))) return false;
+    var at = from;
+    while (at + width <= bytes.len) : (at += width) {
+        const chunk: V = bytes[at..][0..width].*;
+        var hit = (chunk < @as(V, @splat(0x20))) |
+            (chunk == @as(V, @splat('"'))) |
+            (chunk == @as(V, @splat('\\')));
+        if (ascii) hit |= chunk >= @as(V, @splat(0x7f));
+        if (@reduce(.Or, hit)) break;
     }
-    for (bytes[i..]) |b| {
-        if (b < 0x20 or b == '"' or b == '\\' or b >= 0x7f) return false;
+    while (at < bytes.len) : (at += 1) {
+        const b = bytes[at];
+        if (b < 0x20 or b == '"' or b == '\\' or (ascii and b >= 0x7f)) break;
     }
-    try out.byte('"');
-    try out.write(bytes);
-    try out.byte('"');
-    return true;
+    return at;
+}
+
+/// What `std.json` writes for each byte a string has to escape, taken from
+/// `std.json` itself when this is compiled.
+const escapes: [256][]const u8 = table: {
+    @setEvalBranchQuota(100_000);
+    var table: [256][]const u8 = @splat("");
+    for (0..256) |b| {
+        if (b >= 0x20 and b != '"' and b != '\\') continue;
+        var buffer: [6]u8 = undefined;
+        var w: std.Io.Writer = .fixed(&buffer);
+        std.json.Stringify.encodeJsonStringChars(&.{@as(u8, b)}, .{}, &w) catch unreachable;
+        const frozen = buffer[0..w.end].*;
+        table[b] = &frozen;
+    }
+    break :table table;
+};
+
+/// Enough for any integer up to 128 bits and its sign. Wider ones are
+/// written by `std.fmt`.
+const decimal_max = 40;
+
+/// `v` in base ten, as `{d}` writes it, at the end of `buffer`.
+///
+/// Two digits a division, and for an integer past 64 bits, nineteen digits
+/// a 128-bit division and the rest in 64 bits, which is where a `u128`'s
+/// time goes otherwise.
+fn decimal(buffer: *[decimal_max]u8, v: anytype) []const u8 {
+    const info = @typeInfo(@TypeOf(v)).int;
+    comptime std.debug.assert(info.bits <= 128);
+    var at: usize = buffer.len;
+    var n: std.meta.Int(.unsigned, @max(info.bits, 1)) = @abs(v);
+    if (comptime info.bits > 64) {
+        while (n > std.math.maxInt(u64)) {
+            const low: u64 = @intCast(n % 10_000_000_000_000_000_000);
+            n /= 10_000_000_000_000_000_000;
+            const end = at;
+            at = digits64(buffer, at, low);
+            // Nineteen digits, the zeros in front included.
+            while (at > end - 19) {
+                at -= 1;
+                buffer[at] = '0';
+            }
+        }
+    }
+    at = digits64(buffer, at, @intCast(n));
+    if (info.signedness == .signed and v < 0) {
+        at -= 1;
+        buffer[at] = '-';
+    }
+    return buffer[at..];
+}
+
+/// `n`'s digits, ending at `buffer[end]`; where they begin.
+fn digits64(buffer: *[decimal_max]u8, end: usize, n_: u64) usize {
+    var n = n_;
+    var at = end;
+    while (n >= 100) : (n /= 100) {
+        at -= 2;
+        buffer[at..][0..2].* = std.fmt.digits2(@intCast(n % 100));
+    }
+    if (n < 10) {
+        at -= 1;
+        buffer[at] = '0' + @as(u8, @intCast(n));
+    } else {
+        at -= 2;
+        buffer[at..][0..2].* = std.fmt.digits2(@intCast(n));
+    }
+    return at;
 }
 
 fn safeFieldName(bytes: []const u8) bool {

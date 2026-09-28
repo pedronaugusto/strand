@@ -236,6 +236,25 @@ const Parser = struct {
         if (self.cursor < self.input.len and self.input[self.cursor] == '}') {
             self.cursor += 1;
         } else fields_loop: while (true) {
+            // The key the last one leads to, spelled as it is declared:
+            // what a writer that keeps declaration order puts here, and
+            // then there is no string to read and compare.
+            self.space();
+            inline for (fields, 0..) |field, i| {
+                if (comptime literalKey(field.name)) |key| {
+                    if (i == hint and self.input.len - self.cursor >= key.len and
+                        std.mem.eql(u8, self.input[self.cursor..][0..key.len], key))
+                    {
+                        self.cursor += key.len;
+                        try self.take(':');
+                        try self.putField(T, result, &seen, field, i);
+                        hint = (i + 1) % fields.len;
+                        try self.objectEnd();
+                        if (self.input[self.cursor - 1] == '}') break :fields_loop;
+                        continue :fields_loop;
+                    }
+                }
+            }
             const name = try self.string(false);
             try self.take(':');
 
@@ -538,6 +557,17 @@ const Parser = struct {
         self.cursor += scanner.cursor;
     }
 };
+
+/// A field's name as a key spelled with no escape in it, quotes included;
+/// null for a name that would need one, or that is not UTF-8, which the
+/// key's own reading decides.
+fn literalKey(comptime name: []const u8) ?[]const u8 {
+    comptime {
+        if (!std.unicode.utf8ValidateSlice(name)) return null;
+        for (name) |b| if (b < 0x20 or b == '"' or b == '\\') return null;
+        return "\"" ++ name ++ "\"";
+    }
+}
 
 inline fn digit(c: u8) bool {
     return c >= '0' and c <= '9';

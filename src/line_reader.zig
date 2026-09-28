@@ -65,6 +65,14 @@ pub const LineReader = struct {
     /// far as parsing it. See `Fault`. It is the last such line, whether it
     /// was reported or skipped; `fault.line` is 0 until there has been one.
     fault: Fault = .{},
+    /// Set when the last `next` met the end of the stream in the middle of
+    /// a record: it returned `null` over bytes with no terminator after them,
+    /// under `require_terminator`, or refused as too long a line the stream
+    /// ended inside. Clear when it met the end at a line boundary, or
+    /// returned or refused a whole line. A reader of a file still being
+    /// written tells an unfinished record from the end of the file by it;
+    /// `recordStart` is where the record began.
+    unfinished: bool = false,
 
     /// Internal. The current record's bytes when they are not a slice of
     /// `input`'s buffer; `RawLine.line` is then a view of it.
@@ -143,6 +151,13 @@ pub const LineReader = struct {
         /// is not part of the first line. Editors and Windows tooling put one
         /// there; `std.json` has no idea what it is.
         skip_bom: bool = true,
+        /// When true, a `\r` in front of the `\n` that ends a line is part of
+        /// the terminator and not of the line, so a file written on Windows
+        /// reads as the same lines. When false it is a byte of the line like
+        /// any other — a raw control byte, under `reject_control_bytes` — for
+        /// a format whose lines are checked byte for byte, a checksum over
+        /// each of them, which a `\r` changes.
+        crlf: bool = true,
         /// What a damaged line does: one holding a raw control byte, or in
         /// separated mode one with no record on it. `Reader` applies the
         /// same setting to a line that is not a `T`.
@@ -250,6 +265,7 @@ pub const LineReader = struct {
         self.record_number = start.lines_before;
         self.borrowed = false;
         self.cleared = false;
+        self.unfinished = false;
         // A mark belongs to the very start of a stream, so a reader that
         // begins anywhere else must not eat three bytes of a line looking for
         // one, and a reader put back at the start must look again.
@@ -286,6 +302,7 @@ pub const LineReader = struct {
     /// `error.ReadFailed` and `error.OutOfMemory` can arrive in the middle of
     /// a line, and leave the stream wherever they found it.
     pub fn next(self: *LineReader) NextError!?RawLine {
+        self.unfinished = false;
         while (true) {
             self.line_buf.writer.end = 0;
 
@@ -441,7 +458,10 @@ pub const LineReader = struct {
                     error.ReadFailed => return error.ReadFailed,
                     error.EndOfStream => {
                         if (!discarded) return .ended;
-                        if (self.options.require_terminator) return .ended;
+                        if (self.options.require_terminator) {
+                            self.unfinished = true;
+                            return .ended;
+                        }
                         self.number += 1;
                         return .{ .missing = blank };
                     },
@@ -513,6 +533,8 @@ pub const LineReader = struct {
                 self.number += 1;
                 return .{ .record = .{ .bytes = "", .offset = offset } };
             }
+            // The separator was read, so the stream ended inside a record.
+            self.unfinished = true;
             return .ended;
         }
     }
@@ -601,7 +623,9 @@ pub const LineReader = struct {
                 self.fault.framing(self.number);
                 self.offset = self.record_offset;
                 self.consumed += self.line_buf.writer.end - before;
-                self.consumed += try self.discardLine();
+                const discarded = try self.discardLine();
+                self.consumed += discarded;
+                self.unfinished = discarded == 0;
                 return error.LineTooLong;
             },
         };
@@ -625,12 +649,13 @@ pub const LineReader = struct {
             // Nothing at all is the end of the stream; a final line with
             // no newline is a line unless the caller said otherwise.
             if ((n == 0 and prefix.len == 0) or self.options.require_terminator) {
+                self.unfinished = n != 0 or prefix.len != 0 or prior != 0;
                 self.line_buf.writer.end = prior;
                 return null;
             }
         }
 
-        const record_len = if (self.line_buf.writer.end > 0 and
+        const record_len = if (self.options.crlf and self.line_buf.writer.end > 0 and
             self.line_buf.writer.buffer[self.line_buf.writer.end - 1] == '\r')
             self.line_buf.writer.end - 1
         else
@@ -644,7 +669,7 @@ pub const LineReader = struct {
 
         self.number += 1;
         // Tolerate CRLF: the `\r` belongs to the terminator, not the JSON.
-        if (self.line_buf.writer.end > before and
+        if (self.options.crlf and self.line_buf.writer.end > before and
             self.line_buf.writer.buffer[self.line_buf.writer.end - 1] == '\r')
         {
             self.line_buf.writer.end -= 1;
@@ -684,7 +709,7 @@ pub const LineReader = struct {
         if (self.options.reject_control_bytes and !self.options.record_separator) {
             var at = firstControlOrTerminator(contents) orelse return null;
             // A `\r` with the terminator behind it is the terminator.
-            if (contents[at] == '\r' and at + 1 < contents.len and contents[at + 1] == '\n') {
+            if (self.options.crlf and contents[at] == '\r' and at + 1 < contents.len and contents[at + 1] == '\n') {
                 at += 1;
             }
             if (contents[at] == '\n') return .{ .bytes = contents[0 .. at + 1], .cleared = true };
@@ -703,7 +728,7 @@ pub const LineReader = struct {
     /// since it is already known where it ends.
     inline fn takeFrame(self: *LineReader, frame: Framed, room: usize) NextError!?[]const u8 {
         const line = frame.bytes[0 .. frame.bytes.len - 1];
-        const record = trimCr(line);
+        const record = if (self.options.crlf) trimCr(line) else line;
         self.number += 1;
         self.input.toss(frame.bytes.len);
         self.consumed += frame.bytes.len;

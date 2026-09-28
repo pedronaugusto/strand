@@ -82,6 +82,8 @@ pub fn Reader(comptime T: type) type {
             require_terminator: bool = false,
             /// See `LineReader.Options.skip_bom`.
             skip_bom: bool = true,
+            /// See `LineReader.Options.crlf`.
+            crlf: bool = true,
             /// What a line that is not a `T` does, and a damaged one.
             on_malformed: @FieldType(LineReader.Options, "on_malformed") = .fail,
 
@@ -94,6 +96,7 @@ pub fn Reader(comptime T: type) type {
                     .reject_control_bytes = options.reject_control_bytes,
                     .require_terminator = options.require_terminator,
                     .skip_bom = options.skip_bom,
+                    .crlf = options.crlf,
                     .on_malformed = options.on_malformed,
                 };
             }

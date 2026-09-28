@@ -80,7 +80,7 @@ Every allocation anywhere here is on an allocator you passed in.
 | | |
 |---|---|
 | `LineReader` | A `*std.Io.Reader` as a stream of lines, framed at the terminator, held to a bound, checked for damage, numbered and placed, and not parsed: `next` returns a `RawLine`. For bytes whose meaning is somebody else's: a protocol with its own decoder, a child process's output. |
-| `LineReader.recordStart`, `LineReader.reset` | Where the record the reader was last on began, and carrying on from a place the stream has been put back to. How a file still being written is read. |
+| `LineReader.recordStart`, `LineReader.reset`, `LineReader.unfinished` | Where the record the reader was last on began, carrying on from a place the stream has been put back to, and whether the stream ended in the middle of that record rather than after a line. How a file still being written is read. |
 | `Reader(T)` | A `LineReader` with a parse on top: a stream of typed lines. `next` returns a `Line(T)`: the value, the raw bytes, the 1-based number, the byte offset. |
 | `Reader.resumeAt` | The same, starting at an offset with a line count behind it, so an index entry reads back as the line it named. |
 | `Reader.nextRaw`, `Reader.parse` | A line's bytes with no type for them, and the value when the caller decides it wants one. This is how a stream is routed: `kindOf` or `tagOf` on the bytes, and a parse only for the lines worth parsing. |
@@ -91,7 +91,7 @@ Every allocation anywhere here is on an allocator you passed in.
 | `Writer.flush`, `Writer.sync` | The one-off, beside `Options.flush` and `Options.sync`, which are the policy. |
 | `writeLine` | One value, one line, nothing to count. |
 | `writeValue` | One value's JSON with no terminator, for a caller that frames the line itself: an envelope around the value, a checksum after it. `ValueOptions.emit_null_optional_fields` makes the bytes `std.json`'s default ones. |
-| `Tail(T)` | A seekable file read backwards: `prev` for one line, `last(n)` for the end of the log. |
+| `Tail(T)` | A seekable file read backwards: `prev` for one line, `last(n)` for the end of the log, `prevRaw` for a line's bytes with no parse. `Options.end` is where the file ends for it, for a log that reserves space ahead of its records. |
 | `Follower(T)` | Read to the end, wait, carry on. `Opener` and `PathOpener` are how it follows a path across a rotation, and `Identity` is what makes two handles the same file. |
 | `FileId` | Which file or directory a handle is open on, as the filesystem numbers it: the volume and the file's number on it. What `Identity` compares by default. |
 | `Follower.checkpoint`, `Follower.resumeFrom` | Where a follower stands, and a follower that carries on from there. |
@@ -268,7 +268,9 @@ makes one from bytes and checks them. A `Raw` made by hand is trusted.
 
 - A UTF-8 byte-order mark at the start of the stream is not part of the first
   line (`skip_bom`).
-- `\r\n` is a terminator, and the `\r` is not part of the line.
+- `\r\n` is a terminator, and the `\r` is not part of the line — unless
+  `crlf` is off, for a format whose lines are checked byte for byte, and then
+  the `\r` is a byte of the line.
 - A raw C0 control byte other than tab — a NUL above all, which is what a torn
   write leaves behind — is `error.ControlByte` naming the line and the offset
   (`reject_control_bytes`). JSON forbids these raw in a string and has no use
@@ -401,7 +403,7 @@ from a machine that is not Linux; it is a local script and no CI job calls it.
 
 ## Testing
 
-`zig build test` runs 176 tests and the examples, every one under
+`zig build test` runs 179 tests and the examples, every one under
 `std.testing.allocator`, so a leak or an invalid free fails the test rather
 than the process. CI runs that four times, in Debug, ReleaseSafe, ReleaseFast
 and ReleaseSmall, with `zig fmt --check` beside it, and

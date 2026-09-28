@@ -39,6 +39,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   numbers it: the device and the inode on POSIX, the volume's serial number
   and the 128-bit file id on Windows. What `Identity` compares, and what a
   caller comparing two handles wants.
+- `LineReader.unfinished`: whether the stream ended in the middle of a
+  record — `next` returned `null` over bytes with no terminator after them,
+  or refused as too long a line the stream ended inside — rather than after
+  a line. A reader of a file still being written tells an unfinished record
+  from the end of the file by it.
+- `crlf`, on `LineReader.Options`, `Reader.Options` and `Tail.Options`: on
+  by default, as before, and off for a format whose lines are checked byte
+  for byte — a checksum over each — where a `\r` in front of the newline is
+  a byte of the line and not part of the terminator.
+- `Tail.prevRaw`, a line read backwards as its bytes, framed and checked
+  and not parsed; and `Tail.Options.end`, where the file ends for the
+  reader, for a log that reserves space ahead of its records.
 - A line-protocol recipe in `examples/logbook.zig`: requests read with a
   `LineReader`, one past the bound answered, and the replies written a record
   at a time.

@@ -143,6 +143,13 @@ pub fn Tail(comptime T: type) type {
             skip_bom: bool = true,
             /// See `Reader.Options.on_malformed`.
             on_malformed: enum { fail, skip } = .fail,
+            /// See `LineReader.Options.crlf`.
+            crlf: bool = true,
+            /// Where the file ends for this reader: its length when `null`.
+            /// A log that reserves space ahead of its records — zeros a
+            /// writer has not filled yet — reads back from where its
+            /// records end. Past the file's length is `error.Truncated`.
+            end: ?u64 = null,
             /// How many bytes one read asks the file for. The buffer holds
             /// one of these plus the line being assembled, so this trades a
             /// syscall per block against the memory a `Tail` costs while it
@@ -195,8 +202,9 @@ pub fn Tail(comptime T: type) type {
             var normalized = options;
             if (normalized.block_bytes == 0) normalized.block_bytes = 1;
             if (source.size_err) |err| return err;
-            const size = try source.file.length(source.io);
-            source.size = size;
+            const length = try source.file.length(source.io);
+            source.size = length;
+            const size = normalized.end orelse length;
             return .{
                 .source = source,
                 .options = normalized,
@@ -227,12 +235,49 @@ pub fn Tail(comptime T: type) type {
         /// takes both back. `keep` is how a value outlives its line.
         pub fn prev(self: *Self) NextError!?Line(T) {
             while (true) {
-                var raw = (try self.prevRaw()) orelse return null;
+                const raw = (try self.prevRaw()) orelse return null;
+                if (self.batch_allocator == null) _ = self.arena.reset(.retain_capacity);
+                const value = strand.parseLine(T, self.batch_allocator orelse self.arena.allocator(), raw.line, .{
+                    .ignore_unknown_fields = self.options.ignore_unknown_fields,
+                    .duplicate_fields = self.options.duplicate_fields,
+                    .copy_strings = self.batch_allocator != null,
+                }) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    else => |parse_err| {
+                        self.fault.parse(raw.number, parse_err, line_mod.whereItFailed(
+                            T,
+                            self.arena.allocator(),
+                            raw.line,
+                            self.options,
+                        ));
+                        switch (self.options.on_malformed) {
+                            .fail => return error.MalformedLine,
+                            .skip => {
+                                self.skipped += 1;
+                                continue;
+                            },
+                        }
+                    },
+                };
+                return .{ .value = value, .line = raw.line, .number = raw.number, .offset = raw.offset };
+            }
+        }
+
+        /// The line before the last one returned, as its bytes: framed,
+        /// held to the bound and checked for damage as `prev` does, and not
+        /// parsed. `LineReader.next` read backwards, for a caller with its
+        /// own reading of a line — a log whose record is more than a value.
+        ///
+        /// Ownership: the bytes borrow the reader's block buffer, and the
+        /// next `prev` or `prevRaw` takes them back.
+        pub fn prevRaw(self: *Self) NextError!?strand.RawLine {
+            while (true) {
+                var raw = (try self.prevPhysical()) orelse return null;
                 const number = self.number;
 
                 // The terminator is not part of the line, and neither is a
                 // mark at the very start of the file.
-                raw = line_mod.trimCr(raw);
+                if (self.options.crlf) raw = line_mod.trimCr(raw);
                 if (self.options.skip_bom and self.offset == 0 and
                     std.mem.startsWith(u8, raw, line_mod.bom))
                 {
@@ -273,31 +318,7 @@ pub fn Tail(comptime T: type) type {
                         }
                     }
                 }
-
-                if (self.batch_allocator == null) _ = self.arena.reset(.retain_capacity);
-                const value = strand.parseLine(T, self.batch_allocator orelse self.arena.allocator(), raw, .{
-                    .ignore_unknown_fields = self.options.ignore_unknown_fields,
-                    .duplicate_fields = self.options.duplicate_fields,
-                    .copy_strings = self.batch_allocator != null,
-                }) catch |err| switch (err) {
-                    error.OutOfMemory => return error.OutOfMemory,
-                    else => |parse_err| {
-                        self.fault.parse(number, parse_err, line_mod.whereItFailed(
-                            T,
-                            self.arena.allocator(),
-                            raw,
-                            self.options,
-                        ));
-                        switch (self.options.on_malformed) {
-                            .fail => return error.MalformedLine,
-                            .skip => {
-                                self.skipped += 1;
-                                continue;
-                            },
-                        }
-                    },
-                };
-                return .{ .value = value, .line = raw, .number = number, .offset = self.offset };
+                return .{ .line = raw, .number = number, .offset = self.offset };
             }
         }
 
@@ -335,7 +356,7 @@ pub fn Tail(comptime T: type) type {
 
         /// The bytes of the line before the last one returned, terminator
         /// excluded, or `null` at the start of the file. Counts the line.
-        fn prevRaw(self: *Self) NextError!?[]const u8 {
+        fn prevPhysical(self: *Self) NextError!?[]const u8 {
             if (self.exhausted) return null;
             var over = false;
             while (true) {
@@ -374,7 +395,7 @@ pub fn Tail(comptime T: type) type {
         /// have been dropped and only its extent is known.
         fn emit(self: *Self, line: []const u8, over: bool) NextError!?[]const u8 {
             if (!over) {
-                var record = line_mod.trimCr(line);
+                var record = if (self.options.crlf) line_mod.trimCr(line) else line;
                 if (self.options.skip_bom and self.offset == 0 and
                     std.mem.startsWith(u8, record, line_mod.bom))
                 {

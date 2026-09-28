@@ -406,6 +406,104 @@ test "a line reader puts an unfinished record back and reads it once it is finis
     try testing.expectEqual(unfinished.offset, two.offset);
 }
 
+test "a line reader says when the stream ended inside a record" {
+    // Through a buffer smaller than the lines and one larger, so that a line
+    // is framed where it lies and where it straddles a refill alike.
+    inline for (.{ 3, 64 }) |buffer_len| {
+        var buffer: [buffer_len]u8 = undefined;
+
+        // Unfinished: bytes and no terminator after them.
+        var cut = fixtures.Chunked.init("{\"a\":1}\n{\"b\":", &buffer, 2);
+        var lines: strand.LineReader = .init(testing.allocator, &cut.interface, .{ .require_terminator = true });
+        defer lines.deinit();
+        try testing.expectEqualStrings("{\"a\":1}", (try lines.next()).?.line);
+        try testing.expect(!lines.unfinished);
+        try testing.expectEqual(null, try lines.next());
+        try testing.expect(lines.unfinished);
+        try testing.expectEqual(@as(u64, 8), lines.recordStart().offset);
+
+        // Finished: the end of the stream at a line boundary.
+        var whole = fixtures.Chunked.init("{\"a\":1}\n", &buffer, 2);
+        var at_end: strand.LineReader = .init(testing.allocator, &whole.interface, .{ .require_terminator = true });
+        defer at_end.deinit();
+        _ = try at_end.next();
+        try testing.expectEqual(null, try at_end.next());
+        try testing.expect(!at_end.unfinished);
+
+        // Past the bound, with the stream ending inside the line and not.
+        var long_cut = fixtures.Chunked.init("{}\nxxxxxxxxxxxx", &buffer, 2);
+        var over: strand.LineReader = .init(testing.allocator, &long_cut.interface, .{ .require_terminator = true, .max_line_bytes = 4 });
+        defer over.deinit();
+        _ = try over.next();
+        try testing.expectError(error.LineTooLong, over.next());
+        try testing.expect(over.unfinished);
+        var long_whole = fixtures.Chunked.init("xxxxxxxxxxxx\n{}\n", &buffer, 2);
+        var over_whole: strand.LineReader = .init(testing.allocator, &long_whole.interface, .{ .require_terminator = true, .max_line_bytes = 4 });
+        defer over_whole.deinit();
+        try testing.expectError(error.LineTooLong, over_whole.next());
+        try testing.expect(!over_whole.unfinished);
+        try testing.expectEqualStrings("{}", (try over_whole.next()).?.line);
+    }
+}
+
+test "without crlf a carriage return is a byte of the line" {
+    inline for (.{ 3, 64 }) |buffer_len| {
+        var buffer: [buffer_len]u8 = undefined;
+        const input = "{\"a\":1}\r\n{\"b\":2}\n";
+
+        // Kept, where a line is checked byte for byte.
+        var kept = fixtures.Chunked.init(input, &buffer, 2);
+        var lines: strand.LineReader = .init(testing.allocator, &kept.interface, .{ .crlf = false, .reject_control_bytes = false });
+        defer lines.deinit();
+        const first = (try lines.next()).?;
+        try testing.expectEqualStrings("{\"a\":1}\r", first.line);
+        const second = (try lines.next()).?;
+        try testing.expectEqualStrings("{\"b\":2}", second.line);
+        try testing.expectEqual(@as(u64, 9), second.offset);
+
+        // And a raw control byte, where those are refused.
+        var refused = fixtures.Chunked.init(input, &buffer, 2);
+        var strict: strand.LineReader = .init(testing.allocator, &refused.interface, .{ .crlf = false });
+        defer strict.deinit();
+        try testing.expectError(error.ControlByte, strict.next());
+        try testing.expectEqualStrings("{\"b\":2}", (try strict.next()).?.line);
+
+        // The bound counts it.
+        var bound = fixtures.Chunked.init(input, &buffer, 2);
+        var tight: strand.LineReader = .init(testing.allocator, &bound.interface, .{ .crlf = false, .reject_control_bytes = false, .max_line_bytes = 7 });
+        defer tight.deinit();
+        try testing.expectError(error.LineTooLong, tight.next());
+    }
+}
+
+test "a file read backwards ends where it is told to, and gives its lines as bytes" {
+    // Space reserved after the records, which is not a line.
+    const bytes = "{\"a\":1}\nnot json\r\n{\"c\":3}\n\x00\x00\x00\x00";
+    var fixture = try fixtures.Fixture.init(bytes, 64);
+    defer fixture.deinit();
+    var tail: strand.Tail(strand.Raw) = try .init(testing.allocator, &fixture.reader, .{
+        .end = bytes.len - 4,
+        .crlf = false,
+        .reject_control_bytes = false,
+    });
+    defer tail.deinit();
+    const c = (try tail.prevRaw()).?;
+    try testing.expectEqualStrings("{\"c\":3}", c.line);
+    try testing.expectEqual(@as(u64, 18), c.offset);
+    // Not parsed, so a line that is not JSON is its bytes; and without
+    // crlf the carriage return is one of them.
+    const b = (try tail.prevRaw()).?;
+    try testing.expectEqualStrings("not json\r", b.line);
+    try testing.expectEqual(@as(u64, 2), b.number);
+    try testing.expectEqualStrings("{\"a\":1}", (try tail.prevRaw()).?.line);
+    try testing.expectEqual(null, try tail.prevRaw());
+
+    // An end past the file is a file shorter than it was said to be.
+    var past: strand.Tail(strand.Raw) = try .init(testing.allocator, &fixture.reader, .{ .end = bytes.len + 1 });
+    defer past.deinit();
+    try testing.expectError(error.Truncated, past.prevRaw());
+}
+
 test "the line bound excludes a CRLF terminator" {
     {
         var source: std.Io.Reader = .fixed("{}\r\n");

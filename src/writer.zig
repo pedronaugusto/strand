@@ -359,7 +359,7 @@ pub fn Writer(comptime T: type) type {
         fn drainAndSync(self: *Self) Error!void {
             try self.flushOutput();
             const dest = self.file orelse return self.syncFault();
-            _ = syncFile(dest.file, dest.io) catch return self.syncFault();
+            _ = syncFile(dest.file, dest.io, .data) catch return self.syncFault();
         }
 
         /// `initFile` knows the concrete writer behind `output`. Calling its

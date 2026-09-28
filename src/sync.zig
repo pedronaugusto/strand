@@ -15,6 +15,20 @@ pub const SyncKind = enum {
     plain,
 };
 
+/// How much of what a file has been given `syncFile` is to put down.
+pub const SyncLevel = enum {
+    /// The bytes, and what it takes to find them — the file's length above
+    /// all — without the timestamps. What a log appending records needs,
+    /// and what `Writer` asks for.
+    data,
+    /// Everything, timestamps included: `fsync` where `data` would be
+    /// `fdatasync`. For a caller whose promise is written in terms of the
+    /// ordinary call.
+    all,
+};
+
+pub const SyncError = std.Io.File.SyncError;
+
 /// Puts what a file has been given onto the disk under it, as completely as
 /// the platform allows, and says which call did it.
 ///
@@ -24,22 +38,25 @@ pub const SyncKind = enum {
 /// On Darwin it is too weak. `fsync` there hands the bytes to the drive and
 /// does not make the drive write them down, so a machine that loses power can
 /// lose a record an `fsync` returned success for. `fcntl(F_FULLFSYNC)` is the
-/// call that waits for the media, and it is what a sync asks for there.
+/// call that waits for the media, and it is what a sync asks for there, at
+/// either level.
 ///
 /// On Linux it is more than a log needs. `fsync` writes the file's timestamps
 /// back as well, which is a second metadata write per record for a mtime no
 /// reader of this log consults; `fdatasync` writes the record and whatever it
 /// takes to find the record — the file's new length above all — and nothing
 /// else. `std.Io.File` exposes no such call, so this is the syscall, which is
-/// also what makes it the same call whether or not libc is linked.
+/// also what makes it the same call whether or not libc is linked. It is
+/// what `.data` asks for; `.all` is `fsync`.
 ///
 /// A file or filesystem that has no such call — a network mount, an image —
 /// refuses it, and then `fsync` is the strongest thing there is on that
-/// filesystem and is what it gets. Any other failure is reported rather than
-/// retried: a failed sync can clear the error the kernel was holding, so
-/// asking a second time is how the loss gets lost rather than how it gets
-/// fixed.
-pub fn syncFile(file: std.Io.File, io: std.Io) !SyncKind {
+/// filesystem and is what it gets. A call interrupted by a signal is made
+/// again. Any other failure is reported rather than retried or answered
+/// with a weaker call: a failed sync can clear the error the kernel was
+/// holding, so asking a second time is how the loss gets lost rather than
+/// how it gets fixed.
+pub fn syncFile(file: std.Io.File, io: std.Io, level: SyncLevel) SyncError!SyncKind {
     if (comptime builtin.os.tag.isDarwin()) {
         while (true) {
             switch (std.posix.errno(std.c.fcntl(file.handle, std.c.F.FULLFSYNC, @as(c_int, 0)))) {
@@ -48,12 +65,12 @@ pub fn syncFile(file: std.Io.File, io: std.Io) !SyncKind {
                 // This filesystem cannot be asked. Everything else is the
                 // file saying the bytes are not down.
                 .OPNOTSUPP, .INVAL, .NOTTY, .PERM => break,
-                else => return error.SyncFailed,
+                else => |e| return failure(e),
             }
         }
     }
     if (comptime builtin.os.tag == .linux) {
-        while (true) {
+        if (level == .data) while (true) {
             switch (std.os.linux.errno(std.os.linux.fdatasync(file.handle))) {
                 .SUCCESS => return .data,
                 .INTR => continue,
@@ -61,12 +78,23 @@ pub fn syncFile(file: std.Io.File, io: std.Io) !SyncKind {
                 // filesystem that declines it. Everything else is the file
                 // saying the bytes are not down.
                 .INVAL, .NOSYS => break,
-                else => return error.SyncFailed,
+                else => |e| return failure(e),
             }
-        }
+        };
     }
     try file.sync(io);
     return .plain;
+}
+
+/// A sync's failure as `std.Io.File.sync` names it.
+fn failure(e: anytype) SyncError {
+    return switch (e) {
+        .IO => error.InputOutput,
+        .NOSPC => error.NoSpaceLeft,
+        .DQUOT => error.DiskQuota,
+        .ACCES => error.AccessDenied,
+        else => std.posix.unexpectedErrno(e),
+    };
 }
 
 test syncFile {
@@ -76,10 +104,15 @@ test syncFile {
     // A sync is the strongest call the platform has, and on the two platforms
     // where that is not what `std` calls a sync, this is the test that the
     // other one is what was asked for.
-    const kind = try syncFile(fixture.write_file, std.testing.io);
+    const kind = try syncFile(fixture.write_file, std.testing.io, .data);
     const expected: SyncKind = switch (builtin.os.tag) {
         .linux => .data,
         else => if (builtin.os.tag.isDarwin()) .full else .plain,
     };
     try std.testing.expectEqual(expected, kind);
+
+    // Everything, timestamps included, is the ordinary call where the
+    // ordinary call is the whole of it, and still the strongest on Darwin.
+    const all = try syncFile(fixture.write_file, std.testing.io, .all);
+    try std.testing.expectEqual(@as(SyncKind, if (builtin.os.tag.isDarwin()) .full else .plain), all);
 }

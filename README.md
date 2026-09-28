@@ -98,6 +98,7 @@ Every allocation anywhere here is on an allocator you passed in.
 | `Raw` | A JSON value kept as its bytes: checked when its line is read, written back as it came, and decoded when it is wanted (`Raw.parse`). `Raw.encode` makes one from a value. `Writer(Raw)` writes records that are already encoded, under every policy a `Writer` has. |
 | `parseLine`, `lines` | One line, and a buffer of lines, already in memory. |
 | `kindOf`, `tagOf` | The first key of an object, and the union arm it names, without parsing the value. |
+| `syncFile` | A file's bytes put on the disk with the call each platform means by a sync (the table under Design), for a caller that keeps its own file: `.data` is what `Writer` asks for, `.all` is `fsync` where `.data` would be `fdatasync`. |
 | `indexOfControl`, `separator` | The first byte that must not appear raw in a line, and the one that marks where a record starts. |
 
 ## Design

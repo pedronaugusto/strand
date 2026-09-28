@@ -78,6 +78,10 @@ pub const Raw = @import("raw.zig").Raw;
 pub const kindOf = @import("route.zig").kindOf;
 pub const tagOf = @import("route.zig").tagOf;
 pub const indexOfControl = @import("control.zig").indexOfControl;
+pub const syncFile = @import("sync.zig").syncFile;
+pub const SyncLevel = @import("sync.zig").SyncLevel;
+pub const SyncKind = @import("sync.zig").SyncKind;
+pub const SyncError = @import("sync.zig").SyncError;
 
 test {
     _ = @import("parse_line.zig");

@@ -27,6 +27,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `emit_null_optional_fields = true` is `std.json`'s default spelling. A
   value that fits in the unused part of the destination's buffer is encoded
   there, as `Writer` does.
+- `syncFile`, the sync `Writer` makes, for a caller that keeps its own file:
+  `F_FULLFSYNC` on Darwin, `fdatasync` on Linux, the system's flush on
+  Windows, and `fsync` where a filesystem declines the stronger call. It
+  takes a `SyncLevel`: `.data` is what `Writer` asks for, `.all` is `fsync`
+  where `.data` would be `fdatasync`. It says which call did it
+  (`SyncKind`), makes an interrupted call again, and names a failure as
+  `std.Io.File.sync` does (`SyncError`) rather than answering it with a
+  weaker call.
 - A line-protocol recipe in `examples/logbook.zig`: requests read with a
   `LineReader`, one past the bound answered, and the replies written a record
   at a time.

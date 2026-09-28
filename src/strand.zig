@@ -92,4 +92,7 @@ test {
     _ = @import("follow.zig");
     _ = @import("versioned.zig");
     _ = @import("raw.zig");
+    _ = @import("int.zig");
+    _ = @import("from_value.zig");
+    _ = @import("codec_tests.zig");
 }

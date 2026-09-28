@@ -9,6 +9,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Scanner = @import("scanner.zig");
 const Raw = @import("raw.zig").Raw;
+const int = @import("int.zig");
 
 pub fn supports(comptime T: type) bool {
     // The walk visits every field of every type reachable from `T`, once
@@ -298,26 +299,7 @@ const Parser = struct {
     }
 
     fn integer(self: *Parser, comptime T: type) !T {
-        const slice = try self.scalar();
-        if (comptime @typeInfo(T).int.bits <= 64) {
-            if (slice.len != 0 and slice[0] != '-') {
-                var result: u64 = 0;
-                const limit: u64 = @intCast(std.math.maxInt(T));
-                for (slice) |c| {
-                    if (c < '0' or c > '9') break;
-                    const decimal = c - '0';
-                    if (result > limit / 10 or
-                        (result == limit / 10 and decimal > limit % 10)) return error.Overflow;
-                    result = result * 10 + decimal;
-                } else return @intCast(result);
-            }
-        }
-        if (std.json.isNumberFormattedLikeAnInteger(slice)) return std.fmt.parseInt(T, slice, 10);
-        const float = try std.fmt.parseFloat(f128, slice);
-        if (@round(float) != float) return error.InvalidNumber;
-        if (float > @as(f128, @floatFromInt(std.math.maxInt(T))) or
-            float < @as(f128, @floatFromInt(std.math.minInt(T)))) return error.Overflow;
-        return @as(T, @intFromFloat(float));
+        return int.fromSlice(T, try self.scalar());
     }
 
     fn scalar(self: *Parser) ![]const u8 {

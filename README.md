@@ -279,6 +279,9 @@ makes one from bytes and checks them. A `Raw` made by hand is trusted.
   blank lines are not acceptable; a log that has been through an editor or a
   shell redirect has them anyway, and losing the rest of the file over one is
   not an improvement.
+- A whole number written with a fraction or an exponent (`1.8e38`) is read
+  into an integer of any width as the number it is, and one past the type is
+  `error.Overflow`. `std.json` panics on some of these; nothing here does.
 - Bytes that are not UTF-8 are a malformed line: this package rejects, it does
   not repair, and it does not substitute U+FFFD. Going the other way, a Zig
   `[]const u8` that is not valid UTF-8 is written by `std.json` as an array of
@@ -395,14 +398,14 @@ from a machine that is not Linux; it is a local script and no CI job calls it.
 
 ## Testing
 
-`zig build test` runs 164 tests and the examples, every one under
+`zig build test` runs 171 tests and the examples, every one under
 `std.testing.allocator`, so a leak or an invalid free fails the test rather
 than the process. CI runs that four times, in Debug, ReleaseSafe, ReleaseFast
 and ReleaseSmall, with `zig fmt --check` beside it, and
 [`ci/check-readme.sh`](ci/check-readme.sh) regenerates the code blocks above
 from the examples and fails on a difference.
 
-Fifteen of the tests are properties over generated lines: every line is
+Sixteen of the tests are properties over generated lines: every line is
 reported under its own number and at its own byte offset, a line past the
 bound is refused without costing the reader a line after it, a reader resumed at
 an offset agrees with one that read the whole stream, a bad line does not cost
@@ -410,8 +413,10 @@ the reader its place, a file read backwards is the same lines in the other
 order and in the same places, a follower reads a replaced file in the right
 order, a record written over several lines comes back as one, a separated
 stream gives up every record that was written to it whatever is torn in front
-of them, and a value kept as its bytes is refused where `std.json` refuses it
-and is otherwise the value `std.json` read.
+of them, a value kept as its bytes is refused where `std.json` refuses it
+and is otherwise the value `std.json` read, and any bytes at all are read by
+both parsers as `std.json` reads them, or read at all where `std.json`
+panics.
 
 They run over a corpus in `src/corpus` and over a table of awkward inputs on
 every `zig build test`, and over generated input two ways:

@@ -371,12 +371,13 @@ fn unicodeEscape(self: *@This()) Error!u21 {
     const first = try self.hexQuad();
     if (std.unicode.utf16IsLowSurrogate(first)) return error.SyntaxError;
     if (!std.unicode.utf16IsHighSurrogate(first)) return @intCast(first);
-    if (self.input.len - self.cursor < 2) {
-        self.cursor = self.input.len;
-        return error.UnexpectedEndOfInput;
+    // A byte at a time, as `std.json` reads it: the first one that is not
+    // what the escape needs is the error, and running out is another one.
+    for ("\\u") |want| {
+        if (self.cursor == self.input.len) return error.UnexpectedEndOfInput;
+        if (self.input[self.cursor] != want) return error.SyntaxError;
+        self.cursor += 1;
     }
-    if (self.input[self.cursor] != '\\' or self.input[self.cursor + 1] != 'u') return error.SyntaxError;
-    self.cursor += 2;
     const second = try self.hexQuad();
     if (!std.unicode.utf16IsLowSurrogate(second)) return error.SyntaxError;
     const pair = [2]u16{ first, second };
@@ -384,12 +385,9 @@ fn unicodeEscape(self: *@This()) Error!u21 {
 }
 
 fn hexQuad(self: *@This()) Error!u16 {
-    if (self.input.len - self.cursor < 4) {
-        self.cursor = self.input.len;
-        return error.UnexpectedEndOfInput;
-    }
     var out: u16 = 0;
     for (0..4) |_| {
+        if (self.cursor == self.input.len) return error.UnexpectedEndOfInput;
         const c = self.input[self.cursor];
         const nibble: u16 = switch (c) {
             '0'...'9' => c - '0',

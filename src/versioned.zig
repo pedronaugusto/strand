@@ -24,6 +24,8 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const typed_parse = @import("parse.zig");
+const from_value = @import("from_value.zig");
 
 /// The envelope's two keys. Short, because they are on every line.
 const version_key = "v";
@@ -132,7 +134,7 @@ pub fn Versioned(comptime T: type) type {
                         },
                         .use_last => {},
                     };
-                    from = try std.json.innerParse(u32, allocator, source, options);
+                    from = try typed_parse.inner(u32, allocator, source, options);
                 } else if (std.mem.eql(u8, key, data_key)) {
                     if (parsed != null or stashed != null) switch (options.duplicate_field_behavior) {
                         .@"error" => return error.DuplicateField,
@@ -146,7 +148,7 @@ pub fn Versioned(comptime T: type) type {
                         parsed = null;
                         stashed = try std.json.innerParse(std.json.Value, allocator, source, options);
                     } else if (from != null and from.? == current) {
-                        parsed = try std.json.innerParse(T, allocator, source, options);
+                        parsed = try typed_parse.inner(T, allocator, source, options);
                     } else {
                         stashed = try std.json.innerParse(std.json.Value, allocator, source, options);
                     }
@@ -162,7 +164,7 @@ pub fn Versioned(comptime T: type) type {
             const data = stashed orelse return error.MissingField;
             if (version == current) {
                 return .{
-                    .value = try std.json.parseFromValueLeaky(T, allocator, data, options),
+                    .value = try from_value.parseFromValue(T, allocator, data, options),
                     .from = version,
                 };
             }
@@ -188,6 +190,10 @@ pub fn Versioned(comptime T: type) type {
 
 /// `data` parsed as an older shape, for use inside a `jsonlMigrate` hook.
 ///
+/// `std.json.parseFromValueLeaky` with unknown fields ignored, except that a
+/// number it would panic on casting into one of `Old`'s integers is
+/// `error.Overflow`: 2^64 into a `u64`, for one.
+///
 /// Ownership: `std.json`'s leaky contract — allocations land on `allocator`,
 /// which in a hook is the arena the line is being parsed on, and the result
 /// lives exactly as long as the rest of the line's value does.
@@ -196,7 +202,7 @@ pub fn payloadOf(
     allocator: Allocator,
     data: std.json.Value,
 ) std.json.ParseFromValueError!Old {
-    return std.json.parseFromValueLeaky(Old, allocator, data, .{ .ignore_unknown_fields = true });
+    return from_value.parseFromValue(Old, allocator, data, .{ .ignore_unknown_fields = true });
 }
 
 /// What `Versioned` requires of `T`, checked where the mistake is made.
@@ -268,6 +274,44 @@ const Event = struct {
         }
     }
 };
+
+/// A record with integers `std.json` can panic on casting into.
+const Wide = struct {
+    id: u128,
+    count: u64 = 0,
+
+    pub const jsonl_version: u32 = 2;
+
+    pub fn jsonlMigrate(allocator: Allocator, from: u32, data: std.json.Value) std.json.ParseFromValueError!Wide {
+        if (from != 1) return error.UnknownField;
+        const old = try payloadOf(struct { id: u128, count: u64 = 0 }, allocator, data);
+        return .{ .id = old.id, .count = old.count };
+    }
+};
+
+test "a number std.json would panic on is read or refused, never a panic" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // Parsed straight into `T`, `v` first: read here, as the number it is.
+    const straight = try strand.parseLine(Versioned(Wide), a, "{\"v\":2,\"data\":{\"id\":1.8e38}}", .{});
+    try testing.expectEqual(@as(u128, 180_000_000_000_000_000_000_000_000_000_000_000_000), straight.value.id);
+    try testing.expectError(error.Overflow, strand.parseLine(Versioned(Wide), a, "{\"v\":2,\"data\":{\"id\":3.402823669209384634633746074317682114555e38}}", .{}));
+
+    // Held as a `std.json.Value` until `v` is known, and read from it; and
+    // migrated through `payloadOf`. 2^64 is a `u64`'s largest value rounded
+    // up, which std.json let through to its cast.
+    for ([_][]const u8{
+        "{\"data\":{\"id\":1,\"count\":1.8446744073709552e19},\"v\":2}",
+        "{\"v\":1,\"data\":{\"id\":1,\"count\":1.8446744073709552e19}}",
+        "{\"v\":1,\"data\":{\"id\":\"2e38\"}}",
+    }) |line| {
+        try testing.expectError(error.Overflow, strand.parseLine(Versioned(Wide), a, line, .{}));
+    }
+    const migrated = try strand.parseLine(Versioned(Wide), a, "{\"v\":1,\"data\":{\"id\":7,\"count\":1.5e3}}", .{});
+    try testing.expectEqual(Wide{ .id = 7, .count = 1500 }, migrated.value);
+}
 
 test "a line of the current version is parsed straight into T" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);

@@ -45,6 +45,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   file that was empty when it was first read, and was then written mark
   first, read its first line with the mark in it and refused it. `Follower`
   had worked around this for itself.
+- No line takes the process down over a number. `std.json` in Zig 0.16.0
+  reads a number written with a fraction or an exponent into an integer
+  through a float and panics on two that pass its range check: a value from
+  2^127 up, whatever the type (`1.8e38` into a `u128`), and the type's
+  largest value rounded up (2^127 into an `i128`, 2^64 into a `u64` from a
+  `std.json.Value`). Both of strand's parsers read such a number as the
+  number it is, and one past the type is `error.Overflow`; so does
+  `Versioned`, which read its payload through `std.json`, and `payloadOf`,
+  whose value is now checked for those numbers before `std.json` is given
+  it. Wherever `std.json` answers, the answer is unchanged, which a property
+  over 20,000 values of every shape, each changed four ways, and a fuzz
+  target hold both parsers to.
+- The token parser refuses a string where an array belongs before reading
+  the string, and reads a `\u` escape a byte at a time, as `std.json` does:
+  an unfinished line of either kind was `error.UnexpectedEndOfInput` where
+  `std.json` says `error.UnexpectedToken` or `error.SyntaxError`.
 
 ## [0.7.0] - 2026-09-24
 

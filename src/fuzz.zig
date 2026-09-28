@@ -15,6 +15,7 @@ const std = @import("std");
 const testing = std.testing;
 const strand = @import("strand.zig");
 const fixtures = @import("fixtures.zig");
+const codec = @import("codec_tests.zig");
 
 /// The shape a log line is parsed into here. Optional, defaulted and nested
 /// fields so that a generated line can go wrong in more than one way.
@@ -1307,6 +1308,50 @@ fn fuzzRaw(_: void, smith: *std.testing.Smith) anyerror!void {
     while (it.next()) |line| try checkRaw(line.line);
 }
 
+test "fuzz: the decoder reads any bytes as std.json does, and never panics" {
+    try std.testing.fuzz({}, fuzzDecode, .{ .corpus = &decode_corpus });
+}
+
+/// Any bytes, read as three types by both of this package's paths and by
+/// `std.json`: the same value or the same error, and where `std.json` would
+/// panic, an answer (`codec_tests.expectSameParse`).
+fn fuzzDecode(_: void, smith: *std.testing.Smith) anyerror!void {
+    var buffer: [512]u8 = undefined;
+    const bytes = buffer[0..smith.slice(&buffer)];
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    try codec.expectSameParse(codec.Plain, arena.allocator(), bytes);
+    try codec.expectSameParse(codec.Flat, arena.allocator(), bytes);
+    try codec.expectSameParse(codec.Pair, arena.allocator(), bytes);
+}
+
+/// Bytes as `std.testing.Smith.slice` reads them: a little-endian length,
+/// then the bytes.
+fn smithSlice(comptime body: []const u8) []const u8 {
+    comptime {
+        var entry: [4 + body.len]u8 = undefined;
+        std.mem.writeInt(u32, entry[0..4], body.len, .little);
+        @memcpy(entry[4..], body);
+        const frozen = entry;
+        return &frozen;
+    }
+}
+
+const decode_corpus = [_][]const u8{
+    smithSlice("{\"text\":\"plain\"}"),
+    smithSlice("{\"nested\":{\"a\":null,\"b\":[\"x\",\"y\"],\"d\":\"red\",\"e\":{\"empty\":{}}}}"),
+    smithSlice("{\"list\":[1,0,4294967295]}"),
+    smithSlice("{\"twice\":null}"),
+    smithSlice("{\"hue\":\"gr\\\"een\"}"),
+    smithSlice("{\"signed\":-9223372036854775808}"),
+    smithSlice("{\"text\":\"caf\xc3\xa9 \\u0041\"}"),
+    smithSlice("{ \"flag\" : true }"),
+    smithSlice("{\"value\":1,\"padding\":\"pppp\"}"),
+    smithSlice("{\"huge\":1.8e38}"),
+    smithSlice("{\"negative\":1.7014118346046923173168730371588410572e38}"),
+    smithSlice("{\"huge\":3.402823669209384634633746074317682114555e38}"),
+};
+
 //=========================================================================
 // The campaign: every property over generated inputs, driven by a seed.
 //
@@ -1357,6 +1402,7 @@ fn oneRound(bytes: []const u8) !void {
         fuzzTail,
         fuzzVersioned,
         fuzzRaw,
+        fuzzDecode,
     }) |property| {
         var smith: std.testing.Smith = .{ .in = bytes };
         try property({}, &smith);
@@ -1368,6 +1414,7 @@ test "the properties hold over generated inputs" {
     // that name it, and then as much generated input as the build asked for.
     for (corpus) |seed| try oneRound(seed);
     for (versioned_corpus) |seed| try oneRound(seed);
+    for (decode_corpus) |seed| try oneRound(seed);
 
     var prng: std.Random.DefaultPrng = .init(build_options.seed);
     var bytes: [1024]u8 = undefined;

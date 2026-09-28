@@ -1,11 +1,12 @@
 //! Typed parsing on top of strand's complete-input scanner.
 //!
-//! The shape and policies are `std.json`'s. The only owned conversion here
-//! is the common non-negative fixed-width integer path; everything else is
-//! delegated to `std.json.innerParse`.
+//! The shape and policies are `std.json`'s. The one conversion owned here is
+//! the integer (`int.zig`), which `std.json` can panic on; everything else
+//! it does not walk itself is delegated to `std.json.innerParse`.
 
 const std = @import("std");
 const Scanner = @import("scanner.zig");
+const int = @import("int.zig");
 const Allocator = std.mem.Allocator;
 const Token = std.json.Token;
 
@@ -20,12 +21,16 @@ pub fn parse(
     return value;
 }
 
-fn inner(
+/// `std.json.innerParse`, over any of its token sources: strand's scanner,
+/// `std.json.Scanner` or `std.json.Reader`. What a type with its own
+/// `jsonParse` in this package calls for what it holds, so that an integer
+/// in it is read here and not by `std.json` (see `int.zig`).
+pub fn inner(
     comptime T: type,
     allocator: Allocator,
-    source: *Scanner,
+    source: anytype,
     options: std.json.ParseOptions,
-) std.json.ParseError(Scanner)!T {
+) std.json.ParseError(@TypeOf(source.*))!T {
     switch (@typeInfo(T)) {
         .int, .comptime_int => return parseInt(T, allocator, source, options),
         .optional => |info| {
@@ -52,9 +57,16 @@ fn inner(
         .array => |info| {
             // `std.json` also accepts a string for [N]u8; leave that path to
             // its exact implementation.
-            if (info.child == u8 and try source.peekNextTokenType() == .string)
-                return std.json.innerParse(T, allocator, source, options);
-            if (try source.next() != .array_begin) return error.UnexpectedToken;
+            // Looked at before it is taken, as `std.json` does: a string in
+            // the place of an array is refused before it is read to its end.
+            switch (try source.peekNextTokenType()) {
+                .array_begin => _ = try source.next(),
+                .string => if (info.child == u8)
+                    return std.json.innerParse(T, allocator, source, options)
+                else
+                    return error.UnexpectedToken,
+                else => return error.UnexpectedToken,
+            }
             var result: T = undefined;
             for (&result) |*item| item.* = try inner(info.child, allocator, source, options);
             if (try source.next() != .array_end) return error.UnexpectedToken;
@@ -76,7 +88,8 @@ fn inner(
                 // the allocation policy required here.
                 if (info.child == u8)
                     return std.json.innerParse(T, allocator, source, options);
-                if (try source.next() != .array_begin) return error.UnexpectedToken;
+                if (try source.peekNextTokenType() != .array_begin) return error.UnexpectedToken;
+                _ = try source.next();
                 var list: std.ArrayList(info.child) = .empty;
                 while (try source.peekNextTokenType() != .array_end) {
                     try list.append(allocator, try inner(info.child, allocator, source, options));
@@ -121,9 +134,9 @@ fn inner(
 fn parseStruct(
     comptime T: type,
     allocator: Allocator,
-    source: *Scanner,
+    source: anytype,
     options: std.json.ParseOptions,
-) std.json.ParseError(Scanner)!T {
+) std.json.ParseError(@TypeOf(source.*))!T {
     const fields = @typeInfo(T).@"struct".fields;
     if (try source.next() != .object_begin) return error.UnexpectedToken;
     var result: T = undefined;
@@ -199,9 +212,9 @@ fn parseStruct(
 fn parseInt(
     comptime T: type,
     allocator: Allocator,
-    source: *Scanner,
+    source: anytype,
     options: std.json.ParseOptions,
-) std.json.ParseError(Scanner)!T {
+) std.json.ParseError(@TypeOf(source.*))!T {
     const token = try source.nextAllocMax(allocator, .alloc_if_needed, options.max_value_len.?);
     defer freeAllocated(allocator, token);
     const slice = switch (token) {
@@ -209,28 +222,7 @@ fn parseInt(
         else => return error.UnexpectedToken,
     };
 
-    if (comptime @typeInfo(T).int.bits <= 64) {
-        if (slice.len != 0 and slice[0] != '-') {
-            var value: u64 = 0;
-            const limit: u64 = @intCast(std.math.maxInt(T));
-            for (slice) |c| {
-                if (c < '0' or c > '9') break;
-                const digit = c - '0';
-                // Stated as the direct decoder states it: a type whose
-                // largest value is one digit long overflows on its first.
-                if (value > limit / 10 or (value == limit / 10 and digit > limit % 10)) return error.Overflow;
-                value = value * 10 + digit;
-            } else return @intCast(value);
-        }
-    }
-
-    if (std.json.isNumberFormattedLikeAnInteger(slice))
-        return std.fmt.parseInt(T, slice, 10);
-    const float = try std.fmt.parseFloat(f128, slice);
-    if (@round(float) != float) return error.InvalidNumber;
-    if (float > @as(f128, @floatFromInt(std.math.maxInt(T))) or
-        float < @as(f128, @floatFromInt(std.math.minInt(T)))) return error.Overflow;
-    return @as(T, @intFromFloat(float));
+    return int.fromSlice(T, slice);
 }
 
 fn freeAllocated(allocator: Allocator, token: Token) void {

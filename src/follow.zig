@@ -21,6 +21,7 @@
 //! so the old file is read to its end before the new one is started.
 
 const std = @import("std");
+const FileId = @import("file_id.zig").FileId;
 const Allocator = std.mem.Allocator;
 
 const strand = @import("strand.zig");
@@ -99,8 +100,10 @@ pub const PathOpener = struct {
 /// reading?", and there are two ways to answer it.
 pub const Identity = union(enum) {
     /// The number the system gives a file: the inode on a POSIX system, the
-    /// file index on Windows. One call, nothing read, and exactly right
-    /// while the numbers are not reused — which is the catch. A filesystem
+    /// file index on Windows, together with the volume it is on, since two
+    /// volumes number their files independently. Two calls, nothing read,
+    /// and exactly right while the numbers are not reused — which is the
+    /// catch. A filesystem
     /// is free to give a new file the number of one just deleted, and then a
     /// log that was rotated away reads as the log that replaced it; going
     /// the other way, a filesystem that renumbers a file it did not replace
@@ -135,15 +138,23 @@ pub const Identity = union(enum) {
     pub const Taken = struct {
         /// What the system calls the file.
         inode: std.Io.File.INode,
+        /// The volume the file is on (`FileId.volume`): the device on
+        /// POSIX, the volume's serial number on Windows. `null` in a
+        /// checkpoint written before it was recorded, which is then
+        /// compared by the number alone.
+        volume: ?u64 = null,
         /// The hash of the window, or `null` under `.inode` and for a file
         /// that is not yet as long as the window.
         fingerprint: ?u64 = null,
 
         /// Whether these are the same file. Two fingerprints settle it; with
-        /// fewer than two, the number does.
+        /// fewer than two, the number and the volume do.
         pub fn eql(a: Taken, b: Taken) bool {
             if (a.fingerprint) |mine| {
                 if (b.fingerprint) |yours| return mine == yours;
+            }
+            if (a.volume) |mine| {
+                if (b.volume) |yours| if (mine != yours) return false;
             }
             return a.inode == b.inode;
         }
@@ -153,10 +164,12 @@ pub const Identity = union(enum) {
     /// file's attributes is read access, and so is reading its first bytes.
     pub fn take(self: Identity, io: std.Io, file: std.Io.File) !Taken {
         const inode = (try file.stat(io)).inode;
+        const volume = (try FileId.of(file.handle)).volume;
         switch (self) {
-            .inode => return .{ .inode = inode },
+            .inode => return .{ .inode = inode, .volume = volume },
             .fingerprint => |window| return .{
                 .inode = inode,
+                .volume = volume,
                 .fingerprint = try fingerprintOf(io, file, window.offset, window.length),
             },
         }
@@ -1130,6 +1143,43 @@ test "what a file is, by its number or by what is on it" {
     const after = try by_content.take(testing.io, one);
     try testing.expectEqual(before.inode, after.inode);
     try testing.expect(!before.eql(after));
+}
+
+test "a file is its number on its volume, and one number on two volumes is two files" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "log", .data = "{}\n" });
+    const file = try tmp.dir.openFile(testing.io, "log", .{});
+    defer file.close(testing.io);
+
+    // What the volume is, as the system numbers it.
+    const taken = try Identity.take(.inode, testing.io, file);
+    try testing.expectEqual((try FileId.of(file.handle)).volume, taken.volume.?);
+    try testing.expect(taken.eql(try Identity.take(.inode, testing.io, file)));
+
+    // The same number on another volume is another file. Two volumes to
+    // hand are not something a test can count on, so the other volume's
+    // file is stated.
+    var elsewhere = taken;
+    elsewhere.volume = taken.volume.? +% 1;
+    try testing.expect(!taken.eql(elsewhere));
+    try testing.expect(!elsewhere.eql(taken));
+
+    // A checkpoint written before the volume was recorded is compared by
+    // its number, as it always was.
+    var older = taken;
+    older.volume = null;
+    try testing.expect(older.eql(taken));
+    try testing.expect(taken.eql(older));
+    older.inode +%= 1;
+    try testing.expect(!older.eql(taken));
+
+    // Two fingerprints still settle it, whatever the numbers say.
+    var copied = elsewhere;
+    copied.fingerprint = 7;
+    var original = taken;
+    original.fingerprint = 7;
+    try testing.expect(copied.eql(original));
 }
 
 test "a rotation that keeps the file's number is followed by its content" {

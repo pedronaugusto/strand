@@ -72,6 +72,7 @@ pub const Follower = @import("follow.zig").Follower;
 pub const Opener = @import("follow.zig").Opener;
 pub const PathOpener = @import("follow.zig").PathOpener;
 pub const Identity = @import("follow.zig").Identity;
+pub const FileId = @import("file_id.zig").FileId;
 pub const Versioned = @import("versioned.zig").Versioned;
 pub const payloadOf = @import("versioned.zig").payloadOf;
 pub const Raw = @import("raw.zig").Raw;
@@ -99,6 +100,7 @@ test {
     _ = @import("versioned.zig");
     _ = @import("raw.zig");
     _ = @import("int.zig");
+    _ = @import("file_id.zig");
     _ = @import("from_value.zig");
     _ = @import("codec_tests.zig");
 }

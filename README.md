@@ -93,6 +93,7 @@ Every allocation anywhere here is on an allocator you passed in.
 | `writeValue` | One value's JSON with no terminator, for a caller that frames the line itself: an envelope around the value, a checksum after it. `ValueOptions.emit_null_optional_fields` makes the bytes `std.json`'s default ones. |
 | `Tail(T)` | A seekable file read backwards: `prev` for one line, `last(n)` for the end of the log. |
 | `Follower(T)` | Read to the end, wait, carry on. `Opener` and `PathOpener` are how it follows a path across a rotation, and `Identity` is what makes two handles the same file. |
+| `FileId` | Which file or directory a handle is open on, as the filesystem numbers it: the volume and the file's number on it. What `Identity` compares by default. |
 | `Follower.checkpoint`, `Follower.resumeFrom` | Where a follower stands, and a follower that carries on from there. |
 | `Versioned(T)`, `payloadOf` | The `{"v":N,"data":...}` envelope, with a migration hook for an older shape and the parse of that older shape inside it. |
 | `Raw` | A JSON value kept as its bytes: checked when its line is read, written back as it came, and decoded when it is wanted (`Raw.parse`). `Raw.encode` makes one from a value. `Writer(Raw)` writes records that are already encoded, under every policy a `Writer` has. |
@@ -164,9 +165,9 @@ instead of racing a filesystem.
 
 **Which file is which is a setting.** `Options.identity` decides when two
 handles are the same file. The default is the number the system gives it — the
-inode, or the file index on Windows — which is one call and no reading, and
-which a filesystem may reuse for a new file or change for one it did not
-replace. `.fingerprint` hashes the first bytes of the file instead: a log's
+inode, or the file index on Windows — on the volume it is on, since two volumes
+number their files independently: two calls and no reading, and a number a
+filesystem may reuse for a new file or change for one it did not replace. `.fingerprint` hashes the first bytes of the file instead: a log's
 opening lines are written once and not written again, so they name the file in
 a way the filesystem cannot take back, and a rotation that copies the log away
 and writes the same file again from the top is a rotation rather than a
@@ -388,9 +389,9 @@ and 455 with a `std.json.Value` in the same place, which takes the line to
 
 | Platform | What it uses there | Tested |
 |---|---|---|
-| Linux | The inode from `stat` identifies a file across a rotation; a sync is the `fdatasync` syscall | `ubuntu-latest` in CI, four optimize modes |
+| Linux | The device and the inode identify a file across a rotation; a sync is the `fdatasync` syscall | `ubuntu-latest` in CI, four optimize modes |
 | macOS | The same, except that a sync is `fcntl(F_FULLFSYNC)` | `macos-latest` in CI, four optimize modes |
-| Windows | The file index from `stat` stands in for the inode, and a sync is the system's own flush | `windows-latest` in CI, four optimize modes |
+| Windows | The volume's serial number and the file index stand in for the device and the inode, and a sync is the system's own flush | `windows-latest` in CI, four optimize modes |
 
 CI also compiles the suite without running it for `x86_64-linux-gnu`,
 `aarch64-linux-gnu`, `x86_64-linux-musl`, `x86_64-windows-gnu`,
@@ -400,7 +401,7 @@ from a machine that is not Linux; it is a local script and no CI job calls it.
 
 ## Testing
 
-`zig build test` runs 174 tests and the examples, every one under
+`zig build test` runs 176 tests and the examples, every one under
 `std.testing.allocator`, so a leak or an invalid free fails the test rather
 than the process. CI runs that four times, in Debug, ReleaseSafe, ReleaseFast
 and ReleaseSmall, with `zig fmt --check` beside it, and

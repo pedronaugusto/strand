@@ -35,6 +35,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`SyncKind`), makes an interrupted call again, and names a failure as
   `std.Io.File.sync` does (`SyncError`) rather than answering it with a
   weaker call.
+- `FileId`, which file or directory a handle is open on as the filesystem
+  numbers it: the device and the inode on POSIX, the volume's serial number
+  and the 128-bit file id on Windows. What `Identity` compares, and what a
+  caller comparing two handles wants.
 - A line-protocol recipe in `examples/logbook.zig`: requests read with a
   `LineReader`, one past the bound answered, and the replies written a record
   at a time.
@@ -81,6 +85,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   it. Wherever `std.json` answers, the answer is unchanged, which a property
   over 20,000 values of every shape, each changed four ways, and a fuzz
   target hold both parsers to.
+- A follower tells two files apart by the volume they are on as well as by
+  their number. A file on another volume carrying the number of the one
+  being followed read as the same file, so a rotation onto another mount
+  was a silence. `Identity.Taken` records the volume; a checkpoint written
+  before it did is compared by the number, as it was.
 - The token parser refuses a string where an array belongs before reading
   the string, and reads a `\u` escape a byte at a time, as `std.json` does:
   an unfinished line of either kind was `error.UnexpectedEndOfInput` where

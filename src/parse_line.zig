@@ -110,7 +110,20 @@ pub fn parseLineInto(
     options: ParseOptions,
     out: *T,
 ) ParseLineError!void {
-    if (line.len != 0 and line[line.len - 1] == '\n') return error.SyntaxError;
+    if (line.len != 0 and line[line.len - 1] == '\n') {
+        // This refusal belongs to line framing, before any JSON hook runs.
+        // Its diagnostics still belong to this call, not the previous one.
+        if (options.diagnostics) |where| {
+            where.* = .{ .offset = line.len - 1 };
+            for (line[0 .. line.len - 1]) |byte| {
+                if (byte == '\n') {
+                    where.line += 1;
+                    where.column = 1;
+                } else where.column += 1;
+            }
+        }
+        return error.SyntaxError;
+    }
     if (options.diagnostics) |where| {
         out.* = try parseDiagnosed(T, allocator, line, options, where);
         return;
@@ -229,4 +242,26 @@ test "a direct decoder allocation failure is not retried as a parse refusal" {
     var failure: FailOnce = .{ .backing = arena.allocator() };
     try std.testing.expectError(error.OutOfMemory, parseLine([]const u8, failure.allocator(), "\"escaped\\ttext\"", .{}));
     try std.testing.expectEqual(@as(usize, 1), failure.calls);
+}
+
+test "parseLine diagnoses a trailing terminator before any parse" {
+    const testing = std.testing;
+    const Hook = struct {
+        pub fn jsonParse(_: Allocator, _: anytype, _: std.json.ParseOptions) !@This() {
+            return error.UnexpectedToken;
+        }
+    };
+    inline for (.{ std.json.Value, Hook }) |T| {
+        for ([_]struct { bytes: []const u8, offset: usize, line: u64, column: u64 }{
+            .{ .bytes = "{}\n", .offset = 2, .line = 1, .column = 3 },
+            .{ .bytes = "{\n}\n", .offset = 3, .line = 2, .column = 2 },
+            .{ .bytes = "\n", .offset = 0, .line = 1, .column = 1 },
+        }) |case| {
+            var where: Diagnostics = .{ .offset = 999, .line = 999, .column = 999 };
+            try testing.expectError(error.SyntaxError, parseLine(T, testing.allocator, case.bytes, .{ .diagnostics = &where }));
+            try testing.expectEqual(case.offset, where.offset);
+            try testing.expectEqual(case.line, where.line);
+            try testing.expectEqual(case.column, where.column);
+        }
+    }
 }

@@ -85,6 +85,7 @@ Every allocation anywhere here is on an allocator you passed in.
 | `Reader.resumeAt` | The same, starting at an offset with a line count behind it, so an index entry reads back as the line it named. |
 | `Reader.nextRaw`, `Reader.parse` | A line's bytes with no type for them, and the value when the caller decides it wants one. This is how a stream is routed: `kindOf` or `tagOf` on the bytes, and a parse only for the lines worth parsing. |
 | `Reader.keep`, `Tail.keep` | A copy of a value that outlives the line it came from. |
+| `copyOwned`, `freeOwned` | An owned deep copy of an already parsed value, and its release. |
 | `Reader.lines` | The line reader under a `Reader`, and where its place is kept: `lines.number`, `lines.offset`, `lines.fault` (which line was last refused and why) and `lines.skipped` (how many were passed over). |
 | `Writer(T)`, `Writer.initFile` | One value per line, minified or indented, counted. `initFile` is the one with a file to sync. |
 | `Writer.write`, `Writer.writeAll` | One record, and a batch written byte for byte as the loop would have written it. |
@@ -126,6 +127,51 @@ is how a value outlives its line: it copies every string onto an allocator you
 give it, so pass an arena and drop it whole. The three rules are the same for
 `Reader`, `Tail` and `Follower`, and `parseLine` is the first two without a
 reader.
+
+`copyOwned(allocator, value)` keeps the value already parsed, without reading
+its JSON again. It copies structs and tuples, arrays, slices and strings,
+single-item pointers, optionals and tagged unions; numbers, booleans, enums
+and vectors stay values. `Raw` keeps its exact bytes, including whitespace
+and number spelling. A `std.json.Value` gets new keys, strings and containers;
+its arrays use the destination allocator. Parse and stringify hooks are not
+called, and defaults pointing at static strings are copied too.
+
+```zig
+const owned = try strand.copyOwned(gpa, line.value);
+defer strand.freeOwned(gpa, owned);
+```
+
+The copy borrows no storage from the source. Sentinels and alignment survive;
+repeated references become separate copies. The input must be a finite tree
+of data, with no cycles or external resources. Unsupported types are refused
+at compile time, including types hidden in an empty slice, null optional or
+inactive union arm. Sentinels and comptime fields holding pointers are refused
+too, since their storage cannot be replaced in a value of the same type;
+a null optional sentinel holds no pointer and is supported.
+
+Only `error.OutOfMemory` is returned, and a failed copy frees every allocation
+it made. Free a successful copy once with `freeOwned` on the same allocator,
+or copy onto an arena and release it whole. Keep its owning pointers and
+container lengths intact until then. Assigning the result to another Zig
+variable shares its ownership. `freeOwned` is for these copies, not values
+borrowed from a reader or made by a parser. `keep` remains the operation that
+re-parses the original line, including a type's custom parser.
+
+In Rust, [`Clone`](https://doc.rust-lang.org/std/clone/trait.Clone.html) walks
+derived struct fields, but cloning a reference keeps the reference. Owned
+`String` and `Vec` fields copy their storage; borrowed fields need an owned
+representation. [Serde's lifetimes](https://serde.rs/lifetimes.html) express
+that borrow, and `DeserializeOwned` requires a result that does not borrow
+from the input. `copyOwned` instead keeps the Zig type and changes who owns
+every piece of storage it reaches.
+
+`std.json.Parsed(T)` owns a parse arena; it does not promise that its value
+borrows nothing from the input. Parsing with `.allocate = .alloc_always`
+copies input strings, but reparses JSON and calls custom parsers.
+[`std.json.Value.jsonParseFromValue`](https://github.com/ziglang/zig/blob/0.16.0/lib/std/json/dynamic.zig)
+returns its source tree directly, even when passed another allocator.
+`copyOwned` copies that tree and its object keys as data, with no encoding or
+change to its numbers or raw fields.
 
 **Backwards is one block at a time.** `Tail` walks a seekable file from its
 end towards its beginning and reads no further back than the lines it is asked

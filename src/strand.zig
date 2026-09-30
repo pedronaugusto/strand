@@ -22,6 +22,8 @@
 //! * Strings borrow from the line's bytes when they need no unescaping, so
 //!   the common case copies nothing. `Reader.keep` is how a value outlives
 //!   the line it came from.
+//! * `copyOwned` copies an already parsed value and every piece of storage
+//!   it reaches, without parsing again; `freeOwned` releases that copy.
 //! * `kindOf` and `tagOf` answer "what kind of line is this" from the first
 //!   key alone, without parsing the value.
 //! * `Writer` emits one value per line — minified, or indented for a human —
@@ -76,6 +78,9 @@ pub const FileId = @import("file_id.zig").FileId;
 pub const Versioned = @import("versioned.zig").Versioned;
 pub const payloadOf = @import("versioned.zig").payloadOf;
 pub const Raw = @import("raw.zig").Raw;
+const owned = @import("owned.zig");
+pub const copyOwned = owned.copyOwned;
+pub const freeOwned = owned.freeOwned;
 pub const kindOf = @import("route.zig").kindOf;
 pub const tagOf = @import("route.zig").tagOf;
 pub const indexOfControl = @import("control.zig").indexOfControl;
@@ -85,6 +90,7 @@ pub const SyncKind = @import("sync.zig").SyncKind;
 pub const SyncError = @import("sync.zig").SyncError;
 
 test {
+    _ = @import("owned_tests.zig");
     _ = @import("parse_line.zig");
     _ = @import("line.zig");
     _ = @import("line_reader.zig");

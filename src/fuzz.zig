@@ -399,7 +399,7 @@ fn checkKindOf(line: []const u8) !void {
     const kind = strand.kindOf(line);
     if (kind) |key| {
         // A view into the line, quoted on both sides, and no escape in it.
-        const start = @intFromPtr(key.ptr) - @intFromPtr(line.ptr);
+        const start = @intFromPtr(key.ptr) - @intFromPtr(line.ptr); // safe: addresses compared as numbers, never read through; kindOf returns a view into `line`
         try testing.expect(start >= 1 and start + key.len < line.len);
         try testing.expectEqual(@as(u8, '"'), line[start - 1]);
         try testing.expectEqual(@as(u8, '"'), line[start + key.len]);
@@ -468,7 +468,7 @@ fn checkLines(input: []const u8) !void {
         try testing.expectEqual(physical.offset, line.offset);
         try testing.expect(std.mem.indexOfScalar(u8, line.line, '\n') == null);
         if (line.line.len != 0) {
-            const start = @intFromPtr(line.line.ptr) - @intFromPtr(input.ptr);
+            const start = @intFromPtr(line.line.ptr) - @intFromPtr(input.ptr); // safe: addresses compared as numbers, never read through
             try testing.expect(start + line.line.len <= input.len);
         }
     }
@@ -753,8 +753,8 @@ fn checkRawReader(input: []const u8) !void {
 /// A view into `line`, or the default, which is in no line at all.
 fn inLineOrDefault(raw: strand.Raw, line: []const u8) bool {
     if (raw.bytes.ptr == strand.Raw.null.bytes.ptr) return true;
-    return @intFromPtr(raw.bytes.ptr) >= @intFromPtr(line.ptr) and
-        @intFromPtr(raw.bytes.ptr) + raw.bytes.len <= @intFromPtr(line.ptr) + line.len;
+    return @intFromPtr(raw.bytes.ptr) >= @intFromPtr(line.ptr) and // safe: addresses compared as numbers, never read through
+        @intFromPtr(raw.bytes.ptr) + raw.bytes.len <= @intFromPtr(line.ptr) + line.len; // safe: the same comparison, the far end
 }
 
 /// A separated stream is the same stream with one byte in front of every

@@ -180,7 +180,7 @@ const Parser = struct {
                             return copy;
                         }
                         if (!i.is_const and !always) unreachable;
-                        return @constCast(result);
+                        return @constCast(result); // safe: a mutable slice is only asked for with `always`, so these bytes were allocated here and are the caller's to write
                     }
                     try self.take('[');
                     var list: std.ArrayList(i.child) = .empty;

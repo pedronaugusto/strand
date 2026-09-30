@@ -90,7 +90,7 @@ pub const Chunked = struct {
     }
 
     fn stream(io_reader: *std.Io.Reader, w: *std.Io.Writer, limit: std.Io.Limit) std.Io.Reader.StreamError!usize {
-        const self: *Chunked = @alignCast(@fieldParentPtr("interface", io_reader));
+        const self: *Chunked = @alignCast(@fieldParentPtr("interface", io_reader)); // safe: this vtable is installed only on a Chunked's own `interface` field
         if (self.rest.len == 0) return error.EndOfStream;
         const room = @intFromEnum(limit.min(.limited(self.rest.len)));
         const take = @max(@min(self.chunk, room), 1);

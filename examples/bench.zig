@@ -284,6 +284,6 @@ fn report(
 /// True when `inner` points into `outer`: the borrow, checked rather than
 /// assumed.
 fn within(inner: []const u8, outer: []const u8) bool {
-    return @intFromPtr(inner.ptr) >= @intFromPtr(outer.ptr) and
-        @intFromPtr(inner.ptr) + inner.len <= @intFromPtr(outer.ptr) + outer.len;
+    return @intFromPtr(inner.ptr) >= @intFromPtr(outer.ptr) and // safe: addresses compared as numbers, never read through
+        @intFromPtr(inner.ptr) + inner.len <= @intFromPtr(outer.ptr) + outer.len; // safe: the same comparison, the far end
 }

@@ -81,7 +81,7 @@ pub const PathOpener = struct {
     }
 
     fn openPath(context: *anyopaque, io: std.Io) Opener.OpenError!std.Io.File {
-        const self: *PathOpener = @ptrCast(@alignCast(context));
+        const self: *PathOpener = @ptrCast(@alignCast(context)); // safe: `opener` is the only maker of this interface, with a *PathOpener as its context
         return self.dir.openFile(io, self.sub_path, .{}) catch |err| switch (err) {
             error.Canceled => error.Canceled,
             else => error.OpenFailed,
@@ -1038,7 +1038,7 @@ const Staged = struct {
 
     fn open(context: *anyopaque, io: std.Io) Opener.OpenError!std.Io.File {
         _ = io;
-        const self: *Staged = @ptrCast(@alignCast(context));
+        const self: *Staged = @ptrCast(@alignCast(context)); // safe: `Staged.opener` is the only maker of this interface, with a *Staged as its context
         self.opens += 1;
         return self.files[self.now];
     }
@@ -1048,7 +1048,7 @@ const Staged = struct {
     fn close(context: *anyopaque, io: std.Io, file: std.Io.File) void {
         _ = io;
         _ = file;
-        const self: *Staged = @ptrCast(@alignCast(context));
+        const self: *Staged = @ptrCast(@alignCast(context)); // safe: `Staged.opener` is the only maker of this interface, with a *Staged as its context
         self.closes += 1;
     }
 };

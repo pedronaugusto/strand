@@ -12,13 +12,11 @@
 //! - a `.number_string` or a `.string` goes through `sliceToInt`, which
 //!   casts through an `i128` (see `int.zig`).
 //!
-//! Before `std.json` is given the value, the walk below goes through it the
-//! way `std.json` would — the same members to the same fields, with the same
-//! options — and answers `error.Overflow` where `std.json` would reach the
-//! cast. It stops at the first thing `std.json` would refuse and lets it
-//! refuse it, so a value that does not reach a panic gets `std.json`'s own
-//! answer, value or error. A type with its own `jsonParseFromValue` is
-//! stepped over: what it reads is its own.
+//! Conversion walks reflected containers here when they contain a checked
+//! integer or a vector. Each leaf is converted where it occurs, so the
+//! first error is the one `std.json` would report. Scalar and custom
+//! conversions stay with `std.json`; a vector is built as an array and then
+//! converted, since Zig 0.16.0's value parser uses a runtime vector index.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -32,37 +30,17 @@ pub fn parseFromValue(
     value: std.json.Value,
     options: std.json.ParseOptions,
 ) std.json.ParseFromValueError!T {
-    if (comptime risky(T, &.{})) {
-        walk(T, value, options) catch |err| switch (err) {
-            error.Overflow => return error.Overflow,
-            error.Stop => {},
+    @setEvalBranchQuota(1_000_000);
+    if (@typeInfo(T) == .int) {
+        if (comptime @typeInfo(T).int.bits > 53) switch (value) {
+            .float => |float| if (floatBreaksCast(T, float)) return error.Overflow,
+            .number_string, .string => |slice| if (sliceBreaksCast(T, slice)) return error.Overflow,
+            else => {},
         };
+    } else if (comptime needsConversion(T, &.{})) {
+        return collections(T, allocator, value, options);
     }
     return std.json.parseFromValueLeaky(T, allocator, value, options);
-}
-
-/// Whether `T` holds, anywhere, an integer `std.json` could fail to cast
-/// from a value: one whose largest value is not exact as an `f64`.
-fn risky(comptime T: type, comptime within: []const type) bool {
-    for (within) |outer| if (outer == T) return false;
-    const inside = within ++ .{T};
-    return switch (@typeInfo(T)) {
-        .int => |info| info.bits > 53,
-        .optional => |info| risky(info.child, inside),
-        .@"union" => |info| for (info.fields) |field| {
-            if (field.type != void and risky(field.type, inside)) break true;
-        } else false,
-        .@"struct" => |info| for (info.fields) |field| {
-            if (!field.is_comptime and risky(field.type, inside)) break true;
-        } else false,
-        .pointer => |info| switch (info.size) {
-            .one, .slice => risky(info.child, inside),
-            else => false,
-        },
-        .array => |info| risky(info.child, inside),
-        .vector => |info| risky(info.child, inside),
-        else => false,
-    };
 }
 
 /// Whether `innerParseFromValue` given `float` for a `T` would reach a cast
@@ -92,64 +70,103 @@ fn sliceBreaksCast(comptime T: type, slice: []const u8) bool {
     return float >= past_i128 or float < -past_i128;
 }
 
-/// The walk ends: at `Overflow` because `std.json` would panic, at `Stop`
-/// because it would answer first.
-const Walk = error{ Overflow, Stop };
-
-/// `std.json.innerParseFromValue`, reading nothing but what it would read
-/// into an integer.
-fn walk(comptime T: type, value: std.json.Value, options: std.json.ParseOptions) Walk!void {
-    switch (@typeInfo(T)) {
-        .int => |info| if (comptime info.bits > 53) switch (value) {
-            .float => |float| if (floatBreaksCast(T, float)) return error.Overflow,
-            .number_string, .string => |slice| if (sliceBreaksCast(T, slice)) return error.Overflow,
-            else => {},
+fn needsConversion(comptime T: type, comptime seen: []const type) bool {
+    for (seen) |previous| if (T == previous) return false;
+    const next = seen ++ .{T};
+    return switch (@typeInfo(T)) {
+        .int => |info| info.bits > 53,
+        .vector => true,
+        inline .optional, .array => |info| needsConversion(info.child, next),
+        .pointer => |info| switch (info.size) {
+            .one, .slice => needsConversion(info.child, next),
+            else => false,
         },
-        .optional => |info| if (value != .null) try walk(info.child, value, options),
-        .@"union" => |info| {
-            if (comptime std.meta.hasFn(T, "jsonParseFromValue")) return;
-            if (value != .object or value.object.count() != 1) return error.Stop;
-            var it = value.object.iterator();
-            const entry = it.next().?;
-            inline for (info.fields) |field| {
-                if (std.mem.eql(u8, field.name, entry.key_ptr.*)) {
-                    if (field.type != void) try walk(field.type, entry.value_ptr.*, options);
-                    return;
-                }
-            }
-            return error.Stop;
+        inline .@"struct", .@"union" => |info| result: {
+            if (std.meta.hasFn(T, "jsonParseFromValue") and
+                (@typeInfo(T) != .@"struct" or !@typeInfo(T).@"struct".is_tuple)) break :result false;
+            for (info.fields) |field| if (needsConversion(field.type, next)) break :result true;
+            break :result false;
+        },
+        else => false,
+    };
+}
+
+// Only containers whose descendants need checked integers or vectors arrive
+// here. Each child goes through the entry point, so custom hooks retain
+// control of their data and integers retain their checked conversions.
+fn collections(comptime T: type, allocator: Allocator, value: std.json.Value, options: std.json.ParseOptions) std.json.ParseFromValueError!T {
+    switch (@typeInfo(T)) {
+        .vector => |info| {
+            if (value != .array) return error.UnexpectedToken;
+            const array = try parseFromValue([info.len]info.child, allocator, value, options);
+            return array;
+        },
+        .array => |info| {
+            if (value != .array) return error.UnexpectedToken;
+            if (value.array.items.len != info.len) return error.LengthMismatch;
+            var result: T = undefined;
+            for (value.array.items, &result) |item, *dest|
+                dest.* = try parseFromValue(info.child, allocator, item, options);
+            return result;
+        },
+        .optional => |info| return if (value == .null) null else try parseFromValue(info.child, allocator, value, options),
+        .pointer => |info| switch (info.size) {
+            .one => {
+                const result = try allocator.create(info.child);
+                result.* = try parseFromValue(info.child, allocator, value, options);
+                return result;
+            },
+            .slice => {
+                if (value != .array) return error.UnexpectedToken;
+                const result = try allocator.allocWithOptions(info.child, value.array.items.len, null, info.sentinel());
+                for (value.array.items, result) |item, *dest|
+                    dest.* = try parseFromValue(info.child, allocator, item, options);
+                return result;
+            },
+            else => unreachable,
         },
         .@"struct" => |info| {
+            var result: T = undefined;
             if (info.is_tuple) {
-                if (value != .array or value.array.items.len != info.fields.len) return error.Stop;
-                inline for (info.fields, 0..) |field, i| try walk(field.type, value.array.items[i], options);
-                return;
+                if (value != .array or value.array.items.len != info.fields.len) return error.UnexpectedToken;
+                inline for (info.fields, 0..) |field, i|
+                    result[i] = try parseFromValue(field.type, allocator, value.array.items[i], options);
+                return result;
             }
-            if (comptime std.meta.hasFn(T, "jsonParseFromValue")) return;
-            if (value != .object) return error.Stop;
-            var it = value.object.iterator();
-            while (it.next()) |entry| {
-                inline for (info.fields) |field| {
-                    if (std.mem.eql(u8, field.name, entry.key_ptr.*)) {
-                        try walk(field.type, entry.value_ptr.*, options);
+            if (value != .object) return error.UnexpectedToken;
+            var seen = [_]bool{false} ** info.fields.len;
+            for (value.object.keys(), value.object.values()) |key, item| {
+                inline for (info.fields, 0..) |field, i| {
+                    if (field.is_comptime) @compileError("comptime fields are not supported: " ++ @typeName(T) ++ "." ++ field.name);
+                    if (std.mem.eql(u8, key, field.name)) {
+                        @field(result, field.name) = try parseFromValue(field.type, allocator, item, options);
+                        seen[i] = true;
                         break;
                     }
-                } else if (!options.ignore_unknown_fields) return error.Stop;
+                } else if (!options.ignore_unknown_fields) return error.UnknownField;
             }
+            inline for (info.fields, 0..) |field, i| if (!seen[i]) {
+                if (field.defaultValue()) |default| @field(result, field.name) = default else return error.MissingField;
+            };
+            return result;
         },
-        .array, .vector => |info| {
-            if (value != .array) return error.Stop;
-            if (value.array.items.len != info.len) return error.Stop;
-            for (value.array.items) |item| try walk(info.child, item, options);
+        .@"union" => |info| {
+            if (info.tag_type == null) @compileError("Unable to parse into untagged union '" ++ @typeName(T) ++ "'");
+            if (value != .object or value.object.count() != 1) return error.UnexpectedToken;
+            const key = value.object.keys()[0];
+            const item = value.object.values()[0];
+            inline for (info.fields) |field| {
+                if (std.mem.eql(u8, key, field.name)) {
+                    if (field.type == void) {
+                        if (item != .object or item.object.count() != 0) return error.UnexpectedToken;
+                        return @unionInit(T, field.name, {});
+                    }
+                    return @unionInit(T, field.name, try parseFromValue(field.type, allocator, item, options));
+                }
+            }
+            return error.UnknownField;
         },
-        .pointer => |info| switch (info.size) {
-            .one => try walk(info.child, value, options),
-            .slice => if (value == .array) {
-                for (value.array.items) |item| try walk(info.child, item, options);
-            },
-            else => {},
-        },
-        else => {},
+        else => unreachable,
     }
 }
 
@@ -158,6 +175,90 @@ fn walk(comptime T: type, value: std.json.Value, options: std.json.ParseOptions)
 //=========================================================================
 
 const testing = std.testing;
+
+test "payloadOf checks wide integers in arrays and vectors" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const good = try std.json.parseFromSliceLeaky(std.json.Value, a, "[1,2]", .{});
+    const overflow = try std.json.parseFromSliceLeaky(std.json.Value, a, "[1,1.8446744073709552e19]", .{});
+    inline for (.{ [2]u64, @Vector(2, u64) }) |T| {
+        const value = try @import("strand.zig").payloadOf(T, a, good);
+        try testing.expectEqual(@as(u64, 1), value[0]);
+        try testing.expectEqual(@as(u64, 2), value[1]);
+        try testing.expectError(error.Overflow, @import("strand.zig").payloadOf(T, a, overflow));
+        try testing.expectError(error.UnexpectedToken, @import("strand.zig").payloadOf(T, a, .null));
+    }
+}
+
+test "payloadOf reports the first conversion error before a later wide integer" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = try std.json.parseFromSliceLeaky(std.json.Value, a, "{\"flag\":3,\"number\":1.8446744073709552e19}", .{});
+    try testing.expectError(error.UnexpectedToken, parseFromValue(struct { flag: bool, number: u64 }, a, source, .{}));
+}
+
+const NestedVectors = struct {
+    tuple: struct { @Vector(2, u64), []const u8 },
+    array: [1]@Vector(2, u64),
+    rows: ?[]const *const @Vector(2, u64),
+    arm: union(enum) { vector: @Vector(2, u64), none },
+    raw: @import("raw.zig").Raw,
+    hook: struct {
+        vector: @Vector(2, u64),
+        pub fn jsonParseFromValue(_: Allocator, value: std.json.Value, _: std.json.ParseOptions) std.json.ParseFromValueError!@This() {
+            if (value != .string) return error.UnexpectedToken;
+            return .{ .vector = .{ 7, 8 } };
+        }
+    },
+    default: @Vector(2, u64) = .{ 9, 10 },
+};
+
+fn nestedVectors(allocator: Allocator, source: std.json.Value) !void {
+    var arena: std.heap.ArenaAllocator = .init(allocator);
+    defer arena.deinit();
+    const result = try parseFromValue(NestedVectors, arena.allocator(), source, .{});
+    try testing.expectEqual(@as(u64, 2), result.tuple[0][1]);
+    try testing.expectEqualStrings("tuple", result.tuple[1]);
+    try testing.expectEqual(@as(u64, 4), result.array[0][1]);
+    try testing.expectEqual(@as(u64, 6), result.rows.?[0].*[1]);
+    try testing.expectEqual(@as(u64, 12), result.arm.vector[1]);
+    try testing.expectEqualStrings("[1,2]", result.raw.bytes);
+    try testing.expectEqual(@as(u64, 8), result.hook.vector[1]);
+    try testing.expectEqual(@as(u64, 10), result.default[1]);
+}
+
+test "payloadOf converts nested vectors with defaults and custom hooks" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = try std.json.parseFromSliceLeaky(std.json.Value, a,
+        \\{"tuple":[[1,2],"tuple"],"array":[[3,4]],"rows":[[5,6]],
+        \\ "arm":{"vector":[11,12]},"raw":[1,2],"hook":"custom"}
+    , .{});
+    try testing.checkAllAllocationFailures(testing.allocator, nestedVectors, .{source});
+    const Vec = @Vector(2, u64);
+    const short = try std.json.parseFromSliceLeaky(std.json.Value, a, "[1]", .{});
+    try testing.expectError(error.LengthMismatch, parseFromValue(Vec, a, short, .{}));
+    try testing.expectError(error.UnexpectedToken, parseFromValue(Vec, a, .{ .string = "12" }, .{}));
+    const object = try std.json.parseFromSliceLeaky(std.json.Value, a, "{\"extra\":3,\"v\":[1,2]}", .{});
+    const T = struct { v: Vec };
+    try testing.expectError(error.UnknownField, parseFromValue(T, a, object, .{}));
+    try testing.expectEqual(@as(u64, 2), (try parseFromValue(T, a, object, .{ .ignore_unknown_fields = true })).v[1]);
+    try testing.expectError(error.MissingField, parseFromValue(T, a, .{ .object = .empty }, .{}));
+    const empty = try std.json.parseFromSliceLeaky(std.json.Value, a, "{\"none\":{}}", .{});
+    const Arm = union(enum) { vector: Vec, none };
+    try testing.expectEqual(Arm.none, try parseFromValue(Arm, a, empty, .{}));
+    try testing.expectEqual(@as(?Vec, null), try parseFromValue(?Vec, a, .null, .{}));
+    const Event = struct {
+        vector: Vec,
+        pub const jsonl_version: u32 = 1;
+    };
+    const strand = @import("strand.zig");
+    const versioned = try strand.parseLine(strand.Versioned(Event), a, "{\"data\":{\"vector\":[1,2]},\"v\":1}", .{});
+    try testing.expectEqual(@as(u64, 2), versioned.value.vector[1]);
+}
 
 test "a value std.json cannot cast into an integer is Overflow, not a panic" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);

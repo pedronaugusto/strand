@@ -8,6 +8,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Value conversion reads checked integers and vectors through their reflected containers, preserving the first conversion error and supporting nested vectors in migrations.
 - Breaking: `Identity.Taken.id` holds the full `FileId` instead of `inode` and optional `volume`; old checkpoints are refused with `error.MissingField`, with no conversion or fallback, and callers choose where to restart.
 
 - Breaking: `max_line_bytes` counts JSON payload bytes everywhere, excluding the separator, terminator and discarded torn prefix; writer and tail boundary acceptance changes.

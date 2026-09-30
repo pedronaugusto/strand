@@ -297,6 +297,11 @@ tagged union grows without an envelope instead: `std.json` writes
 parsing the payload, and an `unknown: std.json.Value` arm gives a line from a
 newer writer somewhere to land.
 
+`payloadOf` handles arrays and vectors inside reflected containers too.
+Checked integer conversions happen as each field is read, so an earlier
+field's error is reported before an overflow in a later one. Custom
+`jsonParseFromValue` hooks still read their own values.
+
 **A value the reader does not read is kept as its bytes.** A line often
 carries something that belongs to someone else: another program's record
 passed along, a plugin's payload, a request handed on as it came. `Raw` is

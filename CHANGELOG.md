@@ -57,6 +57,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- The bench branch owns the mixed-line reader timing harness and its scratch storage in `bench/own`; snapshots use that harness against library revisions without a benchmark step.
+
 - `Reader(T)` is a `LineReader` with a parse on top, and keeps it as
   `Reader.lines`. The reader's place in the stream is kept there:
   `reader.number`, `reader.offset`, `reader.skipped`, `reader.fault` and

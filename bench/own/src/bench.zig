@@ -1,10 +1,10 @@
 //! What the line layer costs, measured rather than asserted.
 //!
-//! `zig build bench` builds and runs this. It is not part of `zig build
-//! test`: a number that varies with the machine is not a thing to fail a
+//! `bench/own/run.sh` builds and runs this on the bench branch.
+//! It is not part of `zig build test`: a number that varies with the machine is not a thing to fail a
 //! build over, and these numbers exist to be read.
 //!
-//! Six measurements, each one a claim the README makes:
+//! Seven measurements, each one a claim the README makes:
 //!
 //! 1. A million small values written, minified, one line each.
 //! 2. The same million read back and parsed, with strings borrowing from the
@@ -18,10 +18,13 @@
 //!    as a `strand.Raw` and as a `std.json.Value`: the first stays on the
 //!    direct path, the second takes the whole line to `std.json`.
 //!
+//! 7. Mixed lines against the same parse with framing removed, with a target
+//!    of at most 1.10 times the parse on a quiet machine.
+//!
 //! Run it in ReleaseFast for numbers worth quoting:
 //!
 //! ```sh
-//! zig build bench -Doptimize=ReleaseFast
+//! ./bench/own/run.sh
 //! ```
 
 const std = @import("std");
@@ -37,7 +40,6 @@ const Event = struct {
 };
 
 const smoke = @import("bench_options").smoke;
-const scratch_dir = @import("bench_options").scratch_dir;
 const line_count = if (smoke) 1 else 1_000_000;
 const big_line_bytes = if (smoke) 64 else 100 << 20;
 
@@ -65,10 +67,8 @@ pub fn main() !void {
     try benchTail(gpa, io, stdout, written);
     try benchBigLine(gpa, io, stdout);
     try benchCarried(gpa, io, stdout);
+    try @import("read_cost.zig").run(gpa, io, stdout);
 
-    // The scratch files live under `.zig-cache`, which a build already owns,
-    // and they are not worth keeping once the numbers are printed.
-    std.Io.Dir.cwd().deleteTree(io, scratch_dir) catch {};
     try stdout.flush();
 }
 
@@ -162,7 +162,7 @@ fn benchTail(gpa: std.mem.Allocator, io: std.Io, stdout: *std.Io.Writer, input: 
 /// One line of a hundred megabytes, read off a file with a small buffer, so
 /// the only thing holding the line is the reader.
 fn benchBigLine(gpa: std.mem.Allocator, io: std.Io, stdout: *std.Io.Writer) !void {
-    var work = try Scratch.initBigLine(io, gpa);
+    var work = try Scratch.initBigLine(io, gpa, big_line_bytes);
     defer work.deinit(io);
 
     var buffer: [64 * 1024]u8 = undefined;
@@ -223,44 +223,7 @@ fn benchCarried(gpa: std.mem.Allocator, io: std.Io, stdout: *std.Io.Writer) !voi
     }
 }
 
-/// A file under `.zig-cache`, which is where a build already puts things it
-/// does not want to keep.
-const Scratch = struct {
-    dir: std.Io.Dir,
-    file: std.Io.File,
-
-    fn init(io: std.Io, bytes: []const u8) !Scratch {
-        var dir = try std.Io.Dir.cwd().createDirPathOpen(io, scratch_dir, .{});
-        errdefer dir.close(io);
-        try dir.writeFile(io, .{ .sub_path = "log.jsonl", .data = bytes });
-        return .{ .dir = dir, .file = try dir.openFile(io, "log.jsonl", .{}) };
-    }
-
-    /// The same, for a line too big to want a second copy of in memory.
-    fn initBigLine(io: std.Io, gpa: std.mem.Allocator) !Scratch {
-        var dir = try std.Io.Dir.cwd().createDirPathOpen(io, scratch_dir, .{});
-        errdefer dir.close(io);
-        {
-            const file = try dir.createFile(io, "big.jsonl", .{});
-            defer file.close(io);
-            const buffer = try gpa.alloc(u8, 1 << 20);
-            defer gpa.free(buffer);
-            var file_writer = file.writer(io, buffer);
-            const w = &file_writer.interface;
-            try w.writeAll("{\"kind\":\"");
-            try w.splatByteAll('x', big_line_bytes);
-            try w.writeAll("\",\"at\":1}\n");
-            try w.flush();
-        }
-        return .{ .dir = dir, .file = try dir.openFile(io, "big.jsonl", .{}) };
-    }
-
-    fn deinit(self: *Scratch, io: std.Io) void {
-        self.file.close(io);
-        self.dir.close(io);
-        self.* = undefined;
-    }
-};
+const Scratch = @import("bench_scratch.zig").Scratch;
 
 /// One line of output: how long, how many lines a second, how many bytes a
 /// second, and how long one line took.

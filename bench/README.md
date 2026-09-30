@@ -3,7 +3,12 @@
 Compares JSON Lines read/frame/write/flush/tail with Zig std.json, Rust
 serde_json and a backwards reader, Go encoding/json, and system tail.
 `codec/` compares the Chronicle codec from `bde5a26` with strand; `own/`
-measures strand operations and Raw versus std.json.Value.
+measures strand operations, Raw versus std.json.Value, and the mixed-line
+reader against a parse with framing removed (best of fifteen interleaved
+samples, with a 1.10 ratio target reported rather than asserted). Its harness
+lives here on the bench branch, not in the library examples. `own/build-at.sh`
+builds this harness against named library commits, including ones with no
+benchmark build step. Each invocation owns and removes its scratch directories.
 
 From `bench/`, run `./run.sh`, `./codec/run.sh`, or `./own/run.sh` on a quiet
 machine. `BENCH_SMOKE=1` selects one tiny iteration without warm-up. Full

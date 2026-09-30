@@ -345,6 +345,12 @@ pub fn Follower(comptime T: type) type {
             };
         }
 
+        /// A copy of `line.value` that outlives the follower, allocated on
+        /// `allocator`. See `Reader.keep`, whose contract this is.
+        pub fn keep(self: *Self, allocator: Allocator, line: Line(T)) Allocator.Error!T {
+            return self.reader.keep(allocator, line);
+        }
+
         /// A follower that carries on from `point`.
         ///
         /// `source` is the file the path holds now, which is not necessarily

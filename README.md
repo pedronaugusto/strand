@@ -84,7 +84,7 @@ Every allocation anywhere here is on an allocator you passed in.
 | `Reader(T)` | A `LineReader` with a parse on top: a stream of typed lines. `next` returns a `Line(T)`: the value, the raw bytes, the 1-based number, the byte offset. |
 | `Reader.resumeAt` | The same, starting at an offset with a line count behind it, so an index entry reads back as the line it named. |
 | `Reader.nextRaw`, `Reader.parse` | A line's bytes with no type for them, and the value when the caller decides it wants one. This is how a stream is routed: `kindOf` or `tagOf` on the bytes, and a parse only for the lines worth parsing. |
-| `Reader.keep`, `Tail.keep` | A copy of a value that outlives the line it came from. |
+| `Reader.keep`, `Tail.keep`, `Follower.keep` | A copy of a value that outlives the line it came from. |
 | `copyOwned`, `freeOwned` | An owned deep copy of an already parsed value, and its release. |
 | `Reader.lines` | The line reader under a `Reader`, and where its place is kept: `lines.number`, `lines.offset`, `lines.fault` (which line was last refused and why) and `lines.skipped` (how many were passed over). |
 | `Writer(T)`, `Writer.initFile` | One value per line, minified or indented, counted. `initFile` is the one with a file to sync. |
@@ -123,10 +123,11 @@ already sitting in it, and of the reader's line buffer when it was not; the
 value's strings point into that line when they needed no unescaping, and into
 the reader's arena when they did. `next` clears the line buffer and resets the
 arena before it parses, so a stream costs what its longest line costs. `keep`
-is how a value outlives its line: it copies every string onto an allocator you
-give it, so pass an arena and drop it whole. The three rules are the same for
-`Reader`, `Tail` and `Follower`, and `parseLine` is the first two without a
-reader.
+is how a value outlives its line: it calls `copyOwned` on `line.value`,
+copying all its storage onto your allocator. Release it with `freeOwned`,
+or pass an arena and drop it whole. Its only error is `OutOfMemory`. The
+three rules are the same for `Reader`, `Tail` and `Follower`, and `parseLine`
+is the first two without a reader.
 
 `copyOwned(allocator, value)` keeps the value already parsed, without reading
 its JSON again. It copies structs and tuples, arrays, slices and strings,
@@ -154,8 +155,15 @@ it made. Free a successful copy once with `freeOwned` on the same allocator,
 or copy onto an arena and release it whole. Keep its owning pointers and
 container lengths intact until then. Assigning the result to another Zig
 variable shares its ownership. `freeOwned` is for these copies, not values
-borrowed from a reader or made by a parser. `keep` remains the operation that
-re-parses the original line, including a type's custom parser.
+borrowed from a reader or made directly by a parser. Copies returned by
+`keep` have the same ownership and can be released with `freeOwned`.
+
+`keep` preserves edits to `line.value` and the result of migrations. Custom
+parsers and migrations run when the line is read, and are not called again
+by `keep`; changes to their external state cannot change a kept value.
+Their returned data must meet the same finite-tree contract as `copyOwned`.
+Schemas holding external resources or cyclic state need their own ownership
+operation; unsupported field types are refused at compile time.
 
 In Rust, [`Clone`](https://doc.rust-lang.org/std/clone/trait.Clone.html) walks
 derived struct fields, but cloning a reference keeps the reference. Owned

@@ -84,8 +84,9 @@ pub fn copyOwned(allocator: Allocator, value: anytype) Allocator.Error!@TypeOf(v
 }
 
 /// Frees a complete value returned by `copyOwned`, on the allocator that
-/// copied it. Does not free the outer value itself. Do not pass a borrowed
-/// or parsed value here, or free the same owned copy twice.
+/// copied it. Does not free the outer value itself. Also accepts values
+/// returned by `Reader.keep`, `Tail.keep` and `Follower.keep`. Do not pass a
+/// borrowed or directly parsed value here, or free the same owned copy twice.
 pub fn freeOwned(allocator: Allocator, value: anytype) void {
     const T = @TypeOf(value);
     comptime check(T);

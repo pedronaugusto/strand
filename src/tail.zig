@@ -80,7 +80,7 @@ pub fn Tail(comptime T: type) type {
         /// Internal. What parsing the current line allocated, reset per line.
         arena: std.heap.ArenaAllocator,
         /// Internal. `last` parses owned values straight onto its caller's
-        /// allocator, avoiding the second parse that `keep` otherwise needs.
+        /// allocator, avoiding the separate copy that `keep` makes.
         batch_allocator: ?Allocator = null,
 
         const Self = @This();
@@ -325,8 +325,9 @@ pub fn Tail(comptime T: type) type {
 
         /// A copy of `line.value` that outlives the reader, allocated on
         /// `allocator`. See `Reader.keep`, whose contract this is.
-        pub fn keep(self: *Self, allocator: Allocator, line: Line(T)) ParseLineError!T {
-            return line_mod.keep(T, allocator, line.line, self.options);
+        pub fn keep(self: *Self, allocator: Allocator, line: Line(T)) Allocator.Error!T {
+            _ = self;
+            return @import("owned.zig").copyOwned(allocator, line.value);
         }
 
         /// The last `n` values of the file, in file order, allocated on

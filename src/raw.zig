@@ -23,8 +23,8 @@ const encode_mod = @import("encode.zig");
 /// any other would be — and keeps its bytes, from its first to its last,
 /// whitespace inside it included. They borrow from the line exactly as a
 /// string does: a view into it by default, a copy on the allocator under
-/// `copy_strings`, which is what `Reader.keep` asks for. `parse` is the value
-/// when it is wanted, as any type at all.
+/// `copy_strings`; `Reader.keep` copies the already parsed bytes through
+/// `copyOwned`. `parse` is the value when it is wanted, as any type at all.
 ///
 /// Writing one writes the bytes, with two exceptions, both of them promises
 /// the writer makes about every line: a line break, which JSON allows only

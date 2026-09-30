@@ -278,24 +278,23 @@ pub fn Reader(comptime T: type) type {
             }
         }
 
-        /// A copy of `line.value` that outlives the reader, allocated on
-        /// `allocator`.
+        /// A copy of `line.value` and all its storage on `allocator`.
         ///
-        /// Ownership: the result borrows nothing — not from the reader's line
-        /// buffer, not from its arena — so it stays valid across any number of
-        /// further `next` calls and past `deinit`. Allocations are not
-        /// individually tracked, so `allocator` should be an arena the caller
-        /// frees as a whole.
+        /// The result outlives the line and the reader. This calls `copyOwned`
+        /// on the value already returned, preserving edits and migrations;
+        /// it does not read `line.line` or call JSON hooks again. Custom
+        /// parsers and migrations therefore run only when the line is read,
+        /// even when their decisions depend on external state.
         ///
-        /// This re-parses `line.line` with every string copied rather than
-        /// handing over pages: a value from `next` points partly into the
-        /// reader's line buffer, which the reader must keep reusing, so there
-        /// is nothing whole to hand over. In practice the only error is
-        /// `error.OutOfMemory`, since these bytes have already parsed once —
-        /// but a `T` with a custom `jsonParse` method is free to disagree, so
-        /// the full set is reported rather than asserted away.
-        pub fn keep(self: *Self, allocator: Allocator, line: Line(T)) ParseLineError!T {
-            return line_mod.keep(T, allocator, line.line, self.options);
+        /// The value must meet `copyOwned`'s finite-data-tree contract. A
+        /// schema holding external resources or cyclic state needs its own
+        /// ownership operation. Unsupported field types fail at compile time.
+        /// Release the result with `freeOwned` on the same allocator, or
+        /// release its destination arena as a whole. A failed copy frees
+        /// everything it allocated and leaves the source value intact.
+        pub fn keep(self: *Self, allocator: Allocator, line: Line(T)) Allocator.Error!T {
+            _ = self;
+            return @import("owned.zig").copyOwned(allocator, line.value);
         }
     };
 }

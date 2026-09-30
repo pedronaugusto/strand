@@ -91,6 +91,7 @@ pub const SyncError = @import("sync.zig").SyncError;
 
 test {
     _ = @import("owned_tests.zig");
+    _ = @import("keep_tests.zig");
     _ = @import("parse_line.zig");
     _ = @import("line.zig");
     _ = @import("line_reader.zig");

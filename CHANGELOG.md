@@ -86,6 +86,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Follower truncation docs describe automatic reopening through the configured opener.
+
 - Separated blank-line framing honors `crlf` and drops at most one final carriage return.
 
 - Reader.next keeps framing and parsing in one result handoff without changing either layer's ownership.

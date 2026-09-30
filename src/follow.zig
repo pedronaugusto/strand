@@ -476,11 +476,11 @@ pub fn Follower(comptime T: type) type {
         /// it, which is what a truncating rotation looks like through an open
         /// handle.
         ///
-        /// A rename-and-recreate rotation looks like nothing at all: the
-        /// handle still refers to the old file, which simply stops growing,
-        /// and following the path across that is the caller's to do — reopen
-        /// the path, and make a new `Follower` over the new handle. This
-        /// package does not open files, so it cannot do it for you.
+        /// A rename-and-recreate rotation does not shorten the old file:
+        /// its handle stays readable and simply stops growing. With
+        /// `Options.reopen`, `next` finishes that file and uses the opener
+        /// to follow the replacement. Without it, the caller reopens the
+        /// path and builds a new follower over the new handle.
         pub fn truncated(self: *Self) (error{ ReadFailed, SeekFailed } || std.Io.Cancelable)!bool {
             const size = self.currentSize() catch |err| switch (err) {
                 error.Canceled => return error.Canceled,

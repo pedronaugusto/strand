@@ -8,6 +8,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- The logbook example owns a separate scratch directory per invocation so concurrent builds cannot overwrite or remove each other's files.
+
 - Vector decoding converts array elements as values, supporting booleans and narrow integers on every parse path and refusing strings for byte vectors.
 
 - Owned copies give pointer-vector elements independent storage and release them on failure or `freeOwned`.

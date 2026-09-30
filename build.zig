@@ -67,11 +67,23 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run strand tests");
     test_step.dependOn(&b.addRunArtifact(tests).step);
 
+    const scratch_tests = b.addTest(.{
+        .name = "logbook-scratch-tests",
+        .filters = if (test_filter) |filter| &.{filter} else &.{},
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/scratch.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(scratch_tests).step);
+
     // Compiling without running is what a target the host cannot execute can
     // still be held to, and it is the default step: a module on its own
     // installs nothing, so `zig build` would otherwise do no work at all.
     const check_step = b.step("check", "Compile the tests and examples without running them");
     check_step.dependOn(&tests.step);
+    check_step.dependOn(&scratch_tests.step);
     b.getInstallStep().dependOn(check_step);
 
     // A null optional or inactive union arm must not hide an unsupported

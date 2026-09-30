@@ -80,6 +80,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A follower checks cancellation before returning a record already in its buffer.
+
 - A separated record keeps its separator offset when physical framing fails.
 
 - Versioned accepts payload fields named v, since payload fields live inside data and cannot collide with the envelope.

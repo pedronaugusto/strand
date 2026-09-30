@@ -444,6 +444,7 @@ pub fn Follower(comptime T: type) type {
         /// Ownership: exactly `Reader.next`'s. The returned `Line` borrows the
         /// reader's line buffer and arena, and the next call takes both back.
         pub fn next(self: *Self) NextError!Line(T) {
+            try self.io.checkCancel();
             // What the file is has to be taken before it is read, not when
             // the question is asked: a file rewritten where it stands would
             // otherwise be measured after the rewrite and match itself.
@@ -718,6 +719,26 @@ fn followUntilCanceled(io: std.Io, source: *std.Io.File.Reader) Follower(Event).
     });
     defer follower.deinit();
     while (true) _ = try follower.next();
+}
+
+test "a follower checks cancellation before handing over a buffered record" {
+    var fixture = try Fixture.init("{\"kind\":\"ready\"}\n", 64);
+    defer fixture.deinit();
+    _ = try fixture.reader.interface.peek(1);
+
+    const Canceled = struct {
+        fn check(_: ?*anyopaque) std.Io.Cancelable!void {
+            return error.Canceled;
+        }
+    };
+    var vtable = testing.io.vtable.*;
+    vtable.checkCancel = Canceled.check;
+    const io: std.Io = .{ .userdata = testing.io.userdata, .vtable = &vtable };
+    var follower: Follower(Event) = .init(testing.allocator, io, &fixture.reader, .{});
+    defer follower.deinit();
+    try testing.expectError(error.Canceled, follower.next());
+    try testing.expectEqual(@as(u64, 0), follower.reader.lines.number);
+    try testing.expectEqualStrings("ready", (try follower.reader.next()).?.value.kind);
 }
 
 test "a follower waiting on a file that never grows is stopped by cancellation" {

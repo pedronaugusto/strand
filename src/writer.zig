@@ -4,6 +4,7 @@
 const std = @import("std");
 const assert = std.debug.assert;
 const encode = @import("encode.zig");
+const EncodeBuffer = @import("encode_buffer.zig");
 
 const line_mod = @import("line.zig");
 const Format = line_mod.Format;
@@ -193,9 +194,10 @@ pub fn Writer(comptime T: type) type {
             }
         }
 
-        /// What `write` can report. `WriteFailed` is the destination refusing
-        /// the bytes, `SyncFailed` is the file refusing to put them on the
-        /// disk — ask the destination or the file for diagnostics — and
+        /// What `write` can report. `WriteFailed` is a custom stringify hook
+        /// or the destination refusing the bytes, `SyncFailed` is the file
+        /// refusing to put them on the disk — ask the destination or the
+        /// file for diagnostics — and
         /// `LineTooLong` is this writer's own bound, if it was given one.
         /// `OutOfMemory` is bounded record storage refusing to grow.
         pub const Error = std.Io.Writer.Error || std.mem.Allocator.Error || error{ SyncFailed, LineTooLong };
@@ -265,10 +267,10 @@ pub fn Writer(comptime T: type) type {
         pub fn write(self: *Self, value: T) Error!void {
             if (self.sync_failed) return error.SyncFailed;
             if (self.scratch) |*scratch| {
-                scratch.reset();
-                self.encodeValue(value, &scratch.writer) catch |err|
-                    return if (scratch.allocation_failed) error.OutOfMemory else err;
-                const bytes = scratch.writer.buffered();
+                scratch.buffer.reset();
+                self.encodeValue(value, &scratch.buffer.writer) catch |err|
+                    return scratch.buffer.diagnose(err);
+                const bytes = scratch.buffer.writer.buffered();
                 if (bytes.len > scratch.max_line_bytes) return error.LineTooLong;
                 if (self.options.record_separator) try self.output.writeByte(separator);
                 try self.output.writeAll(bytes);
@@ -399,77 +401,18 @@ pub fn Writer(comptime T: type) type {
     };
 }
 
-// One owner of the encoded payload and its allocation diagnostics. Writer's
-// buffer and end are the storage and length; no second list keeps them in sync.
+// A bounded record keeps its bound beside the storage used to measure it.
 const RecordScratch = struct {
-    allocator: std.mem.Allocator,
+    buffer: EncodeBuffer,
     max_line_bytes: usize,
-    writer: std.Io.Writer,
-    allocation_failed: bool = false,
 
     fn init(allocator: std.mem.Allocator, max_line_bytes: usize) RecordScratch {
-        return .{
-            .allocator = allocator,
-            .max_line_bytes = max_line_bytes,
-            .writer = .{ .buffer = &.{}, .vtable = &.{ .drain = drain, .flush = flush, .rebase = rebase } },
-        };
+        return .{ .buffer = .init(allocator), .max_line_bytes = max_line_bytes };
     }
 
     fn deinit(self: *RecordScratch) void {
-        self.allocator.free(self.writer.buffer);
+        self.buffer.deinit();
         self.* = undefined;
-    }
-
-    fn reset(self: *RecordScratch) void {
-        self.writer.end = 0;
-        self.allocation_failed = false;
-    }
-
-    fn grow(self: *RecordScratch, additional: usize) std.Io.Writer.Error!void {
-        var storage: std.ArrayList(u8) = .{
-            .items = self.writer.buffered(),
-            .capacity = self.writer.buffer.len,
-        };
-        storage.ensureUnusedCapacity(self.allocator, additional) catch {
-            self.allocation_failed = true;
-            return error.WriteFailed;
-        };
-        self.writer.buffer = storage.allocatedSlice();
-    }
-
-    fn drain(writer: *std.Io.Writer, data: []const []const u8, splat: usize) std.Io.Writer.Error!usize {
-        const self: *RecordScratch = @fieldParentPtr("writer", writer);
-        const start = writer.end;
-        for (data[0 .. data.len - 1]) |bytes| {
-            try self.grow(bytes.len);
-            @memcpy(writer.buffer[writer.end..][0..bytes.len], bytes);
-            writer.end += bytes.len;
-        }
-        const pattern = data[data.len - 1];
-        const total = std.math.mul(usize, pattern.len, splat) catch {
-            self.allocation_failed = true;
-            return error.WriteFailed;
-        };
-        try self.grow(total);
-        switch (pattern.len) {
-            0 => {},
-            1 => {
-                @memset(writer.buffer[writer.end..][0..total], pattern[0]);
-                writer.end += total;
-            },
-            else => for (0..splat) |_| {
-                @memcpy(writer.buffer[writer.end..][0..pattern.len], pattern);
-                writer.end += pattern.len;
-            },
-        }
-        return writer.end - start;
-    }
-
-    fn flush(_: *std.Io.Writer) std.Io.Writer.Error!void {}
-
-    fn rebase(writer: *std.Io.Writer, _: usize, capacity: usize) std.Io.Writer.Error!void {
-        const self: *RecordScratch = @fieldParentPtr("writer", writer);
-        try self.grow(capacity);
     }
 };
 

@@ -363,8 +363,10 @@ wanted, and applies `duplicate_fields` then; reading the line does not look
 for a key repeated inside the value. A `std.json.Value` in the same place
 builds a tree nobody reads, and since it parses itself it takes the whole
 line to `std.json`'s token parser; a type holding a `Raw` stays on the direct
-path both ways. `Raw.encode` makes one from a value, and `parseLine(Raw, ...)`
-makes one from bytes and checks them. A `Raw` made by hand is trusted.
+path both ways. `Raw.encode` makes one from a value: `OutOfMemory` means its
+allocation failed, and `WriteFailed` means a custom stringify hook refused
+the value. `parseLine(Raw, ...)` makes one from bytes and checks them. A `Raw`
+made by hand is trusted.
 
 **What a line may contain.**
 

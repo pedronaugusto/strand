@@ -2739,3 +2739,25 @@ test "a separated writer bounds only its JSON payload" {
         try testing.expectEqualStrings("\x1e{}\n", out.written());
     }
 }
+
+test "a separated blank line honors the carriage-return policy" {
+    for ([_][]const u8{ " \t\r\n", "\r\n", "\r" }) |input| {
+        var source: std.Io.Reader = .fixed(input);
+        var lines: strand.LineReader = .init(testing.allocator, &source, .{
+            .record_separator = true,
+            .crlf = false,
+        });
+        defer lines.deinit();
+        try testing.expectError(error.MissingSeparator, lines.next());
+        try testing.expectEqual(@as(u64, 1), lines.fault.line);
+    }
+}
+
+test "a separated blank line discards only one carriage return" {
+    for ([_][]const u8{ "\r\r\n", "\r\r" }) |input| {
+        var source: std.Io.Reader = .fixed(input);
+        var lines: strand.LineReader = .init(testing.allocator, &source, .{ .record_separator = true });
+        defer lines.deinit();
+        try testing.expectError(error.MissingSeparator, lines.next());
+    }
+}

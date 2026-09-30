@@ -463,6 +463,7 @@ pub const LineReader = struct {
                             return .ended;
                         }
                         self.number += 1;
+                        if (pending_cr and !self.options.crlf) blank = false;
                         return .{ .missing = blank };
                     },
                 };
@@ -480,6 +481,7 @@ pub const LineReader = struct {
                 for (contents) |byte| {
                     discarded = true;
                     if (byte == '\r') {
+                        if (pending_cr) blank = false;
                         pending_cr = true;
                     } else {
                         if (pending_cr) blank = false;
@@ -501,6 +503,7 @@ pub const LineReader = struct {
                 for (contents[0..at]) |prefix_byte| {
                     discarded = true;
                     if (prefix_byte == '\r') {
+                        if (pending_cr) blank = false;
                         pending_cr = true;
                     } else {
                         if (pending_cr) blank = false;
@@ -513,6 +516,7 @@ pub const LineReader = struct {
                     self.consumed += at + 1;
                 }
                 self.number += 1;
+                if (pending_cr and !self.options.crlf) blank = false;
                 return .{ .missing = blank };
             }
 

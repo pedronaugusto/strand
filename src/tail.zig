@@ -1009,3 +1009,54 @@ test "a separated tail accepts the exact payload bound and refuses the next byte
         try testing.expect(try tail.prev() == null);
     }
 }
+
+test "separated forward and backward framing agree at every payload boundary" {
+    for ([_][]const u8{
+        "",                      "\n",                               " \t\r\n", line_mod.bom ++ " \t\n", "\xef\xbb \n",
+        "no separator at all\n", "torn\x1e{}\r\n",                   "\x1e{}",  "\x1e\n",                "torn\x1e \r\n",
+        "\x1e{}\x1e{}\n",        "\x1e" ++ "x" ** 512 ++ "\x1e{}\n",
+    }) |input| {
+        var tmp = testing.tmpDir(.{});
+        defer tmp.cleanup();
+        try tmp.dir.writeFile(testing.io, .{ .sub_path = "log", .data = input });
+        const file = try tmp.dir.openFile(testing.io, "log", .{});
+        defer file.close(testing.io);
+        for ([_]usize{ 1, 2, 7, 4096 }) |block_bytes| {
+            for (0..9) |max| {
+                for ([_]bool{ false, true }) |crlf| {
+                    for ([_]bool{ false, true }) |skip_blank| {
+                        var passed = false;
+                        defer if (!passed) std.debug.print("input={any}, block={d}, max={d}, crlf={}, blank={}\n", .{ input, block_bytes, max, crlf, skip_blank });
+                        var forward_source: std.Io.Reader = .fixed(input);
+                        var forward: strand.LineReader = .init(testing.allocator, &forward_source, .{
+                            .record_separator = true,
+                            .max_line_bytes = max,
+                            .crlf = crlf,
+                            .skip_blank = skip_blank,
+                        });
+                        defer forward.deinit();
+                        var source = file.reader(testing.io, &.{});
+                        var tail = try Tail(struct {}).init(testing.allocator, &source, .{
+                            .record_separator = true,
+                            .max_line_bytes = max,
+                            .block_bytes = block_bytes,
+                            .crlf = crlf,
+                            .skip_blank = skip_blank,
+                        });
+                        defer tail.deinit();
+                        const backward = tail.prevRaw();
+                        if (forward.next()) |expected| {
+                            const actual = try backward;
+                            if (expected) |line| {
+                                try testing.expect(actual != null);
+                                try testing.expectEqualStrings(line.line, actual.?.line);
+                                try testing.expectEqual(line.offset, actual.?.offset);
+                            } else try testing.expect(actual == null);
+                        } else |err| try testing.expectError(err, backward);
+                        passed = true;
+                    }
+                }
+            }
+        }
+    }
+}

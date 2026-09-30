@@ -80,6 +80,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- The test build accepts -Dtest-filter to run the named part of the suite.
+
 - A reader that meets a stream with no byte on it yet looks for a byte-order
   mark when the first bytes arrive. It used to decide there was none, so a
   file that was empty when it was first read, and was then written mark

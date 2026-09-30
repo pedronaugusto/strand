@@ -31,6 +31,7 @@ pub fn build(b: *std.Build) void {
 
     const tests = b.addTest(.{
         .name = "strand-tests",
+        .filters = if (b.option([]const u8, "test-filter", "Select tests by name")) |filter| &.{filter} else &.{},
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/strand.zig"),
             .target = target,

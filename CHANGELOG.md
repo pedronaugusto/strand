@@ -80,6 +80,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A separated record keeps its separator offset when physical framing fails.
+
 - Versioned accepts payload fields named v, since payload fields live inside data and cannot collide with the envelope.
 
 - The test build accepts -Dtest-filter to run the named part of the suite.

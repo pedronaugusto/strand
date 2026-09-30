@@ -1427,6 +1427,29 @@ test "a torn prefix does not count against a separated record's bound" {
     try testing.expect((try streamed.next()).?.value == .object);
 }
 
+test "a separated framing failure keeps the record start" {
+    const input = "\x1e{}\ntorn\x1e0123456789\n\x1e{}\n";
+    for ([_]bool{ false, true }) |streamed| {
+        var buffer: [3]u8 = undefined;
+        var chunked: fixtures.Chunked = .init(input, &buffer, 1);
+        var fixed: std.Io.Reader = .fixed(input);
+        var lines: strand.LineReader = .init(testing.allocator, if (streamed) &chunked.interface else &fixed, .{
+            .record_separator = true,
+            .max_line_bytes = 2,
+        });
+        defer lines.deinit();
+        try testing.expectEqualStrings("{}", (try lines.next()).?.line);
+        try testing.expectError(error.LineTooLong, lines.next());
+        try testing.expectEqual(@as(u64, 8), lines.offset);
+        try testing.expectEqual(@as(u64, 8), lines.recordStart().offset);
+        try testing.expectEqual(@as(u64, 1), lines.recordStart().lines_before);
+        const next = (try lines.next()).?;
+        try testing.expectEqualStrings("{}", next.line);
+        try testing.expectEqual(@as(u64, 3), next.number);
+        try testing.expectEqual(@as(u64, 20), next.offset);
+    }
+}
+
 test "a separator is a decision both ends make" {
     var out: std.Io.Writer.Allocating = .init(testing.allocator);
     defer out.deinit();

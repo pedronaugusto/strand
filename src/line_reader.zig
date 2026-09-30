@@ -525,9 +525,17 @@ pub const LineReader = struct {
                 self.consumed += at + 1;
             }
             const after_separator = self.consumed;
-            const framed = try self.readPhysical();
-            self.record_offset = offset;
-            self.record_number = self.number -| @intFromBool(framed != null);
+            const lines_before = self.number;
+            // Physical framing starts after the separator. The record starts
+            // at it, even when framing refuses the line or cannot finish it.
+            defer {
+                self.record_offset = offset;
+                self.record_number = lines_before;
+            }
+            const framed = self.readPhysical() catch |err| {
+                if (err == error.LineTooLong) self.offset = offset;
+                return err;
+            };
             if (framed) |bytes| return .{ .record = .{ .bytes = bytes, .offset = offset } };
             if (!self.options.require_terminator and self.consumed == after_separator) {
                 self.number += 1;

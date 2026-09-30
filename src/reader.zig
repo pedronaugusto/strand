@@ -176,6 +176,10 @@ pub fn Reader(comptime T: type) type {
                 // aggregate. The two layers still own their own work.
                 const raw = (try @call(.always_inline, LineReader.next, .{&self.lines})) orelse return null;
                 if (try @call(.always_inline, Self.parse, .{ self, raw })) |line| return line;
+                // An unfinished pretty record is the end reached while
+                // joining, not a skipped record. Keep the framing layer's
+                // rewind point for the caller that will read it again.
+                if (self.lines.unfinished) return null;
                 // The record was passed over under `.skip`; the next one.
             }
         }
@@ -201,8 +205,9 @@ pub fn Reader(comptime T: type) type {
 
         /// The value on a line `nextRaw` handed back, on this reader's own
         /// arena. `null` when the line is not a `T` and `on_malformed` is
-        /// `.skip`, which is the one thing `next` does with it that a caller
-        /// routing lines itself would otherwise have to write out.
+        /// `.skip`, or when an unfinished pretty record reaches the end
+        /// under `require_terminator`. The framing layer keeps its rewind
+        /// point in that case, so the caller can read the record again.
         ///
         /// Ownership: exactly `next`'s — the value borrows the line, the line
         /// borrows the stream, and the next read takes both back.

@@ -2795,3 +2795,80 @@ test "bounded writer on a file preserves batch and sync policies" {
     var reader = file.reader(io, &read_buffer);
     try testing.expectEqualStrings("\"x\"\n\"y\"\n", try reader.interface.take(8));
 }
+
+test "a pretty prefix at its byte bound ends without inventing a joined line" {
+    for ([_]bool{ false, true }) |separated| {
+        const input = if (separated) "\x1e[\n" else "[\n";
+        for ([_]bool{ false, true }) |require_terminator| {
+            for ([_]bool{ false, true }) |streamed| {
+                var fixed: std.Io.Reader = .fixed(input);
+                var buffer: [2]u8 = undefined;
+                var chunks: fixtures.Chunked = .init(input, &buffer, 1);
+                var reader: strand.Reader(std.json.Value) = .init(testing.allocator, if (streamed) &chunks.interface else &fixed, .{
+                    .format = .pretty,
+                    .record_separator = separated,
+                    .max_line_bytes = 1,
+                    .require_terminator = require_terminator,
+                });
+                defer reader.deinit();
+                if (require_terminator) {
+                    try testing.expectEqual(null, try reader.next());
+                    try testing.expect(reader.lines.unfinished);
+                } else {
+                    try testing.expectError(error.MalformedLine, reader.next());
+                    try testing.expectEqual(error.UnexpectedEndOfInput, reader.lines.fault.err.?);
+                }
+                try testing.expectEqual(@as(u64, 1), reader.lines.number);
+                try testing.expectEqual(@as(u64, 0), reader.lines.recordStart().offset);
+                try testing.expectEqual(@as(u64, 0), reader.lines.recordStart().lines_before);
+                try testing.expectEqual(@as(u64, input.len), reader.lines.consumed);
+            }
+        }
+    }
+}
+
+test "a pretty join past its byte bound counts the discarded physical line" {
+    for ([_]bool{ false, true }) |streamed| {
+        const input = "[\n]\n0\n";
+        var fixed: std.Io.Reader = .fixed(input);
+        var buffer: [2]u8 = undefined;
+        var chunks: fixtures.Chunked = .init(input, &buffer, 1);
+        var reader: strand.Reader(std.json.Value) = .init(testing.allocator, if (streamed) &chunks.interface else &fixed, .{
+            .format = .pretty,
+            .max_line_bytes = 1,
+        });
+        defer reader.deinit();
+        try testing.expectError(error.LineTooLong, reader.next());
+        try testing.expectEqual(@as(u64, 1), reader.lines.fault.line);
+        try testing.expectEqual(@as(u64, 0), reader.lines.offset);
+        const after = (try reader.next()).?;
+        try testing.expectEqual(@as(u64, 3), after.number);
+        try testing.expectEqual(@as(u64, 4), after.offset);
+        try testing.expectEqualStrings("0", after.line);
+    }
+}
+
+test "an unfinished pretty record keeps its rewind point after complete records" {
+    var fixture = try fixtures.Fixture.init("{}\n[\n", 64);
+    defer fixture.deinit();
+    var reader: strand.Reader(std.json.Value) = .init(testing.allocator, &fixture.reader.interface, .{
+        .format = .pretty,
+        .max_line_bytes = 3,
+        .require_terminator = true,
+    });
+    defer reader.deinit();
+    try testing.expectEqualStrings("{}", (try reader.next()).?.line);
+    try testing.expectEqual(null, try reader.next());
+    const start = reader.lines.recordStart();
+    try testing.expectEqual(@as(u64, 3), start.offset);
+    try testing.expectEqual(@as(u64, 1), start.lines_before);
+    try testing.expect(reader.lines.unfinished);
+    try fixture.write_file.writePositionalAll(testing.io, "]\n", 5);
+    try fixture.reader.seekTo(start.offset);
+    reader.lines.reset(start);
+    const completed = (try reader.next()).?;
+    try testing.expectEqualStrings("[\n]", completed.line);
+    try testing.expectEqual(@as(u64, 2), completed.number);
+    try testing.expectEqual(@as(u64, 3), completed.offset);
+    try testing.expectEqual(@as(usize, 0), completed.value.array.items.len);
+}

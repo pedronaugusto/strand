@@ -407,17 +407,14 @@ pub const LineReader = struct {
             self.borrowed = false;
         }
         const before = self.line_buf.writer.end;
-        // The newline joining the payload lines counts against the bound.
-        if (self.options.max_line_bytes -| before == 0) {
-            // It is the record that is too long, and the record began at
-            // `number`, whatever line the reader has reached since.
-            self.fault.framing(number);
-            self.offset = self.record_offset;
-            self.consumed += try self.discardLine();
-            return error.LineTooLong;
-        }
+        // The newline belongs to the payload only if another physical line
+        // exists. Let physical framing decide that and count what it reads,
+        // even when the record so far is exactly at the bound.
         self.line_buf.writer.writeByte('\n') catch return error.OutOfMemory;
-        const joined = (try self.readPhysical()) orelse {
+        const joined = (self.readPhysical() catch |err| {
+            if (err == error.LineTooLong) self.fault.framing(number);
+            return err;
+        }) orelse {
             self.line_buf.writer.end = before;
             return .ended;
         };

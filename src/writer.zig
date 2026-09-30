@@ -56,7 +56,8 @@ pub fn Writer(comptime T: type) type {
             /// `Reader.Options.record_separator`.
             record_separator: bool = false,
             /// The longest record this writer will emit, in bytes, not
-            /// counting the terminator; `null` for no bound, which is the
+            /// counting the terminator, but counting a record separator;
+            /// `null` for no bound, which is the
             /// default. A longer one is `error.LineTooLong` and **none of it
             /// is written**, so the log is left where the record before it
             /// left it.

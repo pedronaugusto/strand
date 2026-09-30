@@ -80,6 +80,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- The separator-mode docs say which bytes each reader and writer counts against its bound.
+
 - A follower checks cancellation before returning a record already in its buffer.
 
 - A separated record keeps its separator offset when physical framing fails.

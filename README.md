@@ -306,13 +306,18 @@ makes one from bytes and checks them. A `Raw` made by hand is trusted.
 marker, so a line that does not parse is either damage or a record from a
 writer that knows something this reader does not, and nothing tells the two
 apart. `record_separator` on the writer and on both readers is RFC 7464's
-framing: ASCII RS, 0x1E, in front of every record, the only byte that cannot
+framing: ASCII RS, 0x1E, in front of every record, a control byte that cannot
 appear unescaped inside a JSON value. What lies before the first separator on
 a line is the tail of a torn record and is dropped; a line carrying no record
 at all is `error.MissingSeparator` rather than a line that might have been
 meant. A reader in this mode does not read a stream without separators, and a
 reader not in it does not read one with them — the byte is then a raw control
 byte. It is a decision both ends make together, like the schema.
+
+The bounds in this mode count different bytes: `Reader` and `LineReader`
+bound the payload after the separator, `Writer` includes the separator, and
+`Tail` bounds the whole physical line, torn prefix included, before framing
+it. None counts the terminator.
 
 **Every refusal is a named error.**
 

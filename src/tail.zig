@@ -125,7 +125,10 @@ pub fn Tail(comptime T: type) type {
             duplicate_fields: strand.DuplicateFields = .@"error",
             /// The longest line accepted, in bytes. A longer one is
             /// `error.LineTooLong`, and is discarded whole: `prev` continues
-            /// with the line before it.
+            /// with the line before it. The terminator and a leading
+            /// byte-order mark are excluded. In separator mode this bounds
+            /// the whole physical line, including the separator and any
+            /// torn prefix, before the prefix is dropped.
             max_line_bytes: usize = 1 << 20,
             /// When true, a line that is empty or all spaces and tabs is
             /// passed over. Its number is still counted.
@@ -135,7 +138,8 @@ pub fn Tail(comptime T: type) type {
             /// See `Reader.Options.record_separator`. A backwards read
             /// treats a line the same way a forwards one does: the record is
             /// what follows the first separator on it, and a line with none
-            /// is `error.MissingSeparator`.
+            /// is `error.MissingSeparator`. Unlike a forwards read, the
+            /// physical line must fit `max_line_bytes` before it is framed.
             record_separator: bool = false,
             /// When true, a UTF-8 byte-order mark at the very start of the
             /// file is not part of the first line — which a backwards read

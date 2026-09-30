@@ -4,9 +4,9 @@
 
 strand reads and writes [JSON Lines](https://jsonlines.org) as a stream of
 typed values: one JSON value per line, for append-only logs, line protocols
-and event streams. strand decodes ordinary typed values directly and uses
-`std.json` as its compatibility oracle and extension path; `std.json` emits
-the values. The line layer runs forwards over a stream, backwards from the
+and event streams. strand reads and writes ordinary typed values directly,
+keeping `std.json` for custom parsers, stringifiers and pretty output.
+The line layer runs forwards over a stream, backwards from the
 end of a seekable file, or along a file that is still being appended to.
 
 ## Usage
@@ -174,7 +174,7 @@ and writes the same file again from the top is a rotation rather than a
 silence. A file with fewer bytes than the window is compared by number until
 it is long enough.
 
-**Starting again is four integers.** The thing that crashes is the follower.
+**Starting again is a checkpoint.** The thing that crashes is the follower.
 `Follower.checkpoint` says which file it stands in, how far into it, what the
 next line is numbered and how many files it has been through; take it after
 `next` has returned a line, which is when the offset in it is a line boundary.

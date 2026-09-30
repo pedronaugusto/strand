@@ -313,9 +313,8 @@ pub fn Follower(comptime T: type) type {
         ///
         /// The thing that crashes is the follower, and the point of
         /// `Line.offset` is to be able to start again where the last one
-        /// stopped. This is the four numbers that takes: which file, how far
-        /// into it, what the line after that is numbered, and how many files
-        /// the follower has been through to get here.
+        /// stopped. This keeps the file identity, the offset, the line count
+        /// and how many files the follower has been through to get here.
         ///
         /// It is an ordinary struct of integers, so a caller keeping one
         /// between runs can write it with this package and read it back with

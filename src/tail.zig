@@ -24,7 +24,6 @@ const strand = @import("strand.zig");
 const line_mod = @import("line.zig");
 const Fault = line_mod.Fault;
 const Line = strand.Line;
-const ParseLineError = strand.ParseLineError;
 
 /// A stream of `T` read from the end of a seekable file towards its start.
 ///
@@ -79,9 +78,6 @@ pub fn Tail(comptime T: type) type {
         trimmed: bool = false,
         /// Internal. What parsing the current line allocated, reset per line.
         arena: std.heap.ArenaAllocator,
-        /// Internal. `last` parses owned values straight onto its caller's
-        /// allocator, avoiding the separate copy that `keep` makes.
-        batch_allocator: ?Allocator = null,
 
         const Self = @This();
 
@@ -243,11 +239,10 @@ pub fn Tail(comptime T: type) type {
         pub fn prev(self: *Self) NextError!?Line(T) {
             while (true) {
                 const raw = (try self.prevRaw()) orelse return null;
-                if (self.batch_allocator == null) _ = self.arena.reset(.retain_capacity);
-                const value = strand.parseLine(T, self.batch_allocator orelse self.arena.allocator(), raw.line, .{
+                _ = self.arena.reset(.retain_capacity);
+                const value = strand.parseLine(T, self.arena.allocator(), raw.line, .{
                     .ignore_unknown_fields = self.options.ignore_unknown_fields,
                     .duplicate_fields = self.options.duplicate_fields,
-                    .copy_strings = self.batch_allocator != null,
                 }) catch |err| switch (err) {
                     error.OutOfMemory => return error.OutOfMemory,
                     else => |parse_err| {
@@ -334,23 +329,27 @@ pub fn Tail(comptime T: type) type {
         /// `allocator`.
         ///
         /// Ownership: everything the result points at is on `allocator`, and
-        /// none of it borrows the reader, so pass an arena and drop it whole.
+        /// none of it borrows the reader. Each line is parsed normally and
+        /// copied through `copyOwned`, under the same data contract as `keep`.
+        /// With an arena, drop it whole; otherwise `freeOwned` each value and
+        /// free the returned slice. A failure releases the partial batch.
         /// Fewer than `n` values means the file ran out; under
         /// `on_malformed = .skip` a skipped line is not one of the `n`.
         ///
         /// This is the whole reason to read a file backwards, so it is worth
         /// saying what it costs: one block read per block the last `n` lines
         /// span, and nothing at all for the rest of the file.
-        pub fn last(self: *Self, allocator: Allocator, n: usize) (NextError || ParseLineError)![]T {
+        pub fn last(self: *Self, allocator: Allocator, n: usize) NextError![]T {
             var out: std.ArrayList(T) = .empty;
-            errdefer out.deinit(allocator);
+            errdefer {
+                for (out.items) |value| @import("owned.zig").freeOwned(allocator, value);
+                out.deinit(allocator);
+            }
             try out.ensureTotalCapacity(allocator, @min(n, 1024));
-            assert(self.batch_allocator == null);
-            self.batch_allocator = allocator;
-            defer self.batch_allocator = null;
             while (out.items.len < n) {
                 const line = (try self.prev()) orelse break;
-                try out.append(allocator, line.value);
+                try out.ensureUnusedCapacity(allocator, 1);
+                out.appendAssumeCapacity(try self.keep(allocator, line));
             }
             std.mem.reverse(T, out.items);
             return out.toOwnedSlice(allocator);

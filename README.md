@@ -184,7 +184,10 @@ change to its numbers or raw fields.
 **Backwards is one block at a time.** `Tail` walks a seekable file from its
 end towards its beginning and reads no further back than the lines it is asked
 for, so the last ten lines of a gigabyte cost one block read; `last(n)` is
-`keep` over a batch. A backwards read cannot count, so `Line.number` counts
+`keep` over a batch: ordinary per-line parsing, then `copyOwned`, with the
+same data contract. It returns only `Tail.NextError` and releases a partial
+batch on failure. With an ordinary allocator, `freeOwned` each value and
+free the returned slice; with an arena, drop it whole. A backwards read cannot count, so `Line.number` counts
 back from the end, 1 being the last line, while `Line.offset` is an offset in
 the file and means the same thing in both directions. A file that shrinks
 under a `Tail` is `error.Truncated`.

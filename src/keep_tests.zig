@@ -88,3 +88,74 @@ test "Tail keep preserves edits and stateful parsing and migration" {
 test "Follower keep preserves edits and stateful parsing and migration" {
     try keepParsed(.follower);
 }
+
+const LastData = struct {
+    text: []const u8,
+    fallback: []const u8 = "default",
+    raw: strand.Raw,
+    dynamic: std.json.Value,
+
+    var shared: [5]u8 = undefined;
+    var calls: usize = 0;
+
+    pub fn jsonParse(a: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) !LastData {
+        calls += 1;
+        const wire = try std.json.innerParse(struct { text: [5]u8, raw: strand.Raw, dynamic: std.json.Value }, a, source, options);
+        shared = wire.text;
+        return .{ .text = &shared, .raw = wire.raw, .dynamic = wire.dynamic };
+    }
+};
+
+fn lastOwned(a: std.mem.Allocator) !void {
+    LastData.calls = 0;
+    var fixture = try Fixture.init(
+        "{\"text\":\"first\",\"raw\":{ \"n\": 1 },\"dynamic\":{\"key\":[\"one\"]}}\n" ++
+            "{\"text\":\"later\",\"raw\":[ 2 ],\"dynamic\":{\"key\":[\"two\"]}}\n",
+        8,
+    );
+    defer fixture.deinit();
+    var batch: []LastData = undefined;
+    {
+        var tail = try strand.Tail(LastData).init(testing.allocator, &fixture.reader, .{ .block_bytes = 4 });
+        defer tail.deinit();
+        batch = try tail.last(a, 3);
+    }
+    defer {
+        for (batch) |value| strand.freeOwned(a, value);
+        a.free(batch);
+    }
+    try testing.expectEqual(@as(usize, 2), LastData.calls);
+    try testing.expectEqual(@as(usize, 2), batch.len);
+    try testing.expect(batch[0].text.ptr != &LastData.shared);
+    try testing.expect(batch[0].fallback.ptr != @as([]const u8, "default").ptr);
+    @memset(&LastData.shared, 'x');
+    try testing.expectEqualStrings("first", batch[0].text);
+    try testing.expectEqualStrings("later", batch[1].text);
+    try testing.expectEqualStrings("default", batch[0].fallback);
+    try testing.expectEqualStrings("{ \"n\": 1 }", batch[0].raw.bytes);
+    try testing.expectEqualStrings("[ 2 ]", batch[1].raw.bytes);
+    try testing.expectEqualStrings("one", batch[0].dynamic.object.get("key").?.array.items[0].string);
+    try testing.expectEqualStrings("two", batch[1].dynamic.object.get("key").?.array.items[0].string);
+}
+
+test "Tail last owns hook references defaults Raw and dynamic values" {
+    try lastOwned(testing.allocator);
+}
+
+test "Tail last releases every partial owned batch on allocation failure" {
+    try testing.checkAllAllocationFailures(testing.allocator, lastOwned, .{});
+}
+
+test "Tail last reports only NextError" {
+    const Result = @typeInfo(@TypeOf(strand.Tail(LastData).last)).@"fn".return_type.?;
+    const Errors = @typeInfo(Result).error_union.error_set;
+    try testing.expect(Errors == strand.Tail(LastData).NextError);
+}
+
+test "Tail last releases owned values when a later line is malformed" {
+    var fixture = try Fixture.init("broken\n{\"text\":\"later\",\"raw\":[2],\"dynamic\":{}}\n", 8);
+    defer fixture.deinit();
+    var tail = try strand.Tail(LastData).init(testing.allocator, &fixture.reader, .{});
+    defer tail.deinit();
+    try testing.expectError(error.MalformedLine, tail.last(testing.allocator, 2));
+}

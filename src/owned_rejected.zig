@@ -4,6 +4,7 @@ const std = @import("std");
 const owned = @import("owned.zig");
 const options = @import("rejection_options");
 const sentinel: u8 = 0;
+const pointer_lanes: @Vector(2, *const u8) = .{ &sentinel, &sentinel };
 
 const T = switch (options.case) {
     0 => [*]const u8,
@@ -19,15 +20,19 @@ const T = switch (options.case) {
     10 => *volatile u8,
     11 => *allowzero u8,
     12 => [:&sentinel]const ?*const u8,
+    13 => [0:pointer_lanes]@Vector(2, *const u8),
+    14 => [:pointer_lanes]const @Vector(2, *const u8),
+    15 => ?[0:pointer_lanes]@Vector(2, *const u8),
+    16 => union(enum) { safe, unsafe: [0:pointer_lanes]@Vector(2, *const u8) },
     else => unreachable,
 };
 
 export fn rejected() void {
     const value: T = switch (options.case) {
-        4 => .safe,
-        5 => null,
+        4, 16 => .safe,
+        5, 15 => null,
         6 => &.{},
-        7, 8 => .{},
+        7, 8, 13 => .{},
         else => undefined,
     };
     if (options.free_only) {

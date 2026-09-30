@@ -90,7 +90,7 @@ pub fn build(b: *std.Build) void {
     // field type. The same gate applies to copying and freeing. Run these
     // with the ownership tests, and in the full and compile-only suites.
     if (test_filter == null or std.mem.indexOf(u8, "owned", test_filter.?) != null) {
-        for (0..13) |case| {
+        for (0..17) |case| {
             for ([_]bool{ false, true }) |free_only| {
                 const rejection_options = b.addOptions();
                 rejection_options.addOption(usize, "case", case);

@@ -211,7 +211,9 @@ fn canCopy(comptime T: type, comptime seen: []const type) bool {
 // new owning pointer. A null optional sentinel has no storage to copy.
 fn safeSentinel(comptime info: anytype) bool {
     if (info.sentinel_ptr == null) return true;
-    return !containsPointer(info.sentinel().?);
+    if (containsPointer(info.sentinel().?))
+        @compileError("sentinels holding pointers have storage fixed by the type and cannot be copied by copyOwned");
+    return true;
 }
 
 fn containsPointer(comptime value: anytype) bool {
@@ -221,6 +223,10 @@ fn containsPointer(comptime value: anytype) bool {
         .array => for (value) |item| {
             if (containsPointer(item)) break true;
         } else false,
+        .vector => |info| {
+            const items: [info.len]info.child = value;
+            return containsPointer(items);
+        },
         .@"struct" => |info| result: {
             for (info.fields) |field| if (containsPointer(@field(value, field.name))) break :result true;
             break :result false;

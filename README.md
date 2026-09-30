@@ -146,7 +146,7 @@ The copy borrows no storage from the source. Sentinels and alignment survive;
 repeated references become separate copies. The input must be a finite tree
 of data, with no cycles or external resources. Unsupported types are refused
 at compile time, including types hidden in an empty slice, null optional or
-inactive union arm. Sentinels and comptime fields holding pointers are refused
+inactive union arm. Sentinels, including vector lanes, and comptime fields holding pointers are refused
 too, since their storage cannot be replaced in a value of the same type;
 a null optional sentinel holds no pointer and is supported.
 

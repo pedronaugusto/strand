@@ -23,10 +23,20 @@ pub fn parse(
     return value;
 }
 
-/// `std.json.innerParse`, over any of its token sources: strand's scanner,
-/// `std.json.Scanner` or `std.json.Reader`. What a type with its own
-/// `jsonParse` in this package calls for what it holds, so that an integer
-/// in it is read here and not by `std.json` (see `int.zig`).
+/// Reads one value from strand's scanner, `std.json.Scanner` or
+/// `std.json.Reader`, leaving the following token for the caller.
+/// Exported as `strand.innerParse`.
+///
+/// Use inside a custom `jsonParse` hook to delegate ordinary fields while
+/// retaining strand's checked integer conversions and byte-vector string
+/// support. Delegate the field's type, not the hook's own type, which would
+/// call that hook again. The hook still owns its custom wire semantics.
+///
+/// Pass the allocator and resolved `std.json.ParseOptions` received by the
+/// hook unchanged, including `allocate` and `max_value_len`. Allocations
+/// follow std.json's leaky contract: use an arena, and retain borrowed input
+/// as long as the returned value. This does not check end of document or
+/// JSON Lines framing; use `parseLine` for a complete line.
 pub fn inner(
     comptime T: type,
     allocator: Allocator,

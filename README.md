@@ -85,6 +85,7 @@ Every allocation anywhere here is on an allocator you passed in.
 | `Reader.resumeAt` | The same, starting at an offset with a line count behind it, so an index entry reads back as the line it named. |
 | `Reader.nextRaw`, `Reader.parse` | A line's bytes with no type for them, and the value when the caller decides it wants one. This is how a stream is routed: `kindOf` or `tagOf` on the bytes, and a parse only for the lines worth parsing. |
 | `Reader.keep`, `Tail.keep`, `Follower.keep` | A copy of a value that outlives the line it came from. |
+| `innerParse` | Read one field from a token source inside a custom `jsonParse` hook, with checked integers and byte-vector strings. |
 | `copyOwned`, `freeOwned` | An owned deep copy of an already parsed value, and its release. |
 | `Reader.lines` | The line reader under a `Reader`, and where its place is kept: `lines.number`, `lines.offset`, `lines.fault` (which line was last refused and why) and `lines.skipped` (how many were passed over). |
 | `Writer(T)`, `Writer.initFile` | One value per line, minified or indented, counted. `initFile` is the one with a file to sync. |
@@ -128,6 +129,17 @@ copying all its storage onto your allocator. Release it with `freeOwned`,
 or pass an arena and drop it whole. Its only error is `OutOfMemory`. The
 three rules are the same for `Reader`, `Tail` and `Follower`, and `parseLine`
 is the first two without a reader.
+
+Inside a custom `jsonParse` hook, delegate ordinary fields with
+`try strand.innerParse(Field, allocator, source, options)` when they should
+have strand's checked integer conversions and byte-vector string support.
+Pass the allocator, source and resolved `std.json.ParseOptions` the hook
+received unchanged. It consumes one value and leaves the next token for the
+hook; it does not frame a line or require end of document. Delegate a field's
+type rather than the hook's own type, which would call the hook again. The
+hook still owns its custom wire format, and allocations and borrows follow
+std.json's leaky contract. Use `parseLine` for a complete line and `payloadOf`
+for a `std.json.Value` in a migration.
 
 `copyOwned(allocator, value)` keeps the value already parsed, without reading
 its JSON again. It copies structs and tuples, arrays and vectors, slices and strings,
@@ -455,7 +467,8 @@ and 455 with a `std.json.Value` in the same place, which takes the line to
 ## Scope
 
 - Its decoder implements `std.json`'s typed field rules. Types with a custom
-  `jsonParse` method use `std.json`'s token parser directly; `Raw` has one for
+  `jsonParse` method use the token-source path; hooks can delegate fields
+  to `innerParse` for strand's checked conversions; `Raw` has one for
   `std.json`'s own entry points and is read directly here.
 - It does not own, buffer or lock a stream, and opens a file only through an
   `Opener` you hand it.

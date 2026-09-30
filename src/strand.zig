@@ -49,6 +49,7 @@
 
 const parse_line = @import("parse_line.zig");
 pub const parseLine = parse_line.parseLine;
+pub const innerParse = @import("parse.zig").inner;
 pub const ParseOptions = parse_line.ParseOptions;
 pub const Diagnostics = parse_line.Diagnostics;
 pub const DuplicateFields = parse_line.DuplicateFields;

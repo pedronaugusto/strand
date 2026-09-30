@@ -40,6 +40,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `innerParse` exposes the checked token-source decoder so custom `jsonParse` hooks can delegate fields with strand's integer and vector rules.
+
 - `copyOwned` and `freeOwned` copy a parsed value and all its storage without a JSON round-trip, including `Raw` bytes and `std.json.Value`, and clean up a failed copy.
 - `LineReader`, the line layer on its own: a `*std.Io.Reader` as a stream of
   lines, framed at the terminator, held to `max_line_bytes`, checked for raw

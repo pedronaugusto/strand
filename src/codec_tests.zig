@@ -6,6 +6,58 @@ const std = @import("std");
 const testing = std.testing;
 const strand = @import("strand.zig");
 
+fn Delegating(comptime T: type) type {
+    return struct {
+        value: T,
+        pub fn jsonParse(a: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) std.json.ParseError(@TypeOf(source.*))!@This() {
+            return .{ .value = try strand.innerParse(T, a, source, options) };
+        }
+    };
+}
+
+test "custom hooks delegate to the public checked token decoder" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Fields = struct { bytes: @Vector(2, u8), number: u128, text: []const u8 };
+    const Hook = Delegating(Fields);
+    const bytes = "{\"bytes\":\"ab\",\"number\":1.8e38,\"text\":\"borrowed\"}";
+    for (0..4) |path| {
+        var where: strand.Diagnostics = .{};
+        var input: std.Io.Reader = .fixed(bytes);
+        var tokens = std.json.Reader.init(a, &input);
+        defer tokens.deinit();
+        const result = switch (path) {
+            0 => try strand.parseLine(Hook, a, bytes, .{}),
+            1 => try strand.parseLine(Hook, a, bytes, .{ .copy_strings = true, .diagnostics = &where }),
+            2 => try std.json.parseFromSliceLeaky(Hook, a, bytes, .{}),
+            3 => try std.json.parseFromTokenSourceLeaky(Hook, a, &tokens, .{}),
+            else => unreachable,
+        };
+        try testing.expectEqual(@as(u8, 'a'), result.value.bytes[0]);
+        try testing.expectEqual(@as(u8, 'b'), result.value.bytes[1]);
+        try testing.expect(result.value.number > std.math.maxInt(i128));
+        try testing.expectEqualStrings("borrowed", result.value.text);
+        if (path == 0) try testing.expect(result.value.text.ptr == bytes.ptr + std.mem.indexOf(u8, bytes, "borrowed").?);
+        if (path == 1) try testing.expect(result.value.text.ptr != bytes.ptr + std.mem.indexOf(u8, bytes, "borrowed").?);
+    }
+    const overflow = "{\"bytes\":\"ab\",\"number\":3.5e38,\"text\":\"x\"}";
+    try testing.expectError(error.Overflow, strand.parseLine(Hook, a, overflow, .{}));
+    try testing.expectError(error.Overflow, std.json.parseFromSliceLeaky(Hook, a, overflow, .{}));
+    try testing.expectError(error.UnexpectedToken, strand.parseLine(Delegating(@Vector(2, bool)), a, "\"ab\"", .{}));
+    try testing.expectError(error.LengthMismatch, strand.parseLine(Delegating(@Vector(2, u8)), a, "\"abc\"", .{}));
+
+    // An inner decoder reads one value and leaves the enclosing tokens to
+    // the hook. It also keeps the hook's duplicate and unknown-field policy.
+    const HookPair = struct { Hook, u8 };
+    const pair = try strand.parseLine(HookPair, a, "[" ++ bytes ++ ",7]", .{});
+    try testing.expectEqual(@as(u8, 7), pair[1]);
+    const repeated = "{\"number\":1,\"number\":2,\"extra\":0,\"bytes\":[97,98],\"text\":\"x\"}";
+    try testing.expectEqual(@as(u128, 1), (try strand.parseLine(Hook, a, repeated, .{ .duplicate_fields = .use_first })).value.number);
+    try testing.expectEqual(@as(u128, 2), (try strand.parseLine(Hook, a, repeated, .{ .duplicate_fields = .use_last })).value.number);
+    try testing.expectError(error.UnknownField, strand.parseLine(Hook, a, repeated, .{ .duplicate_fields = .use_last, .ignore_unknown_fields = false }));
+}
+
 const Hue = enum { red, @"gr\"een", blue };
 
 /// Every shape the decoder reads itself, so that a line of it takes the

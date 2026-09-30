@@ -171,8 +171,11 @@ pub fn Reader(comptime T: type) type {
         /// they found it.
         pub fn next(self: *Self) NextError!?Line(T) {
             while (true) {
-                const raw = (try self.lines.next()) orelse return null;
-                if (try self.parse(raw)) |line| return line;
+                // Keep the frame and the decoded value in this call's
+                // result rather than returning each through a separate
+                // aggregate. The two layers still own their own work.
+                const raw = (try @call(.always_inline, LineReader.next, .{&self.lines})) orelse return null;
+                if (try @call(.always_inline, Self.parse, .{ self, raw })) |line| return line;
                 // The record was passed over under `.skip`; the next one.
             }
         }

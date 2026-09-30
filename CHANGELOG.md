@@ -80,6 +80,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Reader.next keeps framing and parsing in one result handoff without changing either layer's ownership.
+
 - The ARM framing scan reduces byte-sized lane indices without unpacking narrow vector elements.
 
 - The separator-mode docs say which bytes each reader and writer counts against its bound.

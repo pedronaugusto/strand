@@ -8,6 +8,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Value conversion handles empty arrays through the reflected walker, avoiding std.json's nonexistent-element indexing in nested payloads and migrations.
+
 - Breaking: byte vectors accept both JSON strings of the exact UTF-8 byte length and arrays on every decoder path, replacing string refusal; encoding stays byte-for-byte std.json, including empty vectors.
 
 - Breaking: `Tail.last` parses each line normally and copies through `copyOwned`, requires the same owned-data contract as `keep`, returns only `NextError`, and releases partial batches on failure; its internal `batch_allocator` field is removed.

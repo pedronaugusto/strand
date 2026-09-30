@@ -13,7 +13,7 @@
 //!   casts through an `i128` (see `int.zig`).
 //!
 //! Conversion walks reflected containers here when they contain a checked
-//! integer or a vector. Each leaf is converted where it occurs, so the
+//! integer, vector or empty array. Each leaf is converted where it occurs, so the
 //! first error is the one `std.json` would report. Scalar and custom
 //! conversions stay with `std.json`; a vector is built as an array and then
 //! converted, since Zig 0.16.0's value parser uses a runtime vector index.
@@ -78,7 +78,8 @@ fn needsConversion(comptime T: type, comptime seen: []const type) bool {
     return switch (@typeInfo(T)) {
         .int => |info| info.bits > 53,
         .vector => true,
-        inline .optional, .array => |info| needsConversion(info.child, next),
+        .array => |info| info.len == 0 or needsConversion(info.child, next),
+        .optional => |info| needsConversion(info.child, next),
         .pointer => |info| switch (info.size) {
             .one, .slice => needsConversion(info.child, next),
             else => false,
@@ -93,7 +94,7 @@ fn needsConversion(comptime T: type, comptime seen: []const type) bool {
     };
 }
 
-// Only containers whose descendants need checked integers or vectors arrive
+// Only containers whose descendants need checked integers, vectors or empty arrays arrive
 // here. Each child goes through the entry point, so custom hooks retain
 // control of their data and integers retain their checked conversions.
 fn collections(comptime T: type, allocator: Allocator, value: std.json.Value, options: std.json.ParseOptions) std.json.ParseFromValueError!T {
@@ -297,4 +298,20 @@ test "a value std.json cannot cast into an integer is Overflow, not a panic" {
     // std.json refuses the unknown member before it reaches the number.
     const unknown = try std.json.parseFromSliceLeaky(std.json.Value, a, "{\"z\":1,\"n\":1.8446744073709552e19}", .{});
     try testing.expectError(error.UnknownField, parseFromValue(struct { n: u64 }, a, unknown, .{}));
+}
+
+test "payloadOf reads empty arrays without indexing nonexistent elements" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const empty = try std.json.parseFromSliceLeaky(std.json.Value, a, "[]", .{});
+    inline for (.{ u8, bool, u32, []const u8 }) |Child| {
+        try testing.expectEqualDeep(@as([0]Child, .{}), try @import("strand.zig").payloadOf([0]Child, a, empty));
+        const Nested = struct { rows: [1][0]Child };
+        const source = try std.json.parseFromSliceLeaky(std.json.Value, a, "{\"rows\":[[]]}", .{});
+        try testing.expectEqualDeep(Nested{ .rows = .{.{}} }, try @import("strand.zig").payloadOf(Nested, a, source));
+        try testing.expectError(error.LengthMismatch, @import("strand.zig").payloadOf([0]Child, a, try std.json.parseFromSliceLeaky(std.json.Value, a, "[0]", .{})));
+    }
+    try testing.expectEqualDeep(@as([0]u8, .{}), try @import("strand.zig").payloadOf([0]u8, a, .{ .string = "" }));
+    try testing.expectError(error.LengthMismatch, @import("strand.zig").payloadOf([0]u8, a, .{ .string = "x" }));
 }

@@ -162,6 +162,9 @@ fn freeValue(allocator: Allocator, value: std.json.Value) void {
 }
 
 fn check(comptime T: type) void {
+    // As in the reflected codecs, a whole protocol can take more than the
+    // default thousand steps. The walk still stops at recursive schemas.
+    @setEvalBranchQuota(1_000_000);
     if (!canCopy(T, &.{})) @compileError(@typeName(T) ++ " cannot be copied by copyOwned");
 }
 

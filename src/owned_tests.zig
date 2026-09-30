@@ -218,6 +218,14 @@ test "owned copy preserves null sentinels around optional pointers" {
     try copyAndFree(testing.allocator, array);
 }
 
+test "owned copy accepts a full protocol schema" {
+    const Leaf = struct { text: []const u8, rows: []const struct { text: []const u8 } };
+    const T = std.meta.Tuple(&([_]type{Leaf} ** 64));
+    var source: T = undefined;
+    inline for (0..64) |i| source[i] = .{ .text = "protocol", .rows = &.{.{ .text = "row" }} };
+    try copyAndFree(testing.allocator, source);
+}
+
 fn allocationFailures(source: anytype) !void {
     const T = @TypeOf(source);
     const Case = struct {

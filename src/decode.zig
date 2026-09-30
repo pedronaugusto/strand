@@ -160,9 +160,8 @@ const Parser = struct {
                 return result;
             },
             .vector => |i| {
-                self.space();
-                if (self.cursor == self.input.len) return error.UnexpectedEndOfInput;
-                if (self.input[self.cursor] != '[') return error.UnexpectedToken;
+                // Vectors use their array's JSON shape, including strings
+                // for UTF-8 bytes, just as std.json writes them.
                 const A = [i.len]i.child;
                 return try self.value(A);
             },

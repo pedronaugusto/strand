@@ -73,6 +73,9 @@ pub const ParseLineError = std.json.ParseError(std.json.Scanner);
 /// `line` is one JSON value with no line terminator; a trailing `\n` is
 /// `error.SyntaxError`, because a JSON Lines line does not contain one.
 ///
+/// Byte vectors accept strings of exactly their byte length as well as
+/// arrays, matching the forms std.json writes. Other vectors accept arrays.
+///
 /// Ownership: allocations are made on `allocator` and are not individually
 /// tracked, so `allocator` should be an arena you can drop as a whole (this
 /// is `std.json.parseFromSliceLeaky`'s contract). With the default

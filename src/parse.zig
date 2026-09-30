@@ -1,7 +1,8 @@
 //! Typed parsing on top of strand's complete-input scanner.
 //!
 //! The shape and policies are `std.json`'s. The one conversion owned here is
-//! the integer (`int.zig`), which `std.json` can panic on; everything else
+//! the integer (`int.zig`), which `std.json` can panic on, and vectors,
+//! which accept the byte strings its encoder writes; everything else
 //! it does not walk itself is delegated to `std.json.innerParse`.
 
 const std = @import("std");
@@ -73,7 +74,6 @@ pub fn inner(
             return result;
         },
         .vector => |info| {
-            if (try source.peekNextTokenType() != .array_begin) return error.UnexpectedToken;
             const A = [info.len]info.child;
             return try inner(A, allocator, source, options);
         },

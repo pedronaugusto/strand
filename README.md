@@ -314,6 +314,10 @@ parsing the payload, and an `unknown: std.json.Value` arm gives a line from a
 newer writer somewhere to land.
 
 `payloadOf` handles arrays and vectors inside reflected containers too.
+Byte vectors read both strings and arrays on every parse path. As with byte
+arrays, the string must contain exactly as many UTF-8 bytes as there are
+lanes. Writing stays byte-for-byte `std.json`: valid UTF-8 bytes become a
+string, other bytes an array. Both forms read back with the same bytes.
 Checked integer conversions happen as each field is read, so an earlier
 field's error is reported before an overflow in a later one. Custom
 `jsonParseFromValue` hooks still read their own values.

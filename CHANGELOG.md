@@ -8,11 +8,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Breaking: byte vectors accept both JSON strings of the exact UTF-8 byte length and arrays on every decoder path, replacing string refusal; encoding stays byte-for-byte std.json, including empty vectors.
+
 - Breaking: `Tail.last` parses each line normally and copies through `copyOwned`, requires the same owned-data contract as `keep`, returns only `NextError`, and releases partial batches on failure; its internal `batch_allocator` field is removed.
 
 - The logbook example owns a separate scratch directory per invocation so concurrent builds cannot overwrite or remove each other's files.
 
-- Vector decoding converts array elements as values, supporting booleans and narrow integers on every parse path and refusing strings for byte vectors.
+- Vector decoding converts array elements as values, supporting booleans and narrow integers on every parse path including array input for byte vectors.
 
 - Owned copies give pointer-vector elements independent storage and release them on failure or `freeOwned`.
 

@@ -477,11 +477,180 @@ test "vectors decode their elements without assuming array bit layout" {
     }
 }
 
-test "a byte vector refuses a JSON string on every parse path" {
+fn expectVectorPaths(expected: anytype, bytes: []const u8) !void {
+    const T = @TypeOf(expected);
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
-    const T = @Vector(3, u8);
-    try testing.expectError(error.UnexpectedToken, strand.parseLine(T, arena.allocator(), "\"abc\"", .{}));
-    var where: strand.Diagnostics = .{};
-    try testing.expectError(error.UnexpectedToken, strand.parseLine(T, arena.allocator(), "\"abc\"", .{ .diagnostics = &where }));
+    const a = arena.allocator();
+    if (comptime @import("decode.zig").supports(T)) {
+        var direct: T = undefined;
+        try @import("decode.zig").parseInto(T, a, bytes, .{ .allocate = .alloc_if_needed, .max_value_len = bytes.len }, &direct);
+        try testing.expectEqualDeep(expected, direct);
+    }
+    for ([_]bool{ false, true }) |copy| {
+        try testing.expectEqualDeep(expected, try strand.parseLine(T, a, bytes, .{ .copy_strings = copy }));
+        var where: strand.Diagnostics = .{};
+        try testing.expectEqualDeep(expected, try strand.parseLine(T, a, bytes, .{ .copy_strings = copy, .diagnostics = &where }));
+    }
+    var scanner = std.json.Scanner.initCompleteInput(a, bytes);
+    defer scanner.deinit();
+    try testing.expectEqualDeep(expected, try @import("parse.zig").inner(T, a, &scanner, .{ .allocate = .alloc_if_needed, .max_value_len = bytes.len }));
+    var input: std.Io.Reader = .fixed(bytes);
+    var tokens = std.json.Reader.init(a, &input);
+    defer tokens.deinit();
+    try testing.expectEqualDeep(expected, try @import("parse.zig").inner(T, a, &tokens, .{ .allocate = .alloc_always, .max_value_len = bytes.len }));
+    const dynamic = try std.json.parseFromSliceLeaky(std.json.Value, a, bytes, .{});
+    try testing.expectEqualDeep(expected, try strand.payloadOf(T, a, dynamic));
+
+    const Payload = struct {
+        item: T,
+        pub const jsonl_version: u32 = 2;
+        pub fn jsonlMigrate(allocator: std.mem.Allocator, from: u32, data: std.json.Value) std.json.ParseFromValueError!@This() {
+            if (from != 1) return error.UnknownField;
+            return strand.payloadOf(@This(), allocator, data);
+        }
+    };
+    const Envelope = strand.Versioned(Payload);
+    // Streaming payload, stashed payload, migration, and duplicate policy's
+    // stashed payload all reach the same value through different decoders.
+    for ([_][]const u8{
+        try std.fmt.allocPrint(a, "{{\"v\":2,\"data\":{{\"item\":{s}}}}}", .{bytes}),
+        try std.fmt.allocPrint(a, "{{\"data\":{{\"item\":{s}}},\"v\":2}}", .{bytes}),
+        try std.fmt.allocPrint(a, "{{\"v\":1,\"data\":{{\"item\":{s}}}}}", .{bytes}),
+    }) |envelope| {
+        for ([_]strand.DuplicateFields{ .@"error", .use_last }) |duplicates| {
+            try testing.expectEqualDeep(expected, (try strand.parseLine(Envelope, a, envelope, .{ .duplicate_fields = duplicates })).value.item);
+            var where: strand.Diagnostics = .{};
+            try testing.expectEqualDeep(expected, (try strand.parseLine(Envelope, a, envelope, .{ .duplicate_fields = duplicates, .diagnostics = &where })).value.item);
+        }
+    }
+
+    const framed = try std.mem.concat(a, u8, &.{ bytes, "\n" });
+    var stream: std.Io.Reader = .fixed(framed);
+    var reader = strand.Reader(T).init(testing.allocator, &stream, .{});
+    defer reader.deinit();
+    try testing.expectEqualDeep(expected, (try reader.next()).?.value);
+    var fixture = try @import("fixtures.zig").Fixture.init(framed, 1);
+    defer fixture.deinit();
+    var tail = try strand.Tail(T).init(testing.allocator, &fixture.reader, .{ .block_bytes = 1 });
+    defer tail.deinit();
+    try testing.expectEqualDeep(expected, (try tail.prev()).?.value);
+    var batch_tail = try strand.Tail(T).init(testing.allocator, &fixture.reader, .{ .block_bytes = 1 });
+    defer batch_tail.deinit();
+    const batch = try batch_tail.last(testing.allocator, 1);
+    defer {
+        for (batch) |item| strand.freeOwned(testing.allocator, item);
+        testing.allocator.free(batch);
+    }
+    try testing.expectEqualDeep(expected, batch[0]);
+    try fixture.reader.seekTo(0);
+    var follower = strand.Follower(T).init(testing.allocator, testing.io, &fixture.reader, .{});
+    defer follower.deinit();
+    try testing.expectEqualDeep(expected, (try follower.next()).value);
+}
+
+fn expectVectorRoundTrip(expected: anytype) !void {
+    var encoded: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer encoded.deinit();
+    try strand.writeLine(&encoded.writer, expected);
+    const bytes = encoded.written()[0 .. encoded.written().len - 1];
+    const std_bytes = try std.json.Stringify.valueAlloc(testing.allocator, expected, .{ .emit_null_optional_fields = false });
+    defer testing.allocator.free(std_bytes);
+    try testing.expectEqualStrings(std_bytes, bytes);
+    try expectVectorPaths(expected, bytes);
+    // Pretty output takes std.json's encoder instead of the direct encoder.
+    encoded.clearRetainingCapacity();
+    var writer = strand.Writer(@TypeOf(expected)).init(&encoded.writer, .{ .format = .pretty });
+    try writer.write(expected);
+    const pretty = encoded.written()[0 .. encoded.written().len - 1];
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    try testing.expectEqualDeep(expected, try strand.parseLine(@TypeOf(expected), arena.allocator(), pretty, .{}));
+    var input: std.Io.Reader = .fixed(encoded.written());
+    var reader = strand.Reader(@TypeOf(expected)).init(testing.allocator, &input, .{ .format = .pretty });
+    defer reader.deinit();
+    try testing.expectEqualDeep(expected, (try reader.next()).?.value);
+}
+
+test "vector round trips preserve std.json bytes on every parse path" {
+    const number: u32 = 42;
+    inline for (.{
+        @as(@Vector(1, u8), .{0}),
+        @as(@Vector(3, u8), .{ 'a', 'b', 'c' }),
+        @as(@Vector(4, u8), .{ 0xc3, 0xa9, '\n', '"' }),
+        @as(@Vector(4, u8), .{ 0xf0, 0x9f, 0x98, 0x80 }),
+        @as(@Vector(3, u8), .{ 0xff, 0x80, 0xc3 }),
+        @as(@Vector(3, bool), .{ true, false, true }),
+        @as(@Vector(3, u0), .{ 0, 0, 0 }),
+        @as(@Vector(3, i1), .{ -1, 0, -1 }),
+        @as(@Vector(3, u3), .{ 0, 2, 7 }),
+        @as(@Vector(3, i3), .{ -4, 0, 3 }),
+        @as(@Vector(3, u64), .{ 0, 1 << 63, std.math.maxInt(u64) }),
+        @as(@Vector(3, i64), .{ std.math.minInt(i64), 0, std.math.maxInt(i64) }),
+        @as(@Vector(3, u128), .{ 0, 1 << 127, std.math.maxInt(u128) }),
+        @as(@Vector(3, i128), .{ std.math.minInt(i128), 0, std.math.maxInt(i128) }),
+        @as(@Vector(3, f16), .{ -1.25, 0, 3.5 }),
+        @as(@Vector(3, f64), .{ -1.25, 0, 3.5 }),
+        @as(@Vector(3, f32), .{ -1.25, 0, 3.5 }),
+        @as(@Vector(3, *const u32), .{ &number, &number, &number }),
+    }) |vector| {
+        try expectVectorRoundTrip(vector);
+        const V = @TypeOf(vector);
+        const Containers = struct {
+            optional: ?V,
+            pointer: *const V,
+            array: [2]V,
+            slice: []const V,
+            tuple: struct { V, bool },
+            arm: union(enum) { vector: V, empty },
+        };
+        try expectVectorRoundTrip(Containers{
+            .optional = vector,
+            .pointer = &vector,
+            .array = .{ vector, vector },
+            .slice = &.{ vector, vector },
+            .tuple = .{ vector, true },
+            .arm = .{ .vector = vector },
+        });
+    }
+}
+
+test "byte vector strings and arrays decode to the same bytes on every parse path" {
+    try expectVectorPaths(@as(@Vector(3, u8), .{ 'a', 'b', 'c' }), "\"abc\"");
+    try expectVectorPaths(@as(@Vector(3, u8), .{ 'a', 'b', 'c' }), "[97,98,99]");
+    try expectVectorPaths(@as(@Vector(3, u8), .{ 0xc3, 0xa9, '\n' }), "\"\\u00e9\\n\"");
+    try expectVectorPaths(@as(@Vector(3, u8), .{ 0xc3, 0xa9, '\n' }), "[195,169,10]");
+}
+
+test "zero lane vector round trips on every parse path" {
+    try expectVectorRoundTrip(@as(@Vector(0, u8), .{}));
+    try expectVectorRoundTrip(@as(@Vector(0, bool), .{}));
+}
+
+test "byte vector lane counts round trip across scanner boundaries" {
+    inline for (.{ 0, 1, 2, 3, 4, 7, 8, 15, 16, 17, 31, 32, 33 }) |n| {
+        try expectVectorRoundTrip(@as(@Vector(n, u8), @splat('a')));
+        if (n != 0) try expectVectorRoundTrip(@as(@Vector(n, u8), @splat(0xff)));
+    }
+}
+
+test "vector strings require byte elements and the exact byte count" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    inline for (.{
+        .{ @Vector(3, u8), "\"ab\"", error.LengthMismatch },
+        .{ @Vector(3, u8), "\"abcd\"", error.LengthMismatch },
+        .{ @Vector(1, u8), "\"\\u00e9\"", error.LengthMismatch },
+        .{ @Vector(3, u3), "\"abc\"", error.UnexpectedToken },
+        .{ @Vector(3, bool), "\"abc\"", error.UnexpectedToken },
+        .{ @Vector(3, u8), "{}", error.UnexpectedToken },
+        .{ @Vector(3, u8), "null", error.UnexpectedToken },
+    }) |case| {
+        try testing.expectError(case[2], strand.parseLine(case[0], a, case[1], .{}));
+        var where: strand.Diagnostics = .{};
+        try testing.expectError(case[2], strand.parseLine(case[0], a, case[1], .{ .diagnostics = &where }));
+        const dynamic = try std.json.parseFromSliceLeaky(std.json.Value, a, case[1], .{});
+        try testing.expectError(case[2], strand.payloadOf(case[0], a, dynamic));
+    }
 }

@@ -191,6 +191,7 @@ pub fn Versioned(comptime T: type) type {
 /// `std.json.parseFromValueLeaky` with unknown fields ignored, except that a
 /// number it would panic on casting into one of `Old`'s integers is
 /// `error.Overflow`: 2^64 into a `u64`, for one.
+/// Byte vectors accept strings and arrays, matching std.json's encoding.
 /// Arrays and vectors compose with the reflected shapes, and an earlier
 /// field's conversion error is returned before any later integer overflow.
 ///

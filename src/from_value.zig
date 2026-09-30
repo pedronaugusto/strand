@@ -17,13 +17,15 @@
 //! first error is the one `std.json` would report. Scalar and custom
 //! conversions stay with `std.json`; a vector is built as an array and then
 //! converted, since Zig 0.16.0's value parser uses a runtime vector index.
+//! Byte vectors also accept strings, matching the shape its encoder writes.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const int = @import("int.zig");
 
 /// `std.json.parseFromValueLeaky(T, allocator, value, options)`, with its
-/// answer, or `error.Overflow` where it would panic.
+/// answer, or `error.Overflow` where it would panic. Byte vectors also
+/// accept the string form written by std.json, as byte arrays do.
 pub fn parseFromValue(
     comptime T: type,
     allocator: Allocator,
@@ -97,11 +99,16 @@ fn needsConversion(comptime T: type, comptime seen: []const type) bool {
 fn collections(comptime T: type, allocator: Allocator, value: std.json.Value, options: std.json.ParseOptions) std.json.ParseFromValueError!T {
     switch (@typeInfo(T)) {
         .vector => |info| {
-            if (value != .array) return error.UnexpectedToken;
-            const array = try parseFromValue([info.len]info.child, allocator, value, options);
+            const array = try collections([info.len]info.child, allocator, value, options);
             return array;
         },
         .array => |info| {
+            if (info.child == u8 and value == .string) {
+                if (value.string.len != info.len) return error.LengthMismatch;
+                var result: T = undefined;
+                @memcpy(&result, value.string);
+                return result;
+            }
             if (value != .array) return error.UnexpectedToken;
             if (value.array.items.len != info.len) return error.LengthMismatch;
             var result: T = undefined;

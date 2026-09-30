@@ -73,8 +73,9 @@ pub fn inner(
             return result;
         },
         .vector => |info| {
+            if (try source.peekNextTokenType() != .array_begin) return error.UnexpectedToken;
             const A = [info.len]info.child;
-            return @bitCast(try inner(A, allocator, source, options));
+            return try inner(A, allocator, source, options);
         },
         .pointer => |info| switch (info.size) {
             .one => {

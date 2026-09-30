@@ -454,3 +454,34 @@ test "a value is written as std.json writes it, whatever its shape" {
     try expectSameAsStdJson(a, struct {}{});
     try expectSameAsStdJson(a, struct { a: void }{ .a = {} });
 }
+
+test "vectors decode their elements without assuming array bit layout" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    inline for (.{
+        .{ @Vector(3, bool), "[true,false,true]" },
+        .{ @Vector(3, u3), "[1,2,7]" },
+        .{ @Vector(3, i3), "[-4,0,3]" },
+        .{ @Vector(3, *const u32), "[1,2,7]" },
+    }) |case| {
+        const T = case[0];
+        const expected = try std.json.parseFromSliceLeaky(T, a, case[1], .{});
+        const direct = try strand.parseLine(T, a, case[1], .{});
+        var where: strand.Diagnostics = .{};
+        const diagnosed = try strand.parseLine(T, a, case[1], .{ .diagnostics = &where });
+        inline for (0..3) |i| {
+            try testing.expectEqualDeep(expected[i], direct[i]);
+            try testing.expectEqualDeep(expected[i], diagnosed[i]);
+        }
+    }
+}
+
+test "a byte vector refuses a JSON string on every parse path" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const T = @Vector(3, u8);
+    try testing.expectError(error.UnexpectedToken, strand.parseLine(T, arena.allocator(), "\"abc\"", .{}));
+    var where: strand.Diagnostics = .{};
+    try testing.expectError(error.UnexpectedToken, strand.parseLine(T, arena.allocator(), "\"abc\"", .{ .diagnostics = &where }));
+}

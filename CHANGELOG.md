@@ -8,6 +8,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Vector decoding converts array elements as values, supporting booleans and narrow integers on every parse path and refusing strings for byte vectors.
+
 - Owned copies give pointer-vector elements independent storage and release them on failure or `freeOwned`.
 
 - Breaking: `Identity.inode` is now `Identity.file_id`, including serialized policy tags; the old `inode` tag is refused with `error.UnknownField`, with no compatibility path, and followers start fresh.

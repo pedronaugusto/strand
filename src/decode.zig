@@ -160,8 +160,11 @@ const Parser = struct {
                 return result;
             },
             .vector => |i| {
+                self.space();
+                if (self.cursor == self.input.len) return error.UnexpectedEndOfInput;
+                if (self.input[self.cursor] != '[') return error.UnexpectedToken;
                 const A = [i.len]i.child;
-                return @bitCast(try self.value(A));
+                return try self.value(A);
             },
             .pointer => |i| switch (i.size) {
                 .one => {

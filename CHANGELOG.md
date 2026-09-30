@@ -80,6 +80,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Versioned accepts payload fields named v, since payload fields live inside data and cannot collide with the envelope.
+
 - The test build accepts -Dtest-filter to run the named part of the suite.
 
 - A reader that meets a stream with no byte on it yet looks for a byte-order

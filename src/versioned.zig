@@ -53,10 +53,8 @@ const data_key = "data";
 ///   recognisable there. A log that was written before versioning existed
 ///   sets this to the version that log was.
 ///
-/// A `T` with a field named `v` is a compile error: an envelope key and a
-/// record field of the same name means the author has confused the two, and
-/// the confusion is quiet — the field would be written inside `data`, where
-/// it is ignored by everything that reads the version.
+/// Every field of `T` belongs inside `data`, including fields named `v` or
+/// `data`. Only the envelope's own `v` selects the schema version.
 pub fn Versioned(comptime T: type) type {
     comptime checkShape(T);
     return struct {
@@ -216,16 +214,6 @@ fn checkShape(comptime T: type) void {
     }
     if (T.jsonl_version == 0) {
         @compileError(name ++ ".jsonl_version must not be 0: 0 is what a line with no version is");
-    }
-    const info = @typeInfo(T);
-    if (info == .@"struct") {
-        for (info.@"struct".fields) |field| {
-            if (std.mem.eql(u8, field.name, version_key)) {
-                @compileError("strand.Versioned(" ++ name ++ "): " ++ name ++ " has a field named `" ++
-                    version_key ++ "`, which is the envelope's own key. The record goes inside `" ++
-                    data_key ++ "`, so the field would never be read as the version; rename one of them.");
-            }
-        }
     }
 }
 
@@ -498,6 +486,31 @@ test "round trip: what is written under the envelope is read back under it" {
     try testing.expectEqual(@as(u32, 1), (try reader.next()).?.value.value.count);
     try testing.expectEqualStrings("net", (try reader.next()).?.value.value.scope);
     try testing.expectEqual(@as(?strand.Line(Versioned(Event)), null), try reader.next());
+}
+
+test "payload fields v and data belong to the payload, not the envelope" {
+    const Payload = struct {
+        v: u32,
+        data: []const u8,
+        pub const jsonl_version: u32 = 2;
+    };
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    try strand.writeLine(&out.writer, Versioned(Payload){ .value = .{ .v = 12, .data = "kept" } });
+    try testing.expectEqualStrings("{\"v\":2,\"data\":{\"v\":12,\"data\":\"kept\"}}\n", out.written());
+
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    for ([_][]const u8{
+        "{\"v\":2,\"data\":{\"v\":12,\"data\":\"kept\"}}",
+        "{\"data\":{\"v\":12,\"data\":\"kept\"},\"v\":2}",
+    }) |line| {
+        const record = try strand.parseLine(Versioned(Payload), arena.allocator(), line, .{});
+        try testing.expectEqual(@as(u32, 2), record.from);
+        try testing.expectEqual(@as(u32, 12), record.value.v);
+        try testing.expectEqualStrings("kept", record.value.data);
+        try testing.expect(!record.migrated());
+    }
 }
 
 test "a migrated record is written back in today's shape" {

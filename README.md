@@ -235,7 +235,7 @@ build writes, `T.jsonlMigrate` is the hook an older line goes through, taking
 the version and a `std.json.Value` and returning today's shape, and
 `payloadOf` parses the old shape inside the hook. `v` comes first and `data`
 second, with the whole record inside `data`, so the envelope cannot collide
-with it — a `T` with a field named `v` is a compile error. `Versioned(T)` is
+with it: payload fields named `v` or `data` stay inside `data`. `Versioned(T)` is
 an ordinary `std.json` type and composes with `Reader`, `Writer`, `Tail` and
 `Follower`. A line with no `v` is version `T.jsonl_version_unstamped`, which
 defaults to 0, and no `jsonl_version` may be 0, so an unstamped line is always

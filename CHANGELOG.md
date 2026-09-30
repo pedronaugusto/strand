@@ -9,7 +9,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - Breaking: bounded writers use `initBounded(allocator, output, max_line_bytes, options)` or `initFileBounded(allocator, file_writer, max_line_bytes, options)` instead of `Options.max_line_bytes`, require `deinit`, encode once into reusable owned scratch and emit the bytes measured; `Writer.Error` adds `OutOfMemory`, while unbounded `init` and `initFile` keep streaming without scratch.
-- The mixed-line speed ratio lives in the benchmark; unit tests count framing work, parse calls and allocations and check borrowed records without wall-clock assertions.
+- Breaking: benchmark harnesses and their scratch tests live only on the `bench` branch in `bench/own`; `zig build bench` and the benchmark examples are removed from the library, while unit tests retain deterministic framing, parse, allocation and borrowing checks.
 - Breaking: owned schemas refuse pointer-bearing vector sentinels, including empty arrays and slices and fields in null optionals or inactive union arms.
 - A follower retains the identity measured when it adopts or restarts a file, so later rewrites cannot change a checkpoint of records already read.
 - Direct decoding propagates allocator failure immediately instead of reparsing the line and potentially hiding `OutOfMemory`.
@@ -43,8 +43,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A line-protocol recipe in `examples/logbook.zig`: requests read with a `LineReader`, one past the bound answered, and the replies written a record at a time.
 
 ### Fixed
-
-- Each benchmark invocation owns its scratch directory, so another invocation cannot overwrite its files or delete them.
 
 - Follower truncation docs describe automatic reopening through the configured opener.
 - Separated blank-line framing honors `crlf` and drops at most one final carriage return.

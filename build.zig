@@ -78,24 +78,12 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(scratch_tests).step);
 
-    const bench_scratch_tests = b.addTest(.{
-        .name = "bench-scratch-tests",
-        .filters = if (test_filter) |filter| &.{filter} else &.{},
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("examples/bench_scratch.zig"),
-            .target = target,
-            .optimize = optimize,
-        }),
-    });
-    test_step.dependOn(&b.addRunArtifact(bench_scratch_tests).step);
-
     // Compiling without running is what a target the host cannot execute can
     // still be held to, and it is the default step: a module on its own
     // installs nothing, so `zig build` would otherwise do no work at all.
     const check_step = b.step("check", "Compile the tests and examples without running them");
     check_step.dependOn(&tests.step);
     check_step.dependOn(&scratch_tests.step);
-    check_step.dependOn(&bench_scratch_tests.step);
     b.getInstallStep().dependOn(check_step);
 
     // A null optional or inactive union arm must not hide an unsupported
@@ -149,27 +137,6 @@ pub fn build(b: *std.Build) void {
         check_step.dependOn(&example.step);
     }
     test_step.dependOn(examples_step);
-
-    //=====================================================================
-    // Benchmark
-    //
-    // Its own step, and not one `test` depends on: a number that varies with
-    // the machine is not a thing to fail a build over. It is still built by
-    // `check`, so it cannot rot.
-    //=====================================================================
-
-    const bench = b.addExecutable(.{
-        .name = "bench",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("examples/bench.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{.{ .name = "strand", .module = module }},
-        }),
-    });
-    const bench_step = b.step("bench", "Build and run the benchmark");
-    bench_step.dependOn(&b.addRunArtifact(bench).step);
-    check_step.dependOn(&bench.step);
 }
 
 /// Every example, listed rather than globbed: a build graph that scans a

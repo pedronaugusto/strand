@@ -450,7 +450,7 @@ shows.
 two of them over two streams run on two threads as they are. One `Reader` is
 not shared between threads.
 
-**What a line costs.** `zig build bench -Doptimize=ReleaseFast` writes and
+**What a line costs.** The harness on the [bench branch](https://github.com/pedronaugusto/strand/tree/bench), run with `./bench/own/run.sh`, writes and
 reads a million small lines and prints the numbers. On an Apple M3 Max, Zig
 0.16.0:
 

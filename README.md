@@ -218,7 +218,7 @@ a path. I made it an interface so a test can stage the two files itself
 instead of racing a filesystem.
 
 **Which file is which is a setting.** `Options.identity` decides when two
-handles are the same file. The default is the number the system gives it — the
+handles are the same file. The default, `.file_id`, is the number the system gives it — the
 inode, or the full 128-bit file id on Windows — on the volume it is on,
 since two volumes number their files independently: no reading, and a number a
 filesystem may reuse for a new file or change for one it did not replace. `.fingerprint` hashes the first bytes of the file instead: a log's
@@ -227,6 +227,11 @@ a way the filesystem cannot take back, and a rotation that copies the log away
 and writes the same file again from the top is a rotation rather than a
 silence. A file with fewer bytes than the window is compared by number until
 it is long enough.
+
+The native policy serializes as `{"file_id":{}}`. The old `{"inode":{}}`
+policy is refused with `error.UnknownField`; there is no compatibility path.
+Followers using that saved policy start fresh, from the beginning or a
+position the caller chooses.
 
 **Starting again is a checkpoint.** The thing that crashes is the follower.
 `Follower.checkpoint` says which file it stands in, how far into it, what the

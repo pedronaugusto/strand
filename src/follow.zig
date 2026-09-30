@@ -98,6 +98,10 @@ pub const PathOpener = struct {
 ///
 /// A rotation is noticed by asking "is what the path holds now the file I was
 /// reading?", and there are two ways to answer it.
+///
+/// The native policy is `.file_id`, including in serialized settings. The
+/// old `inode` policy tag is refused; there is no conversion or fallback.
+/// Start a new follower at the beginning or seek to the chosen position.
 pub const Identity = union(enum) {
     /// The number the system gives a file: the inode on a POSIX system, the
     /// full 128-bit file id on Windows, together with the volume it is on,
@@ -108,7 +112,7 @@ pub const Identity = union(enum) {
     /// log that was rotated away reads as the log that replaced it; going
     /// the other way, a filesystem that renumbers a file it did not replace
     /// reads as a rotation that never happened. Both are silent.
-    inode,
+    file_id,
     /// The first bytes of the file, hashed. A log's opening lines are
     /// written once and not written again, so they name the file in a way
     /// the filesystem cannot take back — which is what makes this the answer
@@ -126,7 +130,7 @@ pub const Identity = union(enum) {
         /// Where the window starts.
         offset: u64 = 0,
         /// How many bytes of it are hashed.
-        /// Zero disables the content comparison and falls back to `.inode`.
+        /// Zero disables the content comparison and falls back to `.file_id`.
         length: usize = 1024,
     },
 
@@ -140,7 +144,7 @@ pub const Identity = union(enum) {
         /// bit of its file id. Required in a serialized checkpoint; the old
         /// inode/volume shape is refused with `error.MissingField`.
         id: FileId,
-        /// The hash of the window, or `null` under `.inode` and for a file
+        /// The hash of the window, or `null` under `.file_id` and for a file
         /// that is not yet as long as the window.
         fingerprint: ?u64 = null,
 
@@ -159,7 +163,7 @@ pub const Identity = union(enum) {
     pub fn take(self: Identity, io: std.Io, file: std.Io.File) !Taken {
         const id = try FileId.of(file.handle);
         switch (self) {
-            .inode => return .{ .id = id },
+            .file_id => return .{ .id = id },
             .fingerprint => |window| return .{
                 .id = id,
                 .fingerprint = try fingerprintOf(io, file, window.offset, window.length),
@@ -263,7 +267,7 @@ pub fn Follower(comptime T: type) type {
             /// What makes the file the path holds now the file this follower
             /// is reading. Only looked at when `reopen` is set, since it is
             /// the answer to a question only a reopen asks.
-            identity: Identity = .inode,
+            identity: Identity = .file_id,
         };
 
         /// How a follower waits for the file to grow.
@@ -600,7 +604,7 @@ pub fn Follower(comptime T: type) type {
         /// asked again, since its first bytes have not all been written yet.
         fn heldIdentity(self: *Self) !Identity.Taken {
             if (self.held) |taken| {
-                if (taken.fingerprint != null or self.options.identity == .inode) return taken;
+                if (taken.fingerprint != null or self.options.identity == .file_id) return taken;
             }
             const taken = try self.options.identity.take(self.io, self.source.file);
             self.held = taken;
@@ -1130,14 +1134,14 @@ test "what a file is, by its number or by what is on it" {
     const by_content: Identity = .{ .fingerprint = .{} };
 
     // A file is itself, whichever way the question is asked.
-    try testing.expect((try Identity.take(.inode, testing.io, one))
-        .eql(try Identity.take(.inode, testing.io, one)));
+    try testing.expect((try Identity.take(.file_id, testing.io, one))
+        .eql(try Identity.take(.file_id, testing.io, one)));
     try testing.expect((try by_content.take(testing.io, one)).eql(try by_content.take(testing.io, one)));
 
     // Two files with the same bytes on them are two files by number and one
     // file by content, which is the trade between the two answers.
-    try testing.expect(!(try Identity.take(.inode, testing.io, one))
-        .eql(try Identity.take(.inode, testing.io, copy)));
+    try testing.expect(!(try Identity.take(.file_id, testing.io, one))
+        .eql(try Identity.take(.file_id, testing.io, copy)));
     try testing.expect((try by_content.take(testing.io, one)).eql(try by_content.take(testing.io, copy)));
 
     // A file with too few bytes to fingerprint is compared by number.
@@ -1173,9 +1177,9 @@ test "a file is its number on its volume, and one number on two volumes is two f
     defer file.close(testing.io);
 
     // What the volume is, as the system numbers it.
-    const taken = try Identity.take(.inode, testing.io, file);
+    const taken = try Identity.take(.file_id, testing.io, file);
     try testing.expect(taken.id.eql(try FileId.of(file.handle)));
-    try testing.expect(taken.eql(try Identity.take(.inode, testing.io, file)));
+    try testing.expect(taken.eql(try Identity.take(.file_id, testing.io, file)));
 
     // The same number on another volume is another file. Two volumes to
     // hand are not something a test can count on, so the other volume's
@@ -1419,4 +1423,20 @@ test "a taken identity keeps every bit of the file id" {
     } else {
         try testing.expect(false);
     }
+}
+
+test "the identity policy names the volume-qualified file id" {
+    const options: Follower(struct {}).Options = .{};
+    const policy = options.identity;
+    try testing.expectEqualStrings("file_id", @tagName(policy));
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    try strand.writeLine(&out.writer, policy);
+    try testing.expectEqualStrings("{\"file_id\":{}}\n", out.written());
+    const read = try strand.parseLine(Identity, testing.allocator, std.mem.trimEnd(u8, out.written(), "\n"), .{});
+    try testing.expectEqual(policy, read);
+}
+
+test "the old inode identity policy is refused" {
+    try testing.expectError(error.UnknownField, strand.parseLine(Identity, testing.allocator, "{\"inode\":{}}", .{}));
 }

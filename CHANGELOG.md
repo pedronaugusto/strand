@@ -80,6 +80,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- The ARM framing scan reduces byte-sized lane indices without unpacking narrow vector elements.
+
 - The separator-mode docs say which bytes each reader and writer counts against its bound.
 
 - A follower checks cancellation before returning a record already in its buffer.

@@ -72,12 +72,19 @@ pub fn firstControlOrTerminator(bytes: []const u8) ?usize {
 /// by halves: over a dozen instructions, each waiting on the one before, on
 /// every line a reader frames. x86 turns a compare into a bitmask in one
 /// instruction and finds the lowest set bit of it in another, and those two
-/// are the whole answer. NEON has no such mask and is good at the reduction,
-/// so everywhere else the question is asked of the vector.
+/// are the whole answer. NEON reduces byte lanes directly: choose each
+/// matching lane's index or 255, then take the smallest. The narrow index
+/// type std.simd.firstTrue uses can require unpacking on that architecture.
 inline fn firstHit(comptime n: usize, hits: @Vector(n, bool)) ?usize {
     if (comptime builtin.cpu.arch.isX86()) {
         const mask: std.meta.Int(.unsigned, n) = @bitCast(hits);
         return if (mask == 0) null else @ctz(mask);
+    }
+    if (comptime builtin.cpu.arch == .aarch64 or builtin.cpu.arch == .aarch64_be) {
+        comptime std.debug.assert(n < 256);
+        const indices = @select(u8, hits, std.simd.iota(u8, n), @as(@Vector(n, u8), @splat(255)));
+        const first = @reduce(.Min, indices);
+        return if (first == 255) null else first;
     }
     return if (@reduce(.Or, hits)) std.simd.firstTrue(hits).? else null;
 }

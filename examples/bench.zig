@@ -4,7 +4,7 @@
 //! test`: a number that varies with the machine is not a thing to fail a
 //! build over, and these numbers exist to be read.
 //!
-//! Six measurements, each one a claim the README makes:
+//! Seven measurements, each one a claim the README makes:
 //!
 //! 1. A million small values written, minified, one line each.
 //! 2. The same million read back and parsed, with strings borrowing from the
@@ -17,6 +17,9 @@
 //! 6. A million lines each carrying a value the reader does not read, typed
 //!    as a `strand.Raw` and as a `std.json.Value`: the first stays on the
 //!    direct path, the second takes the whole line to `std.json`.
+//!
+//! 7. Mixed lines against the same parse with framing removed, with a target
+//!    of at most 1.10 times the parse on a quiet machine.
 //!
 //! Run it in ReleaseFast for numbers worth quoting:
 //!
@@ -63,6 +66,7 @@ pub fn main() !void {
     try benchTail(gpa, io, stdout, written);
     try benchBigLine(gpa, io, stdout);
     try benchCarried(gpa, io, stdout);
+    try @import("read_cost.zig").run(gpa, io, stdout);
 
     // The scratch files live under `.zig-cache`, which a build already owns,
     // and they are not worth keeping once the numbers are printed.

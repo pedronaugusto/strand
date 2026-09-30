@@ -442,9 +442,10 @@ copied anywhere before it is parsed. The arena figure is what one 100 MB line
 cost beyond the line buffer. Those are one uniform line shape. Over mixed
 lines — five kinds, one in seven carrying a note with escapes in it — the read
 is 78 ns/line against a floor of 75 for the same parse with no line layer
-over it at all. The suite holds the line layer to that floor rather than to an
-absolute: *a line costs what the parse under it costs, within a tenth* times
-this reader against that parse, and fails if the gap opens up.
+over it at all. The benchmark prints that ratio against a target of 1.10
+on a quiet machine. The unit suite counts framing bytes and parse calls,
+checks that complete records borrow the input, and holds allocations steady
+after the buffers have grown; elapsed time never decides whether it passes.
 
 A line that carries a small object it does not read is 105 ns/line as a `Raw`
 and 455 with a `std.json.Value` in the same place, which takes the line to

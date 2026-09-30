@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const work = @import("work.zig");
 
 /// The offset of the first byte in `bytes` that must not appear raw in a JSON
 /// Lines line, or `null`.
@@ -56,6 +57,7 @@ pub fn firstControlOrTerminator(bytes: []const u8) ?usize {
             const highest: Block = @splat(0x20);
             const tab: Block = @splat('\t');
             while (i + block_len <= bytes.len) : (i += block_len) {
+                work.scan(block_len);
                 const block: Block = bytes[i..][0..block_len].*;
                 const hits = (block < highest) & (block != tab);
                 if (firstHit(block_len, hits)) |at| return i + at;
@@ -136,6 +138,7 @@ fn controlInBlocks(comptime block_len: usize, bytes: []const u8) ?usize {
     while (i + group <= bytes.len) : (i += group) {
         var any: @Vector(block_len, bool) = @splat(false);
         inline for (0..4) |k| {
+            work.scan(block_len);
             const block: Block = bytes[i + k * block_len ..][0..block_len].*;
             any = any | ((block < highest) & (block != tab));
         }
@@ -151,10 +154,12 @@ fn controlInBlocks(comptime block_len: usize, bytes: []const u8) ?usize {
     const rest = i;
     var any: @Vector(block_len, bool) = @splat(false);
     while (i + block_len <= bytes.len) : (i += block_len) {
+        work.scan(block_len);
         const block: Block = bytes[i..][0..block_len].*;
         any = any | ((block < highest) & (block != tab));
     }
     if (i < bytes.len) {
+        work.scan(block_len);
         const block: Block = bytes[bytes.len - block_len ..][0..block_len].*;
         any = any | ((block < highest) & (block != tab));
     }
@@ -169,6 +174,7 @@ fn controlInBlocks(comptime block_len: usize, bytes: []const u8) ?usize {
 /// machine with no vectors to use.
 fn scalarControl(bytes: []const u8) ?usize {
     for (bytes, 0..) |byte, i| {
+        work.scan(1);
         if (byte < 0x20 and byte != '\t') return i;
     }
     return null;

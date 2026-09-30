@@ -8,6 +8,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- The mixed-line speed ratio lives in the benchmark; unit tests count framing work, parse calls and allocations and check borrowed records without wall-clock assertions.
+
 - Breaking: owned schemas refuse pointer-bearing vector sentinels, including empty arrays and slices and fields in null optionals or inactive union arms.
 
 - A follower retains the identity measured when it adopts or restarts a file, so later rewrites cannot change a checkpoint of records already read.

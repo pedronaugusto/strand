@@ -2488,137 +2488,50 @@ test "a raw value comes off the end of a file owned" {
     try testing.expectEqualStrings("{\"z\":2}", last[1].data.bytes);
 }
 
-//=========================================================================
-// What a line costs, held to a budget.
-//
-// Two loops over the same bytes: this package's reader, and the same parse
-// over a frame taken straight out of the input reader's buffer with nothing
-// in between. The second is the floor — the typed decoder doing the work and the
-// line layer doing nothing — so the first divided by the second is what the
-// line layer costs, and that is the number a budget can be set on. An
-// absolute ns/line would only be a fact about the machine that ran it.
-//
-// The reader measures within a few per cent of the floor on aarch64 and
-// x86_64 alike (README.md's figures are 78 ns/line against 75), and the
-// budget is ten per cent over the floor. A reader that copied every line
-// into its own buffer measured about 1.15x, and so did one whose
-// control-byte scan was a byte loop, so either regression fails this test
-// rather than showing up as a number nobody reads.
-//=========================================================================
-
-/// The shape the figures were measured over: a short string, a number, an
-/// enum, and one line in seven carrying a note with escapes in it.
-const Timed = struct {
-    kind: []const u8,
-    at: u64 = 0,
-    level: enum { info, warn } = .info,
-    note: ?[]const u8 = null,
-};
-
-const timed_lines = 120_000;
-
-/// The budget, as a fraction of what the same parse costs with no line layer
-/// at all.
-const timed_budget = 1.10;
-
-fn timedInput(allocator: std.mem.Allocator) ![]u8 {
-    const kinds: []const []const u8 = &.{ "request", "open", "retry", "close", "flush" };
-    var out: std.Io.Writer.Allocating = .init(allocator);
-    errdefer out.deinit();
-    try out.ensureUnusedCapacity(timed_lines * 80);
-
-    var log: strand.Writer(Timed) = .init(&out.writer, .{});
-    for (0..timed_lines) |i| try log.write(.{
-        .kind = kinds[i % kinds.len],
-        .at = i,
-        .level = if (i % 1000 == 0) .warn else .info,
-        .note = if (i % 7 == 0) "user \"ada\" said \"no\"" else null,
-    });
-
-    var list = out.toArrayList();
-    return list.toOwnedSlice(allocator);
-}
-
-/// This package's reader over `input`, in nanoseconds.
-fn timeReader(input: []const u8) !u64 {
-    var source: std.Io.Reader = .fixed(input);
-    var reader: strand.Reader(Timed) = .init(testing.allocator, &source, .{});
-    defer reader.deinit();
-
-    var checksum: u64 = 0;
-    const started = std.Io.Clock.awake.now(testing.io);
-    while (try reader.next()) |line| checksum +%= line.value.at +% line.value.kind.len;
-    const elapsed = started.untilNow(testing.io, .awake);
-
-    try testing.expectEqual(@as(u64, timed_lines), reader.lines.number);
-    std.mem.doNotOptimizeAway(checksum);
-    return @intCast(@max(elapsed.toNanoseconds(), 1));
-}
-
-/// The same parse with no line layer over it: the frame is a slice of the
-/// input reader's own buffer, and nothing is copied or checked.
-fn timeFloor(input: []const u8) !u64 {
-    var source: std.Io.Reader = .fixed(input);
-    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
-    defer arena.deinit();
-
-    var checksum: u64 = 0;
-    var seen: u64 = 0;
-    const started = std.Io.Clock.awake.now(testing.io);
-    while (source.takeDelimiterInclusive('\n')) |framed| {
-        const line = framed[0 .. framed.len - 1];
-        _ = arena.reset(.retain_capacity);
-        const value = try strand.parseLine(Timed, arena.allocator(), line, .{});
-        checksum +%= value.at +% value.kind.len;
-        seen += 1;
-    } else |err| switch (err) {
-        error.EndOfStream => {},
-        else => return err,
-    }
-    const elapsed = started.untilNow(testing.io, .awake);
-
-    try testing.expectEqual(@as(u64, timed_lines), seen);
-    std.mem.doNotOptimizeAway(checksum);
-    return @intCast(@max(elapsed.toNanoseconds(), 1));
-}
-
-test "a line costs what the parse under it costs, within a tenth" {
-    const input = try timedInput(testing.allocator);
-    defer testing.allocator.free(input);
-
-    // Best of fifteen, interleaved: a machine that is busy for a moment
-    // slows whichever loop it lands in, and the best run of each is the one
-    // the machine was not busy for. Five rounds were not enough to find
-    // that run on a shared CI machine -- the two bests came from rounds
-    // the load had hit unevenly, and the ratio between them read anywhere
-    // from 0.83x to 1.87x on one host. Fifteen settles it to within a few
-    // parts in a hundred, and costs about a second.
-    var reader_ns: u64 = std.math.maxInt(u64);
-    var floor_ns: u64 = std.math.maxInt(u64);
-    for (0..15) |_| {
-        reader_ns = @min(reader_ns, try timeReader(input));
-        floor_ns = @min(floor_ns, try timeFloor(input));
-    }
-
-    const ratio = @as(f64, @floatFromInt(reader_ns)) / @as(f64, @floatFromInt(floor_ns));
-    if (!withinBudget(ratio)) {
-        std.debug.print(
-            "read {d} ns/line against a floor of {d} ns/line: {d:.2}x, over the budget of {d:.2}x\n",
-            .{ reader_ns / timed_lines, floor_ns / timed_lines, ratio, timed_budget },
-        );
-        return error.OverBudget;
-    }
-}
-
-/// Whether a measured ratio is acceptable in the mode the suite is built in.
-/// Debug and ReleaseSmall are not modes anything is measured in: one keeps
-/// every safety check and the other asks the compiler not to vectorise, so a
-/// budget set on optimized code would say nothing there.
-fn withinBudget(ratio: f64) bool {
-    return switch (@import("builtin").mode) {
-        .ReleaseFast, .ReleaseSafe => ratio <= timed_budget,
-        .Debug, .ReleaseSmall => true,
+// The line layer does one framing scan and one parse per complete record.
+// Read-ahead within the last SIMD block is counted too; elapsed time belongs
+// in the benchmark, where the machine's load can be controlled.
+test "a buffered record is scanned once parsed once and borrowed without allocation" {
+    const work = @import("work.zig");
+    const Row = struct { text: []const u8, note: ?[]const u8 = null };
+    const Hook = struct {
+        row: Row,
+        pub fn jsonParse(a: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) std.json.ParseError(@TypeOf(source.*))!@This() {
+            return .{ .row = try @import("parse.zig").inner(Row, a, source, options) };
+        }
     };
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    var writer: strand.Writer(Row) = .init(&out.writer, .{});
+    for (0..128) |i| try writer.write(.{
+        .text = "x" ** 512,
+        .note = if (i % 7 == 0) "escaped\tnote" else null,
+    });
+    inline for (.{ Row, Hook }) |T| {
+        var counting: Counting = .{ .child = testing.allocator };
+        var input: std.Io.Reader = .fixed(out.written());
+        var reader: strand.Reader(T) = .init(counting.allocator(), &input, .{ .skip_bom = false });
+        defer reader.deinit();
+        var counts: work.Counts = .{};
+        work.observe(&counts);
+        defer work.observe(null);
+        var settled: usize = 0;
+        for (0..128) |i| {
+            counts = .{};
+            const line = (try reader.next()).?;
+            const row = if (T == Row) line.value else line.value.row;
+            try testing.expect(within(line.line, out.written()));
+            try testing.expect(within(row.text, line.line));
+            try testing.expectEqual(@as(usize, 0), reader.lines.line_buf.written().len);
+            try testing.expectEqual(@as(usize, 1), counts.parses);
+            const read_ahead = (std.simd.suggestVectorLength(u8) orelse 1) - 1;
+            try testing.expect(counts.scan_bytes >= line.line.len + 1);
+            try testing.expect(counts.scan_bytes <= line.line.len + 1 + read_ahead);
+            if (i == 31) settled = counting.allocations;
+            if (i >= 32) try testing.expectEqual(settled, counting.allocations);
+        }
+        try testing.expectEqual(@as(?strand.Line(T), null), try reader.next());
+    }
 }
 
 /// A tagged union of `arms` arms, each a struct of `fields` integer fields:

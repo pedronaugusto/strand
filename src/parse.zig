@@ -17,6 +17,7 @@ pub fn parse(
     scanner: *Scanner,
     options: std.json.ParseOptions,
 ) std.json.ParseError(Scanner)!T {
+    @import("work.zig").parse();
     const value = try inner(T, allocator, scanner, options);
     if (try scanner.next() != .end_of_document) return error.UnexpectedToken;
     return value;

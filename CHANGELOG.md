@@ -8,6 +8,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Breaking: bounded writers use `initBounded(allocator, output, max_line_bytes, options)` or `initFileBounded(allocator, file_writer, max_line_bytes, options)` instead of `Options.max_line_bytes`, require `deinit`, encode once into reusable owned scratch and emit the bytes measured; `Writer.Error` adds `OutOfMemory`, while unbounded `init` and `initFile` keep streaming without scratch.
 - The mixed-line speed ratio lives in the benchmark; unit tests count framing work, parse calls and allocations and check borrowed records without wall-clock assertions.
 - Breaking: owned schemas refuse pointer-bearing vector sentinels, including empty arrays and slices and fields in null optionals or inactive union arms.
 - A follower retains the identity measured when it adopts or restarts a file, so later rewrites cannot change a checkpoint of records already read.

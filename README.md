@@ -88,7 +88,7 @@ Every allocation anywhere here is on an allocator you passed in.
 | `innerParse` | Read one field from a token source inside a custom `jsonParse` hook, with checked integers and byte-vector strings. |
 | `copyOwned`, `freeOwned` | An owned deep copy of an already parsed value, and its release. |
 | `Reader.lines` | The line reader under a `Reader`, and where its place is kept: `lines.number`, `lines.offset`, `lines.fault` (which line was last refused and why) and `lines.skipped` (how many were passed over). |
-| `Writer(T)`, `Writer.initFile` | One value per line, minified or indented, counted. `initFile` is the one with a file to sync. |
+| `Writer(T)` | One value per line, minified or indented, counted. File constructors can sync; bounded constructors encode once into owned scratch. |
 | `Writer.write`, `Writer.writeAll` | One record, and a batch written byte for byte as the loop would have written it. |
 | `Writer.flush`, `Writer.sync` | The one-off, beside `Options.flush` and `Options.sync`, which are the policy. |
 | `writeLine` | One value, one line, nothing to count. |
@@ -280,7 +280,8 @@ a run.
 `.per_records` is the setting a stream of records wants: one drain, or one
 sync, for every *n* records however they arrive — the cost divided by *n*,
 against losing up to *n*. A sync drains first, whatever `flush` says, and
-needs a file, so `Writer.initFile` is the constructor that can do it.
+needs a file, so `Writer.initFile` and `Writer.initFileBounded` are the
+constructors that can do it.
 
 **A sync is the call the platform means by it.** The platforms do not agree
 about what `fsync` promises, and on one of them it is not the cheapest call
@@ -302,9 +303,22 @@ after a crash — because creating and opening are the caller's.
 
 **A writer can be given the reader's bound.** With no bound a writer will emit
 a record no reader with the matching bound will read back; with
-`Writer.Options.max_line_bytes` the record is refused where it is written and
-none of it reaches the log. It costs a second encoding pass, so there is no
-bound unless one is asked for.
+`Writer(T).initBounded(allocator, output, max_line_bytes, options)` the record
+is encoded once into owned scratch, measured, and those same bytes are emitted.
+The bound counts JSON payload bytes, excluding the separator and terminator.
+An oversized record or failed encoding leaves the destination and record count
+unchanged. Scratch grows as needed and is reused; keep the allocator alive and
+call `deinit` once to release it. `deinit` does not drain or close the destination.
+`initFileBounded(allocator, file_writer, max_line_bytes, options)` adds the same
+bound to a file writer with sync policies. `init` and `initFile` stream without
+scratch. Bounded storage can report `error.OutOfMemory`; a hook's own
+`error.WriteFailed` stays a write failure.
+
+```zig
+var log: strand.Writer(Event) = .initBounded(gpa, output, 64 * 1024, .{});
+defer log.deinit();
+try log.write(event);
+```
 
 **A record that changes shape says so.** Adding a field is easy, since a
 reader defaults its missing fields. When a field changes meaning, splits in

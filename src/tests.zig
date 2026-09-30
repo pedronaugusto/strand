@@ -1504,7 +1504,8 @@ test "a writer can be held to the bound its readers are held to" {
     // is written: the log is left where the record before it left it.
     var out: std.Io.Writer.Allocating = .init(testing.allocator);
     defer out.deinit();
-    var log: strand.Writer(Event) = .init(&out.writer, .{ .max_line_bytes = bound });
+    var log: strand.Writer(Event) = .initBounded(testing.allocator, &out.writer, bound, .{});
+    defer log.deinit();
 
     try log.write(small);
     const after_small = out.written().len;
@@ -1534,15 +1535,16 @@ test "the bound is on the record, whatever shape it is written in" {
 
     var minified: std.Io.Writer.Allocating = .init(testing.allocator);
     defer minified.deinit();
-    var lean: strand.Writer(Event) = .init(&minified.writer, .{ .max_line_bytes = 1 << 20 });
+    var lean: strand.Writer(Event) = .initBounded(testing.allocator, &minified.writer, 1 << 20, .{});
+    defer lean.deinit();
     try lean.write(event);
 
     var out: std.Io.Writer.Allocating = .init(testing.allocator);
     defer out.deinit();
-    var wide: strand.Writer(Event) = .init(&out.writer, .{
+    var wide: strand.Writer(Event) = .initBounded(testing.allocator, &out.writer, minified.written().len, .{
         .format = .pretty,
-        .max_line_bytes = minified.written().len,
     });
+    defer wide.deinit();
     try testing.expectError(error.LineTooLong, wide.write(event));
     try testing.expectEqual(@as(usize, 0), out.written().len);
 }
@@ -2639,15 +2641,20 @@ test "a separated writer bounds only its JSON payload" {
     for ([_]strand.Format{ .minified, .pretty }) |format| {
         var out: std.Io.Writer.Allocating = .init(testing.allocator);
         defer out.deinit();
-        var writer: strand.Writer(struct {}) = .init(&out.writer, .{
+        var writer: strand.Writer(struct {}) = .initBounded(testing.allocator, &out.writer, 2, .{
             .format = format,
             .record_separator = true,
-            .max_line_bytes = 2,
         });
+        defer writer.deinit();
         try writer.write(.{});
         try testing.expectEqualStrings("\x1e{}\n", out.written());
-        writer.options.max_line_bytes = 1;
-        try testing.expectError(error.LineTooLong, writer.write(.{}));
+        var tighter: strand.Writer(struct {}) = .initBounded(testing.allocator, &out.writer, 1, .{
+            .format = format,
+            .record_separator = true,
+        });
+        defer tighter.deinit();
+        try testing.expectError(error.LineTooLong, tighter.write(.{}));
+        try testing.expectEqual(@as(u64, 0), tighter.count);
         try testing.expectEqual(@as(u64, 1), writer.count);
         try testing.expectEqualStrings("\x1e{}\n", out.written());
     }
@@ -2673,4 +2680,118 @@ test "a separated blank line discards only one carriage return" {
         defer lines.deinit();
         try testing.expectError(error.MissingSeparator, lines.next());
     }
+}
+
+test "a bounded writer emits the encoding it measured once" {
+    const Changing = struct {
+        calls: *usize,
+
+        pub fn jsonStringify(self: @This(), json: *std.json.Stringify) !void {
+            self.calls.* += 1;
+            try json.write(if (self.calls.* == 1) "x" else "too long");
+        }
+    };
+    for ([_]strand.Format{ .minified, .pretty }) |format| {
+        for ([_]bool{ false, true }) |separated| {
+            var output: std.Io.Writer.Allocating = .init(testing.allocator);
+            defer output.deinit();
+            var calls: usize = 0;
+            var writer: strand.Writer(Changing) = .initBounded(testing.allocator, &output.writer, 3, .{
+                .format = format,
+                .record_separator = separated,
+            });
+            defer writer.deinit();
+            try writer.write(.{ .calls = &calls });
+            try testing.expectEqualStrings(if (separated) "\x1e\"x\"\n" else "\"x\"\n", output.written());
+            try testing.expectEqual(@as(usize, 1), calls);
+            try testing.expectEqual(@as(u64, 1), writer.count);
+            try testing.expectError(error.LineTooLong, writer.write(.{ .calls = &calls }));
+            try testing.expectEqual(@as(usize, 2), calls);
+            try testing.expectEqual(@as(u64, 1), writer.count);
+            try testing.expectEqualStrings(if (separated) "\x1e\"x\"\n" else "\"x\"\n", output.written());
+        }
+    }
+}
+
+test "bounded writer scratch survives allocation failures and reuses capacity" {
+    const Case = struct {
+        fn run(allocator: std.mem.Allocator) !void {
+            var output: std.Io.Writer.Allocating = .init(testing.allocator);
+            defer output.deinit();
+            var writer: strand.Writer([]const u8) = .initBounded(allocator, &output.writer, 4096, .{ .record_separator = true });
+            defer writer.deinit();
+            writer.write("x") catch |err| {
+                try testing.expectEqual(@as(usize, 0), output.written().len);
+                try testing.expectEqual(@as(u64, 0), writer.count);
+                return err;
+            };
+            const before = output.written().len;
+            writer.write("y" ** 2048) catch |err| {
+                try testing.expectEqual(before, output.written().len);
+                try testing.expectEqual(@as(u64, 1), writer.count);
+                return err;
+            };
+            try writer.write("z");
+            try testing.expectEqual(@as(u64, 3), writer.count);
+            try testing.expect(std.mem.endsWith(u8, output.written(), "\x1e\"z\"\n"));
+        }
+    };
+    try testing.checkAllAllocationFailures(testing.allocator, Case.run, .{});
+
+    var failing: testing.FailingAllocator = .init(testing.allocator, .{ .fail_index = 0 });
+    var output: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer output.deinit();
+    var writer: strand.Writer([]const u8) = .initBounded(failing.allocator(), &output.writer, 64, .{});
+    defer writer.deinit();
+    try testing.expectError(error.OutOfMemory, writer.write("first"));
+    try testing.expectEqual(@as(usize, 0), output.written().len);
+    failing.fail_index = std.math.maxInt(usize);
+    try writer.write("second");
+    const allocations = failing.alloc_index;
+    failing.fail_index = allocations;
+    try writer.write("third");
+    try testing.expectEqual(allocations, failing.alloc_index);
+    try testing.expectEqualStrings("\"second\"\n\"third\"\n", output.written());
+    try testing.expectEqual(@as(u64, 2), writer.count);
+}
+
+test "bounded writer keeps hook failure distinct from allocation failure" {
+    const Refusing = struct {
+        pub fn jsonStringify(_: @This(), json: *std.json.Stringify) !void {
+            try json.write("part");
+            return error.WriteFailed;
+        }
+    };
+    var output: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer output.deinit();
+    var writer: strand.Writer(Refusing) = .initBounded(testing.allocator, &output.writer, 64, .{ .record_separator = true });
+    defer writer.deinit();
+    try testing.expectError(error.WriteFailed, writer.write(.{}));
+    try testing.expectEqual(@as(usize, 0), output.written().len);
+    try testing.expectEqual(@as(u64, 0), writer.count);
+    var failing: testing.FailingAllocator = .init(testing.allocator, .{ .fail_index = 0 });
+    var starved: strand.Writer(Refusing) = .initBounded(failing.allocator(), &output.writer, 64, .{});
+    defer starved.deinit();
+    try testing.expectError(error.OutOfMemory, starved.write(.{}));
+    try testing.expectEqual(@as(usize, 0), output.written().len);
+}
+
+test "bounded writer on a file preserves batch and sync policies" {
+    const io = testing.io;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const file = try tmp.dir.createFile(io, "bounded.jsonl", .{ .read = true });
+    defer file.close(io);
+    var buffer: [128]u8 = undefined;
+    var dest = file.writer(io, &buffer);
+    var writer: strand.Writer([]const u8) = .initFileBounded(testing.allocator, &dest, 3, .{ .sync = .per_batch });
+    defer writer.deinit();
+    try testing.expectError(error.LineTooLong, writer.writeAll(&.{ "x", "too long", "y" }));
+    try testing.expectEqual(@as(u64, 1), writer.count);
+    try testing.expectEqual(@as(u64, 0), try file.length(io));
+    try writer.writeAll(&.{"y"});
+    try testing.expectEqual(@as(u64, 2), writer.count);
+    var read_buffer: [128]u8 = undefined;
+    var reader = file.reader(io, &read_buffer);
+    try testing.expectEqualStrings("\"x\"\n\"y\"\n", try reader.interface.take(8));
 }

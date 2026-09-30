@@ -116,7 +116,8 @@ pub fn parseLineInto(
         return;
     }
     if (comptime decode.supports(T)) {
-        return decode.parseInto(T, allocator, line, jsonOptions(options, line.len), out) catch {
+        return decode.parseInto(T, allocator, line, jsonOptions(options, line.len), out) catch |err| {
+            if (err == error.OutOfMemory) return error.OutOfMemory;
             // The direct path is for good lines. On a refusal, the token
             // source remains the oracle for the precise public error.
             var oracle: Scanner = .initCompleteInput(allocator, line);
@@ -196,4 +197,36 @@ test parseLine {
     try std.testing.expectEqual(.info, event.level);
     // "open" needed no unescaping, so it is a view into `line`.
     try std.testing.expect(event.kind.ptr == line.ptr + std.mem.indexOf(u8, line, "open").?);
+}
+
+test "a direct decoder allocation failure is not retried as a parse refusal" {
+    const FailOnce = struct {
+        backing: Allocator,
+        calls: usize = 0,
+
+        fn alloc(ctx: *anyopaque, len: usize, alignment: std.mem.Alignment, ra: usize) ?[*]u8 {
+            const self: *@This() = @ptrCast(@alignCast(ctx)); // safe: this vtable receives only a FailOnce installed by the test below
+            self.calls += 1;
+            if (self.calls == 1) return null;
+            return self.backing.rawAlloc(len, alignment, ra);
+        }
+
+        fn allocator(self: *@This()) Allocator {
+            return .{
+                .ptr = self,
+                .vtable = &.{
+                    .alloc = alloc,
+                    .resize = Allocator.noResize,
+                    .remap = Allocator.noRemap,
+                    // All successful allocations live in the backing arena.
+                    .free = Allocator.noFree,
+                },
+            };
+        }
+    };
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    var failure: FailOnce = .{ .backing = arena.allocator() };
+    try std.testing.expectError(error.OutOfMemory, parseLine([]const u8, failure.allocator(), "\"escaped\\ttext\"", .{}));
+    try std.testing.expectEqual(@as(usize, 1), failure.calls);
 }

@@ -8,6 +8,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- A follower retains the identity measured when it adopts or restarts a file, so later rewrites cannot change a checkpoint of records already read.
+
 - Direct decoding propagates allocator failure immediately instead of reparsing the line and potentially hiding `OutOfMemory`.
 
 - Value conversion handles empty arrays through the reflected walker, avoiding std.json's nonexistent-element indexing in nested payloads and migrations.

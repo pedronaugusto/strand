@@ -586,11 +586,13 @@ pub fn Follower(comptime T: type) type {
                 self.opened = fresh;
                 self.source.* = fresh.reader(self.io, self.source.interface.buffer);
                 self.atStart();
+                self.held = there;
                 self.rotations += 1;
                 return;
             }
             if (emptied) {
                 try self.restart();
+                self.held = there;
                 self.rotations += 1;
             }
         }
@@ -1439,4 +1441,30 @@ test "the identity policy names the volume-qualified file id" {
 
 test "the old inode identity policy is refused" {
     try testing.expectError(error.UnknownField, strand.parseLine(Identity, testing.allocator, "{\"inode\":{}}", .{}));
+}
+
+test "a rotated follower checkpoints the identity it adopted before reading" {
+    var fixture = try Fixture.init("{\"kind\":\"old\"}\n", 8);
+    defer fixture.deinit();
+    try fixture.tmp.dir.writeFile(testing.io, .{ .sub_path = "new.jsonl", .data = "{\"kind\":\"new\"}\n" });
+    var path: PathOpener = .{ .dir = fixture.tmp.dir, .sub_path = "new.jsonl" };
+    const identity: Identity = .{ .fingerprint = .{ .length = 14 } };
+    var follower = Follower(Event).init(testing.allocator, testing.io, &fixture.reader, .{
+        .reopen = path.opener(),
+        .identity = identity,
+    });
+    defer follower.deinit();
+    // Exercise the two operations inside one next call after its wait,
+    // without a second next entry capturing the identity again.
+    try follower.rotate(path.opener(), false);
+    const adopted = try identity.take(testing.io, fixture.reader.file);
+    try testing.expectEqualStrings("new", (try follower.reader.next()).?.value.kind);
+    // An in-place rewrite after that read cannot change what the follower
+    // says it has already consumed, even when the native id stays the same.
+    try fixture.tmp.dir.writeFile(testing.io, .{ .sub_path = "new.jsonl", .data = "{\"kind\":\"now\"}\n" });
+    const rewritten = try identity.take(testing.io, fixture.reader.file);
+    try testing.expect(!adopted.eql(rewritten));
+    const point = try follower.checkpoint();
+    try testing.expect(adopted.eql(point.file));
+    try testing.expectEqual(@as(u64, 1), point.rotations);
 }

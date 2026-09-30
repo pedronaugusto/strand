@@ -451,9 +451,16 @@ const RecordScratch = struct {
             return error.WriteFailed;
         };
         try self.grow(total);
-        for (0..splat) |_| {
-            @memcpy(writer.buffer[writer.end..][0..pattern.len], pattern);
-            writer.end += pattern.len;
+        switch (pattern.len) {
+            0 => {},
+            1 => {
+                @memset(writer.buffer[writer.end..][0..total], pattern[0]);
+                writer.end += total;
+            },
+            else => for (0..splat) |_| {
+                @memcpy(writer.buffer[writer.end..][0..pattern.len], pattern);
+                writer.end += pattern.len;
+            },
         }
         return writer.end - start;
     }

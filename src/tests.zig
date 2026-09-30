@@ -2872,3 +2872,21 @@ test "an unfinished pretty record keeps its rewind point after complete records"
     try testing.expectEqual(@as(u64, 3), completed.offset);
     try testing.expectEqual(@as(usize, 0), completed.value.array.items.len);
 }
+
+test "a bounded writer completes a raw write with an empty repeated pattern" {
+    const EmptyPattern = struct {
+        pub fn jsonStringify(_: @This(), json: *std.json.Stringify) !void {
+            try json.beginWriteRaw();
+            var parts = [_][]const u8{ "true", "" };
+            try json.writer.writeSplatAll(&parts, std.math.maxInt(usize));
+            json.endWriteRaw();
+        }
+    };
+    var output: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer output.deinit();
+    var writer: strand.Writer(EmptyPattern) = .initBounded(testing.allocator, &output.writer, 4, .{});
+    defer writer.deinit();
+    try writer.write(.{});
+    try testing.expectEqualStrings("true\n", output.written());
+    try testing.expectEqual(@as(u64, 1), writer.count);
+}

@@ -235,3 +235,23 @@ fn allocationFailures(source: anytype) !void {
     };
     try testing.checkAllAllocationFailures(testing.allocator, Case.run, .{source});
 }
+
+fn copyPointerVector(allocator: std.mem.Allocator) !void {
+    var first: u32 = 7;
+    var second: u32 = 9;
+    const source: @Vector(3, *const u32) = .{ &first, &second, &first };
+    const copy = try strand.copyOwned(allocator, source);
+    defer strand.freeOwned(allocator, copy);
+    try testing.expect(copy[0] != source[0]);
+    try testing.expect(copy[1] != source[1]);
+    try testing.expect(copy[0] != copy[2]);
+    first = 100;
+    second = 200;
+    try testing.expectEqual(@as(u32, 7), copy[0].*);
+    try testing.expectEqual(@as(u32, 9), copy[1].*);
+    try testing.expectEqual(@as(u32, 7), copy[2].*);
+}
+
+test "owned copy gives pointer vectors independent storage" {
+    try testing.checkAllAllocationFailures(testing.allocator, copyPointerVector, .{});
+}

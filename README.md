@@ -130,9 +130,9 @@ three rules are the same for `Reader`, `Tail` and `Follower`, and `parseLine`
 is the first two without a reader.
 
 `copyOwned(allocator, value)` keeps the value already parsed, without reading
-its JSON again. It copies structs and tuples, arrays, slices and strings,
-single-item pointers, optionals and tagged unions; numbers, booleans, enums
-and vectors stay values. `Raw` keeps its exact bytes, including whitespace
+its JSON again. It copies structs and tuples, arrays and vectors, slices and strings,
+single-item pointers, optionals and tagged unions; numbers, booleans and enums
+stay values. Pointer vectors get new storage for each element. `Raw` keeps its exact bytes, including whitespace
 and number spelling. A `std.json.Value` gets new keys, strings and containers;
 its arrays use the destination allocator. Parse and stringify hooks are not
 called, and defaults pointing at static strings are copied too.

@@ -7,7 +7,7 @@ const Allocator = std.mem.Allocator;
 
 /// Copies `value` and all the storage it reaches onto `allocator`.
 ///
-/// Structs (including tuples), arrays, slices, single-item pointers,
+/// Structs (including tuples), arrays, vectors, slices, single-item pointers,
 /// optionals and tagged unions are walked; numbers, booleans, enums and
 /// void are copied as values. Sentinels and pointer alignment are preserved.
 /// `Raw` keeps its exact bytes. `std.json.Value` gets new strings, object
@@ -76,6 +76,10 @@ pub fn copyOwned(allocator: Allocator, value: anytype) Allocator.Error!@TypeOf(v
             }
             return result;
         },
+        .vector => |info| {
+            const items: [info.len]info.child = value;
+            return try copyOwned(allocator, items);
+        },
         .@"union" => return switch (value) {
             inline else => |item, tag| @unionInit(T, @tagName(tag), try copyOwned(allocator, item)),
         },
@@ -108,6 +112,10 @@ pub fn freeOwned(allocator: Allocator, value: anytype) void {
             if (!field.is_comptime) freeOwned(allocator, @field(value, field.name));
         },
         .array => for (value) |item| freeOwned(allocator, item),
+        .vector => |info| {
+            const items: [info.len]info.child = value;
+            freeOwned(allocator, items);
+        },
         .@"union" => switch (value) {
             inline else => |item| freeOwned(allocator, item),
         },

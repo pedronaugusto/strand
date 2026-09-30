@@ -100,8 +100,8 @@ pub const PathOpener = struct {
 /// reading?", and there are two ways to answer it.
 pub const Identity = union(enum) {
     /// The number the system gives a file: the inode on a POSIX system, the
-    /// file index on Windows, together with the volume it is on, since two
-    /// volumes number their files independently. Two calls, nothing read,
+    /// full 128-bit file id on Windows, together with the volume it is on,
+    /// since two volumes number their files independently. Nothing read,
     /// and exactly right while the numbers are not reused — which is the
     /// catch. A filesystem
     /// is free to give a new file the number of one just deleted, and then a
@@ -136,13 +136,10 @@ pub const Identity = union(enum) {
     /// is the whole point: a fingerprint read afresh from both sides of a
     /// rotation that rewrote a file in place would find the two the same.
     pub const Taken = struct {
-        /// What the system calls the file.
-        inode: std.Io.File.INode,
-        /// The volume the file is on (`FileId.volume`): the device on
-        /// POSIX, the volume's serial number on Windows. `null` in a
-        /// checkpoint written before it was recorded, which is then
-        /// compared by the number alone.
-        volume: ?u64 = null,
+        /// What the system calls the file, including its volume and every
+        /// bit of its file id. Required in a serialized checkpoint; the old
+        /// inode/volume shape is refused with `error.MissingField`.
+        id: FileId,
         /// The hash of the window, or `null` under `.inode` and for a file
         /// that is not yet as long as the window.
         fingerprint: ?u64 = null,
@@ -153,23 +150,18 @@ pub const Identity = union(enum) {
             if (a.fingerprint) |mine| {
                 if (b.fingerprint) |yours| return mine == yours;
             }
-            if (a.volume) |mine| {
-                if (b.volume) |yours| if (mine != yours) return false;
-            }
-            return a.inode == b.inode;
+            return a.id.eql(b.id);
         }
     };
 
     /// What `file` is, now. The handle must be open for reading: asking a
     /// file's attributes is read access, and so is reading its first bytes.
     pub fn take(self: Identity, io: std.Io, file: std.Io.File) !Taken {
-        const inode = (try file.stat(io)).inode;
-        const volume = (try FileId.of(file.handle)).volume;
+        const id = try FileId.of(file.handle);
         switch (self) {
-            .inode => return .{ .inode = inode, .volume = volume },
+            .inode => return .{ .id = id },
             .fingerprint => |window| return .{
-                .inode = inode,
-                .volume = volume,
+                .id = id,
                 .fingerprint = try fingerprintOf(io, file, window.offset, window.length),
             },
         }
@@ -319,7 +311,9 @@ pub fn Follower(comptime T: type) type {
         /// It is an ordinary struct of integers, so a caller keeping one
         /// between runs can write it with this package and read it back with
         /// it — a registry of checkpoints is a JSON Lines file like any
-        /// other.
+        /// other. A checkpoint in the old inode/volume shape is refused by
+        /// `parseLine` with `error.MissingField`. Start a new follower from
+        /// the beginning, or seek to a position the caller chooses.
         pub const Checkpoint = struct {
             /// What the file being read is, under `Options.identity`. A
             /// checkpoint taken under one identity and resumed under another
@@ -1161,7 +1155,7 @@ test "what a file is, by its number or by what is on it" {
     defer writer.close(testing.io);
     try writer.writePositionalAll(testing.io, "{\"kind\":\"else\",\"at\":9}\n" ** 60, 0);
     const after = try by_content.take(testing.io, one);
-    try testing.expectEqual(before.inode, after.inode);
+    try testing.expect(before.id.eql(after.id));
     try testing.expect(!before.eql(after));
 }
 
@@ -1174,25 +1168,16 @@ test "a file is its number on its volume, and one number on two volumes is two f
 
     // What the volume is, as the system numbers it.
     const taken = try Identity.take(.inode, testing.io, file);
-    try testing.expectEqual((try FileId.of(file.handle)).volume, taken.volume.?);
+    try testing.expect(taken.id.eql(try FileId.of(file.handle)));
     try testing.expect(taken.eql(try Identity.take(.inode, testing.io, file)));
 
     // The same number on another volume is another file. Two volumes to
     // hand are not something a test can count on, so the other volume's
     // file is stated.
     var elsewhere = taken;
-    elsewhere.volume = taken.volume.? +% 1;
+    elsewhere.id.volume +%= 1;
     try testing.expect(!taken.eql(elsewhere));
     try testing.expect(!elsewhere.eql(taken));
-
-    // A checkpoint written before the volume was recorded is compared by
-    // its number, as it always was.
-    var older = taken;
-    older.volume = null;
-    try testing.expect(older.eql(taken));
-    try testing.expect(taken.eql(older));
-    older.inode +%= 1;
-    try testing.expect(!older.eql(taken));
 
     // Two fingerprints still settle it, whatever the numbers say.
     var copied = elsewhere;
@@ -1399,5 +1384,33 @@ test "two writers on two tasks share nothing" {
             try testing.expectEqualStrings(pair[1], line.value.kind);
         }
         try testing.expectEqual(@as(u64, each), seen);
+    }
+}
+
+test "a checkpoint with the old identity shape is refused" {
+    const Checkpoint = Follower(struct {}).Checkpoint;
+    for ([_][]const u8{
+        "{\"file\":{\"inode\":7},\"offset\":12}",
+        "{\"file\":{\"inode\":7,\"volume\":9,\"fingerprint\":null},\"offset\":12}",
+        "{\"file\":{\"inode\":7,\"volume\":9,\"fingerprint\":123},\"offset\":12}",
+    }) |old| {
+        try testing.expectError(error.MissingField, strand.parseLine(Checkpoint, testing.allocator, old, .{}));
+    }
+}
+
+test "a taken identity keeps every bit of the file id" {
+    if (comptime @hasField(Identity.Taken, "id")) {
+        const a: Identity.Taken = .{ .id = .{ .volume = 3, .file = 7 } };
+        const b: Identity.Taken = .{ .id = .{ .volume = 3, .file = (@as(u128, 1) << 96) | 7 } };
+        try testing.expect(!a.eql(b));
+        try testing.expect(!b.eql(a));
+        var out: std.Io.Writer.Allocating = .init(testing.allocator);
+        defer out.deinit();
+        try strand.writeLine(&out.writer, b);
+        const read = try strand.parseLine(Identity.Taken, testing.allocator, std.mem.trimEnd(u8, out.written(), "\n"), .{});
+        try testing.expectEqual(b.id.file, read.id.file);
+        try testing.expect(b.eql(read));
+    } else {
+        try testing.expect(false);
     }
 }

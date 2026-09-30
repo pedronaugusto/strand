@@ -165,8 +165,8 @@ instead of racing a filesystem.
 
 **Which file is which is a setting.** `Options.identity` decides when two
 handles are the same file. The default is the number the system gives it — the
-inode, or the file index on Windows — on the volume it is on, since two volumes
-number their files independently: two calls and no reading, and a number a
+inode, or the full 128-bit file id on Windows — on the volume it is on,
+since two volumes number their files independently: no reading, and a number a
 filesystem may reuse for a new file or change for one it did not replace. `.fingerprint` hashes the first bytes of the file instead: a log's
 opening lines are written once and not written again, so they name the file in
 a way the filesystem cannot take back, and a rotation that copies the log away
@@ -184,6 +184,11 @@ two are told apart under `Options.identity`: the same file carries on at the
 recorded offset with the recorded numbering, a different one is read from its
 start and counted as a rotation. A `Checkpoint` is a struct of integers, so a
 registry of them is a JSON Lines file like any other.
+
+`Checkpoint.file.id` keeps the full `FileId`: its volume and 128-bit file
+number. Old checkpoints with `inode` and optional `volume` are refused by
+`parseLine` with `error.MissingField`; they are not converted. Start a new
+follower from the beginning, or seek to the position the caller chooses.
 
 **Draining and syncing are policy, stated once.** The writer does not own the
 destination and drains it only when told to. `Writer.Options.flush` is
@@ -397,7 +402,7 @@ and 455 with a `std.json.Value` in the same place, which takes the line to
 |---|---|---|
 | Linux | The device and the inode identify a file across a rotation; a sync is the `fdatasync` syscall | `ubuntu-latest` in CI, four optimize modes |
 | macOS | The same, except that a sync is `fcntl(F_FULLFSYNC)` | `macos-latest` in CI, four optimize modes |
-| Windows | The volume's serial number and the file index stand in for the device and the inode, and a sync is the system's own flush | `windows-latest` in CI, four optimize modes |
+| Windows | The volume's serial number and the full file id stand in for the device and the inode, and a sync is the system's own flush | `windows-latest` in CI, four optimize modes |
 
 CI also compiles the suite without running it for `x86_64-linux-gnu`,
 `aarch64-linux-gnu`, `x86_64-linux-musl`, `x86_64-windows-gnu`,

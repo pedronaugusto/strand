@@ -1,0 +1,10 @@
+.{
+    .name = .strand_benchmark,
+    .version = "0.0.0",
+    .fingerprint = 0x76255c7b2bce6cb3,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        .strand = .{ .path = ".." },
+    },
+    .paths = .{ "build.zig", "build.zig.zon", "src" },
+}

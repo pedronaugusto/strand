@@ -56,7 +56,7 @@ pub fn Writer(comptime T: type) type {
             /// `Reader.Options.record_separator`.
             record_separator: bool = false,
             /// The longest record this writer will emit, in bytes, not
-            /// counting the terminator, but counting a record separator;
+            /// counting the terminator or a record separator;
             /// `null` for no bound, which is the
             /// default. A longer one is `error.LineTooLong` and **none of it
             /// is written**, so the log is left where the record before it
@@ -325,7 +325,7 @@ pub fn Writer(comptime T: type) type {
             var counter: std.Io.Writer.Discarding = .init(&.{});
             self.encodeValue(value, &counter.writer) catch
                 return error.WriteFailed;
-            const written = counter.fullCount() + @intFromBool(self.options.record_separator);
+            const written = counter.fullCount();
             if (written > max) return error.LineTooLong;
         }
 

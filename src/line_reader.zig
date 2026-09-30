@@ -101,8 +101,8 @@ pub const LineReader = struct {
     /// Framing policy, fixed at `init`. `Reader.Options` carries the same
     /// fields under the same names and hands them down.
     pub const Options = struct {
-        /// The longest record accepted, in bytes, not counting the
-        /// terminator. A longer one is `error.LineTooLong`; the rest of it is
+        /// The longest JSON payload accepted, in bytes, excluding the
+        /// terminator, separator and discarded torn prefix. A longer one is `error.LineTooLong`; the rest of it is
         /// discarded, so `next` can be called again to continue with the line
         /// after it. This bound is the reader's memory bound, and it is
         /// independent of the size of `input`'s buffer.
@@ -391,7 +391,7 @@ pub const LineReader = struct {
     /// written over several lines is put back together by a reader that can
     /// tell when it is finished, which a line reader cannot: `Reader` in
     /// `.pretty` mode joins until the record parses. The joined record is
-    /// held to `max_line_bytes`, the separator included, and the line
+    /// held to `max_line_bytes`, the separator excluded, and the line
     /// joined on is checked for control bytes like any other; one found
     /// under `on_malformed = .skip` is `.damaged`, and counted in `skipped`.
     ///
@@ -407,7 +407,7 @@ pub const LineReader = struct {
             self.borrowed = false;
         }
         const before = self.line_buf.writer.end;
-        // The separator counts against the bound like any other byte.
+        // The newline joining the payload lines counts against the bound.
         if (self.options.max_line_bytes -| before == 0) {
             // It is the record that is too long, and the record began at
             // `number`, whatever line the reader has reached since.

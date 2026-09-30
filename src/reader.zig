@@ -54,8 +54,8 @@ pub fn Reader(comptime T: type) type {
             ignore_unknown_fields: bool = true,
             /// See `ParseOptions.duplicate_fields`.
             duplicate_fields: DuplicateFields = .@"error",
-            /// The longest record accepted, in bytes, not counting the
-            /// terminator; in `.pretty` mode this bounds the joined record
+            /// The longest JSON payload accepted, in bytes, excluding the
+            /// terminator, separator and discarded torn prefix; in `.pretty` mode this bounds the joined record
             /// rather than one physical line. A longer one is
             /// `error.LineTooLong`; the rest of it is discarded, so `next`
             /// can be called again to continue with the line after it. This

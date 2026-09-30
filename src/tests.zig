@@ -2721,3 +2721,21 @@ test "a packed struct is read and written as any struct is" {
     try strand.writeLine(&out.writer, row);
     try testing.expectEqualStrings(line ++ "\n", out.written());
 }
+
+test "a separated writer bounds only its JSON payload" {
+    for ([_]strand.Format{ .minified, .pretty }) |format| {
+        var out: std.Io.Writer.Allocating = .init(testing.allocator);
+        defer out.deinit();
+        var writer: strand.Writer(struct {}) = .init(&out.writer, .{
+            .format = format,
+            .record_separator = true,
+            .max_line_bytes = 2,
+        });
+        try writer.write(.{});
+        try testing.expectEqualStrings("\x1e{}\n", out.written());
+        writer.options.max_line_bytes = 1;
+        try testing.expectError(error.LineTooLong, writer.write(.{}));
+        try testing.expectEqual(@as(u64, 1), writer.count);
+        try testing.expectEqualStrings("\x1e{}\n", out.written());
+    }
+}

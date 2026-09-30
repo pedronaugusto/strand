@@ -314,10 +314,9 @@ meant. A reader in this mode does not read a stream without separators, and a
 reader not in it does not read one with them — the byte is then a raw control
 byte. It is a decision both ends make together, like the schema.
 
-The bounds in this mode count different bytes: `Reader` and `LineReader`
-bound the payload after the separator, `Writer` includes the separator, and
-`Tail` bounds the whole physical line, torn prefix included, before framing
-it. None counts the terminator.
+The bound counts JSON payload bytes everywhere: `Reader`, `LineReader`,
+`Writer` and `Tail`. The separator, the terminator and a discarded torn
+prefix never count. A backwards read scans the prefix without holding it.
 
 **Every refusal is a named error.**
 

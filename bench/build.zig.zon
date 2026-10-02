@@ -5,6 +5,10 @@
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .strand = .{ .path = ".." },
+        .after = .{
+            .url = "https://github.com/pedronaugusto/strand/archive/f2fcdd50e85644c2fd7b3811b1e977725cd56768.tar.gz",
+            .hash = "strand-0.7.0-8LNWVgbuCwBhhMCfHCJksrQurNf6tSTNbHHUPPSh5JQn",
+        },
     },
     .paths = .{ "build.zig", "build.zig.zon", "src" },
 }

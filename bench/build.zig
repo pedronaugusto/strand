@@ -5,7 +5,7 @@ pub fn build(b: *std.Build) void {
     const options = b.addOptions();
     options.addOption(bool, "smoke", b.option(bool, "smoke", "Run one tiny iteration") orelse false);
     const optimize = b.standardOptimizeOption(.{});
-    const strand_dep = b.dependency("strand", .{ .target = target, .optimize = optimize });
+    const strand_dep = b.dependency(if (b.option(bool, "snapshot", "Build the archived local revision") orelse false) "strand" else "after", .{ .target = target, .optimize = optimize });
 
     const ours = b.addExecutable(.{ .name = "strand-bench", .root_module = b.createModule(.{
         .root_source_file = b.path("src/zig_bench.zig"),

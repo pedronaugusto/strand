@@ -14,14 +14,10 @@ executing any timing loop (use a full build/corpus for the full cross-check).
 Smoke stdout is consumed and discarded; reports retain no timing, rate or ratio
 values. A successful smoke run supports no performance claim.
 
-By default A is the last first-parent main commit before **2026-09-30 00:00:00
-+0100**, and B is current local main. The explicit time and offset enforce the
-midnight boundary (Git's date-only `--before=2026-09-30` can inherit the current
-time of day). `--before REV --after REV` selects other immutable snapshots.
-Each job runs A, B, then its existing same-job tools, repeating that order five
-times (`BENCH_RUNS`). One warm-up per side precedes those trials; all raw samples
-are retained and summaries use medians. A and B share the exact harness sources
-and deterministic input. Strand's workload APIs required no adaptation.
+`revisions.json` fixes A at `5fb576f145aad1a3e033222e7408770bdbcc4b66` and B at
+`f2fcdd50e85644c2fd7b3811b1e977725cd56768`. A retains the original
+**2026-09-30 00:00:00 +01:00** cutoff. `--before REV --after REV` selects other
+immutable snapshots; refresh the pins when main advances.
 
 The jobs are typed read and raw framing over regular and long lines, write,
 per-record flush, backwards tail, four codec shapes (including generated raw
@@ -56,3 +52,7 @@ planning estimate, not a measurement from this preparation. Have at least
 and standard tool cache environment variables can select installed tools/caches.
 The specialized `run.sh`, `build-at.sh`, `own/` and `codec/` scripts remain for
 individual investigations; `quiet.sh` is the complete pass entry point.
+
+Standalone `zig build -Doptimize=Debug` compiles the pinned after harness
+without running it. Snapshot builds pass `-Dsnapshot=true` to compile the
+archived local revision instead; quiet runs retain ReleaseFast.

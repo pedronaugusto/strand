@@ -96,6 +96,8 @@ exercises file following, tailing and a line protocol.
 
 ## Testing
 
+Local build scripts clear `.zig-cache/{o,h,z,tmp}` above the measured cap in `ci/cache.sh`; run `sh ci/cache.sh` before direct Zig builds (only a rebuild is lost).
+
 `zig build test` runs the unit suite, scratch tests and examples in Debug by default.
 The suite covers framing, codec agreement with `std.json`, owned copies, rotation,
 cancellation and malformed records. Properties run from corpus inputs and 32 seeded

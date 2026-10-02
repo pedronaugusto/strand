@@ -8,6 +8,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- The README usage excerpt keeps the example calls without the surrounding commentary.
+
 - Breaking: `Raw.encode` adds `WriteFailed` for a custom stringify hook's refusal and reports `OutOfMemory` only when its owned encoding buffer cannot allocate.
 - Breaking: bounded writers use `initBounded(allocator, output, max_line_bytes, options)` or `initFileBounded(allocator, file_writer, max_line_bytes, options)` instead of `Options.max_line_bytes`, require `deinit`, encode once into reusable owned scratch and emit the bytes measured; `Writer.Error` adds `OutOfMemory`, while unbounded `init` and `initFile` keep streaming without scratch.
 - Breaking: benchmark harnesses and their scratch tests live only on the `bench` branch in `bench/own`; `zig build bench` and the benchmark examples are removed from the library, while unit tests retain deterministic framing, parse, allocation and borrowing checks.

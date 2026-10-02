@@ -82,6 +82,8 @@ jobs:
         run: python3 ci/casts.py
       - name: Source import boundaries
         run: zig build check-imports
+      - name: Import gate regression checks
+        run: python3 ci/test_imports.py
 
   # The properties over generated input, rather than over the corpus and the
   # table alone. `zig build test --fuzz` is the other mode and runs until it

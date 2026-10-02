@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Reject undeclared dependencies, duplicate layer membership and imports of source executables.
+
 - Assemble codecs around one raw value type and keep integration tests above the public module.
 
 - Check named source layers, cycles, entry files and dependency owners during source CI.

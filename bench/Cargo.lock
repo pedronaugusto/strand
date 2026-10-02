@@ -82,7 +82,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "strand-rival-bench"
+name = "strand-tools-bench"
 version = "0.0.0"
 dependencies = [
  "serde",

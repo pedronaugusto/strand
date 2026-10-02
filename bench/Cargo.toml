@@ -1,5 +1,5 @@
 [package]
-name = "strand-rival-bench"
+name = "strand-tools-bench"
 version = "0.0.0"
 edition = "2024"
 

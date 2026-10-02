@@ -1,3 +1,3 @@
-module strand-rival-bench
+module strand-tools-bench
 
 go 1.27.0

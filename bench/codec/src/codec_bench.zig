@@ -1,5 +1,5 @@
 //! chronicle's record codec against strand's, on chronicle's own record shape
-//! and on the events tycho writes.
+//! and on synthetic event shapes.
 //!
 //!   codec-bench <side> <synthetic_events.jsonl>
 //!
@@ -28,7 +28,7 @@ const smoke = @import("bench_options").smoke;
 const Bench = struct { value: u64, padding: []const u8 };
 
 /// A tagged union of structs, chronicle's expected event shape, with the
-/// bodies tycho's captures carry (strings with escapes and non-ASCII).
+/// bodies using invented strings with escapes and non-ASCII.
 const Typed = struct {
     node: u64,
     conversation: u64,
@@ -316,7 +316,8 @@ fn run(comptime side: Side, comptime Event: type, io: std.Io, gpa: Allocator, sh
     if (side == .strand) report(io, tag, shape.name, "decode_envelope", try time(io, n, ctx, Ctx.decEnvelope));
 }
 
-fn runShape(comptime Event: type, side: Side, io: std.Io, gpa: Allocator, a: Allocator, shape: Shape(Event)) !void {
+fn runShape(comptime Event: type, side: Side, io: std.Io, gpa: Allocator, a: Allocator, shape: Shape(Event), check_only: bool) !void {
+    if (check_only) return check(Event, a, shape);
     switch (side) {
         .chronicle => try run(.chronicle, Event, io, gpa, shape),
         .strand => {
@@ -333,6 +334,10 @@ pub fn main(init: std.process.Init) !void {
     _ = args.next();
     const side = std.meta.stringToEnum(Side, args.next() orelse return error.MissingSide) orelse return error.UnknownSide;
     const corpus_path = args.next() orelse return error.MissingCorpus;
+    const option = args.next();
+    const check_only = if (option) |flag| std.mem.eql(u8, flag, "--check-only") else false;
+    if (option != null and !check_only) return error.UnknownOption;
+    if (args.next() != null) return error.ExtraArgument;
 
     var setup: std.heap.ArenaAllocator = .init(gpa);
     defer setup.deinit();
@@ -367,9 +372,9 @@ pub fn main(init: std.process.Init) !void {
         .note = if (i % 2 == 0) "settled" else "carried forward",
     };
 
-    try runShape(Bench, side, io, gpa, a, try prepare(Bench, a, "bench", bench));
-    try runShape(strand.Raw, side, io, gpa, a, try prepare(strand.Raw, a, "tycho", raws.items));
-    try runShape(Typed, side, io, gpa, a, try prepare(Typed, a, "typed", typed.items));
-    try runShape(Wide, side, io, gpa, a, try prepare(Wide, a, "wide", wide));
+    try runShape(Bench, side, io, gpa, a, try prepare(Bench, a, "bench", bench), check_only);
+    try runShape(strand.Raw, side, io, gpa, a, try prepare(strand.Raw, a, "synthetic", raws.items), check_only);
+    try runShape(Typed, side, io, gpa, a, try prepare(Typed, a, "typed", typed.items), check_only);
+    try runShape(Wide, side, io, gpa, a, try prepare(Wide, a, "wide", wide), check_only);
     if (sink == 42) std.debug.print("", .{});
 }

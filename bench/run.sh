@@ -46,25 +46,25 @@ for fixture in regular long; do
   path=${!fixture}
   bench "-$fixture" "$build/zig-out/bin/strand-bench" read "$path"
   bench "-$fixture" "$build/zig-out/bin/zig-stdjson-bench" read "$path"
-  bench "-lines-$fixture" "$CARGO_TARGET_DIR/release/strand-rival-bench" read "$path"
-  bench "-$fixture" "$CARGO_TARGET_DIR/release/strand-rival-bench" stream "$path"
+  bench "-lines-$fixture" "$CARGO_TARGET_DIR/release/strand-tools-bench" read "$path"
+  bench "-$fixture" "$CARGO_TARGET_DIR/release/strand-tools-bench" stream "$path"
   bench "-$fixture" "$build/go-bench" read "$path"
   bench "-$fixture" "$build/zig-out/bin/strand-bench" raw "$path"
-  bench "-$fixture" "$CARGO_TARGET_DIR/release/strand-rival-bench" raw "$path"
+  bench "-$fixture" "$CARGO_TARGET_DIR/release/strand-tools-bench" raw "$path"
   bench "-$fixture" "$build/go-bench" raw "$path"
 done
 
 bench "" "$build/zig-out/bin/strand-bench" write "$output"
 bench "" "$build/zig-out/bin/zig-stdjson-bench" write "$output"
-bench "" "$CARGO_TARGET_DIR/release/strand-rival-bench" write "$output"
+bench "" "$CARGO_TARGET_DIR/release/strand-tools-bench" write "$output"
 bench "" "$build/go-bench" write "$output"
 bench "" "$build/zig-out/bin/strand-bench" write-flush "$output"
 bench "" "$build/zig-out/bin/zig-stdjson-bench" write-flush "$output"
-bench "" "$CARGO_TARGET_DIR/release/strand-rival-bench" write-flush "$output"
+bench "" "$CARGO_TARGET_DIR/release/strand-tools-bench" write-flush "$output"
 bench "" "$build/go-bench" write-flush "$output"
 
 bench "" "$build/zig-out/bin/strand-bench" tail "$regular"
-bench "" "$CARGO_TARGET_DIR/release/strand-rival-bench" tail "$regular"
+bench "" "$CARGO_TARGET_DIR/release/strand-tools-bench" tail "$regular"
 bench "" "$build/tail-command" "$regular"
 
 for fixture in regular long; do

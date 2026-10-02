@@ -15,7 +15,7 @@ build="$(cd "$build" && pwd)"
 max_load=${BENCH_MAX_LOAD:-4}
 trials=${BENCH_RUNS:-7}
 corpus="${BENCH_CORPUS:-$build/synthetic_events.jsonl}"
-"${PYTHON:-python3}" src/tycho_corpus.py "$corpus"
+"${PYTHON:-python3}" src/synthetic_corpus.py "$corpus"
 raw="${BENCH_RAW:-$build/alternate.raw.tsv}"
 load1() { sysctl -n vm.loadavg | awk '{print $2}'; }
 wait_quiet() { while awk -v l="$(load1)" -v m="$max_load" 'BEGIN{exit !(l>=m)}'; do sleep 20; done; }

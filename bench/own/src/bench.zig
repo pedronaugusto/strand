@@ -55,11 +55,6 @@ pub fn main() !void {
     var out = std.Io.File.stdout().writerStreaming(io, &.{});
     const stdout = &out.interface;
 
-    try stdout.print("strand bench — {d} lines, {s}\n\n", .{
-        line_count,
-        @tagName(@import("builtin").mode),
-    });
-
     const written = try benchWrite(gpa, io, stdout);
     defer gpa.free(written);
     try benchRead(gpa, io, stdout, written);
@@ -111,10 +106,9 @@ fn benchRead(gpa: std.mem.Allocator, io: std.Io, stdout: *std.Io.Writer, input: 
     const elapsed = started.untilNow(io, .awake);
 
     try report(stdout, "read", elapsed, reader.lines.number, input.len);
-    try stdout.print(
-        "                 {d} of {d} strings borrowed the line, checksum {d}\n",
-        .{ borrowed, reader.lines.number, checksum },
-    );
+    if (reader.lines.number != line_count or borrowed != line_count) return error.ReadMismatch;
+    if (checksum != line_count * (line_count - 1) / 2 + 7 * line_count) return error.ChecksumMismatch;
+    try metric(stdout, "read", "borrowed", borrowed, "records");
 }
 
 /// The same million as one `writeAll`.
@@ -132,6 +126,7 @@ fn benchWriteAll(gpa: std.mem.Allocator, io: std.Io, stdout: *std.Io.Writer) !vo
     try log.writeAll(events);
     const elapsed = started.untilNow(io, .awake);
 
+    if (log.count != line_count) return error.WriteCountMismatch;
     try report(stdout, "writeAll", elapsed, log.count, out.written().len);
 }
 
@@ -153,10 +148,10 @@ fn benchTail(gpa: std.mem.Allocator, io: std.Io, stdout: *std.Io.Writer, input: 
     const last = try tail.last(arena.allocator(), 100);
     const elapsed = started.untilNow(io, .awake);
 
-    try stdout.print(
-        "tail(100)        {f} for the last {d} of {d} lines, {B:.2} of {B:.2} touched\n",
-        .{ elapsed, last.len, line_count, input.len - tail.lo, input.len },
-    );
+    if (last.len != @min(line_count, 100)) return error.TailCountMismatch;
+    try metric(stdout, "tail(100)", "elapsed", elapsed.toNanoseconds(), "ns");
+    try metric(stdout, "tail(100)", "returned", last.len, "records");
+    try metric(stdout, "tail(100)", "bytes_touched", input.len - tail.lo, "bytes");
 }
 
 /// One line of a hundred megabytes, read off a file with a small buffer, so
@@ -177,15 +172,9 @@ fn benchBigLine(gpa: std.mem.Allocator, io: std.Io, stdout: *std.Io.Writer) !voi
     const line = (try reader.next()) orelse return error.NoLine;
     const elapsed = started.untilNow(io, .awake);
 
-    try stdout.print(
-        "big line         {f} for {B:.2}, borrowed: {}, arena {B:.2}\n",
-        .{
-            elapsed,
-            line.line.len,
-            within(line.value.kind, line.line),
-            reader.arena.queryCapacity(),
-        },
-    );
+    if (line.value.kind.len != big_line_bytes or !within(line.value.kind, line.line)) return error.BigLineMismatch;
+    try metric(stdout, "big_line", "elapsed", elapsed.toNanoseconds(), "ns");
+    try metric(stdout, "big_line", "arena_capacity", reader.arena.queryCapacity(), "bytes");
 }
 
 /// A line of a log that carries another program's record, passed along.
@@ -218,6 +207,7 @@ fn benchCarried(gpa: std.mem.Allocator, io: std.Io, stdout: *std.Io.Writer) !voi
         const started = std.Io.Clock.awake.now(io);
         while (try reader.next()) |line| checksum +%= line.value.at;
         const elapsed = started.untilNow(io, .awake);
+        if (reader.lines.number != line_count or checksum != line_count * (line_count - 1) / 2) return error.CarriedMismatch;
         try report(stdout, name, elapsed, reader.lines.number, out.written().len);
         std.mem.doNotOptimizeAway(checksum);
     }
@@ -237,13 +227,10 @@ fn report(
     const ns: u64 = @intCast(@max(elapsed.toNanoseconds(), 1));
     const per_second = lines * std.time.ns_per_s / ns;
     const bytes_per_second = bytes * std.time.ns_per_s / ns;
-    try stdout.print("{s:<16} {f} — {d} lines/s, {B:.2}/s, {d} ns/line\n", .{
-        what,
-        elapsed,
-        per_second,
-        bytes_per_second,
-        ns / @max(lines, 1),
-    });
+    try metric(stdout, what, "elapsed", ns, "ns");
+    try metric(stdout, what, "lines", per_second, "lines/s");
+    try metric(stdout, what, "bytes", bytes_per_second, "bytes/s");
+    try metric(stdout, what, "per_line", ns / @max(lines, 1), "ns/line");
 }
 
 /// True when `inner` points into `outer`: the borrow, checked rather than
@@ -251,4 +238,8 @@ fn report(
 fn within(inner: []const u8, outer: []const u8) bool {
     return @intFromPtr(inner.ptr) >= @intFromPtr(outer.ptr) and // safe: addresses compared as numbers, never read through
         @intFromPtr(inner.ptr) + inner.len <= @intFromPtr(outer.ptr) + outer.len; // safe: the same comparison, the far end
+}
+
+fn metric(stdout: *std.Io.Writer, work: []const u8, name: []const u8, value: anytype, unit: []const u8) !void {
+    try stdout.print("strand\t{s}\t{s}\t{}\t{s}\n", .{ work, name, value, unit });
 }

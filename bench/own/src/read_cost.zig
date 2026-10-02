@@ -91,7 +91,8 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io, stdout: *std.Io.Writer) !vo
         floor_ns = @min(floor_ns, try timeFloor(allocator, io, input));
     }
     const ratio = @as(f64, @floatFromInt(reader_ns)) / @as(f64, @floatFromInt(floor_ns));
-    try stdout.print("mixed read       {d} ns/line, parse alone {d} ns/line, {d:.2}x (target {d:.2}x)\n", .{
-        reader_ns / timed_lines, floor_ns / timed_lines, ratio, budget,
-    });
+    try stdout.print("strand\tmixed_read\treader\t{d}\tns/line\n", .{reader_ns / timed_lines});
+    try stdout.print("strand\tmixed_read\tparse_alone\t{d}\tns/line\n", .{floor_ns / timed_lines});
+    try stdout.print("strand\tmixed_read\treader_over_parse\t{d:.6}\tratio\n", .{ratio});
+    try stdout.print("strand\tmixed_read\ttarget\t{d:.2}\tratio\n", .{budget});
 }

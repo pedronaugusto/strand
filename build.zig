@@ -138,6 +138,7 @@ pub fn build(b: *std.Build) void {
     }
     test_step.dependOn(examples_step);
 }
+
 /// Every example, listed rather than globbed: a build graph that scans a
 /// directory is not reproducible from the manifest alone.
 const example_sources = [_][]const u8{

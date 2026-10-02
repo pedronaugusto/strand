@@ -18,6 +18,7 @@
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
+sh ci/cache.sh
 
 image=${STRAND_LINUX_IMAGE:-strand-zig-0.16.0}
 

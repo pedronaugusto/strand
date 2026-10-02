@@ -1,0 +1,98 @@
+//! Source layers, lowest first. Every source has one explicit place.
+const gantry = @import("gantry");
+
+pub const layers: []const gantry.rules.Layer = &.{
+    .{ .name = "primitives", .patterns = &.{
+        "src/encode_buffer.zig",
+        "src/encode_impl.zig",
+        "src/file_id.zig",
+        "src/fixtures.zig",
+        "src/int.zig",
+        "src/owned.zig",
+        "src/route.zig",
+        "src/scanner.zig",
+        "src/value_api.zig",
+        "src/work.zig",
+    } },
+    .{ .name = "decoding and conversion", .patterns = &.{
+        "src/control.zig",
+        "src/decode_impl.zig",
+        "src/from_value.zig",
+        "src/owned_rejected.zig",
+        "src/parse.zig",
+        "src/raw_type.zig",
+        "src/sync.zig",
+    } },
+    .{ .name = "parsing and schema", .patterns = &.{
+        "src/parse_line_impl.zig",
+        "src/versioned.zig",
+    } },
+    .{ .name = "codec assembly", .patterns = &.{
+        "src/codec.zig",
+    } },
+    .{ .name = "codec interfaces", .patterns = &.{
+        "src/decode.zig",
+        "src/encode.zig",
+        "src/parse_line.zig",
+        "src/raw.zig",
+    } },
+    .{ .name = "records", .patterns = &.{
+        "src/line.zig",
+    } },
+    .{ .name = "line framing", .patterns = &.{
+        "src/line_reader.zig",
+        "src/tail.zig",
+        "src/writer.zig",
+    } },
+    .{ .name = "typed streams", .patterns = &.{
+        "src/reader.zig",
+    } },
+    .{ .name = "following", .patterns = &.{
+        "src/follow.zig",
+    } },
+    .{ .name = "public", .patterns = &.{
+        "src/strand.zig",
+    } },
+    .{ .name = "scenarios", .patterns = &.{
+        "src/codec_tests.zig",
+        "src/follow_test.zig",
+        "src/from_value_test.zig",
+        "src/keep_tests.zig",
+        "src/owned_tests.zig",
+        "src/raw_test.zig",
+        "src/tail_test.zig",
+        "src/tests.zig",
+        "src/versioned_test.zig",
+    } },
+    .{ .name = "properties", .patterns = &.{
+        "src/fuzz.zig",
+    } },
+    .{ .name = "tests", .patterns = &.{
+        "src/test_root.zig",
+    } },
+};
+
+pub const entries: []const []const u8 = &.{};
+
+pub const modules: []const gantry.NamedModule = &.{};
+pub const references: []const gantry.rules.ReferenceRule = &.{
+    .{ .name = "named dependencies", .unresolved_only = true, .except_targets = &.{
+        "build_options",
+        "builtin",
+        "rejection_options",
+        "std",
+    } },
+    .{ .name = "source siblings", .suffix = ".zig", .relative = true, .except_targets = &.{"src/**"} },
+};
+
+pub const required = blk: {
+    var count: usize = 0;
+    for (layers) |layer| count += layer.patterns.len;
+    var paths: [count][]const u8 = undefined;
+    var i: usize = 0;
+    for (layers) |layer| for (layer.patterns) |path| {
+        paths[i] = path;
+        i += 1;
+    };
+    break :blk paths;
+};

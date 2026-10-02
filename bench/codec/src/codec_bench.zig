@@ -84,12 +84,12 @@ fn report(io: std.Io, side: []const u8, shape: []const u8, op: []const u8, ns: f
 fn time(io: std.Io, n: usize, ctx: anytype, comptime body: fn (@TypeOf(ctx), usize) anyerror!void) !f64 {
     if (!smoke) for (0..n) |i| try body(ctx, i);
     var calls: u64 = 0;
-    const started = std.Io.Clock.awake.now(io);
+    const started = benchmarkNow(io);
     var ns: i96 = 0;
     while (calls == 0 or (!smoke and ns < 200 * std.time.ns_per_ms)) {
         for (0..n) |i| try body(ctx, i);
         calls += n;
-        ns = started.durationTo(std.Io.Clock.awake.now(io)).toNanoseconds();
+        ns = started.durationTo(benchmarkNow(io)).toNanoseconds();
     }
     return @as(f64, @floatFromInt(ns)) / @as(f64, @floatFromInt(calls));
 }
@@ -377,4 +377,11 @@ pub fn main(init: std.process.Init) !void {
     try runShape(Typed, side, io, gpa, a, try prepare(Typed, a, "typed", typed.items), check_only);
     try runShape(Wide, side, io, gpa, a, try prepare(Wide, a, "wide", wide), check_only);
     if (sink == 42) std.debug.print("", .{});
+}
+
+// Smoke exercises correctness without sampling a benchmark clock.
+var smoke_ticks = std.atomic.Value(i64).init(0);
+fn benchmarkNow(io: std.Io) std.Io.Timestamp {
+    if (@import("bench_options").smoke) return .{ .nanoseconds = smoke_ticks.fetchAdd(1, .monotonic) };
+    return std.Io.Clock.awake.now(io);
 }

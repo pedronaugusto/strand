@@ -15,16 +15,19 @@ def run(p, bins):
         root = p.scratch / side / 'bench'
         own[side] = p.zig(root / 'own') / 'strand-own-bench'
         codec[side] = p.zig(root / 'codec') / 'codec-bench'
-    print('Building existing same-job tools', flush=True)
-    p.command([p.tool('cargo'), 'build', '-j1', '--release', '--locked'])
+    print('Preparing existing same-job tools' if p.preparing else 'Using prepared same-job tools', flush=True)
+    p.setup_command([p.tool('cargo'), 'build', '-j1', '--release', '--locked'])
     go = p.scratch / 'go-bench'
-    p.command([p.tool('go'), 'build', '-p=1', '-trimpath', "-ldflags=-s -w", '-o', go, './src/go_bench.go'])
+    p.setup_command([p.tool('go'), 'build', '-p=1', '-trimpath', "-ldflags=-s -w", '-o', go, './src/go_bench.go'])
     tail = p.scratch / 'tail-command'
-    p.command([p.tool('cc'), '-O2', '-o', tail, 'src/tail_command.c'])
+    p.setup_command([p.tool('cc'), '-O2', '-o', tail, 'src/tail_command.c'])
     rust = p.env['CARGO_TARGET_DIR'] + '/release/strand-tools-bench'
     stdjson = bins['after'] / 'zig-stdjson-bench'
     fixtures = p.scratch / 'fixtures'
-    p.command([p.tool('python'), 'src/generate.py', fixtures])
+    p.setup_command([p.tool('python'), 'src/generate.py', fixtures])
+    p.prepared.require(fixtures)
+    p.prepared.require(go)
+    p.prepared.require(tail)
     for fixture in ('regular', 'long'):
         path = fixtures / f'{fixture}.jsonl'
         p.group(f'typed-read-{fixture}', [
@@ -59,8 +62,9 @@ def run(p, bins):
                      ('after', [bins['after'] / 'strand-bench', 'tail', path]),
                      ('Rust-backward-reader', [rust, 'tail', path]), ('system-tail', [tail, path])])
     corpus = p.scratch / 'synthetic_events.jsonl'
-    p.command([p.tool('python'), 'codec/src/synthetic_corpus.py', corpus,
+    p.setup_command([p.tool('python'), 'codec/src/synthetic_corpus.py', corpus,
                *(['--smoke'] if p.smoke else [])])
+    p.prepared.require(corpus)
     p.group('codec', [('before', [codec['before'], 'strand', corpus]),
                       ('after', [codec['after'], 'strand', corpus]),
                       ('Chronicle-bde5a26', [codec['after'], 'chronicle', corpus])])

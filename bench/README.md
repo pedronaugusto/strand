@@ -41,12 +41,11 @@ Reports are plain `results.md` and `results.json` under
 `bench/results/<UTC-date>/<UTC-start>/`; smoke uses `smoke.md` and `smoke.json`.
 They include revision hashes, harness hash, machine/power information, tool
 versions, execution order, samples and status. Results and owned scratch/cache
-files are ignored. Scratch is removed on success or failure; tool caches remain
-under `bench/build/quiet-cache`. Each pass builds fresh binaries, so smoke/full
-mode and changed harnesses cannot accidentally reuse a stale executable.
+files are ignored. Prepared scratch and compiler caches persist; tool caches remain
+under `bench/build/quiet-cache`. Smoke builds separate full/smoke binaries and checks correctness. The full
+pass reuses them after checking source identity and prepared artifacts.
 
-Allow roughly **15–30 minutes** for the default full pass on an Apple Silicon
-Mac with cached dependencies, plus first-time downloads/builds. This is a
+Quiet-only planning estimate: **6–15 minutes** after successful smoke preparation. See [QUIET-PREP.md](QUIET-PREP.md) for invocation counts, sizes and assumptions. This is a
 planning estimate, not a measurement from this preparation. Have at least
 5 GiB free for scratch and caches. `ZIG`, `GO`, `CARGO`, `CC`, `PYTHON`, `TAIL`
 and standard tool cache environment variables can select installed tools/caches.

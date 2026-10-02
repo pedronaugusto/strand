@@ -22,7 +22,7 @@ pub fn sample(i: u64) Record {
 }
 
 pub fn ns(io: std.Io, started: std.Io.Timestamp) u64 {
-    return @intCast(@max(started.untilNow(io, .awake).toNanoseconds(), 1));
+    return @intCast(@max((if (@import("bench_options").smoke) std.Io.Duration.fromNanoseconds(1) else started.untilNow(io, .awake)).toNanoseconds(), 1));
 }
 
 pub fn report(out: *std.Io.Writer, side: []const u8, workload: []const u8, metric: []const u8, value: f64, unit: []const u8) !void {

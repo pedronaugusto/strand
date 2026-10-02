@@ -18,7 +18,7 @@ fn read(init: std.process.Init, path: []const u8, out: *std.Io.Writer) !void {
     const size = (try stat_file.stat(init.io)).size;
     var lines: u64 = 0;
     var checksum: u64 = 0;
-    const started = std.Io.Clock.awake.now(init.io);
+    const started = benchmarkNow(init.io);
     for (0..(if (smoke) @as(usize, 1) else 2)) |_| {
         const file = try std.Io.Dir.openFileAbsolute(init.io, path, .{});
         defer file.close(init.io);
@@ -49,7 +49,7 @@ fn write(init: std.process.Init, path: []const u8, out: *std.Io.Writer, per_reco
     const buf = try init.gpa.alloc(u8, 1 << 20);
     defer init.gpa.free(buf);
     var fw = file.writer(init.io, buf);
-    const started = std.Io.Clock.awake.now(init.io);
+    const started = benchmarkNow(init.io);
     for (0..(if (smoke) @as(usize, 1) else 1_000_000)) |i| {
         try std.json.Stringify.value(common.sample(i), .{}, &fw.interface);
         try fw.interface.writeByte('\n');
@@ -59,4 +59,11 @@ fn write(init: std.process.Init, path: []const u8, out: *std.Io.Writer, per_reco
     const elapsed = common.ns(init.io, started);
     const size = (try file.stat(init.io)).size;
     try common.report(out, "zig-std-json", if (per_record) "typed-write-flush" else "typed-write", "bytes", @as(f64, @floatFromInt(size)) * 1e3 / @as(f64, @floatFromInt(elapsed)), "MB/s");
+}
+
+// Smoke exercises correctness without sampling a benchmark clock.
+var smoke_ticks = std.atomic.Value(i64).init(0);
+fn benchmarkNow(io: std.Io) std.Io.Timestamp {
+    if (@import("bench_options").smoke) return .{ .nanoseconds = smoke_ticks.fetchAdd(1, .monotonic) };
+    return std.Io.Clock.awake.now(io);
 }

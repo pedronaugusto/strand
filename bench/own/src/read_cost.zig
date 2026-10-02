@@ -44,9 +44,9 @@ fn timeReader(allocator: std.mem.Allocator, io: std.Io, input: []const u8) !u64 
     defer reader.deinit();
 
     var checksum: u64 = 0;
-    const started = std.Io.Clock.awake.now(io);
+    const started = benchmarkNow(io);
     while (try reader.next()) |line| checksum +%= line.value.at +% line.value.kind.len;
-    const elapsed = started.untilNow(io, .awake);
+    const elapsed = (if (@import("bench_options").smoke) std.Io.Duration.fromNanoseconds(1) else started.untilNow(io, .awake));
 
     if (reader.lines.number != timed_lines) return error.MissingLines;
     std.mem.doNotOptimizeAway(checksum);
@@ -62,7 +62,7 @@ fn timeFloor(allocator: std.mem.Allocator, io: std.Io, input: []const u8) !u64 {
 
     var checksum: u64 = 0;
     var seen: u64 = 0;
-    const started = std.Io.Clock.awake.now(io);
+    const started = benchmarkNow(io);
     while (source.takeDelimiterInclusive('\n')) |framed| {
         const line = framed[0 .. framed.len - 1];
         _ = arena.reset(.retain_capacity);
@@ -73,7 +73,7 @@ fn timeFloor(allocator: std.mem.Allocator, io: std.Io, input: []const u8) !u64 {
         error.EndOfStream => {},
         else => return err,
     }
-    const elapsed = started.untilNow(io, .awake);
+    const elapsed = (if (@import("bench_options").smoke) std.Io.Duration.fromNanoseconds(1) else started.untilNow(io, .awake));
 
     if (seen != timed_lines) return error.MissingLines;
     std.mem.doNotOptimizeAway(checksum);
@@ -95,4 +95,11 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io, stdout: *std.Io.Writer) !vo
     try stdout.print("strand\tmixed_read\tparse_alone\t{d}\tns/line\n", .{floor_ns / timed_lines});
     try stdout.print("strand\tmixed_read\treader_over_parse\t{d:.6}\tratio\n", .{ratio});
     try stdout.print("strand\tmixed_read\ttarget\t{d:.2}\tratio\n", .{budget});
+}
+
+// Smoke exercises correctness without sampling a benchmark clock.
+var smoke_ticks = std.atomic.Value(i64).init(0);
+fn benchmarkNow(io: std.Io) std.Io.Timestamp {
+    if (@import("bench_options").smoke) return .{ .nanoseconds = smoke_ticks.fetchAdd(1, .monotonic) };
+    return std.Io.Clock.awake.now(io);
 }

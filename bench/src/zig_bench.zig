@@ -21,7 +21,7 @@ fn read(init: std.process.Init, path: []const u8, out: *std.Io.Writer, raw: bool
     var checksum: u64 = 0;
     var lines: u64 = 0;
     const reps: usize = if (smoke) 1 else if (raw) 12 else 2;
-    const started = std.Io.Clock.awake.now(init.io);
+    const started = benchmarkNow(init.io);
     for (0..reps) |_| {
         const file = try std.Io.Dir.openFileAbsolute(init.io, path, .{});
         defer file.close(init.io);
@@ -56,7 +56,7 @@ fn write(init: std.process.Init, path: []const u8, out: *std.Io.Writer, per_reco
     defer init.gpa.free(buf);
     var fw = file.writer(init.io, buf);
     var w: strand.Writer(Record) = .initFile(&fw, .{ .flush = if (per_record) .per_record else .never });
-    const started = std.Io.Clock.awake.now(init.io);
+    const started = benchmarkNow(init.io);
     for (0..(if (smoke) @as(usize, 1) else 1_000_000)) |i| try w.write(common.sample(i));
     try fw.interface.flush();
     const elapsed = common.ns(init.io, started);
@@ -66,7 +66,7 @@ fn write(init: std.process.Init, path: []const u8, out: *std.Io.Writer, per_reco
 
 fn tail(init: std.process.Init, path: []const u8, out: *std.Io.Writer) !void {
     const reps: usize = if (smoke) 1 else 500;
-    const started = std.Io.Clock.awake.now(init.io);
+    const started = benchmarkNow(init.io);
     for (0..reps) |_| {
         const file = try std.Io.Dir.openFileAbsolute(init.io, path, .{});
         defer file.close(init.io);
@@ -81,4 +81,11 @@ fn tail(init: std.process.Init, path: []const u8, out: *std.Io.Writer) !void {
     }
     const elapsed = common.ns(init.io, started);
     try common.report(out, "strand", "tail-1000", "latency", @as(f64, @floatFromInt(elapsed)) / (1e6 * @as(f64, @floatFromInt(reps))), "ms");
+}
+
+// Smoke exercises correctness without sampling a benchmark clock.
+var smoke_ticks = std.atomic.Value(i64).init(0);
+fn benchmarkNow(io: std.Io) std.Io.Timestamp {
+    if (@import("bench_options").smoke) return .{ .nanoseconds = smoke_ticks.fetchAdd(1, .monotonic) };
+    return std.Io.Clock.awake.now(io);
 }

@@ -89,26 +89,3 @@ pub const syncFile = @import("sync.zig").syncFile;
 pub const SyncLevel = @import("sync.zig").SyncLevel;
 pub const SyncKind = @import("sync.zig").SyncKind;
 pub const SyncError = @import("sync.zig").SyncError;
-
-test {
-    _ = @import("owned_tests.zig");
-    _ = @import("keep_tests.zig");
-    _ = @import("parse_line.zig");
-    _ = @import("line.zig");
-    _ = @import("line_reader.zig");
-    _ = @import("reader.zig");
-    _ = @import("writer.zig");
-    _ = @import("sync.zig");
-    _ = @import("control.zig");
-    _ = @import("route.zig");
-    _ = @import("tests.zig");
-    _ = @import("fuzz.zig");
-    _ = @import("tail.zig");
-    _ = @import("follow.zig");
-    _ = @import("versioned.zig");
-    _ = @import("raw.zig");
-    _ = @import("int.zig");
-    _ = @import("file_id.zig");
-    _ = @import("from_value.zig");
-    _ = @import("codec_tests.zig");
-}

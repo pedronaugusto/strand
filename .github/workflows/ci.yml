@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, layers]
   pull_request:
   workflow_dispatch:
 
@@ -77,9 +77,11 @@ jobs:
         with:
           version: ${{ env.ZIG_VERSION }}
       - name: Formatting
-        run: zig fmt --check src examples build.zig
+        run: zig fmt --check src examples build.zig ci
       - name: Casts out of the type system carry their reason
         run: python3 ci/casts.py
+      - name: Source import boundaries
+        run: zig build check-imports
 
   # The properties over generated input, rather than over the corpus and the
   # table alone. `zig build test --fuzz` is the other mode and runs until it

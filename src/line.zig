@@ -38,21 +38,6 @@ pub fn isBlank(line: []const u8) bool {
     return true;
 }
 
-/// A copy of the value on `line` that borrows nothing from it: every string
-/// is copied onto `allocator`. See `Reader.keep`, whose contract this is.
-pub fn keep(
-    comptime T: type,
-    allocator: Allocator,
-    line: []const u8,
-    options: anytype,
-) ParseLineError!T {
-    return parse_line.parseLine(T, allocator, line, .{
-        .ignore_unknown_fields = options.ignore_unknown_fields,
-        .duplicate_fields = options.duplicate_fields,
-        .copy_strings = true,
-    });
-}
-
 /// Where `std.json` gave up on a line that has already failed to parse.
 ///
 /// The line is parsed a second time with the scanner's diagnostics on, which

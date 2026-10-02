@@ -98,17 +98,21 @@ pub const PathOpener = struct {
 ///
 /// A rotation is noticed by asking "is what the path holds now the file I was
 /// reading?", and there are two ways to answer it.
+///
+/// The native policy is `.file_id`, including in serialized settings. The
+/// old `inode` policy tag is refused; there is no conversion or fallback.
+/// Start a new follower at the beginning or seek to the chosen position.
 pub const Identity = union(enum) {
     /// The number the system gives a file: the inode on a POSIX system, the
-    /// file index on Windows, together with the volume it is on, since two
-    /// volumes number their files independently. Two calls, nothing read,
+    /// full 128-bit file id on Windows, together with the volume it is on,
+    /// since two volumes number their files independently. Nothing read,
     /// and exactly right while the numbers are not reused — which is the
     /// catch. A filesystem
     /// is free to give a new file the number of one just deleted, and then a
     /// log that was rotated away reads as the log that replaced it; going
     /// the other way, a filesystem that renumbers a file it did not replace
     /// reads as a rotation that never happened. Both are silent.
-    inode,
+    file_id,
     /// The first bytes of the file, hashed. A log's opening lines are
     /// written once and not written again, so they name the file in a way
     /// the filesystem cannot take back — which is what makes this the answer
@@ -126,7 +130,7 @@ pub const Identity = union(enum) {
         /// Where the window starts.
         offset: u64 = 0,
         /// How many bytes of it are hashed.
-        /// Zero disables the content comparison and falls back to `.inode`.
+        /// Zero disables the content comparison and falls back to `.file_id`.
         length: usize = 1024,
     },
 
@@ -136,14 +140,11 @@ pub const Identity = union(enum) {
     /// is the whole point: a fingerprint read afresh from both sides of a
     /// rotation that rewrote a file in place would find the two the same.
     pub const Taken = struct {
-        /// What the system calls the file.
-        inode: std.Io.File.INode,
-        /// The volume the file is on (`FileId.volume`): the device on
-        /// POSIX, the volume's serial number on Windows. `null` in a
-        /// checkpoint written before it was recorded, which is then
-        /// compared by the number alone.
-        volume: ?u64 = null,
-        /// The hash of the window, or `null` under `.inode` and for a file
+        /// What the system calls the file, including its volume and every
+        /// bit of its file id. Required in a serialized checkpoint; the old
+        /// inode/volume shape is refused with `error.MissingField`.
+        id: FileId,
+        /// The hash of the window, or `null` under `.file_id` and for a file
         /// that is not yet as long as the window.
         fingerprint: ?u64 = null,
 
@@ -153,23 +154,18 @@ pub const Identity = union(enum) {
             if (a.fingerprint) |mine| {
                 if (b.fingerprint) |yours| return mine == yours;
             }
-            if (a.volume) |mine| {
-                if (b.volume) |yours| if (mine != yours) return false;
-            }
-            return a.inode == b.inode;
+            return a.id.eql(b.id);
         }
     };
 
     /// What `file` is, now. The handle must be open for reading: asking a
     /// file's attributes is read access, and so is reading its first bytes.
     pub fn take(self: Identity, io: std.Io, file: std.Io.File) !Taken {
-        const inode = (try file.stat(io)).inode;
-        const volume = (try FileId.of(file.handle)).volume;
+        const id = try FileId.of(file.handle);
         switch (self) {
-            .inode => return .{ .inode = inode, .volume = volume },
+            .file_id => return .{ .id = id },
             .fingerprint => |window| return .{
-                .inode = inode,
-                .volume = volume,
+                .id = id,
                 .fingerprint = try fingerprintOf(io, file, window.offset, window.length),
             },
         }
@@ -271,7 +267,7 @@ pub fn Follower(comptime T: type) type {
             /// What makes the file the path holds now the file this follower
             /// is reading. Only looked at when `reopen` is set, since it is
             /// the answer to a question only a reopen asks.
-            identity: Identity = .inode,
+            identity: Identity = .file_id,
         };
 
         /// How a follower waits for the file to grow.
@@ -313,14 +309,15 @@ pub fn Follower(comptime T: type) type {
         ///
         /// The thing that crashes is the follower, and the point of
         /// `Line.offset` is to be able to start again where the last one
-        /// stopped. This is the four numbers that takes: which file, how far
-        /// into it, what the line after that is numbered, and how many files
-        /// the follower has been through to get here.
+        /// stopped. This keeps the file identity, the offset, the line count
+        /// and how many files the follower has been through to get here.
         ///
         /// It is an ordinary struct of integers, so a caller keeping one
         /// between runs can write it with this package and read it back with
         /// it — a registry of checkpoints is a JSON Lines file like any
-        /// other.
+        /// other. A checkpoint in the old inode/volume shape is refused by
+        /// `parseLine` with `error.MissingField`. Start a new follower from
+        /// the beginning, or seek to a position the caller chooses.
         pub const Checkpoint = struct {
             /// What the file being read is, under `Options.identity`. A
             /// checkpoint taken under one identity and resumed under another
@@ -350,6 +347,12 @@ pub fn Follower(comptime T: type) type {
                 .number = self.reader.lines.number,
                 .rotations = self.rotations,
             };
+        }
+
+        /// A copy of `line.value` that outlives the follower, allocated on
+        /// `allocator`. See `Reader.keep`, whose contract this is.
+        pub fn keep(self: *Self, allocator: Allocator, line: Line(T)) Allocator.Error!T {
+            return self.reader.keep(allocator, line);
         }
 
         /// A follower that carries on from `point`.
@@ -445,6 +448,7 @@ pub fn Follower(comptime T: type) type {
         /// Ownership: exactly `Reader.next`'s. The returned `Line` borrows the
         /// reader's line buffer and arena, and the next call takes both back.
         pub fn next(self: *Self) NextError!Line(T) {
+            try self.io.checkCancel();
             // What the file is has to be taken before it is read, not when
             // the question is asked: a file rewritten where it stands would
             // otherwise be measured after the rewrite and match itself.
@@ -482,11 +486,11 @@ pub fn Follower(comptime T: type) type {
         /// it, which is what a truncating rotation looks like through an open
         /// handle.
         ///
-        /// A rename-and-recreate rotation looks like nothing at all: the
-        /// handle still refers to the old file, which simply stops growing,
-        /// and following the path across that is the caller's to do — reopen
-        /// the path, and make a new `Follower` over the new handle. This
-        /// package does not open files, so it cannot do it for you.
+        /// A rename-and-recreate rotation does not shorten the old file:
+        /// its handle stays readable and simply stops growing. With
+        /// `Options.reopen`, `next` finishes that file and uses the opener
+        /// to follow the replacement. Without it, the caller reopens the
+        /// path and builds a new follower over the new handle.
         pub fn truncated(self: *Self) (error{ ReadFailed, SeekFailed } || std.Io.Cancelable)!bool {
             const size = self.currentSize() catch |err| switch (err) {
                 error.Canceled => return error.Canceled,
@@ -582,11 +586,13 @@ pub fn Follower(comptime T: type) type {
                 self.opened = fresh;
                 self.source.* = fresh.reader(self.io, self.source.interface.buffer);
                 self.atStart();
+                self.held = there;
                 self.rotations += 1;
                 return;
             }
             if (emptied) {
                 try self.restart();
+                self.held = there;
                 self.rotations += 1;
             }
         }
@@ -600,7 +606,7 @@ pub fn Follower(comptime T: type) type {
         /// asked again, since its first bytes have not all been written yet.
         fn heldIdentity(self: *Self) !Identity.Taken {
             if (self.held) |taken| {
-                if (taken.fingerprint != null or self.options.identity == .inode) return taken;
+                if (taken.fingerprint != null or self.options.identity == .file_id) return taken;
             }
             const taken = try self.options.identity.take(self.io, self.source.file);
             self.held = taken;
@@ -719,6 +725,26 @@ fn followUntilCanceled(io: std.Io, source: *std.Io.File.Reader) Follower(Event).
     });
     defer follower.deinit();
     while (true) _ = try follower.next();
+}
+
+test "a follower checks cancellation before handing over a buffered record" {
+    var fixture = try Fixture.init("{\"kind\":\"ready\"}\n", 64);
+    defer fixture.deinit();
+    _ = try fixture.reader.interface.peek(1);
+
+    const Canceled = struct {
+        fn check(_: ?*anyopaque) std.Io.Cancelable!void {
+            return error.Canceled;
+        }
+    };
+    var vtable = testing.io.vtable.*;
+    vtable.checkCancel = Canceled.check;
+    const io: std.Io = .{ .userdata = testing.io.userdata, .vtable = &vtable };
+    var follower: Follower(Event) = .init(testing.allocator, io, &fixture.reader, .{});
+    defer follower.deinit();
+    try testing.expectError(error.Canceled, follower.next());
+    try testing.expectEqual(@as(u64, 0), follower.reader.lines.number);
+    try testing.expectEqualStrings("ready", (try follower.reader.next()).?.value.kind);
 }
 
 test "a follower waiting on a file that never grows is stopped by cancellation" {
@@ -1110,14 +1136,14 @@ test "what a file is, by its number or by what is on it" {
     const by_content: Identity = .{ .fingerprint = .{} };
 
     // A file is itself, whichever way the question is asked.
-    try testing.expect((try Identity.take(.inode, testing.io, one))
-        .eql(try Identity.take(.inode, testing.io, one)));
+    try testing.expect((try Identity.take(.file_id, testing.io, one))
+        .eql(try Identity.take(.file_id, testing.io, one)));
     try testing.expect((try by_content.take(testing.io, one)).eql(try by_content.take(testing.io, one)));
 
     // Two files with the same bytes on them are two files by number and one
     // file by content, which is the trade between the two answers.
-    try testing.expect(!(try Identity.take(.inode, testing.io, one))
-        .eql(try Identity.take(.inode, testing.io, copy)));
+    try testing.expect(!(try Identity.take(.file_id, testing.io, one))
+        .eql(try Identity.take(.file_id, testing.io, copy)));
     try testing.expect((try by_content.take(testing.io, one)).eql(try by_content.take(testing.io, copy)));
 
     // A file with too few bytes to fingerprint is compared by number.
@@ -1141,7 +1167,7 @@ test "what a file is, by its number or by what is on it" {
     defer writer.close(testing.io);
     try writer.writePositionalAll(testing.io, "{\"kind\":\"else\",\"at\":9}\n" ** 60, 0);
     const after = try by_content.take(testing.io, one);
-    try testing.expectEqual(before.inode, after.inode);
+    try testing.expect(before.id.eql(after.id));
     try testing.expect(!before.eql(after));
 }
 
@@ -1153,26 +1179,17 @@ test "a file is its number on its volume, and one number on two volumes is two f
     defer file.close(testing.io);
 
     // What the volume is, as the system numbers it.
-    const taken = try Identity.take(.inode, testing.io, file);
-    try testing.expectEqual((try FileId.of(file.handle)).volume, taken.volume.?);
-    try testing.expect(taken.eql(try Identity.take(.inode, testing.io, file)));
+    const taken = try Identity.take(.file_id, testing.io, file);
+    try testing.expect(taken.id.eql(try FileId.of(file.handle)));
+    try testing.expect(taken.eql(try Identity.take(.file_id, testing.io, file)));
 
     // The same number on another volume is another file. Two volumes to
     // hand are not something a test can count on, so the other volume's
     // file is stated.
     var elsewhere = taken;
-    elsewhere.volume = taken.volume.? +% 1;
+    elsewhere.id.volume +%= 1;
     try testing.expect(!taken.eql(elsewhere));
     try testing.expect(!elsewhere.eql(taken));
-
-    // A checkpoint written before the volume was recorded is compared by
-    // its number, as it always was.
-    var older = taken;
-    older.volume = null;
-    try testing.expect(older.eql(taken));
-    try testing.expect(taken.eql(older));
-    older.inode +%= 1;
-    try testing.expect(!older.eql(taken));
 
     // Two fingerprints still settle it, whatever the numbers say.
     var copied = elsewhere;
@@ -1380,4 +1397,74 @@ test "two writers on two tasks share nothing" {
         }
         try testing.expectEqual(@as(u64, each), seen);
     }
+}
+
+test "a checkpoint with the old identity shape is refused" {
+    const Checkpoint = Follower(struct {}).Checkpoint;
+    for ([_][]const u8{
+        "{\"file\":{\"inode\":7},\"offset\":12}",
+        "{\"file\":{\"inode\":7,\"volume\":9,\"fingerprint\":null},\"offset\":12}",
+        "{\"file\":{\"inode\":7,\"volume\":9,\"fingerprint\":123},\"offset\":12}",
+    }) |old| {
+        try testing.expectError(error.MissingField, strand.parseLine(Checkpoint, testing.allocator, old, .{}));
+    }
+}
+
+test "a taken identity keeps every bit of the file id" {
+    if (comptime @hasField(Identity.Taken, "id")) {
+        const a: Identity.Taken = .{ .id = .{ .volume = 3, .file = 7 } };
+        const b: Identity.Taken = .{ .id = .{ .volume = 3, .file = (@as(u128, 1) << 96) | 7 } };
+        try testing.expect(!a.eql(b));
+        try testing.expect(!b.eql(a));
+        var out: std.Io.Writer.Allocating = .init(testing.allocator);
+        defer out.deinit();
+        try strand.writeLine(&out.writer, b);
+        const read = try strand.parseLine(Identity.Taken, testing.allocator, std.mem.trimEnd(u8, out.written(), "\n"), .{});
+        try testing.expectEqual(b.id.file, read.id.file);
+        try testing.expect(b.eql(read));
+    } else {
+        try testing.expect(false);
+    }
+}
+
+test "the identity policy names the volume-qualified file id" {
+    const options: Follower(struct {}).Options = .{};
+    const policy = options.identity;
+    try testing.expectEqualStrings("file_id", @tagName(policy));
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    try strand.writeLine(&out.writer, policy);
+    try testing.expectEqualStrings("{\"file_id\":{}}\n", out.written());
+    const read = try strand.parseLine(Identity, testing.allocator, std.mem.trimEnd(u8, out.written(), "\n"), .{});
+    try testing.expectEqual(policy, read);
+}
+
+test "the old inode identity policy is refused" {
+    try testing.expectError(error.UnknownField, strand.parseLine(Identity, testing.allocator, "{\"inode\":{}}", .{}));
+}
+
+test "a rotated follower checkpoints the identity it adopted before reading" {
+    var fixture = try Fixture.init("{\"kind\":\"old\"}\n", 8);
+    defer fixture.deinit();
+    try fixture.tmp.dir.writeFile(testing.io, .{ .sub_path = "new.jsonl", .data = "{\"kind\":\"new\"}\n" });
+    var path: PathOpener = .{ .dir = fixture.tmp.dir, .sub_path = "new.jsonl" };
+    const identity: Identity = .{ .fingerprint = .{ .length = 14 } };
+    var follower = Follower(Event).init(testing.allocator, testing.io, &fixture.reader, .{
+        .reopen = path.opener(),
+        .identity = identity,
+    });
+    defer follower.deinit();
+    // Exercise the two operations inside one next call after its wait,
+    // without a second next entry capturing the identity again.
+    try follower.rotate(path.opener(), false);
+    const adopted = try identity.take(testing.io, fixture.reader.file);
+    try testing.expectEqualStrings("new", (try follower.reader.next()).?.value.kind);
+    // An in-place rewrite after that read cannot change what the follower
+    // says it has already consumed, even when the native id stays the same.
+    try fixture.tmp.dir.writeFile(testing.io, .{ .sub_path = "new.jsonl", .data = "{\"kind\":\"now\"}\n" });
+    const rewritten = try identity.take(testing.io, fixture.reader.file);
+    try testing.expect(!adopted.eql(rewritten));
+    const point = try follower.checkpoint();
+    try testing.expect(adopted.eql(point.file));
+    try testing.expectEqual(@as(u64, 1), point.rotations);
 }

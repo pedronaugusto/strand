@@ -59,6 +59,7 @@ pub fn parseInto(
     options: std.json.ParseOptions,
     out: *T,
 ) std.json.ParseError(std.json.Scanner)!void {
+    @import("work.zig").parse();
     var p: Parser = .{ .allocator = allocator, .input = input, .options = options };
     try p.valueInto(T, out);
     p.space();
@@ -160,8 +161,10 @@ const Parser = struct {
                 return result;
             },
             .vector => |i| {
+                // Vectors use their array's JSON shape, including strings
+                // for UTF-8 bytes, just as std.json writes them.
                 const A = [i.len]i.child;
-                return @bitCast(try self.value(A));
+                return try self.value(A);
             },
             .pointer => |i| switch (i.size) {
                 .one => {

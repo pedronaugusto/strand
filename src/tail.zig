@@ -24,16 +24,15 @@ const strand = @import("strand.zig");
 const line_mod = @import("line.zig");
 const Fault = line_mod.Fault;
 const Line = strand.Line;
-const ParseLineError = strand.ParseLineError;
 
 /// A stream of `T` read from the end of a seekable file towards its start.
 ///
 /// The reverse of `Reader`, and its mirror image in every way that matters:
-/// one buffer holding the bytes of the current line, one arena holding what
-/// parsing it allocated, both recycled by `prev`, and a value that must be
+/// buffers holding one block and the current line, one arena holding what
+/// parsing it allocated, all recycled by `prev`, and a value that must be
 /// copied out (`keep`) to outlive the line it came from.
 ///
-/// The buffer holds one block plus the line being assembled, so the cost of a
+/// The buffers hold one block plus the line being assembled, so the cost of a
 /// backwards read is the cost of the lines it actually returns — a `last(10)`
 /// over a gigabyte reads one block.
 pub fn Tail(comptime T: type) type {
@@ -64,6 +63,9 @@ pub fn Tail(comptime T: type) type {
         /// returned end at `lo + end`; what is past `end` has been handed out
         /// already and is what the next `prev` overwrites.
         buf: std.ArrayList(u8) = .empty,
+        /// Internal. The bounded suffix of a separated physical line. The
+        /// block buffer is reused while its torn prefix is scanned and dropped.
+        record: std.ArrayList(u8) = .empty,
         /// Internal. See `buf`.
         lo: u64 = 0,
         /// Internal. See `buf`.
@@ -76,9 +78,6 @@ pub fn Tail(comptime T: type) type {
         trimmed: bool = false,
         /// Internal. What parsing the current line allocated, reset per line.
         arena: std.heap.ArenaAllocator,
-        /// Internal. `last` parses owned values straight onto its caller's
-        /// allocator, avoiding the second parse that `keep` otherwise needs.
-        batch_allocator: ?Allocator = null,
 
         const Self = @This();
 
@@ -125,7 +124,9 @@ pub fn Tail(comptime T: type) type {
             duplicate_fields: strand.DuplicateFields = .@"error",
             /// The longest line accepted, in bytes. A longer one is
             /// `error.LineTooLong`, and is discarded whole: `prev` continues
-            /// with the line before it.
+            /// with the line before it. The terminator and a leading
+            /// byte-order mark are excluded. In separator mode only the JSON
+            /// payload counts: the separator and discarded torn prefix do not.
             max_line_bytes: usize = 1 << 20,
             /// When true, a line that is empty or all spaces and tabs is
             /// passed over. Its number is still counted.
@@ -135,7 +136,8 @@ pub fn Tail(comptime T: type) type {
             /// See `Reader.Options.record_separator`. A backwards read
             /// treats a line the same way a forwards one does: the record is
             /// what follows the first separator on it, and a line with none
-            /// is `error.MissingSeparator`.
+            /// is `error.MissingSeparator`. The discarded prefix can be any
+            /// length without growing the retained payload buffer.
             record_separator: bool = false,
             /// When true, a UTF-8 byte-order mark at the very start of the
             /// file is not part of the first line — which a backwards read
@@ -223,6 +225,7 @@ pub fn Tail(comptime T: type) type {
         /// returned, and every string borrowed from one, dangles afterwards.
         pub fn deinit(self: *Self) void {
             self.buf.deinit(self.allocator);
+            self.record.deinit(self.allocator);
             self.arena.deinit();
             self.* = undefined;
         }
@@ -236,11 +239,10 @@ pub fn Tail(comptime T: type) type {
         pub fn prev(self: *Self) NextError!?Line(T) {
             while (true) {
                 const raw = (try self.prevRaw()) orelse return null;
-                if (self.batch_allocator == null) _ = self.arena.reset(.retain_capacity);
-                const value = strand.parseLine(T, self.batch_allocator orelse self.arena.allocator(), raw.line, .{
+                _ = self.arena.reset(.retain_capacity);
+                const value = strand.parseLine(T, self.arena.allocator(), raw.line, .{
                     .ignore_unknown_fields = self.options.ignore_unknown_fields,
                     .duplicate_fields = self.options.duplicate_fields,
-                    .copy_strings = self.batch_allocator != null,
                 }) catch |err| switch (err) {
                     error.OutOfMemory => return error.OutOfMemory,
                     else => |parse_err| {
@@ -272,13 +274,25 @@ pub fn Tail(comptime T: type) type {
         /// next `prev` or `prevRaw` takes them back.
         pub fn prevRaw(self: *Self) NextError!?strand.RawLine {
             while (true) {
-                var raw = (try self.prevPhysical()) orelse return null;
+                var raw = if (self.options.record_separator)
+                    (self.prevSeparated() catch |err| switch (err) {
+                        error.MissingSeparator => switch (self.options.on_malformed) {
+                            .fail => return err,
+                            .skip => {
+                                self.skipped += 1;
+                                continue;
+                            },
+                        },
+                        else => return err,
+                    }) orelse return null
+                else
+                    (try self.prevPhysical()) orelse return null;
                 const number = self.number;
 
                 // The terminator is not part of the line, and neither is a
                 // mark at the very start of the file.
                 if (self.options.crlf) raw = line_mod.trimCr(raw);
-                if (self.options.skip_bom and self.offset == 0 and
+                if (!self.options.record_separator and self.options.skip_bom and self.offset == 0 and
                     std.mem.startsWith(u8, raw, line_mod.bom))
                 {
                     raw = raw[line_mod.bom.len..];
@@ -287,25 +301,7 @@ pub fn Tail(comptime T: type) type {
                     self.offset = line_mod.bom.len;
                 }
 
-                if (self.options.skip_blank and line_mod.isBlank(raw)) continue;
-                if (self.options.record_separator) {
-                    // What is before the separator is the tail of a record
-                    // that was torn, and the separator is where the record
-                    // this line carries begins.
-                    if (std.mem.indexOfScalar(u8, raw, strand.separator)) |at| {
-                        raw = raw[at + 1 ..];
-                        self.offset += at;
-                    } else {
-                        self.fault.framing(number);
-                        switch (self.options.on_malformed) {
-                            .fail => return error.MissingSeparator,
-                            .skip => {
-                                self.skipped += 1;
-                                continue;
-                            },
-                        }
-                    }
-                }
+                if (!self.options.record_separator and self.options.skip_blank and line_mod.isBlank(raw)) continue;
                 if (self.options.reject_control_bytes) {
                     if (strand.indexOfControl(raw)) |at| {
                         self.fault.control(number, at);
@@ -324,34 +320,118 @@ pub fn Tail(comptime T: type) type {
 
         /// A copy of `line.value` that outlives the reader, allocated on
         /// `allocator`. See `Reader.keep`, whose contract this is.
-        pub fn keep(self: *Self, allocator: Allocator, line: Line(T)) ParseLineError!T {
-            return line_mod.keep(T, allocator, line.line, self.options);
+        pub fn keep(self: *Self, allocator: Allocator, line: Line(T)) Allocator.Error!T {
+            _ = self;
+            return @import("owned.zig").copyOwned(allocator, line.value);
         }
 
         /// The last `n` values of the file, in file order, allocated on
         /// `allocator`.
         ///
         /// Ownership: everything the result points at is on `allocator`, and
-        /// none of it borrows the reader, so pass an arena and drop it whole.
+        /// none of it borrows the reader. Each line is parsed normally and
+        /// copied through `copyOwned`, under the same data contract as `keep`.
+        /// With an arena, drop it whole; otherwise `freeOwned` each value and
+        /// free the returned slice. A failure releases the partial batch.
         /// Fewer than `n` values means the file ran out; under
         /// `on_malformed = .skip` a skipped line is not one of the `n`.
         ///
         /// This is the whole reason to read a file backwards, so it is worth
         /// saying what it costs: one block read per block the last `n` lines
         /// span, and nothing at all for the rest of the file.
-        pub fn last(self: *Self, allocator: Allocator, n: usize) (NextError || ParseLineError)![]T {
+        pub fn last(self: *Self, allocator: Allocator, n: usize) NextError![]T {
             var out: std.ArrayList(T) = .empty;
-            errdefer out.deinit(allocator);
+            errdefer {
+                for (out.items) |value| @import("owned.zig").freeOwned(allocator, value);
+                out.deinit(allocator);
+            }
             try out.ensureTotalCapacity(allocator, @min(n, 1024));
-            assert(self.batch_allocator == null);
-            self.batch_allocator = allocator;
-            defer self.batch_allocator = null;
             while (out.items.len < n) {
                 const line = (try self.prev()) orelse break;
-                try out.append(allocator, line.value);
+                try out.ensureUnusedCapacity(allocator, 1);
+                out.appendAssumeCapacity(try self.keep(allocator, line));
             }
             std.mem.reverse(T, out.items);
             return out.toOwnedSlice(allocator);
+        }
+
+        /// Frames a separated line while scanning back to its beginning.
+        /// Keep only its bounded rightmost bytes, but look for the first
+        /// separator across the whole physical line. An earlier separator
+        /// can turn a short candidate into an overlong payload; a torn
+        /// prefix with no separator cannot.
+        fn prevSeparated(self: *Self) NextError!?[]const u8 {
+            while (!self.exhausted) {
+                self.record.clearRetainingCapacity();
+                var suffix_bytes: u64 = 0;
+                var payload_bytes: ?u64 = null;
+                var separator_offset: u64 = 0;
+                var blank = true;
+                var marked_bytes: u2 = 0;
+                var trailing_cr = false;
+                while (true) {
+                    if (self.end == 0 and self.lo > 0) try self.fillBefore();
+                    const newline = lastNewline(self.buf.items[0..self.end]);
+                    const start = if (newline) |at| at + 1 else 0;
+                    const chunk = self.buf.items[start..self.end];
+                    const chunk_offset = self.lo + start;
+                    if (suffix_bytes == 0 and chunk.len != 0)
+                        trailing_cr = self.options.crlf and chunk[chunk.len - 1] == '\r';
+
+                    if (std.mem.indexOfScalar(u8, chunk, strand.separator)) |at| {
+                        payload_bytes = suffix_bytes + chunk.len - at - 1 - @intFromBool(trailing_cr);
+                        separator_offset = chunk_offset + at;
+                    }
+                    if (blank) for (chunk, 0..) |byte, at| {
+                        const position = chunk_offset + at;
+                        if (byte == ' ' or byte == '\t') continue;
+                        if (suffix_bytes == 0 and at + 1 == chunk.len and trailing_cr) continue;
+                        if (self.options.skip_bom and position < line_mod.bom.len and
+                            byte == line_mod.bom[@intCast(position)])
+                        {
+                            marked_bytes += 1;
+                            continue;
+                        }
+                        blank = false;
+                        break;
+                    };
+
+                    // At most the bound plus the possible CR is retained.
+                    // Once that suffix is full, all earlier bytes are only
+                    // scanned; they cannot be part of an accepted payload.
+                    const room = (self.options.max_line_bytes +| 1) - self.record.items.len;
+                    const take = @min(room, chunk.len);
+                    if (take != 0) {
+                        const kept = self.record.items.len;
+                        const capacity = @min(self.options.max_line_bytes +| 1, @max(kept + take, self.record.capacity *| 2));
+                        try self.record.ensureTotalCapacityPrecise(self.allocator, capacity);
+                        self.record.items.len = kept + take;
+                        std.mem.copyBackwards(u8, self.record.items[take..], self.record.items[0..kept]);
+                        @memcpy(self.record.items[0..take], chunk[chunk.len - take ..]);
+                    }
+                    suffix_bytes += chunk.len;
+                    self.end = if (newline) |at| at else 0;
+                    if (newline != null or self.lo == 0) {
+                        self.exhausted = newline == null;
+                        self.number += 1;
+                        self.offset = if (payload_bytes != null) separator_offset else chunk_offset;
+                        break;
+                    }
+                }
+                const length = payload_bytes orelse {
+                    if (marked_bytes != 0 and marked_bytes != line_mod.bom.len) blank = false;
+                    if (blank and self.options.skip_blank) continue;
+                    self.fault.framing(self.number);
+                    return error.MissingSeparator;
+                };
+                if (length > self.options.max_line_bytes) {
+                    self.fault.framing(self.number);
+                    return error.LineTooLong;
+                }
+                const physical: usize = @intCast(length + @intFromBool(trailing_cr));
+                return self.record.items[self.record.items.len - physical ..];
+            }
+            return null;
         }
 
         /// The bytes of the line before the last one returned, terminator
@@ -414,7 +494,11 @@ pub fn Tail(comptime T: type) type {
             const kept = self.end;
 
             self.buf.items.len = kept;
-            self.buf.ensureTotalCapacity(self.allocator, kept + take) catch return error.OutOfMemory;
+            if (self.options.record_separator) {
+                try self.buf.ensureTotalCapacityPrecise(self.allocator, kept + take);
+            } else {
+                try self.buf.ensureTotalCapacity(self.allocator, kept + take);
+            }
             self.buf.items.len = kept + take;
             // The two regions overlap, and the destination is the later one.
             std.mem.copyBackwards(u8, self.buf.items[take..], self.buf.items[0..kept]);
@@ -873,4 +957,106 @@ test "a file that shrinks under a tail is reported rather than misread" {
     try writer.setLength(testing.io, 0);
 
     try testing.expectError(error.Truncated, tail.prev());
+}
+
+test "a separated tail bounds only its JSON payload" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data = line_mod.bom ++ "\x1e{}\r\n" ++ "torn" ** 512 ++ "\x1e{}\r\n";
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "log", .data = data });
+    const file = try tmp.dir.openFile(testing.io, "log", .{});
+    defer file.close(testing.io);
+    for ([_]usize{ 1, 2, 3, 7, 64, data.len }) |block_bytes| {
+        var source = file.reader(testing.io, &.{});
+        var tail = try Tail(struct {}).init(testing.allocator, &source, .{
+            .record_separator = true,
+            .max_line_bytes = 2,
+            .block_bytes = block_bytes,
+        });
+        defer tail.deinit();
+        const last = (try tail.prev()).?;
+        try testing.expectEqualStrings("{}", last.line);
+        try testing.expectEqual(@as(u64, data.len - 5), last.offset);
+        try testing.expectEqual(@as(u64, 1), last.number);
+        const first = (try tail.prev()).?;
+        try testing.expectEqualStrings("{}", first.line);
+        try testing.expectEqual(@as(u64, line_mod.bom.len), first.offset);
+        try testing.expectEqual(@as(u64, 2), first.number);
+        try testing.expect(try tail.prev() == null);
+        // A torn prefix cannot make the retained line grow with it.
+        try testing.expect(tail.buf.capacity < 128 or block_bytes == data.len);
+    }
+}
+
+test "a separated tail accepts the exact payload bound and refuses the next byte" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "log", .data = "\x1e{}\n" ++ "prefix" ** 24 ++ "\x1e{} \r\n" });
+    const file = try tmp.dir.openFile(testing.io, "log", .{});
+    defer file.close(testing.io);
+    for ([_]usize{ 1, 2, 7, 4096 }) |block_bytes| {
+        var source = file.reader(testing.io, &.{});
+        var tail = try Tail(struct {}).init(testing.allocator, &source, .{
+            .record_separator = true,
+            .max_line_bytes = 2,
+            .block_bytes = block_bytes,
+        });
+        defer tail.deinit();
+        try testing.expectError(error.LineTooLong, tail.prev());
+        try testing.expectEqual(@as(u64, 4 + 6 * 24), tail.offset);
+        const first = (try tail.prev()).?;
+        try testing.expectEqualStrings("{}", first.line);
+        try testing.expect(try tail.prev() == null);
+    }
+}
+
+test "separated forward and backward framing agree at every payload boundary" {
+    for ([_][]const u8{
+        "",                      "\n",                               " \t\r\n", line_mod.bom ++ " \t\n", "\xef\xbb \n",
+        "no separator at all\n", "torn\x1e{}\r\n",                   "\x1e{}",  "\x1e\n",                "torn\x1e \r\n",
+        "\x1e{}\x1e{}\n",        "\x1e" ++ "x" ** 512 ++ "\x1e{}\n",
+    }) |input| {
+        var tmp = testing.tmpDir(.{});
+        defer tmp.cleanup();
+        try tmp.dir.writeFile(testing.io, .{ .sub_path = "log", .data = input });
+        const file = try tmp.dir.openFile(testing.io, "log", .{});
+        defer file.close(testing.io);
+        for ([_]usize{ 1, 2, 7, 4096 }) |block_bytes| {
+            for (0..9) |max| {
+                for ([_]bool{ false, true }) |crlf| {
+                    for ([_]bool{ false, true }) |skip_blank| {
+                        var passed = false;
+                        defer if (!passed) std.debug.print("input={any}, block={d}, max={d}, crlf={}, blank={}\n", .{ input, block_bytes, max, crlf, skip_blank });
+                        var forward_source: std.Io.Reader = .fixed(input);
+                        var forward: strand.LineReader = .init(testing.allocator, &forward_source, .{
+                            .record_separator = true,
+                            .max_line_bytes = max,
+                            .crlf = crlf,
+                            .skip_blank = skip_blank,
+                        });
+                        defer forward.deinit();
+                        var source = file.reader(testing.io, &.{});
+                        var tail = try Tail(struct {}).init(testing.allocator, &source, .{
+                            .record_separator = true,
+                            .max_line_bytes = max,
+                            .block_bytes = block_bytes,
+                            .crlf = crlf,
+                            .skip_blank = skip_blank,
+                        });
+                        defer tail.deinit();
+                        const backward = tail.prevRaw();
+                        if (forward.next()) |expected| {
+                            const actual = try backward;
+                            if (expected) |line| {
+                                try testing.expect(actual != null);
+                                try testing.expectEqualStrings(line.line, actual.?.line);
+                                try testing.expectEqual(line.offset, actual.?.offset);
+                            } else try testing.expect(actual == null);
+                        } else |err| try testing.expectError(err, backward);
+                        passed = true;
+                    }
+                }
+            }
+        }
+    }
 }

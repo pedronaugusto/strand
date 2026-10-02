@@ -27,11 +27,9 @@ pub fn main() !void {
     const io = threaded.io();
 
     // Scratch space under `.zig-cache`, which a build already owns.
-    var dir = try std.Io.Dir.cwd().createDirPathOpen(io, ".zig-cache/logbook", .{});
-    defer {
-        dir.close(io);
-        std.Io.Dir.cwd().deleteTree(io, ".zig-cache/logbook") catch {};
-    }
+    var scratch = try @import("scratch.zig").Scratch.init(io);
+    defer scratch.deinit(io);
+    const dir = scratch.dir;
 
     // --- README:versioned ---
 

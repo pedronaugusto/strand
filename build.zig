@@ -29,8 +29,10 @@ pub fn build(b: *std.Build) void {
         "Build the tests with ThreadSanitizer",
     ) orelse false;
 
+    const test_filter = b.option([]const u8, "test-filter", "Select tests by name");
     const tests = b.addTest(.{
         .name = "strand-tests",
+        .filters = if (test_filter) |filter| &.{filter} else &.{},
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/strand.zig"),
             .target = target,
@@ -65,12 +67,49 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run strand tests");
     test_step.dependOn(&b.addRunArtifact(tests).step);
 
+    const scratch_tests = b.addTest(.{
+        .name = "logbook-scratch-tests",
+        .filters = if (test_filter) |filter| &.{filter} else &.{},
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/scratch.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(scratch_tests).step);
+
     // Compiling without running is what a target the host cannot execute can
     // still be held to, and it is the default step: a module on its own
     // installs nothing, so `zig build` would otherwise do no work at all.
     const check_step = b.step("check", "Compile the tests and examples without running them");
     check_step.dependOn(&tests.step);
+    check_step.dependOn(&scratch_tests.step);
     b.getInstallStep().dependOn(check_step);
+
+    // A null optional or inactive union arm must not hide an unsupported
+    // field type. The same gate applies to copying and freeing. Run these
+    // with the ownership tests, and in the full and compile-only suites.
+    if (test_filter == null or std.mem.indexOf(u8, "owned", test_filter.?) != null) {
+        for (0..17) |case| {
+            for ([_]bool{ false, true }) |free_only| {
+                const rejection_options = b.addOptions();
+                rejection_options.addOption(usize, "case", case);
+                rejection_options.addOption(bool, "free_only", free_only);
+                const rejected = b.addObject(.{
+                    .name = b.fmt("owned-rejected-{d}-{s}", .{ case, if (free_only) "free" else "copy" }),
+                    .root_module = b.createModule(.{
+                        .root_source_file = b.path("src/owned_rejected.zig"),
+                        .target = target,
+                        .optimize = optimize,
+                    }),
+                });
+                rejected.root_module.addOptions("rejection_options", rejection_options);
+                rejected.expect_errors = .{ .contains = "cannot be copied by copyOwned" };
+                test_step.dependOn(&rejected.step);
+                check_step.dependOn(&rejected.step);
+            }
+        }
+    }
 
     //=====================================================================
     // Examples

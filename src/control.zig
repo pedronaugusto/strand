@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const work = @import("work.zig");
 
 /// The offset of the first byte in `bytes` that must not appear raw in a JSON
 /// Lines line, or `null`.
@@ -56,6 +57,7 @@ pub fn firstControlOrTerminator(bytes: []const u8) ?usize {
             const highest: Block = @splat(0x20);
             const tab: Block = @splat('\t');
             while (i + block_len <= bytes.len) : (i += block_len) {
+                work.scan(block_len);
                 const block: Block = bytes[i..][0..block_len].*;
                 const hits = (block < highest) & (block != tab);
                 if (firstHit(block_len, hits)) |at| return i + at;
@@ -72,12 +74,19 @@ pub fn firstControlOrTerminator(bytes: []const u8) ?usize {
 /// by halves: over a dozen instructions, each waiting on the one before, on
 /// every line a reader frames. x86 turns a compare into a bitmask in one
 /// instruction and finds the lowest set bit of it in another, and those two
-/// are the whole answer. NEON has no such mask and is good at the reduction,
-/// so everywhere else the question is asked of the vector.
+/// are the whole answer. NEON reduces byte lanes directly: choose each
+/// matching lane's index or 255, then take the smallest. The narrow index
+/// type std.simd.firstTrue uses can require unpacking on that architecture.
 inline fn firstHit(comptime n: usize, hits: @Vector(n, bool)) ?usize {
     if (comptime builtin.cpu.arch.isX86()) {
         const mask: std.meta.Int(.unsigned, n) = @bitCast(hits);
         return if (mask == 0) null else @ctz(mask);
+    }
+    if (comptime builtin.cpu.arch == .aarch64 or builtin.cpu.arch == .aarch64_be) {
+        comptime std.debug.assert(n < 256);
+        const indices = @select(u8, hits, std.simd.iota(u8, n), @as(@Vector(n, u8), @splat(255)));
+        const first = @reduce(.Min, indices);
+        return if (first == 255) null else first;
     }
     return if (@reduce(.Or, hits)) std.simd.firstTrue(hits).? else null;
 }
@@ -129,6 +138,7 @@ fn controlInBlocks(comptime block_len: usize, bytes: []const u8) ?usize {
     while (i + group <= bytes.len) : (i += group) {
         var any: @Vector(block_len, bool) = @splat(false);
         inline for (0..4) |k| {
+            work.scan(block_len);
             const block: Block = bytes[i + k * block_len ..][0..block_len].*;
             any = any | ((block < highest) & (block != tab));
         }
@@ -144,10 +154,12 @@ fn controlInBlocks(comptime block_len: usize, bytes: []const u8) ?usize {
     const rest = i;
     var any: @Vector(block_len, bool) = @splat(false);
     while (i + block_len <= bytes.len) : (i += block_len) {
+        work.scan(block_len);
         const block: Block = bytes[i..][0..block_len].*;
         any = any | ((block < highest) & (block != tab));
     }
     if (i < bytes.len) {
+        work.scan(block_len);
         const block: Block = bytes[bytes.len - block_len ..][0..block_len].*;
         any = any | ((block < highest) & (block != tab));
     }
@@ -162,6 +174,7 @@ fn controlInBlocks(comptime block_len: usize, bytes: []const u8) ?usize {
 /// machine with no vectors to use.
 fn scalarControl(bytes: []const u8) ?usize {
     for (bytes, 0..) |byte, i| {
+        work.scan(1);
         if (byte < 0x20 and byte != '\t') return i;
     }
     return null;

@@ -54,8 +54,8 @@ pub fn Reader(comptime T: type) type {
             ignore_unknown_fields: bool = true,
             /// See `ParseOptions.duplicate_fields`.
             duplicate_fields: DuplicateFields = .@"error",
-            /// The longest record accepted, in bytes, not counting the
-            /// terminator; in `.pretty` mode this bounds the joined record
+            /// The longest JSON payload accepted, in bytes, excluding the
+            /// terminator, separator and discarded torn prefix; in `.pretty` mode this bounds the joined record
             /// rather than one physical line. A longer one is
             /// `error.LineTooLong`; the rest of it is discarded, so `next`
             /// can be called again to continue with the line after it. This
@@ -171,8 +171,15 @@ pub fn Reader(comptime T: type) type {
         /// they found it.
         pub fn next(self: *Self) NextError!?Line(T) {
             while (true) {
-                const raw = (try self.lines.next()) orelse return null;
-                if (try self.parse(raw)) |line| return line;
+                // Keep the frame and the decoded value in this call's
+                // result rather than returning each through a separate
+                // aggregate. The two layers still own their own work.
+                const raw = (try @call(.always_inline, LineReader.next, .{&self.lines})) orelse return null;
+                if (try @call(.always_inline, Self.parse, .{ self, raw })) |line| return line;
+                // An unfinished pretty record is the end reached while
+                // joining, not a skipped record. Keep the framing layer's
+                // rewind point for the caller that will read it again.
+                if (self.lines.unfinished) return null;
                 // The record was passed over under `.skip`; the next one.
             }
         }
@@ -198,8 +205,9 @@ pub fn Reader(comptime T: type) type {
 
         /// The value on a line `nextRaw` handed back, on this reader's own
         /// arena. `null` when the line is not a `T` and `on_malformed` is
-        /// `.skip`, which is the one thing `next` does with it that a caller
-        /// routing lines itself would otherwise have to write out.
+        /// `.skip`, or when an unfinished pretty record reaches the end
+        /// under `require_terminator`. The framing layer keeps its rewind
+        /// point in that case, so the caller can read the record again.
         ///
         /// Ownership: exactly `next`'s — the value borrows the line, the line
         /// borrows the stream, and the next read takes both back.
@@ -275,24 +283,23 @@ pub fn Reader(comptime T: type) type {
             }
         }
 
-        /// A copy of `line.value` that outlives the reader, allocated on
-        /// `allocator`.
+        /// A copy of `line.value` and all its storage on `allocator`.
         ///
-        /// Ownership: the result borrows nothing — not from the reader's line
-        /// buffer, not from its arena — so it stays valid across any number of
-        /// further `next` calls and past `deinit`. Allocations are not
-        /// individually tracked, so `allocator` should be an arena the caller
-        /// frees as a whole.
+        /// The result outlives the line and the reader. This calls `copyOwned`
+        /// on the value already returned, preserving edits and migrations;
+        /// it does not read `line.line` or call JSON hooks again. Custom
+        /// parsers and migrations therefore run only when the line is read,
+        /// even when their decisions depend on external state.
         ///
-        /// This re-parses `line.line` with every string copied rather than
-        /// handing over pages: a value from `next` points partly into the
-        /// reader's line buffer, which the reader must keep reusing, so there
-        /// is nothing whole to hand over. In practice the only error is
-        /// `error.OutOfMemory`, since these bytes have already parsed once —
-        /// but a `T` with a custom `jsonParse` method is free to disagree, so
-        /// the full set is reported rather than asserted away.
-        pub fn keep(self: *Self, allocator: Allocator, line: Line(T)) ParseLineError!T {
-            return line_mod.keep(T, allocator, line.line, self.options);
+        /// The value must meet `copyOwned`'s finite-data-tree contract. A
+        /// schema holding external resources or cyclic state needs its own
+        /// ownership operation. Unsupported field types fail at compile time.
+        /// Release the result with `freeOwned` on the same allocator, or
+        /// release its destination arena as a whole. A failed copy frees
+        /// everything it allocated and leaves the source value intact.
+        pub fn keep(self: *Self, allocator: Allocator, line: Line(T)) Allocator.Error!T {
+            _ = self;
+            return @import("owned.zig").copyOwned(allocator, line.value);
         }
     };
 }

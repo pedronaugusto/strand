@@ -4,9 +4,9 @@
 
 strand reads and writes [JSON Lines](https://jsonlines.org) as a stream of
 typed values: one JSON value per line, for append-only logs, line protocols
-and event streams. strand decodes ordinary typed values directly and uses
-`std.json` as its compatibility oracle and extension path; `std.json` emits
-the values. The line layer runs forwards over a stream, backwards from the
+and event streams. strand reads and writes ordinary typed values directly,
+keeping `std.json` for custom parsers, stringifiers and pretty output.
+The line layer runs forwards over a stream, backwards from the
 end of a seekable file, or along a file that is still being appended to.
 
 ## Usage
@@ -84,9 +84,11 @@ Every allocation anywhere here is on an allocator you passed in.
 | `Reader(T)` | A `LineReader` with a parse on top: a stream of typed lines. `next` returns a `Line(T)`: the value, the raw bytes, the 1-based number, the byte offset. |
 | `Reader.resumeAt` | The same, starting at an offset with a line count behind it, so an index entry reads back as the line it named. |
 | `Reader.nextRaw`, `Reader.parse` | A line's bytes with no type for them, and the value when the caller decides it wants one. This is how a stream is routed: `kindOf` or `tagOf` on the bytes, and a parse only for the lines worth parsing. |
-| `Reader.keep`, `Tail.keep` | A copy of a value that outlives the line it came from. |
+| `Reader.keep`, `Tail.keep`, `Follower.keep` | A copy of a value that outlives the line it came from. |
+| `innerParse` | Read one field from a token source inside a custom `jsonParse` hook, with checked integers and byte-vector strings. |
+| `copyOwned`, `freeOwned` | An owned deep copy of an already parsed value, and its release. |
 | `Reader.lines` | The line reader under a `Reader`, and where its place is kept: `lines.number`, `lines.offset`, `lines.fault` (which line was last refused and why) and `lines.skipped` (how many were passed over). |
-| `Writer(T)`, `Writer.initFile` | One value per line, minified or indented, counted. `initFile` is the one with a file to sync. |
+| `Writer(T)` | One value per line, minified or indented, counted. File constructors can sync; bounded constructors encode once into owned scratch. |
 | `Writer.write`, `Writer.writeAll` | One record, and a batch written byte for byte as the loop would have written it. |
 | `Writer.flush`, `Writer.sync` | The one-off, beside `Options.flush` and `Options.sync`, which are the policy. |
 | `writeLine` | One value, one line, nothing to count. |
@@ -122,15 +124,82 @@ already sitting in it, and of the reader's line buffer when it was not; the
 value's strings point into that line when they needed no unescaping, and into
 the reader's arena when they did. `next` clears the line buffer and resets the
 arena before it parses, so a stream costs what its longest line costs. `keep`
-is how a value outlives its line: it copies every string onto an allocator you
-give it, so pass an arena and drop it whole. The three rules are the same for
-`Reader`, `Tail` and `Follower`, and `parseLine` is the first two without a
-reader.
+is how a value outlives its line: it calls `copyOwned` on `line.value`,
+copying all its storage onto your allocator. Release it with `freeOwned`,
+or pass an arena and drop it whole. Its only error is `OutOfMemory`. The
+three rules are the same for `Reader`, `Tail` and `Follower`, and `parseLine`
+is the first two without a reader.
+
+Inside a custom `jsonParse` hook, delegate ordinary fields with
+`try strand.innerParse(Field, allocator, source, options)` when they should
+have strand's checked integer conversions and byte-vector string support.
+Pass the allocator, source and resolved `std.json.ParseOptions` the hook
+received unchanged. It consumes one value and leaves the next token for the
+hook; it does not frame a line or require end of document. Delegate a field's
+type rather than the hook's own type, which would call the hook again. The
+hook still owns its custom wire format, and allocations and borrows follow
+std.json's leaky contract. Use `parseLine` for a complete line and `payloadOf`
+for a `std.json.Value` in a migration.
+
+`copyOwned(allocator, value)` keeps the value already parsed, without reading
+its JSON again. It copies structs and tuples, arrays and vectors, slices and strings,
+single-item pointers, optionals and tagged unions; numbers, booleans and enums
+stay values. Pointer vectors get new storage for each element. `Raw` keeps its exact bytes, including whitespace
+and number spelling. A `std.json.Value` gets new keys, strings and containers;
+its arrays use the destination allocator. Parse and stringify hooks are not
+called, and defaults pointing at static strings are copied too.
+
+```zig
+const owned = try strand.copyOwned(gpa, line.value);
+defer strand.freeOwned(gpa, owned);
+```
+
+The copy borrows no storage from the source. Sentinels and alignment survive;
+repeated references become separate copies. The input must be a finite tree
+of data, with no cycles or external resources. Unsupported types are refused
+at compile time, including types hidden in an empty slice, null optional or
+inactive union arm. Sentinels, including vector lanes, and comptime fields holding pointers are refused
+too, since their storage cannot be replaced in a value of the same type;
+a null optional sentinel holds no pointer and is supported.
+
+Only `error.OutOfMemory` is returned, and a failed copy frees every allocation
+it made. Free a successful copy once with `freeOwned` on the same allocator,
+or copy onto an arena and release it whole. Keep its owning pointers and
+container lengths intact until then. Assigning the result to another Zig
+variable shares its ownership. `freeOwned` is for these copies, not values
+borrowed from a reader or made directly by a parser. Copies returned by
+`keep` have the same ownership and can be released with `freeOwned`.
+
+`keep` preserves edits to `line.value` and the result of migrations. Custom
+parsers and migrations run when the line is read, and are not called again
+by `keep`; changes to their external state cannot change a kept value.
+Their returned data must meet the same finite-tree contract as `copyOwned`.
+Schemas holding external resources or cyclic state need their own ownership
+operation; unsupported field types are refused at compile time.
+
+In Rust, [`Clone`](https://doc.rust-lang.org/std/clone/trait.Clone.html) walks
+derived struct fields, but cloning a reference keeps the reference. Owned
+`String` and `Vec` fields copy their storage; borrowed fields need an owned
+representation. [Serde's lifetimes](https://serde.rs/lifetimes.html) express
+that borrow, and `DeserializeOwned` requires a result that does not borrow
+from the input. `copyOwned` instead keeps the Zig type and changes who owns
+every piece of storage it reaches.
+
+`std.json.Parsed(T)` owns a parse arena; it does not promise that its value
+borrows nothing from the input. Parsing with `.allocate = .alloc_always`
+copies input strings, but reparses JSON and calls custom parsers.
+[`std.json.Value.jsonParseFromValue`](https://github.com/ziglang/zig/blob/0.16.0/lib/std/json/dynamic.zig)
+returns its source tree directly, even when passed another allocator.
+`copyOwned` copies that tree and its object keys as data, with no encoding or
+change to its numbers or raw fields.
 
 **Backwards is one block at a time.** `Tail` walks a seekable file from its
 end towards its beginning and reads no further back than the lines it is asked
 for, so the last ten lines of a gigabyte cost one block read; `last(n)` is
-`keep` over a batch. A backwards read cannot count, so `Line.number` counts
+`keep` over a batch: ordinary per-line parsing, then `copyOwned`, with the
+same data contract. It returns only `Tail.NextError` and releases a partial
+batch on failure. With an ordinary allocator, `freeOwned` each value and
+free the returned slice; with an arena, drop it whole. A backwards read cannot count, so `Line.number` counts
 back from the end, 1 being the last line, while `Line.offset` is an offset in
 the file and means the same thing in both directions. A file that shrinks
 under a `Tail` is `error.Truncated`.
@@ -164,9 +233,9 @@ a path. I made it an interface so a test can stage the two files itself
 instead of racing a filesystem.
 
 **Which file is which is a setting.** `Options.identity` decides when two
-handles are the same file. The default is the number the system gives it — the
-inode, or the file index on Windows — on the volume it is on, since two volumes
-number their files independently: two calls and no reading, and a number a
+handles are the same file. The default, `.file_id`, is the number the system gives it — the
+inode, or the full 128-bit file id on Windows — on the volume it is on,
+since two volumes number their files independently: no reading, and a number a
 filesystem may reuse for a new file or change for one it did not replace. `.fingerprint` hashes the first bytes of the file instead: a log's
 opening lines are written once and not written again, so they name the file in
 a way the filesystem cannot take back, and a rotation that copies the log away
@@ -174,7 +243,12 @@ and writes the same file again from the top is a rotation rather than a
 silence. A file with fewer bytes than the window is compared by number until
 it is long enough.
 
-**Starting again is four integers.** The thing that crashes is the follower.
+The native policy serializes as `{"file_id":{}}`. The old `{"inode":{}}`
+policy is refused with `error.UnknownField`; there is no compatibility path.
+Followers using that saved policy start fresh, from the beginning or a
+position the caller chooses.
+
+**Starting again is a checkpoint.** The thing that crashes is the follower.
 `Follower.checkpoint` says which file it stands in, how far into it, what the
 next line is numbered and how many files it has been through; take it after
 `next` has returned a line, which is when the offset in it is a line boundary.
@@ -184,6 +258,11 @@ two are told apart under `Options.identity`: the same file carries on at the
 recorded offset with the recorded numbering, a different one is read from its
 start and counted as a rotation. A `Checkpoint` is a struct of integers, so a
 registry of them is a JSON Lines file like any other.
+
+`Checkpoint.file.id` keeps the full `FileId`: its volume and 128-bit file
+number. Old checkpoints with `inode` and optional `volume` are refused by
+`parseLine` with `error.MissingField`; they are not converted. Start a new
+follower from the beginning, or seek to the position the caller chooses.
 
 **Draining and syncing are policy, stated once.** The writer does not own the
 destination and drains it only when told to. `Writer.Options.flush` is
@@ -201,7 +280,8 @@ a run.
 `.per_records` is the setting a stream of records wants: one drain, or one
 sync, for every *n* records however they arrive — the cost divided by *n*,
 against losing up to *n*. A sync drains first, whatever `flush` says, and
-needs a file, so `Writer.initFile` is the constructor that can do it.
+needs a file, so `Writer.initFile` and `Writer.initFileBounded` are the
+constructors that can do it.
 
 **A sync is the call the platform means by it.** The platforms do not agree
 about what `fsync` promises, and on one of them it is not the cheapest call
@@ -223,9 +303,22 @@ after a crash — because creating and opening are the caller's.
 
 **A writer can be given the reader's bound.** With no bound a writer will emit
 a record no reader with the matching bound will read back; with
-`Writer.Options.max_line_bytes` the record is refused where it is written and
-none of it reaches the log. It costs a second encoding pass, so there is no
-bound unless one is asked for.
+`Writer(T).initBounded(allocator, output, max_line_bytes, options)` the record
+is encoded once into owned scratch, measured, and those same bytes are emitted.
+The bound counts JSON payload bytes, excluding the separator and terminator.
+An oversized record or failed encoding leaves the destination and record count
+unchanged. Scratch grows as needed and is reused; keep the allocator alive and
+call `deinit` once to release it. `deinit` does not drain or close the destination.
+`initFileBounded(allocator, file_writer, max_line_bytes, options)` adds the same
+bound to a file writer with sync policies. `init` and `initFile` stream without
+scratch. Bounded storage can report `error.OutOfMemory`; a hook's own
+`error.WriteFailed` stays a write failure.
+
+```zig
+var log: strand.Writer(Event) = .initBounded(gpa, output, 64 * 1024, .{});
+defer log.deinit();
+try log.write(event);
+```
 
 **A record that changes shape says so.** Adding a field is easy, since a
 reader defaults its missing fields. When a field changes meaning, splits in
@@ -235,7 +328,7 @@ build writes, `T.jsonlMigrate` is the hook an older line goes through, taking
 the version and a `std.json.Value` and returning today's shape, and
 `payloadOf` parses the old shape inside the hook. `v` comes first and `data`
 second, with the whole record inside `data`, so the envelope cannot collide
-with it — a `T` with a field named `v` is a compile error. `Versioned(T)` is
+with it: payload fields named `v` or `data` stay inside `data`. `Versioned(T)` is
 an ordinary `std.json` type and composes with `Reader`, `Writer`, `Tail` and
 `Follower`. A line with no `v` is version `T.jsonl_version_unstamped`, which
 defaults to 0, and no `jsonl_version` may be 0, so an unstamped line is always
@@ -245,6 +338,15 @@ tagged union grows without an envelope instead: `std.json` writes
 `{"open":{...}}`, so the arm is the first key, `tagOf` reads it without
 parsing the payload, and an `unknown: std.json.Value` arm gives a line from a
 newer writer somewhere to land.
+
+`payloadOf` handles arrays and vectors inside reflected containers too.
+Byte vectors read both strings and arrays on every parse path. As with byte
+arrays, the string must contain exactly as many UTF-8 bytes as there are
+lanes. Writing stays byte-for-byte `std.json`: valid UTF-8 bytes become a
+string, other bytes an array. Both forms read back with the same bytes.
+Checked integer conversions happen as each field is read, so an earlier
+field's error is reported before an overflow in a later one. Custom
+`jsonParseFromValue` hooks still read their own values.
 
 **A value the reader does not read is kept as its bytes.** A line often
 carries something that belongs to someone else: another program's record
@@ -261,8 +363,10 @@ wanted, and applies `duplicate_fields` then; reading the line does not look
 for a key repeated inside the value. A `std.json.Value` in the same place
 builds a tree nobody reads, and since it parses itself it takes the whole
 line to `std.json`'s token parser; a type holding a `Raw` stays on the direct
-path both ways. `Raw.encode` makes one from a value, and `parseLine(Raw, ...)`
-makes one from bytes and checks them. A `Raw` made by hand is trusted.
+path both ways. `Raw.encode` makes one from a value: `OutOfMemory` means its
+allocation failed, and `WriteFailed` means a custom stringify hook refused
+the value. `parseLine(Raw, ...)` makes one from bytes and checks them. A `Raw`
+made by hand is trusted.
 
 **What a line may contain.**
 
@@ -306,13 +410,17 @@ makes one from bytes and checks them. A `Raw` made by hand is trusted.
 marker, so a line that does not parse is either damage or a record from a
 writer that knows something this reader does not, and nothing tells the two
 apart. `record_separator` on the writer and on both readers is RFC 7464's
-framing: ASCII RS, 0x1E, in front of every record, the only byte that cannot
+framing: ASCII RS, 0x1E, in front of every record, a control byte that cannot
 appear unescaped inside a JSON value. What lies before the first separator on
 a line is the tail of a torn record and is dropped; a line carrying no record
 at all is `error.MissingSeparator` rather than a line that might have been
 meant. A reader in this mode does not read a stream without separators, and a
 reader not in it does not read one with them — the byte is then a raw control
 byte. It is a decision both ends make together, like the schema.
+
+The bound counts JSON payload bytes everywhere: `Reader`, `LineReader`,
+`Writer` and `Tail`. The separator, the terminator and a discarded torn
+prefix never count. A backwards read scans the prefix without holding it.
 
 **Every refusal is a named error.**
 
@@ -344,7 +452,7 @@ shows.
 two of them over two streams run on two threads as they are. One `Reader` is
 not shared between threads.
 
-**What a line costs.** `./bench/own/run.sh` on the [bench branch](https://github.com/pedronaugusto/strand/tree/bench) writes and
+**What a line costs.** The harness on the [bench branch](https://github.com/pedronaugusto/strand/tree/bench), run with `./bench/own/run.sh`, writes and
 reads a million small lines and prints the numbers. On an Apple M3 Max, Zig
 0.16.0:
 
@@ -362,9 +470,10 @@ copied anywhere before it is parsed. The arena figure is what one 100 MB line
 cost beyond the line buffer. Those are one uniform line shape. Over mixed
 lines — five kinds, one in seven carrying a note with escapes in it — the read
 is 78 ns/line against a floor of 75 for the same parse with no line layer
-over it at all. The suite holds the line layer to that floor rather than to an
-absolute: *a line costs what the parse under it costs, within a tenth* times
-this reader against that parse, and fails if the gap opens up.
+over it at all. The benchmark prints that ratio against a target of 1.10
+on a quiet machine. The unit suite counts framing bytes and parse calls,
+checks that complete records borrow the input, and holds allocations steady
+after the buffers have grown; elapsed time never decides whether it passes.
 
 A line that carries a small object it does not read is 105 ns/line as a `Raw`
 and 455 with a `std.json.Value` in the same place, which takes the line to
@@ -374,7 +483,8 @@ and 455 with a `std.json.Value` in the same place, which takes the line to
 ## Scope
 
 - Its decoder implements `std.json`'s typed field rules. Types with a custom
-  `jsonParse` method use `std.json`'s token parser directly; `Raw` has one for
+  `jsonParse` method use the token-source path; hooks can delegate fields
+  to `innerParse` for strand's checked conversions; `Raw` has one for
   `std.json`'s own entry points and is read directly here.
 - It does not own, buffer or lock a stream, and opens a file only through an
   `Opener` you hand it.
@@ -393,7 +503,7 @@ and 455 with a `std.json.Value` in the same place, which takes the line to
 |---|---|---|
 | Linux | The device and the inode identify a file across a rotation; a sync is the `fdatasync` syscall | `ubuntu-latest` in CI, four optimize modes |
 | macOS | The same, except that a sync is `fcntl(F_FULLFSYNC)` | `macos-latest` in CI, four optimize modes |
-| Windows | The volume's serial number and the file index stand in for the device and the inode, and a sync is the system's own flush | `windows-latest` in CI, four optimize modes |
+| Windows | The volume's serial number and the full file id stand in for the device and the inode, and a sync is the system's own flush | `windows-latest` in CI, four optimize modes |
 
 CI also compiles the suite without running it for `x86_64-linux-gnu`,
 `aarch64-linux-gnu`, `x86_64-linux-musl`, `x86_64-windows-gnu`,

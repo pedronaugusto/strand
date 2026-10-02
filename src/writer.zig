@@ -4,6 +4,7 @@
 const std = @import("std");
 const assert = std.debug.assert;
 const encode = @import("encode.zig");
+const EncodeBuffer = @import("encode_buffer.zig");
 
 const line_mod = @import("line.zig");
 const Format = line_mod.Format;
@@ -17,13 +18,16 @@ pub fn Writer(comptime T: type) type {
         /// The destination. Not owned: this writer never closes it, and
         /// drains it only when `Options.flush` or `Options.sync` says to.
         output: *std.Io.Writer,
-        /// The file under `output`, when the writer was made with `initFile`.
+        /// The file under `output`, when made with `initFile` or
+        /// `initFileBounded`.
         /// `null` otherwise, and a `sync` policy needs it: there is no way to
         /// ask a `*std.Io.Writer` to put its bytes on a disk, because not
         /// every one of them has a disk.
         file: ?*std.Io.File.Writer = null,
         /// Read-only after `init`.
         options: Options,
+        /// Owned record storage for a bounded writer; null for streaming.
+        scratch: ?RecordScratch = null,
         /// Records written so far.
         count: u64 = 0,
         /// Set once a sync has failed, after which this writer refuses every
@@ -55,24 +59,6 @@ pub fn Writer(comptime T: type) type {
             /// back. One byte per record, and what it buys is on
             /// `Reader.Options.record_separator`.
             record_separator: bool = false,
-            /// The longest record this writer will emit, in bytes, not
-            /// counting the terminator; `null` for no bound, which is the
-            /// default. A longer one is `error.LineTooLong` and **none of it
-            /// is written**, so the log is left where the record before it
-            /// left it.
-            ///
-            /// A writer with no bound can write a log a reader will not read
-            /// back: `Reader.Options.max_line_bytes` is a megabyte by
-            /// default, and a record over it is discarded whole at the far
-            /// end, where nothing knows what was meant. Set this to the
-            /// bound the readers use and the mistake is an error at the
-            /// place it is made.
-            ///
-            /// It costs a second pass: the record is encoded once into a
-            /// writer that counts and keeps nothing, to find out how long it
-            /// is before any of it is written. That is why there is no bound
-            /// unless one is asked for.
-            max_line_bytes: ?usize = null,
             /// When the destination is asked to drain what it is holding.
             ///
             /// The default is never, because this writer does not own the
@@ -127,8 +113,8 @@ pub fn Writer(comptime T: type) type {
             /// task of its own, and this package does not own one — a caller
             /// that has a task has `flush` and `sync` to call from it.
             ///
-            /// Only a writer made with `initFile` has a file to sync. `init`
-            /// refuses any other setting than `.never`, and a writer built by
+            /// Only `initFile` and `initFileBounded` have a file to sync.
+            /// `init` and `initBounded` require `.never`, and a writer built by
             /// hand without a file reports `error.SyncFailed` rather than
             /// pretending.
             ///
@@ -208,11 +194,13 @@ pub fn Writer(comptime T: type) type {
             }
         }
 
-        /// What `write` can report. `WriteFailed` is the destination refusing
-        /// the bytes, `SyncFailed` is the file refusing to put them on the
-        /// disk — ask the destination or the file for diagnostics — and
+        /// What `write` can report. `WriteFailed` is a custom stringify hook
+        /// or the destination refusing the bytes, `SyncFailed` is the file
+        /// refusing to put them on the disk — ask the destination or the
+        /// file for diagnostics — and
         /// `LineTooLong` is this writer's own bound, if it was given one.
-        pub const Error = std.Io.Writer.Error || error{ SyncFailed, LineTooLong };
+        /// `OutOfMemory` is bounded record storage refusing to grow.
+        pub const Error = std.Io.Writer.Error || std.mem.Allocator.Error || error{ SyncFailed, LineTooLong };
 
         /// A writer over `output`. Writes nothing.
         ///
@@ -234,6 +222,37 @@ pub fn Writer(comptime T: type) type {
             return .{ .output = &dest.interface, .file = dest, .options = options };
         }
 
+        /// A bounded writer over `output`. Encodes each record once into
+        /// storage owned by this writer, then emits those same bytes if the
+        /// JSON payload fits `max_line_bytes`. The separator and terminator
+        /// do not count. An oversized record or failed encoding writes
+        /// nothing to the destination and does not advance `count`.
+        ///
+        /// Scratch grows as needed and is reused until `deinit`. The caller
+        /// keeps `allocator` alive until then. Construction allocates nothing.
+        /// Like `init`, this requires `options.sync = .never`.
+        pub fn initBounded(allocator: std.mem.Allocator, output: *std.Io.Writer, max_line_bytes: usize, options: Options) Self {
+            var self = init(output, options);
+            self.scratch = .init(allocator, max_line_bytes);
+            return self;
+        }
+
+        /// A bounded writer over a file, with the same record storage and
+        /// lifetime as `initBounded`, and the sync policies of `initFile`.
+        pub fn initFileBounded(allocator: std.mem.Allocator, dest: *std.Io.File.Writer, max_line_bytes: usize, options: Options) Self {
+            var self = initFile(dest, options);
+            self.scratch = .init(allocator, max_line_bytes);
+            return self;
+        }
+
+        /// Releases owned record storage. Does not drain, sync or close the
+        /// destination. Streaming writers have no storage to release.
+        /// A bounded writer must be released once; copying it shares ownership.
+        pub fn deinit(self: *Self) void {
+            if (self.scratch) |*scratch| scratch.deinit();
+            self.* = undefined;
+        }
+
         /// Writes `value` as one record: its JSON, then `\n`.
         ///
         /// In `.minified` the record is exactly one line, whatever `value`
@@ -247,8 +266,18 @@ pub fn Writer(comptime T: type) type {
         /// on the writer it owns.
         pub fn write(self: *Self, value: T) Error!void {
             if (self.sync_failed) return error.SyncFailed;
-            if (self.options.max_line_bytes) |max| try self.checkLength(value, max);
-            try self.writeRecord(value);
+            if (self.scratch) |*scratch| {
+                scratch.buffer.reset();
+                self.encodeValue(value, &scratch.buffer.writer) catch |err|
+                    return scratch.buffer.diagnose(err);
+                const bytes = scratch.buffer.writer.buffered();
+                if (bytes.len > scratch.max_line_bytes) return error.LineTooLong;
+                if (self.options.record_separator) try self.output.writeByte(separator);
+                try self.output.writeAll(bytes);
+                try self.output.writeByte('\n');
+            } else {
+                try self.writeRecord(value);
+            }
             self.count += 1;
             if (self.due(self.options.sync)) return self.drainAndSync();
             if (self.due(self.options.flush)) try self.flushOutput();
@@ -316,18 +345,6 @@ pub fn Writer(comptime T: type) type {
             try self.output.writeByte('\n');
         }
 
-        /// Refuses a record longer than the bound before a byte of it is
-        /// written. Measured by encoding it into a writer that counts and
-        /// keeps nothing, which is the second pass `Options.max_line_bytes`
-        /// costs — and why there is no bound unless one is asked for.
-        fn checkLength(self: *Self, value: T, max: usize) Error!void {
-            var counter: std.Io.Writer.Discarding = .init(&.{});
-            self.encodeValue(value, &counter.writer) catch
-                return error.WriteFailed;
-            const written = counter.fullCount() + @intFromBool(self.options.record_separator);
-            if (written > max) return error.LineTooLong;
-        }
-
         /// Drains the destination now, whatever `Options.flush` says.
         ///
         /// The policy covers the ordinary case — after every record, after
@@ -362,9 +379,10 @@ pub fn Writer(comptime T: type) type {
             _ = syncFile(dest.file, dest.io, .data) catch return self.syncFault();
         }
 
-        /// `initFile` knows the concrete writer behind `output`. Calling its
-        /// drain directly avoids two indirect calls on a per-record flush;
-        /// writers supplied through `init` retain their own flush semantics.
+        /// The file constructors know the concrete writer behind `output`.
+        /// Calling its drain directly avoids two indirect calls on a
+        /// per-record flush; stream constructors retain the supplied writer's
+        /// own flush semantics.
         fn flushOutput(self: *Self) std.Io.Writer.Error!void {
             if (self.file != null) {
                 while (self.output.end != 0)
@@ -382,6 +400,21 @@ pub fn Writer(comptime T: type) type {
         }
     };
 }
+
+// A bounded record keeps its bound beside the storage used to measure it.
+const RecordScratch = struct {
+    buffer: EncodeBuffer,
+    max_line_bytes: usize,
+
+    fn init(allocator: std.mem.Allocator, max_line_bytes: usize) RecordScratch {
+        return .{ .buffer = .init(allocator), .max_line_bytes = max_line_bytes };
+    }
+
+    fn deinit(self: *RecordScratch) void {
+        self.buffer.deinit();
+        self.* = undefined;
+    }
+};
 
 /// How `writeValue` spells a value. The same two settings as
 /// `Writer.Options`, and the same defaults.
@@ -440,7 +473,7 @@ pub fn writeLine(output: *std.Io.Writer, value: anytype) std.Io.Writer.Error!voi
         // The default sync policy is `.never`, so nothing here ever asks a
         // file for anything and this writer has no file to ask; the default
         // bound is no bound.
-        error.SyncFailed, error.LineTooLong => unreachable,
+        error.SyncFailed, error.LineTooLong, error.OutOfMemory => unreachable,
     };
 }
 

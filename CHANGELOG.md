@@ -6,108 +6,61 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Added
-
-- `LineReader`, the line layer on its own: a `*std.Io.Reader` as a stream of
-  lines, framed at the terminator, held to `max_line_bytes`, checked for raw
-  control bytes and missing separators, numbered and placed, and not parsed.
-  It is for bytes whose meaning is somebody else's — a line protocol with its
-  own decoder, a child process's output — which until now had to name a type
-  for a `Reader` they never parsed into. A line past the bound is
-  `error.LineTooLong` with the line consumed to its end, so the caller answers
-  it and reads on; the stream's own buffer can be much smaller than the
-  longest line. `LineReader.recordStart` and `LineReader.reset` are how a
-  file still being written is read: where the record the reader was last on
-  began, and carrying on from a place the stream has been put back to.
-  `LineReader.join` appends the next physical line to a record, for a reader
-  that knows when a record spread over several lines is finished.
-- `writeValue`, one value's JSON with no terminator, for a caller that
-  frames the line itself — an envelope around the value, a checksum after
-  it — with `ValueOptions` for the two settings that change its bytes.
-  `emit_null_optional_fields = true` is `std.json`'s default spelling. A
-  value that fits in the unused part of the destination's buffer is encoded
-  there, as `Writer` does.
-- `syncFile`, the sync `Writer` makes, for a caller that keeps its own file:
-  `F_FULLFSYNC` on Darwin, `fdatasync` on Linux, the system's flush on
-  Windows, and `fsync` where a filesystem declines the stronger call. It
-  takes a `SyncLevel`: `.data` is what `Writer` asks for, `.all` is `fsync`
-  where `.data` would be `fdatasync`. It says which call did it
-  (`SyncKind`), makes an interrupted call again, and names a failure as
-  `std.Io.File.sync` does (`SyncError`) rather than answering it with a
-  weaker call.
-- `FileId`, which file or directory a handle is open on as the filesystem
-  numbers it: the device and the inode on POSIX, the volume's serial number
-  and the 128-bit file id on Windows. What `Identity` compares, and what a
-  caller comparing two handles wants.
-- `LineReader.unfinished`: whether the stream ended in the middle of a
-  record — `next` returned `null` over bytes with no terminator after them,
-  or refused as too long a line the stream ended inside — rather than after
-  a line. A reader of a file still being written tells an unfinished record
-  from the end of the file by it.
-- `crlf`, on `LineReader.Options`, `Reader.Options` and `Tail.Options`: on
-  by default, as before, and off for a format whose lines are checked byte
-  for byte — a checksum over each — where a `\r` in front of the newline is
-  a byte of the line and not part of the terminator.
-- `Tail.prevRaw`, a line read backwards as its bytes, framed and checked
-  and not parsed; and `Tail.Options.end`, where the file ends for the
-  reader, for a log that reserves space ahead of its records.
-- A line-protocol recipe in `examples/logbook.zig`: requests read with a
-  `LineReader`, one past the bound answered, and the replies written a record
-  at a time.
-
 ### Changed
 
-- The bench branch owns the mixed-line reader timing harness and its scratch storage in `bench/own`; snapshots use that harness against library revisions without a benchmark step.
+- Breaking: `Raw.encode` adds `WriteFailed` for a custom stringify hook's refusal and reports `OutOfMemory` only when its owned encoding buffer cannot allocate.
+- Breaking: bounded writers use `initBounded(allocator, output, max_line_bytes, options)` or `initFileBounded(allocator, file_writer, max_line_bytes, options)` instead of `Options.max_line_bytes`, require `deinit`, encode once into reusable owned scratch and emit the bytes measured; `Writer.Error` adds `OutOfMemory`, while unbounded `init` and `initFile` keep streaming without scratch.
+- Breaking: benchmark harnesses and their scratch tests live only on the `bench` branch in `bench/own`; `zig build bench` and the benchmark examples are removed from the library, while unit tests retain deterministic framing, parse, allocation and borrowing checks.
+- Breaking: owned schemas refuse pointer-bearing vector sentinels, including empty arrays and slices and fields in null optionals or inactive union arms.
+- A follower retains the identity measured when it adopts or restarts a file, so later rewrites cannot change a checkpoint of records already read.
+- Direct decoding propagates allocator failure immediately instead of reparsing the line and potentially hiding `OutOfMemory`.
+- Value conversion handles empty arrays through the reflected walker, avoiding std.json's nonexistent-element indexing in nested payloads and migrations.
+- Breaking: byte vectors accept both JSON strings of the exact UTF-8 byte length and arrays on every decoder path, replacing string refusal; encoding stays byte-for-byte std.json, including empty vectors.
+- Breaking: `Tail.last` parses each line normally and copies through `copyOwned`, requires the same owned-data contract as `keep`, returns only `NextError`, and releases partial batches on failure; its internal `batch_allocator` field is removed.
+- The logbook example owns a separate scratch directory per invocation so concurrent builds cannot overwrite or remove each other's files.
+- Vector decoding converts array elements as values, supporting booleans and narrow integers on every parse path including array input for byte vectors.
+- Owned copies give pointer-vector elements independent storage and release them on failure or `freeOwned`.
+- Breaking: `Identity.inode` is now `Identity.file_id`, including serialized policy tags; the old `inode` tag is refused with `error.UnknownField`, with no compatibility path, and followers start fresh.
+- Breaking: `Reader.keep`, `Tail.keep` and `Follower.keep` copy `line.value` through `copyOwned` and return `Allocator.Error!T`, preserving edits and migrations without calling parsers again; schemas must meet the owned-copy data contract.
+- Owned-copy type checking accepts full protocol schemas without exhausting the compiler's default evaluation budget.
+- Value conversion reads checked integers and vectors through their reflected containers, preserving the first conversion error and supporting nested vectors in migrations.
+- Breaking: `Identity.Taken.id` holds the full `FileId` instead of `inode` and optional `volume`; old checkpoints are refused with `error.MissingField`, with no conversion or fallback, and callers choose where to restart.
+- Breaking: `max_line_bytes` counts JSON payload bytes everywhere, excluding the separator, terminator and discarded torn prefix; writer and tail boundary acceptance changes.
+- Breaking: `Reader(T)` is a `LineReader` with a parse on top, and keeps it as `Reader.lines`. The reader's place in the stream is kept there: `reader.number`, `reader.offset`, `reader.skipped`, `reader.fault` and `reader.input` are now `reader.lines.number`, `reader.lines.offset`, `reader.lines.skipped`, `reader.lines.fault` and `reader.lines.input`. `Reader.Options` is unchanged. `Reader.Joined` is `LineReader.Joined`. The framing is one piece of code, no longer compiled once for every `T`.
+- `Follower` rewinds a half-written record and begins again after a truncation through `LineReader.reset`, rather than by setting the reader's fields.
+- Faster where chronicle's own codec was faster, and the same bytes. A string with something to escape in it is scanned a vector at a time and written in runs, each escape `std.json`'s own spelling, where it used to go to `std.json` whole, a byte at a time; a member's key, with its comma where the comma is certain, and an enum's name are one constant each; an integer past 64 bits is written nineteen digits a division and read nineteen digits at a time. The decoder matches the key it expects next as the constant it is before reading one. The same property over every shape, under every option that changes bytes, and a fuzz target hold the writer to `std.json`'s bytes.
 
-- `Reader(T)` is a `LineReader` with a parse on top, and keeps it as
-  `Reader.lines`. The reader's place in the stream is kept there:
-  `reader.number`, `reader.offset`, `reader.skipped`, `reader.fault` and
-  `reader.input` are now `reader.lines.number`, `reader.lines.offset`,
-  `reader.lines.skipped`, `reader.lines.fault` and `reader.lines.input`.
-  `Reader.Options` is unchanged. `Reader.Joined` is `LineReader.Joined`. The
-  framing is one piece of code, no longer compiled once for every `T`.
-- `Follower` rewinds a half-written record and begins again after a
-  truncation through `LineReader.reset`, rather than by setting the reader's
-  fields.
-- Faster where chronicle's own codec was faster, and the same bytes. A
-  string with something to escape in it is scanned a vector at a time and
-  written in runs, each escape `std.json`'s own spelling, where it used to
-  go to `std.json` whole, a byte at a time; a member's key, with its comma
-  where the comma is certain, and an enum's name are one constant each; an
-  integer past 64 bits is written nineteen digits a division and read
-  nineteen digits at a time. The decoder matches the key it expects next
-  as the constant it is before reading one. The same property over every
-  shape, under every option that changes bytes, and a fuzz target hold the
-  writer to `std.json`'s bytes.
+### Added
+
+- `innerParse` exposes the checked token-source decoder so custom `jsonParse` hooks can delegate fields with strand's integer and vector rules.
+- `copyOwned` and `freeOwned` copy a parsed value and all its storage without a JSON round-trip, including `Raw` bytes and `std.json.Value`, and clean up a failed copy.
+- `LineReader`, the line layer on its own: a `*std.Io.Reader` as a stream of lines, framed at the terminator, held to `max_line_bytes`, checked for raw control bytes and missing separators, numbered and placed, and not parsed. It is for bytes whose meaning is somebody else's — a line protocol with its own decoder, a child process's output — which until now had to name a type for a `Reader` they never parsed into. A line past the bound is `error.LineTooLong` with the line consumed to its end, so the caller answers it and reads on; the stream's own buffer can be much smaller than the longest line. `LineReader.recordStart` and `LineReader.reset` are how a file still being written is read: where the record the reader was last on began, and carrying on from a place the stream has been put back to. `LineReader.join` appends the next physical line to a record, for a reader that knows when a record spread over several lines is finished.
+- `writeValue`, one value's JSON with no terminator, for a caller that frames the line itself — an envelope around the value, a checksum after it — with `ValueOptions` for the two settings that change its bytes. `emit_null_optional_fields = true` is `std.json`'s default spelling. A value that fits in the unused part of the destination's buffer is encoded there, as `Writer` does.
+- `syncFile`, the sync `Writer` makes, for a caller that keeps its own file: `F_FULLFSYNC` on Darwin, `fdatasync` on Linux, the system's flush on Windows, and `fsync` where a filesystem declines the stronger call. It takes a `SyncLevel`: `.data` is what `Writer` asks for, `.all` is `fsync` where `.data` would be `fdatasync`. It says which call did it (`SyncKind`), makes an interrupted call again, and names a failure as `std.Io.File.sync` does (`SyncError`) rather than answering it with a weaker call.
+- `FileId`, which file or directory a handle is open on as the filesystem numbers it: the device and the inode on POSIX, the volume's serial number and the 128-bit file id on Windows. What `Identity` compares, and what a caller comparing two handles wants.
+- `LineReader.unfinished`: whether the stream ended in the middle of a record — `next` returned `null` over bytes with no terminator after them, or refused as too long a line the stream ended inside — rather than after a line. A reader of a file still being written tells an unfinished record from the end of the file by it.
+- `crlf`, on `LineReader.Options`, `Reader.Options` and `Tail.Options`: on by default, as before, and off for a format whose lines are checked byte for byte — a checksum over each — where a `\r` in front of the newline is a byte of the line and not part of the terminator.
+- `Tail.prevRaw`, a line read backwards as its bytes, framed and checked and not parsed; and `Tail.Options.end`, where the file ends for the reader, for a log that reserves space ahead of its records.
+- A line-protocol recipe in `examples/logbook.zig`: requests read with a `LineReader`, one past the bound answered, and the replies written a record at a time.
 
 ### Fixed
 
-- A reader that meets a stream with no byte on it yet looks for a byte-order
-  mark when the first bytes arrive. It used to decide there was none, so a
-  file that was empty when it was first read, and was then written mark
-  first, read its first line with the mark in it and refused it. `Follower`
-  had worked around this for itself.
-- No line takes the process down over a number. `std.json` in Zig 0.16.0
-  reads a number written with a fraction or an exponent into an integer
-  through a float and panics on two that pass its range check: a value from
-  2^127 up, whatever the type (`1.8e38` into a `u128`), and the type's
-  largest value rounded up (2^127 into an `i128`, 2^64 into a `u64` from a
-  `std.json.Value`). Both of strand's parsers read such a number as the
-  number it is, and one past the type is `error.Overflow`; so does
-  `Versioned`, which read its payload through `std.json`, and `payloadOf`,
-  whose value is now checked for those numbers before `std.json` is given
-  it. Wherever `std.json` answers, the answer is unchanged, which a property
-  over 20,000 values of every shape, each changed four ways, and a fuzz
-  target hold both parsers to.
-- A follower tells two files apart by the volume they are on as well as by
-  their number. A file on another volume carrying the number of the one
-  being followed read as the same file, so a rotation onto another mount
-  was a silence. `Identity.Taken` records the volume; a checkpoint written
-  before it did is compared by the number, as it was.
-- The token parser refuses a string where an array belongs before reading
-  the string, and reads a `\u` escape a byte at a time, as `std.json` does:
-  an unfinished line of either kind was `error.UnexpectedEndOfInput` where
-  `std.json` says `error.UnexpectedToken` or `error.SyntaxError`.
+- `parseLine` fills diagnostics when it refuses a trailing terminator before parsing, replacing stale coordinates from an earlier call.
+- Bounded record scratch treats an empty repeated write pattern as no bytes, so a custom stringify hook can finish that write regardless of its repetition count.
+- Pretty-record joins count and bound only physical lines that exist, preserve subsequent line numbers after refusal, and retain an unfinished record's rewind point.
+- Follower truncation docs describe automatic reopening through the configured opener.
+- Separated blank-line framing honors `crlf` and drops at most one final carriage return.
+- Reader.next keeps framing and parsing in one result handoff without changing either layer's ownership.
+- The ARM framing scan reduces byte-sized lane indices without unpacking narrow vector elements.
+- The separator-mode docs say which bytes each reader and writer counts against its bound.
+- A follower checks cancellation before returning a record already in its buffer.
+- A separated record keeps its separator offset when physical framing fails.
+- Versioned accepts payload fields named v, since payload fields live inside data and cannot collide with the envelope.
+- The test build accepts -Dtest-filter to run the named part of the suite.
+- A reader that meets a stream with no byte on it yet looks for a byte-order mark when the first bytes arrive. It used to decide there was none, so a file that was empty when it was first read, and was then written mark first, read its first line with the mark in it and refused it. `Follower` had worked around this for itself.
+- No line takes the process down over a number. `std.json` in Zig 0.16.0 reads a number written with a fraction or an exponent into an integer through a float and panics on two that pass its range check: a value from 2^127 up, whatever the type (`1.8e38` into a `u128`), and the type's largest value rounded up (2^127 into an `i128`, 2^64 into a `u64` from a `std.json.Value`). Both of strand's parsers read such a number as the number it is, and one past the type is `error.Overflow`; so does `Versioned`, which read its payload through `std.json`, and `payloadOf`, whose value is now checked for those numbers before `std.json` is given it. Wherever `std.json` answers, the answer is unchanged, which a property over 20,000 values of every shape, each changed four ways, and a fuzz target hold both parsers to.
+- A follower tells two files apart by the volume they are on as well as by their number. A file on another volume carrying the number of the one being followed read as the same file, so a rotation onto another mount was a silence.
+- The token parser refuses a string where an array belongs before reading the string, and reads a `\u` escape a byte at a time, as `std.json` does: an unfinished line of either kind was `error.UnexpectedEndOfInput` where `std.json` says `error.UnexpectedToken` or `error.SyntaxError`.
 
 ## [0.7.0] - 2026-09-24
 

@@ -101,8 +101,8 @@ pub const LineReader = struct {
     /// Framing policy, fixed at `init`. `Reader.Options` carries the same
     /// fields under the same names and hands them down.
     pub const Options = struct {
-        /// The longest record accepted, in bytes, not counting the
-        /// terminator. A longer one is `error.LineTooLong`; the rest of it is
+        /// The longest JSON payload accepted, in bytes, excluding the
+        /// terminator, separator and discarded torn prefix. A longer one is `error.LineTooLong`; the rest of it is
         /// discarded, so `next` can be called again to continue with the line
         /// after it. This bound is the reader's memory bound, and it is
         /// independent of the size of `input`'s buffer.
@@ -391,7 +391,7 @@ pub const LineReader = struct {
     /// written over several lines is put back together by a reader that can
     /// tell when it is finished, which a line reader cannot: `Reader` in
     /// `.pretty` mode joins until the record parses. The joined record is
-    /// held to `max_line_bytes`, the separator included, and the line
+    /// held to `max_line_bytes`, the separator excluded, and the line
     /// joined on is checked for control bytes like any other; one found
     /// under `on_malformed = .skip` is `.damaged`, and counted in `skipped`.
     ///
@@ -407,17 +407,14 @@ pub const LineReader = struct {
             self.borrowed = false;
         }
         const before = self.line_buf.writer.end;
-        // The separator counts against the bound like any other byte.
-        if (self.options.max_line_bytes -| before == 0) {
-            // It is the record that is too long, and the record began at
-            // `number`, whatever line the reader has reached since.
-            self.fault.framing(number);
-            self.offset = self.record_offset;
-            self.consumed += try self.discardLine();
-            return error.LineTooLong;
-        }
+        // The newline belongs to the payload only if another physical line
+        // exists. Let physical framing decide that and count what it reads,
+        // even when the record so far is exactly at the bound.
         self.line_buf.writer.writeByte('\n') catch return error.OutOfMemory;
-        const joined = (try self.readPhysical()) orelse {
+        const joined = (self.readPhysical() catch |err| {
+            if (err == error.LineTooLong) self.fault.framing(number);
+            return err;
+        }) orelse {
             self.line_buf.writer.end = before;
             return .ended;
         };
@@ -463,6 +460,7 @@ pub const LineReader = struct {
                             return .ended;
                         }
                         self.number += 1;
+                        if (pending_cr and !self.options.crlf) blank = false;
                         return .{ .missing = blank };
                     },
                 };
@@ -480,6 +478,7 @@ pub const LineReader = struct {
                 for (contents) |byte| {
                     discarded = true;
                     if (byte == '\r') {
+                        if (pending_cr) blank = false;
                         pending_cr = true;
                     } else {
                         if (pending_cr) blank = false;
@@ -501,6 +500,7 @@ pub const LineReader = struct {
                 for (contents[0..at]) |prefix_byte| {
                     discarded = true;
                     if (prefix_byte == '\r') {
+                        if (pending_cr) blank = false;
                         pending_cr = true;
                     } else {
                         if (pending_cr) blank = false;
@@ -513,6 +513,7 @@ pub const LineReader = struct {
                     self.consumed += at + 1;
                 }
                 self.number += 1;
+                if (pending_cr and !self.options.crlf) blank = false;
                 return .{ .missing = blank };
             }
 
@@ -525,9 +526,17 @@ pub const LineReader = struct {
                 self.consumed += at + 1;
             }
             const after_separator = self.consumed;
-            const framed = try self.readPhysical();
-            self.record_offset = offset;
-            self.record_number = self.number -| @intFromBool(framed != null);
+            const lines_before = self.number;
+            // Physical framing starts after the separator. The record starts
+            // at it, even when framing refuses the line or cannot finish it.
+            defer {
+                self.record_offset = offset;
+                self.record_number = lines_before;
+            }
+            const framed = self.readPhysical() catch |err| {
+                if (err == error.LineTooLong) self.offset = offset;
+                return err;
+            };
             if (framed) |bytes| return .{ .record = .{ .bytes = bytes, .offset = offset } };
             if (!self.options.require_terminator and self.consumed == after_separator) {
                 self.number += 1;

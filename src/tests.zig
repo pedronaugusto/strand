@@ -1427,6 +1427,29 @@ test "a torn prefix does not count against a separated record's bound" {
     try testing.expect((try streamed.next()).?.value == .object);
 }
 
+test "a separated framing failure keeps the record start" {
+    const input = "\x1e{}\ntorn\x1e0123456789\n\x1e{}\n";
+    for ([_]bool{ false, true }) |streamed| {
+        var buffer: [3]u8 = undefined;
+        var chunked: fixtures.Chunked = .init(input, &buffer, 1);
+        var fixed: std.Io.Reader = .fixed(input);
+        var lines: strand.LineReader = .init(testing.allocator, if (streamed) &chunked.interface else &fixed, .{
+            .record_separator = true,
+            .max_line_bytes = 2,
+        });
+        defer lines.deinit();
+        try testing.expectEqualStrings("{}", (try lines.next()).?.line);
+        try testing.expectError(error.LineTooLong, lines.next());
+        try testing.expectEqual(@as(u64, 8), lines.offset);
+        try testing.expectEqual(@as(u64, 8), lines.recordStart().offset);
+        try testing.expectEqual(@as(u64, 1), lines.recordStart().lines_before);
+        const next = (try lines.next()).?;
+        try testing.expectEqualStrings("{}", next.line);
+        try testing.expectEqual(@as(u64, 3), next.number);
+        try testing.expectEqual(@as(u64, 20), next.offset);
+    }
+}
+
 test "a separator is a decision both ends make" {
     var out: std.Io.Writer.Allocating = .init(testing.allocator);
     defer out.deinit();
@@ -1481,7 +1504,8 @@ test "a writer can be held to the bound its readers are held to" {
     // is written: the log is left where the record before it left it.
     var out: std.Io.Writer.Allocating = .init(testing.allocator);
     defer out.deinit();
-    var log: strand.Writer(Event) = .init(&out.writer, .{ .max_line_bytes = bound });
+    var log: strand.Writer(Event) = .initBounded(testing.allocator, &out.writer, bound, .{});
+    defer log.deinit();
 
     try log.write(small);
     const after_small = out.written().len;
@@ -1511,15 +1535,16 @@ test "the bound is on the record, whatever shape it is written in" {
 
     var minified: std.Io.Writer.Allocating = .init(testing.allocator);
     defer minified.deinit();
-    var lean: strand.Writer(Event) = .init(&minified.writer, .{ .max_line_bytes = 1 << 20 });
+    var lean: strand.Writer(Event) = .initBounded(testing.allocator, &minified.writer, 1 << 20, .{});
+    defer lean.deinit();
     try lean.write(event);
 
     var out: std.Io.Writer.Allocating = .init(testing.allocator);
     defer out.deinit();
-    var wide: strand.Writer(Event) = .init(&out.writer, .{
+    var wide: strand.Writer(Event) = .initBounded(testing.allocator, &out.writer, minified.written().len, .{
         .format = .pretty,
-        .max_line_bytes = minified.written().len,
     });
+    defer wide.deinit();
     try testing.expectError(error.LineTooLong, wide.write(event));
     try testing.expectEqual(@as(usize, 0), out.written().len);
 }
@@ -2465,137 +2490,50 @@ test "a raw value comes off the end of a file owned" {
     try testing.expectEqualStrings("{\"z\":2}", last[1].data.bytes);
 }
 
-//=========================================================================
-// What a line costs, held to a budget.
-//
-// Two loops over the same bytes: this package's reader, and the same parse
-// over a frame taken straight out of the input reader's buffer with nothing
-// in between. The second is the floor — the typed decoder doing the work and the
-// line layer doing nothing — so the first divided by the second is what the
-// line layer costs, and that is the number a budget can be set on. An
-// absolute ns/line would only be a fact about the machine that ran it.
-//
-// The reader measures within a few per cent of the floor on aarch64 and
-// x86_64 alike (README.md's figures are 78 ns/line against 75), and the
-// budget is ten per cent over the floor. A reader that copied every line
-// into its own buffer measured about 1.15x, and so did one whose
-// control-byte scan was a byte loop, so either regression fails this test
-// rather than showing up as a number nobody reads.
-//=========================================================================
-
-/// The shape the figures were measured over: a short string, a number, an
-/// enum, and one line in seven carrying a note with escapes in it.
-const Timed = struct {
-    kind: []const u8,
-    at: u64 = 0,
-    level: enum { info, warn } = .info,
-    note: ?[]const u8 = null,
-};
-
-const timed_lines = 120_000;
-
-/// The budget, as a fraction of what the same parse costs with no line layer
-/// at all.
-const timed_budget = 1.10;
-
-fn timedInput(allocator: std.mem.Allocator) ![]u8 {
-    const kinds: []const []const u8 = &.{ "request", "open", "retry", "close", "flush" };
-    var out: std.Io.Writer.Allocating = .init(allocator);
-    errdefer out.deinit();
-    try out.ensureUnusedCapacity(timed_lines * 80);
-
-    var log: strand.Writer(Timed) = .init(&out.writer, .{});
-    for (0..timed_lines) |i| try log.write(.{
-        .kind = kinds[i % kinds.len],
-        .at = i,
-        .level = if (i % 1000 == 0) .warn else .info,
-        .note = if (i % 7 == 0) "user \"ada\" said \"no\"" else null,
-    });
-
-    var list = out.toArrayList();
-    return list.toOwnedSlice(allocator);
-}
-
-/// This package's reader over `input`, in nanoseconds.
-fn timeReader(input: []const u8) !u64 {
-    var source: std.Io.Reader = .fixed(input);
-    var reader: strand.Reader(Timed) = .init(testing.allocator, &source, .{});
-    defer reader.deinit();
-
-    var checksum: u64 = 0;
-    const started = std.Io.Clock.awake.now(testing.io);
-    while (try reader.next()) |line| checksum +%= line.value.at +% line.value.kind.len;
-    const elapsed = started.untilNow(testing.io, .awake);
-
-    try testing.expectEqual(@as(u64, timed_lines), reader.lines.number);
-    std.mem.doNotOptimizeAway(checksum);
-    return @intCast(@max(elapsed.toNanoseconds(), 1));
-}
-
-/// The same parse with no line layer over it: the frame is a slice of the
-/// input reader's own buffer, and nothing is copied or checked.
-fn timeFloor(input: []const u8) !u64 {
-    var source: std.Io.Reader = .fixed(input);
-    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
-    defer arena.deinit();
-
-    var checksum: u64 = 0;
-    var seen: u64 = 0;
-    const started = std.Io.Clock.awake.now(testing.io);
-    while (source.takeDelimiterInclusive('\n')) |framed| {
-        const line = framed[0 .. framed.len - 1];
-        _ = arena.reset(.retain_capacity);
-        const value = try strand.parseLine(Timed, arena.allocator(), line, .{});
-        checksum +%= value.at +% value.kind.len;
-        seen += 1;
-    } else |err| switch (err) {
-        error.EndOfStream => {},
-        else => return err,
-    }
-    const elapsed = started.untilNow(testing.io, .awake);
-
-    try testing.expectEqual(@as(u64, timed_lines), seen);
-    std.mem.doNotOptimizeAway(checksum);
-    return @intCast(@max(elapsed.toNanoseconds(), 1));
-}
-
-test "a line costs what the parse under it costs, within a tenth" {
-    const input = try timedInput(testing.allocator);
-    defer testing.allocator.free(input);
-
-    // Best of fifteen, interleaved: a machine that is busy for a moment
-    // slows whichever loop it lands in, and the best run of each is the one
-    // the machine was not busy for. Five rounds were not enough to find
-    // that run on a shared CI machine -- the two bests came from rounds
-    // the load had hit unevenly, and the ratio between them read anywhere
-    // from 0.83x to 1.87x on one host. Fifteen settles it to within a few
-    // parts in a hundred, and costs about a second.
-    var reader_ns: u64 = std.math.maxInt(u64);
-    var floor_ns: u64 = std.math.maxInt(u64);
-    for (0..15) |_| {
-        reader_ns = @min(reader_ns, try timeReader(input));
-        floor_ns = @min(floor_ns, try timeFloor(input));
-    }
-
-    const ratio = @as(f64, @floatFromInt(reader_ns)) / @as(f64, @floatFromInt(floor_ns));
-    if (!withinBudget(ratio)) {
-        std.debug.print(
-            "read {d} ns/line against a floor of {d} ns/line: {d:.2}x, over the budget of {d:.2}x\n",
-            .{ reader_ns / timed_lines, floor_ns / timed_lines, ratio, timed_budget },
-        );
-        return error.OverBudget;
-    }
-}
-
-/// Whether a measured ratio is acceptable in the mode the suite is built in.
-/// Debug and ReleaseSmall are not modes anything is measured in: one keeps
-/// every safety check and the other asks the compiler not to vectorise, so a
-/// budget set on optimized code would say nothing there.
-fn withinBudget(ratio: f64) bool {
-    return switch (@import("builtin").mode) {
-        .ReleaseFast, .ReleaseSafe => ratio <= timed_budget,
-        .Debug, .ReleaseSmall => true,
+// The line layer does one framing scan and one parse per complete record.
+// Read-ahead within the last SIMD block is counted too; elapsed time belongs
+// in the benchmark, where the machine's load can be controlled.
+test "a buffered record is scanned once parsed once and borrowed without allocation" {
+    const work = @import("work.zig");
+    const Row = struct { text: []const u8, note: ?[]const u8 = null };
+    const Hook = struct {
+        row: Row,
+        pub fn jsonParse(a: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) std.json.ParseError(@TypeOf(source.*))!@This() {
+            return .{ .row = try @import("parse.zig").inner(Row, a, source, options) };
+        }
     };
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    var writer: strand.Writer(Row) = .init(&out.writer, .{});
+    for (0..128) |i| try writer.write(.{
+        .text = "x" ** 512,
+        .note = if (i % 7 == 0) "escaped\tnote" else null,
+    });
+    inline for (.{ Row, Hook }) |T| {
+        var counting: Counting = .{ .child = testing.allocator };
+        var input: std.Io.Reader = .fixed(out.written());
+        var reader: strand.Reader(T) = .init(counting.allocator(), &input, .{ .skip_bom = false });
+        defer reader.deinit();
+        var counts: work.Counts = .{};
+        work.observe(&counts);
+        defer work.observe(null);
+        var settled: usize = 0;
+        for (0..128) |i| {
+            counts = .{};
+            const line = (try reader.next()).?;
+            const row = if (T == Row) line.value else line.value.row;
+            try testing.expect(within(line.line, out.written()));
+            try testing.expect(within(row.text, line.line));
+            try testing.expectEqual(@as(usize, 0), reader.lines.line_buf.written().len);
+            try testing.expectEqual(@as(usize, 1), counts.parses);
+            const read_ahead = (std.simd.suggestVectorLength(u8) orelse 1) - 1;
+            try testing.expect(counts.scan_bytes >= line.line.len + 1);
+            try testing.expect(counts.scan_bytes <= line.line.len + 1 + read_ahead);
+            if (i == 31) settled = counting.allocations;
+            if (i >= 32) try testing.expectEqual(settled, counting.allocations);
+        }
+        try testing.expectEqual(@as(?strand.Line(T), null), try reader.next());
+    }
 }
 
 /// A tagged union of `arms` arms, each a struct of `fields` integer fields:
@@ -2697,4 +2635,258 @@ test "a packed struct is read and written as any struct is" {
     var out: std.Io.Writer.Allocating = .init(arena.allocator());
     try strand.writeLine(&out.writer, row);
     try testing.expectEqualStrings(line ++ "\n", out.written());
+}
+
+test "a separated writer bounds only its JSON payload" {
+    for ([_]strand.Format{ .minified, .pretty }) |format| {
+        var out: std.Io.Writer.Allocating = .init(testing.allocator);
+        defer out.deinit();
+        var writer: strand.Writer(struct {}) = .initBounded(testing.allocator, &out.writer, 2, .{
+            .format = format,
+            .record_separator = true,
+        });
+        defer writer.deinit();
+        try writer.write(.{});
+        try testing.expectEqualStrings("\x1e{}\n", out.written());
+        var tighter: strand.Writer(struct {}) = .initBounded(testing.allocator, &out.writer, 1, .{
+            .format = format,
+            .record_separator = true,
+        });
+        defer tighter.deinit();
+        try testing.expectError(error.LineTooLong, tighter.write(.{}));
+        try testing.expectEqual(@as(u64, 0), tighter.count);
+        try testing.expectEqual(@as(u64, 1), writer.count);
+        try testing.expectEqualStrings("\x1e{}\n", out.written());
+    }
+}
+
+test "a separated blank line honors the carriage-return policy" {
+    for ([_][]const u8{ " \t\r\n", "\r\n", "\r" }) |input| {
+        var source: std.Io.Reader = .fixed(input);
+        var lines: strand.LineReader = .init(testing.allocator, &source, .{
+            .record_separator = true,
+            .crlf = false,
+        });
+        defer lines.deinit();
+        try testing.expectError(error.MissingSeparator, lines.next());
+        try testing.expectEqual(@as(u64, 1), lines.fault.line);
+    }
+}
+
+test "a separated blank line discards only one carriage return" {
+    for ([_][]const u8{ "\r\r\n", "\r\r" }) |input| {
+        var source: std.Io.Reader = .fixed(input);
+        var lines: strand.LineReader = .init(testing.allocator, &source, .{ .record_separator = true });
+        defer lines.deinit();
+        try testing.expectError(error.MissingSeparator, lines.next());
+    }
+}
+
+test "a bounded writer emits the encoding it measured once" {
+    const Changing = struct {
+        calls: *usize,
+
+        pub fn jsonStringify(self: @This(), json: *std.json.Stringify) !void {
+            self.calls.* += 1;
+            try json.write(if (self.calls.* == 1) "x" else "too long");
+        }
+    };
+    for ([_]strand.Format{ .minified, .pretty }) |format| {
+        for ([_]bool{ false, true }) |separated| {
+            var output: std.Io.Writer.Allocating = .init(testing.allocator);
+            defer output.deinit();
+            var calls: usize = 0;
+            var writer: strand.Writer(Changing) = .initBounded(testing.allocator, &output.writer, 3, .{
+                .format = format,
+                .record_separator = separated,
+            });
+            defer writer.deinit();
+            try writer.write(.{ .calls = &calls });
+            try testing.expectEqualStrings(if (separated) "\x1e\"x\"\n" else "\"x\"\n", output.written());
+            try testing.expectEqual(@as(usize, 1), calls);
+            try testing.expectEqual(@as(u64, 1), writer.count);
+            try testing.expectError(error.LineTooLong, writer.write(.{ .calls = &calls }));
+            try testing.expectEqual(@as(usize, 2), calls);
+            try testing.expectEqual(@as(u64, 1), writer.count);
+            try testing.expectEqualStrings(if (separated) "\x1e\"x\"\n" else "\"x\"\n", output.written());
+        }
+    }
+}
+
+test "bounded writer scratch survives allocation failures and reuses capacity" {
+    const Case = struct {
+        fn run(allocator: std.mem.Allocator) !void {
+            var output: std.Io.Writer.Allocating = .init(testing.allocator);
+            defer output.deinit();
+            var writer: strand.Writer([]const u8) = .initBounded(allocator, &output.writer, 4096, .{ .record_separator = true });
+            defer writer.deinit();
+            writer.write("x") catch |err| {
+                try testing.expectEqual(@as(usize, 0), output.written().len);
+                try testing.expectEqual(@as(u64, 0), writer.count);
+                return err;
+            };
+            const before = output.written().len;
+            writer.write("y" ** 2048) catch |err| {
+                try testing.expectEqual(before, output.written().len);
+                try testing.expectEqual(@as(u64, 1), writer.count);
+                return err;
+            };
+            try writer.write("z");
+            try testing.expectEqual(@as(u64, 3), writer.count);
+            try testing.expect(std.mem.endsWith(u8, output.written(), "\x1e\"z\"\n"));
+        }
+    };
+    try testing.checkAllAllocationFailures(testing.allocator, Case.run, .{});
+
+    var failing: testing.FailingAllocator = .init(testing.allocator, .{ .fail_index = 0 });
+    var output: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer output.deinit();
+    var writer: strand.Writer([]const u8) = .initBounded(failing.allocator(), &output.writer, 64, .{});
+    defer writer.deinit();
+    try testing.expectError(error.OutOfMemory, writer.write("first"));
+    try testing.expectEqual(@as(usize, 0), output.written().len);
+    failing.fail_index = std.math.maxInt(usize);
+    try writer.write("second");
+    const allocations = failing.alloc_index;
+    failing.fail_index = allocations;
+    try writer.write("third");
+    try testing.expectEqual(allocations, failing.alloc_index);
+    try testing.expectEqualStrings("\"second\"\n\"third\"\n", output.written());
+    try testing.expectEqual(@as(u64, 2), writer.count);
+}
+
+test "bounded writer keeps hook failure distinct from allocation failure" {
+    const Refusing = struct {
+        pub fn jsonStringify(_: @This(), json: *std.json.Stringify) !void {
+            try json.write("part");
+            return error.WriteFailed;
+        }
+    };
+    var output: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer output.deinit();
+    var writer: strand.Writer(Refusing) = .initBounded(testing.allocator, &output.writer, 64, .{ .record_separator = true });
+    defer writer.deinit();
+    try testing.expectError(error.WriteFailed, writer.write(.{}));
+    try testing.expectEqual(@as(usize, 0), output.written().len);
+    try testing.expectEqual(@as(u64, 0), writer.count);
+    var failing: testing.FailingAllocator = .init(testing.allocator, .{ .fail_index = 0 });
+    var starved: strand.Writer(Refusing) = .initBounded(failing.allocator(), &output.writer, 64, .{});
+    defer starved.deinit();
+    try testing.expectError(error.OutOfMemory, starved.write(.{}));
+    try testing.expectEqual(@as(usize, 0), output.written().len);
+}
+
+test "bounded writer on a file preserves batch and sync policies" {
+    const io = testing.io;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const file = try tmp.dir.createFile(io, "bounded.jsonl", .{ .read = true });
+    defer file.close(io);
+    var buffer: [128]u8 = undefined;
+    var dest = file.writer(io, &buffer);
+    var writer: strand.Writer([]const u8) = .initFileBounded(testing.allocator, &dest, 3, .{ .sync = .per_batch });
+    defer writer.deinit();
+    try testing.expectError(error.LineTooLong, writer.writeAll(&.{ "x", "too long", "y" }));
+    try testing.expectEqual(@as(u64, 1), writer.count);
+    try testing.expectEqual(@as(u64, 0), try file.length(io));
+    try writer.writeAll(&.{"y"});
+    try testing.expectEqual(@as(u64, 2), writer.count);
+    var read_buffer: [128]u8 = undefined;
+    var reader = file.reader(io, &read_buffer);
+    try testing.expectEqualStrings("\"x\"\n\"y\"\n", try reader.interface.take(8));
+}
+
+test "a pretty prefix at its byte bound ends without inventing a joined line" {
+    for ([_]bool{ false, true }) |separated| {
+        const input = if (separated) "\x1e[\n" else "[\n";
+        for ([_]bool{ false, true }) |require_terminator| {
+            for ([_]bool{ false, true }) |streamed| {
+                var fixed: std.Io.Reader = .fixed(input);
+                var buffer: [2]u8 = undefined;
+                var chunks: fixtures.Chunked = .init(input, &buffer, 1);
+                var reader: strand.Reader(std.json.Value) = .init(testing.allocator, if (streamed) &chunks.interface else &fixed, .{
+                    .format = .pretty,
+                    .record_separator = separated,
+                    .max_line_bytes = 1,
+                    .require_terminator = require_terminator,
+                });
+                defer reader.deinit();
+                if (require_terminator) {
+                    try testing.expectEqual(null, try reader.next());
+                    try testing.expect(reader.lines.unfinished);
+                } else {
+                    try testing.expectError(error.MalformedLine, reader.next());
+                    try testing.expectEqual(error.UnexpectedEndOfInput, reader.lines.fault.err.?);
+                }
+                try testing.expectEqual(@as(u64, 1), reader.lines.number);
+                try testing.expectEqual(@as(u64, 0), reader.lines.recordStart().offset);
+                try testing.expectEqual(@as(u64, 0), reader.lines.recordStart().lines_before);
+                try testing.expectEqual(@as(u64, input.len), reader.lines.consumed);
+            }
+        }
+    }
+}
+
+test "a pretty join past its byte bound counts the discarded physical line" {
+    for ([_]bool{ false, true }) |streamed| {
+        const input = "[\n]\n0\n";
+        var fixed: std.Io.Reader = .fixed(input);
+        var buffer: [2]u8 = undefined;
+        var chunks: fixtures.Chunked = .init(input, &buffer, 1);
+        var reader: strand.Reader(std.json.Value) = .init(testing.allocator, if (streamed) &chunks.interface else &fixed, .{
+            .format = .pretty,
+            .max_line_bytes = 1,
+        });
+        defer reader.deinit();
+        try testing.expectError(error.LineTooLong, reader.next());
+        try testing.expectEqual(@as(u64, 1), reader.lines.fault.line);
+        try testing.expectEqual(@as(u64, 0), reader.lines.offset);
+        const after = (try reader.next()).?;
+        try testing.expectEqual(@as(u64, 3), after.number);
+        try testing.expectEqual(@as(u64, 4), after.offset);
+        try testing.expectEqualStrings("0", after.line);
+    }
+}
+
+test "an unfinished pretty record keeps its rewind point after complete records" {
+    var fixture = try fixtures.Fixture.init("{}\n[\n", 64);
+    defer fixture.deinit();
+    var reader: strand.Reader(std.json.Value) = .init(testing.allocator, &fixture.reader.interface, .{
+        .format = .pretty,
+        .max_line_bytes = 3,
+        .require_terminator = true,
+    });
+    defer reader.deinit();
+    try testing.expectEqualStrings("{}", (try reader.next()).?.line);
+    try testing.expectEqual(null, try reader.next());
+    const start = reader.lines.recordStart();
+    try testing.expectEqual(@as(u64, 3), start.offset);
+    try testing.expectEqual(@as(u64, 1), start.lines_before);
+    try testing.expect(reader.lines.unfinished);
+    try fixture.write_file.writePositionalAll(testing.io, "]\n", 5);
+    try fixture.reader.seekTo(start.offset);
+    reader.lines.reset(start);
+    const completed = (try reader.next()).?;
+    try testing.expectEqualStrings("[\n]", completed.line);
+    try testing.expectEqual(@as(u64, 2), completed.number);
+    try testing.expectEqual(@as(u64, 3), completed.offset);
+    try testing.expectEqual(@as(usize, 0), completed.value.array.items.len);
+}
+
+test "a bounded writer completes a raw write with an empty repeated pattern" {
+    const EmptyPattern = struct {
+        pub fn jsonStringify(_: @This(), json: *std.json.Stringify) !void {
+            try json.beginWriteRaw();
+            var parts = [_][]const u8{ "true", "" };
+            try json.writer.writeSplatAll(&parts, std.math.maxInt(usize));
+            json.endWriteRaw();
+        }
+    };
+    var output: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer output.deinit();
+    var writer: strand.Writer(EmptyPattern) = .initBounded(testing.allocator, &output.writer, 4, .{});
+    defer writer.deinit();
+    try writer.write(.{});
+    try testing.expectEqualStrings("true\n", output.written());
+    try testing.expectEqual(@as(u64, 1), writer.count);
 }

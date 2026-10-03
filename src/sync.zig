@@ -13,6 +13,20 @@ pub const SyncKind = enum {
     data,
     /// The ordinary one, which is all the platform or the filesystem has.
     plain,
+
+    /// The call `syncFile` asks for first at `level` on this platform: what
+    /// a sync is here, before a filesystem has had its say. What it reports
+    /// is this, or `.plain` from a filesystem that declines the stronger
+    /// call — `F_FULLFSYNC` on a network mount, say — so a caller that
+    /// promises a durability names this one and checks the answer.
+    pub fn asked(level: SyncLevel) SyncKind {
+        if (comptime builtin.os.tag.isDarwin()) return .full;
+        if (comptime builtin.os.tag == .linux) return switch (level) {
+            .data => .data,
+            .all => .plain,
+        };
+        return .plain;
+    }
 };
 
 /// How much of what a file has been given `syncFile` is to put down.
@@ -148,6 +162,11 @@ test syncFile {
     // ordinary call is the whole of it, and still the strongest on Darwin.
     const all = try syncFile(fixture.write_file, std.testing.io, .all);
     try std.testing.expectEqual(@as(SyncKind, if (builtin.os.tag.isDarwin()) .full else .plain), all);
+
+    // What was asked for is what a filesystem that takes it answers.
+    try std.testing.expectEqual(SyncKind.asked(.data), kind);
+    try std.testing.expectEqual(SyncKind.asked(.all), all);
+    comptime std.debug.assert(SyncKind.asked(.all) == if (builtin.os.tag.isDarwin()) .full else .plain);
 }
 
 test syncDir {

@@ -436,6 +436,96 @@ test "a line past the bound keeps the member it is answered under" {
     try testing.expectEqual(@as(?strand.Raw, null), lines.oversizedMember());
 }
 
+test "an object written open is the value's bytes, members added, then closed" {
+    // A record that carries a checksum over the bytes in front of it: the
+    // struct's members as `std.json` writes them, one more, and the brace.
+    const Envelope = struct { seq: u64, at: i64, note: ?[]const u8, @"we\"ird": u8 = 1, ev: struct { kind: []const u8 } };
+    const values = [_]Envelope{
+        .{ .seq = 7, .at = -3, .note = null, .ev = .{ .kind = "open" } },
+        .{ .seq = std.math.maxInt(u64), .at = std.math.minInt(i64), .note = "\u{e9}\n\"", .ev = .{ .kind = "" } },
+    };
+    for (values) |value| {
+        inline for (.{ true, false }) |emit_null| {
+            inline for (.{ true, false }) |escape_unicode| {
+                const options: strand.ValueOptions = .{ .emit_null_optional_fields = emit_null, .escape_unicode = escape_unicode };
+                var want: std.Io.Writer.Allocating = .init(testing.allocator);
+                defer want.deinit();
+                try std.json.Stringify.value(value, .{ .emit_null_optional_fields = emit_null, .escape_unicode = escape_unicode }, &want.writer);
+                const before = want.written()[0 .. want.written().len - 1];
+                // Into room to spare, and into a writer with none.
+                inline for (.{ 4096, 0 }) |room| {
+                    var out: std.Io.Writer.Allocating = try .initCapacity(testing.allocator, room);
+                    defer out.deinit();
+                    var object = try strand.writeObjectOpen(&out.writer, value, options);
+                    try testing.expectEqualStrings(before, out.written());
+                    try testing.expect(!object.empty);
+                    try object.member("c", @as(u32, 4_000_000_000));
+                    try object.close();
+                    const after = try std.fmt.allocPrint(testing.allocator, "{s},\"c\":4000000000}}", .{before});
+                    defer testing.allocator.free(after);
+                    try testing.expectEqualStrings(after, out.written());
+                }
+            }
+        }
+    }
+
+    // A field `std.json` writes for itself is written by it, and the rest
+    // as ever.
+    const Spelled = struct {
+        n: u8,
+        pub fn jsonStringify(self: @This(), jw: anytype) !void {
+            try jw.print("\"n={d}\"", .{self.n});
+        }
+    };
+    const Mixed = struct { seq: u64, f: f64, way: Spelled, value: std.json.Value, none: ?u8 = null };
+    const mixed: Mixed = .{ .seq = 3, .f = 0.1, .way = .{ .n = 9 }, .value = .{ .bool = true } };
+    inline for (.{ true, false }) |emit_null| {
+        var want: std.Io.Writer.Allocating = .init(testing.allocator);
+        defer want.deinit();
+        try std.json.Stringify.value(mixed, .{ .emit_null_optional_fields = emit_null }, &want.writer);
+        var got: std.Io.Writer.Allocating = .init(testing.allocator);
+        defer got.deinit();
+        var object = try strand.writeObjectOpen(&got.writer, mixed, .{ .emit_null_optional_fields = emit_null });
+        try testing.expectEqualStrings(want.written()[0 .. want.written().len - 1], got.written());
+        try object.close();
+        try testing.expectEqualStrings(want.written(), got.written());
+    }
+
+    // An object with nothing written yet takes its first member bare.
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    var empty = try strand.writeObjectOpen(&out.writer, struct { note: ?u8 = null }{}, .{});
+    try testing.expect(empty.empty);
+    try empty.member("c", @as(u8, 1));
+    try empty.member("d\"", "x");
+    try empty.close();
+    try testing.expectEqualStrings("{\"c\":1,\"d\\\"\":\"x\"}", out.written());
+
+    // And the integers in front of the rest come back off the bytes.
+    out.clearRetainingCapacity();
+    const Head = struct { seq: u64, at: i64 };
+    var record = try strand.writeObjectOpen(&out.writer, .{ .seq = @as(u64, 42), .at = @as(i64, -1), .ev = "x" }, .{});
+    try record.close();
+    const head = strand.leadingIntMembers(Head, out.written()).?;
+    try testing.expectEqual(Head{ .seq = 42, .at = -1 }, head.value);
+    try testing.expectEqualStrings(",\"ev\":\"x\"}", out.written()[head.end..]);
+}
+
+test "leadingIntMembers reads what writeValue writes" {
+    const Envelope = struct { seq: u64, at: i64, v: u32, p: u8 };
+    var prng: std.Random.DefaultPrng = .init(0x1ead_1e7);
+    const random = prng.random();
+    for (0..1000) |_| {
+        const want: Envelope = .{ .seq = random.int(u64), .at = random.int(i64), .v = random.int(u32), .p = random.int(u8) };
+        var buffer: [256]u8 = undefined;
+        var out: std.Io.Writer = .fixed(&buffer);
+        try strand.writeValue(&out, want, .{});
+        const got = strand.leadingIntMembers(Envelope, out.buffered()).?;
+        try testing.expectEqual(want, got.value);
+        try testing.expectEqual(out.buffered().len - 1, got.end);
+    }
+}
+
 test "a line reader puts an unfinished record back and reads it once it is finished" {
     var fixture = try fixtures.Fixture.init("{\"kind\":\"one\"}\n{\"kind\":", 64);
     defer fixture.deinit();

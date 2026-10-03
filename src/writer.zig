@@ -429,6 +429,9 @@ pub const ValueOptions = @import("codec.zig").ValueOptions;
 /// is encoded there directly, and one that does not goes through `output`'s
 /// interface, which drains or grows it as `output` does.
 pub const writeValue = @import("codec.zig").writeValue;
+/// See `writeValue`; members follow and `OpenObject.close` ends it.
+pub const writeObjectOpen = @import("codec.zig").writeObjectOpen;
+pub const OpenObject = @import("codec.zig").OpenObject;
 
 test writeValue {
     var out: std.Io.Writer.Allocating = .init(std.testing.allocator);

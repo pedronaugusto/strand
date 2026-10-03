@@ -50,6 +50,16 @@ pub const MemberScan = struct {
     /// length, or `null` when it had none: `span` and `finishSpan`.
     found_span: ?Span = null,
 
+    /// Which of a repeated member is the answer. `last` by default, as for
+    /// a reader that keeps the last of a duplicate field; `first` is a peek
+    /// at a line in hand, which stops reading once it has one.
+    which: enum { last, first } = .last,
+    /// Under `first`, the name's value has been met: nothing more is read.
+    done: bool = false,
+    /// Whether the value is copied and checked for `finish`, or only placed
+    /// for `finishSpan` by a caller that holds the bytes.
+    copy: bool = true,
+
     /// A stretch of the bytes fed, counted from the first of them.
     pub const Span = struct { start: usize, end: usize };
 
@@ -60,20 +70,46 @@ pub const MemberScan = struct {
     pub fn feed(s: *MemberScan, bytes: []const u8) void {
         var i: usize = 0;
         while (i < bytes.len) {
-            if (s.in_string and !s.in_key and !s.in_value and !s.escaped) {
-                // A string that is neither a key nor the value: only where
-                // it ends matters, and that is found a vector at a time.
-                const at = stringSpecial(bytes[i..]).at;
-                i += at;
-                s.fed += at;
-                if (i == bytes.len) return;
+            if (s.done) {
+                s.fed += bytes.len - i;
+                return;
             }
+            const skip = s.skippable(bytes[i..]);
+            i += skip;
+            s.fed += skip;
+            if (i == bytes.len) return;
             s.byte(bytes[i]);
             s.fed += 1;
             i += 1;
         }
     }
 
+    /// How many of `rest`'s leading bytes change nothing but `fed`, found a
+    /// vector at a time: a string that is not the name's value up to its
+    /// quote or escape, a key that is the name whole, and the inside of a
+    /// nested value up to its next string or bracket.
+    fn skippable(s: *MemberScan, rest: []const u8) usize {
+        if (s.in_string) {
+            if (s.escaped or s.in_value) return 0;
+            if (s.in_key) {
+                if (!s.key_same) return stringSpecial(rest).at;
+                // The name and the quote after it, all in hand: compared at
+                // once, and left on the quote that closes the key.
+                if (s.key_len == 0 and rest.len > s.name.len) {
+                    if (std.mem.eql(u8, rest[0..s.name.len], s.name) and rest[s.name.len] == '"') {
+                        s.key_len = s.name.len;
+                        return s.name.len;
+                    }
+                    s.key_same = false;
+                    return stringSpecial(rest).at;
+                }
+                return 0;
+            }
+            return stringSpecial(rest).at;
+        }
+        if (s.depth > 1) return nextStructural(rest);
+        return 0;
+    }
     /// The member's value as its bytes, borrowed from `s`, after the last
     /// byte of the line has been fed; `null` when the line had none that
     /// could be kept.
@@ -107,6 +143,9 @@ pub const MemberScan = struct {
                 }
             },
             '{', '[' => {
+                // The name's value is an object or an array: not kept, and
+                // under `first` the answer is that there is none.
+                if (s.value_next and s.which == .first) s.done = true;
                 s.value_next = false;
                 s.endValue(s.fed);
                 s.depth +|= 1;
@@ -163,7 +202,7 @@ pub const MemberScan = struct {
     }
 
     fn keep(s: *MemberScan, b: u8) void {
-        if (s.value_len < max_value_bytes) s.value[s.value_len] = b;
+        if (s.copy and s.value_len < max_value_bytes) s.value[s.value_len] = b;
         s.value_len +|= 1;
     }
 
@@ -173,6 +212,8 @@ pub const MemberScan = struct {
         if (!s.in_value) return;
         s.in_value = false;
         s.found_span = .{ .start = s.value_start, .end = end };
+        if (s.which == .first) s.done = true;
+        if (!s.copy) return;
         if (s.value_len > max_value_bytes) return;
         const value = s.value[0..s.value_len];
         if (!scalar(value)) return;
@@ -180,6 +221,30 @@ pub const MemberScan = struct {
         s.found_len = @intCast(value.len);
     }
 };
+
+/// The index of the first byte of `bytes` that opens a string or opens or
+/// closes an object or an array, or `bytes.len`: everything else inside a
+/// nested value is passed over.
+fn nextStructural(bytes: []const u8) usize {
+    var i: usize = 0;
+    if (!@inComptime()) if (std.simd.suggestVectorLength(u8)) |width| {
+        const V = @Vector(width, u8);
+        while (i + width <= bytes.len) : (i += width) {
+            const v: V = bytes[i..][0..width].*;
+            // `[` and `{`, and `]` and `}`, differ only in 0x20: set, an
+            // opening bracket of either kind is one compare, and a closing
+            // one another.
+            const folded = v | @as(V, @splat(0x20));
+            const hits = (v == @as(V, @splat('"'))) | (folded == @as(V, @splat('{'))) | (folded == @as(V, @splat('}')));
+            if (@reduce(.Or, hits)) return i + std.simd.firstTrue(hits).?;
+        }
+    };
+    while (i < bytes.len) : (i += 1) switch (bytes[i]) {
+        '"', '{', '}', '[', ']' => return i,
+        else => {},
+    };
+    return i;
+}
 
 /// Whether `bytes` are one JSON value with no structure in it. A scalar
 /// nests nothing, so the check allocates nothing, and an allocator with no

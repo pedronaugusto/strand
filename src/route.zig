@@ -3,6 +3,7 @@
 
 const std = @import("std");
 const member_scan = @import("member_scan.zig");
+const stringSpecial = @import("scanner.zig").stringSpecial;
 const tagging = @import("tagging.zig");
 
 /// The first key of the object on `line`, or `null` when there is not one to
@@ -73,19 +74,34 @@ test kindOf {
 ///
 /// The member is one of the outermost object's own, matched by its name as
 /// written: a key spelled with a `\` escape is not decoded, as `kindOf`
-/// does not decode one. When the name is there more than once, the last is
-/// the answer, as for a reader that keeps the last of a duplicate field.
-/// `null` means: not an object, no such member, or a member whose value is
-/// an object or an array, which is not something to route on. The rest of
-/// the line is not checked, so an answer is not a claim that the line is
-/// valid JSON.
+/// does not decode one. When the name is there more than once, the first
+/// is the answer, and nothing after it is read: a parse refuses the line
+/// anyway, or keeps the one its `duplicate_fields` says. `null` means: not
+/// an object, no such member, or a member whose value is an object or an
+/// array, which is not something to route on. Only the value is checked,
+/// so an answer is not a claim that the line is valid JSON.
 pub fn memberOf(line: []const u8, name: []const u8) ?[]const u8 {
     var scan: member_scan.MemberScan = .init(name);
+    scan.which = .first;
+    scan.copy = false;
     scan.feed(line);
     const span = scan.finishSpan() orelse return null;
     const value = line[span.start..span.end];
-    if (!member_scan.scalar(value)) return null;
+    if (!scalar(value)) return null;
     return value;
+}
+
+/// Whether `value`, which `MemberScan` found to run from a value's first
+/// byte to where it ended, is one JSON scalar. A string with no escape is
+/// one when it holds no raw control byte and is UTF-8, which is a vector
+/// at a time; anything else is asked of `std.json`.
+fn scalar(value: []const u8) bool {
+    if (value.len >= 2 and value[0] == '"' and value[value.len - 1] == '"') {
+        const text = value[1 .. value.len - 1];
+        const special = stringSpecial(text);
+        if (special.at == text.len) return !special.non_ascii or std.unicode.utf8ValidateSlice(text);
+    }
+    return member_scan.scalar(value);
 }
 
 /// The member `name` of the object on `line` as the text of its string:

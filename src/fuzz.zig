@@ -481,7 +481,7 @@ fn checkMemberOf(line: []const u8) !void {
     // read differently by the two on purpose.
     if (std.mem.indexOfScalar(u8, line, '\\') != null) return;
     const value = std.json.parseFromSliceLeaky(std.json.Value, arena.allocator(), line, .{
-        .duplicate_field_behavior = .use_last,
+        .duplicate_field_behavior = .use_first,
     }) catch return;
     const want: ?std.json.Value = switch (value) {
         .object => |object| object.get("kind"),

@@ -9,6 +9,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Scanner = @import("scanner.zig");
 const int = @import("int.zig");
+const tagging = @import("tagging.zig");
 
 pub fn Decoder(comptime Raw: type) type {
     return struct {
@@ -210,6 +211,7 @@ pub fn Decoder(comptime Raw: type) type {
                         else => @compileError("Unable to parse into type '" ++ @typeName(T) ++ "'"),
                     },
                     .@"union" => |i| {
+                        if (comptime tagging.internal(T)) |inside| return self.tagged(T, inside);
                         try self.take('{');
                         const name = try self.string(false);
                         try self.take(':');
@@ -232,14 +234,46 @@ pub fn Decoder(comptime Raw: type) type {
             }
 
             fn object(self: *Parser, comptime T: type, result: *T) !void {
-                const fields = @typeInfo(T).@"struct".fields;
                 try self.take('{');
+                return self.members(T, result, null, .open);
+            }
+
+            /// Where `members` takes an object up.
+            const From = enum {
+                /// Just past its `{`.
+                open,
+                /// Just past the value of a member read already, which was the
+                /// one named `skip`.
+                after_skipped,
+            };
+
+            /// An object's members into `result`, from `from` to its `}`. A
+            /// member named `skip` is passed over once and is a duplicate the
+            /// second time: the tag of a union tagged inside its object, which
+            /// is not one of the arm's fields.
+            fn members(self: *Parser, comptime T: type, result: *T, comptime skip: ?[]const u8, from: From) !void {
+                const fields = @typeInfo(T).@"struct".fields;
                 var seen = [_]bool{false} ** fields.len;
+                _ = &seen;
                 var hint: usize = 0;
-                self.space();
-                if (self.cursor < self.input.len and self.input[self.cursor] == '}') {
-                    self.cursor += 1;
-                } else fields_loop: while (true) {
+                _ = &hint;
+                var skipped = from == .after_skipped;
+                _ = &skipped;
+                const closed = switch (from) {
+                    .open => closed: {
+                        self.space();
+                        if (self.cursor < self.input.len and self.input[self.cursor] == '}') {
+                            self.cursor += 1;
+                            break :closed true;
+                        }
+                        break :closed false;
+                    },
+                    .after_skipped => closed: {
+                        try self.objectEnd();
+                        break :closed self.input[self.cursor - 1] == '}';
+                    },
+                };
+                if (closed) {} else fields_loop: while (true) {
                     // The key the last one leads to, spelled as it is declared:
                     // what a writer that keeps declaration order puts here, and
                     // then there is no string to read and compare.
@@ -261,6 +295,14 @@ pub fn Decoder(comptime Raw: type) type {
                     }
                     const name = try self.string(false);
                     try self.take(':');
+                    if (skip) |tag| if (std.mem.eql(u8, name, tag)) {
+                        if (skipped) return error.DuplicateField;
+                        skipped = true;
+                        try self.skipValue();
+                        try self.objectEnd();
+                        if (self.input[self.cursor - 1] == '}') break :fields_loop;
+                        continue :fields_loop;
+                    };
 
                     inline for (fields, 0..) |field, i| {
                         if (i == hint and std.mem.eql(u8, field.name, name)) {
@@ -291,6 +333,113 @@ pub fn Decoder(comptime Raw: type) type {
                 inline for (fields, 0..) |field, i| if (!seen[i]) {
                     if (field.defaultValue()) |default| @field(result, field.name) = default else return error.MissingField;
                 };
+            }
+
+            /// A union tagged inside its object. The tag is read where most
+            /// writers put it, first, and the arm's members are read on from
+            /// there; anywhere else, the object is looked through for it once
+            /// and then read from the top, passing over it.
+            fn tagged(self: *Parser, comptime T: type, comptime inside: anytype) !T {
+                self.space();
+                const start = self.cursor;
+                try self.take('{');
+                const key = comptime literalKey(inside.tag).?;
+                self.space();
+                var from: From = .open;
+                const name = if (self.input.len - self.cursor >= key.len and
+                    std.mem.eql(u8, self.input[self.cursor..][0..key.len], key))
+                first: {
+                    self.cursor += key.len;
+                    try self.take(':');
+                    from = .after_skipped;
+                    break :first try self.tagName();
+                } else elsewhere: {
+                    const top = self.cursor;
+                    const found = try self.findTag(inside.tag);
+                    self.cursor = top;
+                    break :elsewhere found;
+                };
+                const info = @typeInfo(T).@"union";
+                inline for (info.fields) |field| {
+                    const is_other = comptime inside.other != null and
+                        std.mem.eql(u8, field.name, @tagName(inside.other.?));
+                    if (!is_other and std.mem.eql(u8, field.name, name)) {
+                        if (field.type == void) {
+                            var none: struct {} = .{};
+                            try self.members(@TypeOf(none), &none, inside.tag, from);
+                            return @unionInit(T, field.name, {});
+                        }
+                        var result: T = @unionInit(T, field.name, undefined);
+                        try self.members(field.type, &@field(result, field.name), inside.tag, from);
+                        return result;
+                    }
+                }
+                if (comptime inside.other) |other| {
+                    const Payload = @FieldType(T, @tagName(other));
+                    // Not this reader's to read: every member is passed over,
+                    // and the record kept whole when there is a place for it.
+                    try self.passOver(inside.tag, from);
+                    if (Payload == void) return @unionInit(T, @tagName(other), {});
+                    const bytes = self.input[start..self.cursor];
+                    return @unionInit(T, @tagName(other), .{
+                        .bytes = if (self.options.allocate.? == .alloc_always) try self.allocator.dupe(u8, bytes) else bytes,
+                    });
+                }
+                return error.InvalidEnumTag;
+            }
+
+            /// The value of the tag member: a string, which is an arm's name.
+            fn tagName(self: *Parser) ![]const u8 {
+                self.space();
+                if (self.cursor == self.input.len) return error.UnexpectedEndOfInput;
+                if (self.input[self.cursor] != '"') return error.UnexpectedToken;
+                return self.string(false);
+            }
+
+            /// The tag's value in the object whose `{` is just behind the
+            /// cursor, which is left anywhere: the caller puts it back.
+            fn findTag(self: *Parser, comptime tag: []const u8) ![]const u8 {
+                var found: ?[]const u8 = null;
+                self.space();
+                if (self.cursor < self.input.len and self.input[self.cursor] == '}') return error.MissingField;
+                while (true) {
+                    const name = try self.string(false);
+                    try self.take(':');
+                    if (std.mem.eql(u8, name, tag)) {
+                        if (found != null) return error.DuplicateField;
+                        found = try self.tagName();
+                    } else try self.skipValue();
+                    try self.objectEnd();
+                    if (self.input[self.cursor - 1] == '}') break;
+                }
+                return found orelse error.MissingField;
+            }
+
+            /// Every member from `from` to the `}`, checked and not kept, the
+            /// tag passed over once.
+            fn passOver(self: *Parser, comptime tag: []const u8, from: From) !void {
+                var skipped = from == .after_skipped;
+                if (from == .open) {
+                    self.space();
+                    if (self.cursor < self.input.len and self.input[self.cursor] == '}') {
+                        self.cursor += 1;
+                        return;
+                    }
+                } else {
+                    try self.objectEnd();
+                    if (self.input[self.cursor - 1] == '}') return;
+                }
+                while (true) {
+                    const name = try self.string(false);
+                    try self.take(':');
+                    if (std.mem.eql(u8, name, tag)) {
+                        if (skipped) return error.DuplicateField;
+                        skipped = true;
+                    }
+                    try self.skipValue();
+                    try self.objectEnd();
+                    if (self.input[self.cursor - 1] == '}') return;
+                }
             }
 
             fn putField(self: *Parser, comptime T: type, result: *T, seen: anytype, comptime field: std.builtin.Type.StructField, comptime i: usize) !void {

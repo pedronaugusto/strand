@@ -81,7 +81,11 @@ that identity, the byte offset and line numbering.
 
 `kindOf` and `tagOf` route a line by its first key without parsing it. `memberOf` and
 `memberStringOf` read one top-level member's scalar value wherever it sits, as a view
-into the line.
+into the line. A union that declares `pub const jsonl_tag = "type"` is read and written
+tagged inside its object (`{"type":"assistant",...}`), as serde's `#[serde(tag)]`;
+`jsonl_other` names the arm for a tag no arm has, holding nothing or the record as a
+`Raw`. A missing, repeated or non-string tag is refused, and `tagOf` reads the arm from
+the tag member.
 
 `Raw` retains a JSON value's bytes for later parsing or forwarding. `Versioned(T)` wraps
 records with a version and a migration hook. Both compose with the readers and writer.

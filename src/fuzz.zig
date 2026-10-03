@@ -449,6 +449,90 @@ fn checkTagOf(line: []const u8) !void {
     }
 }
 
+/// A union tagged inside its object, on the member the generated lines
+/// carry their kind in, with a catch-all that keeps the record.
+const Tagged = union(enum) {
+    open: struct { at: u64 = 0, tags: []const []const u8 = &.{} },
+    ping,
+    close: struct { code: u8 },
+    other: strand.Raw,
+    pub const jsonl_tag = "kind";
+    pub const jsonl_other = .other;
+};
+
+/// `memberOf` either declines, or points at the bytes of a scalar the line
+/// holds; and on a line `std.json` reads, it is that line's member.
+fn checkMemberOf(line: []const u8) !void {
+    const member = strand.memberOf(line, "kind");
+    if (member) |bytes| {
+        const start = @intFromPtr(bytes.ptr) - @intFromPtr(line.ptr); // safe: addresses compared as numbers, never read through; memberOf returns a view into `line`
+        try testing.expect(start + bytes.len <= line.len);
+        var none: [0]u8 = undefined;
+        var fixed: std.heap.FixedBufferAllocator = .init(&none);
+        try testing.expect(try std.json.validate(fixed.allocator(), bytes));
+    }
+    if (strand.memberStringOf(line, "kind")) |text| {
+        try testing.expectEqualStrings(member.?[1 .. member.?.len - 1], text);
+    }
+
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    // Keys are matched as written, so a line with an escape anywhere is
+    // read differently by the two on purpose.
+    if (std.mem.indexOfScalar(u8, line, '\\') != null) return;
+    const value = std.json.parseFromSliceLeaky(std.json.Value, arena.allocator(), line, .{
+        .duplicate_field_behavior = .use_last,
+    }) catch return;
+    const want: ?std.json.Value = switch (value) {
+        .object => |object| object.get("kind"),
+        else => null,
+    };
+    if (want) |kind| switch (kind) {
+        .object, .array => try testing.expectEqual(@as(?[]const u8, null), member),
+        else => {
+            const got = std.json.parseFromSliceLeaky(std.json.Value, arena.allocator(), member orelse return error.TestMemberMissed, .{}) catch
+                return error.TestMemberNotItsValue;
+            var a: std.Io.Writer.Allocating = .init(arena.allocator());
+            var b: std.Io.Writer.Allocating = .init(arena.allocator());
+            try std.json.Stringify.value(got, .{}, &a.writer);
+            try std.json.Stringify.value(kind, .{}, &b.writer);
+            try testing.expectEqualStrings(b.written(), a.written());
+        },
+    } else try testing.expectEqual(@as(?[]const u8, null), member);
+}
+
+/// The two decoders give one answer for a union tagged inside its object,
+/// what they read is written back as it is read, and `tagOf` names the arm
+/// the parse took.
+fn checkTagged(line: []const u8) !void {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var where: strand.Diagnostics = .{};
+    const direct = strand.parseLine(Tagged, a, line, .{});
+    const tokens = strand.parseLine(Tagged, a, line, .{ .diagnostics = &where });
+    const value = direct catch |err| {
+        try testing.expectError(err, tokens);
+        return;
+    };
+    const written = try taggedBytes(a, value);
+    try testing.expectEqualStrings(written, try taggedBytes(a, try tokens));
+    // Written once, it reads back as itself.
+    try testing.expectEqualStrings(written, try taggedBytes(a, try strand.parseLine(Tagged, a, written, .{})));
+    if (strand.tagOf(Tagged, line)) |arm| {
+        try testing.expectEqual(std.meta.activeTag(value), arm);
+    } else {
+        // Declined only for a tag written with an escape.
+        try testing.expect(std.mem.indexOfScalar(u8, line, '\\') != null);
+    }
+}
+
+fn taggedBytes(a: std.mem.Allocator, value: Tagged) ![]const u8 {
+    var out: std.Io.Writer.Allocating = .init(a);
+    try strand.writeValue(&out.writer, value, .{});
+    return out.written();
+}
+
 /// `lines` splits exactly the way the oracle does, and hands back views.
 fn checkLines(input: []const u8) !void {
     // `lines` takes a byte-order mark off the front of the buffer, which the
@@ -1088,6 +1172,37 @@ fn generate(smith: *std.testing.Smith, buf: []u8) []u8 {
     return buf[0..end];
 }
 
+/// Records tagged inside their object: the tag first, last, twice, missing
+/// or not a string, around members of the arms and of none.
+fn generateTagged(smith: *std.testing.Smith, buf: []u8) []u8 {
+    @disableInstrumentation();
+    var end: usize = 0;
+    while (end < buf.len and !smith.eos()) {
+        append(buf, &end, "{");
+        const members = smith.valueRangeAtMost(u8, 0, 4);
+        for (0..members) |i| {
+            if (i != 0) append(buf, &end, ",");
+            switch (smith.valueRangeAtMost(u8, 0, 9)) {
+                0 => append(buf, &end, "\"kind\":\"open\""),
+                1 => append(buf, &end, "\"kind\":\"close\""),
+                2 => append(buf, &end, "\"kind\":\"ping\""),
+                3 => append(buf, &end, "\"kind\":\"new\""),
+                4 => append(buf, &end, "\"kind\":7"),
+                5 => append(buf, &end, "\"at\":12"),
+                6 => append(buf, &end, "\"code\":3"),
+                7 => append(buf, &end, "\"tags\":[\"a\",{\"kind\":\"x\"}]"),
+                8 => append(buf, &end, "\"k\\u0069nd\":\"ping\""),
+                else => {
+                    var chunk: [12]u8 = undefined;
+                    append(buf, &end, chunk[0..smith.slice(&chunk)]);
+                },
+            }
+        }
+        append(buf, &end, "}\n");
+    }
+    return buf[0..end];
+}
+
 /// Lines of indented values, cut where a value can and cannot be cut: what a
 /// `.pretty` reader joins.
 fn generatePretty(smith: *std.testing.Smith, buf: []u8) []u8 {
@@ -1334,6 +1449,21 @@ fn fuzzTagOf(_: void, smith: *std.testing.Smith) anyerror!void {
     while (it.next()) |line| try checkTagOf(line.line);
 }
 
+test "fuzz: memberOf and tagged unions over generated lines" {
+    try std.testing.fuzz({}, fuzzTagged, .{ .corpus = corpus });
+}
+
+fn fuzzTagged(_: void, smith: *std.testing.Smith) anyerror!void {
+    @disableInstrumentation();
+    var buf: [512]u8 = undefined;
+    const input = if (smith.value(bool)) generateTagged(smith, &buf) else generate(smith, &buf);
+    var it = strand.lines(input);
+    while (it.next()) |line| {
+        try checkMemberOf(line.line);
+        try checkTagged(line.line);
+    }
+}
+
 test "fuzz: lines over generated input" {
     try std.testing.fuzz({}, fuzzLines, .{ .corpus = corpus });
 }
@@ -1564,6 +1694,7 @@ fn oneRound(bytes: []const u8) !void {
         fuzzResume,
         fuzzKindOf,
         fuzzTagOf,
+        fuzzTagged,
         fuzzLines,
         fuzzPretty,
         fuzzPrettyRoundTrip,
@@ -1680,6 +1811,8 @@ test "the properties hold on a table of awkward inputs" {
         while (it.next()) |line| {
             try checkKindOf(line.line);
             try checkTagOf(line.line);
+            try checkMemberOf(line.line);
+            try checkTagged(line.line);
             try checkVersioned(line.line);
             try checkRaw(line.line);
         }

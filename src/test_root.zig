@@ -5,6 +5,7 @@ test {
     _ = @import("raw_test.zig");
     _ = @import("tail_test.zig");
     _ = @import("follow_test.zig");
+    _ = @import("tagged_test.zig");
     _ = @import("versioned_test.zig");
     _ = @import("from_value_test.zig");
 
@@ -28,6 +29,8 @@ test {
     _ = @import("int.zig");
     _ = @import("file_id.zig");
     _ = @import("member_scan.zig");
+    _ = @import("tagging.zig");
+    _ = @import("indent.zig");
     _ = @import("leading.zig");
     _ = @import("from_value.zig");
     _ = @import("codec_tests.zig");

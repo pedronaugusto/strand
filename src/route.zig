@@ -3,6 +3,7 @@
 
 const std = @import("std");
 const member_scan = @import("member_scan.zig");
+const tagging = @import("tagging.zig");
 
 /// The first key of the object on `line`, or `null` when there is not one to
 /// read cheaply.
@@ -107,16 +108,24 @@ pub fn memberStringOf(line: []const u8, name: []const u8) ?[]const u8 {
 /// active arm — `{"open":{...}}` — so the first key is the tag, and reading
 /// it is enough to route a line without parsing its payload.
 ///
-/// `null` means the line is not shaped that way, its key is escaped (see
-/// `kindOf`), or the key does not name an arm of `U`. The last of those is
-/// how a line from a newer writer arrives; see "Arms added over time" in
-/// README.md for the `unknown` arm that gives it somewhere to land.
+/// A union that declares `jsonl_tag` is tagged inside its object instead —
+/// `{"type":"open",...}` — and its arm is the string in that member, read
+/// as `memberStringOf` reads it. A tag that names no arm is the arm
+/// `jsonl_other` names, when the union declares one, as a parse takes it.
+///
+/// `null` means the line is not shaped that way, its key or tag is escaped
+/// (see `kindOf`), or the tag does not name an arm of `U` and there is no
+/// `jsonl_other` to take it.
 pub fn tagOf(comptime U: type, line: []const u8) ?std.meta.Tag(U) {
     comptime {
         const info = @typeInfo(U);
         if (info != .@"union" or info.@"union".tag_type == null) {
             @compileError("strand.tagOf expects a tagged union, got " ++ @typeName(U));
         }
+    }
+    if (comptime tagging.internal(U)) |inside| {
+        const text = memberStringOf(line, inside.tag) orelse return null;
+        return std.meta.stringToEnum(std.meta.Tag(U), text) orelse inside.other;
     }
     const key = kindOf(line) orelse return null;
     return std.meta.stringToEnum(std.meta.Tag(U), key);

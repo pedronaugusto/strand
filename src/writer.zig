@@ -4,6 +4,7 @@
 const std = @import("std");
 const assert = std.debug.assert;
 const encode = @import("encode.zig");
+const tagging = @import("tagging.zig");
 const EncodeBuffer = @import("encode_buffer.zig");
 
 const line_mod = @import("line.zig");
@@ -315,6 +316,9 @@ pub fn Writer(comptime T: type) type {
         fn encodeValue(self: *const Self, value: T, output: *std.Io.Writer) std.Io.Writer.Error!void {
             if (comptime encode.supports(T)) {
                 if (self.options.format == .minified) return encode.value(value, self.encoding(), output);
+                // `std.json` would write a union tagged inside its object as
+                // one tagged by its key.
+                if (comptime tagging.reaches(T)) return encode.indented(value, self.encoding(), output);
             }
             return std.json.Stringify.value(value, self.encoding(), output);
         }

@@ -27,6 +27,9 @@
 //! * `kindOf` and `tagOf` answer "what kind of line is this" from the first
 //!   key alone, without parsing the value; `memberOf` and `memberStringOf`
 //!   answer it from a member named for it, wherever it is in the object.
+//! * A union that declares `jsonl_tag` is read and written tagged inside its
+//!   object — `{"type":"assistant",...}` — as serde's `#[serde(tag)]` is,
+//!   and `jsonl_other` names the arm a tag naming no arm is read as.
 //! * `Writer` emits one value per line — minified, or indented for a human —
 //!   and counts them, draining the destination and syncing the file under it
 //!   as often as it is told to.

@@ -22,6 +22,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const int = @import("int.zig");
+const tagging = @import("tagging.zig");
 
 /// `std.json.parseFromValueLeaky(T, allocator, value, options)`, with its
 /// answer, or `error.Overflow` where it would panic. Byte vectors also
@@ -85,6 +86,8 @@ fn needsConversion(comptime T: type, comptime seen: []const type) bool {
             else => false,
         },
         inline .@"struct", .@"union" => |info| result: {
+            // `std.json` reads every union as tagged by its one key.
+            if (comptime tagging.internal(T) != null) break :result true;
             if (std.meta.hasFn(T, "jsonParseFromValue") and
                 (@typeInfo(T) != .@"struct" or !@typeInfo(T).@"struct".is_tuple)) break :result false;
             for (info.fields) |field| if (needsConversion(field.type, next)) break :result true;
@@ -142,23 +145,11 @@ fn collections(comptime T: type, allocator: Allocator, value: std.json.Value, op
                 return result;
             }
             if (value != .object) return error.UnexpectedToken;
-            var seen = [_]bool{false} ** info.fields.len;
-            for (value.object.keys(), value.object.values()) |key, item| {
-                inline for (info.fields, 0..) |field, i| {
-                    if (field.is_comptime) @compileError("comptime fields are not supported: " ++ @typeName(T) ++ "." ++ field.name);
-                    if (std.mem.eql(u8, key, field.name)) {
-                        @field(result, field.name) = try parseFromValue(field.type, allocator, item, options);
-                        seen[i] = true;
-                        break;
-                    }
-                } else if (!options.ignore_unknown_fields) return error.UnknownField;
-            }
-            inline for (info.fields, 0..) |field, i| if (!seen[i]) {
-                if (field.defaultValue()) |default| @field(result, field.name) = default else return error.MissingField;
-            };
+            try fields(T, &result, allocator, value.object, options, null);
             return result;
         },
         .@"union" => |info| {
+            if (comptime tagging.internal(T)) |inside| return tagged(T, inside, allocator, value, options);
             if (info.tag_type == null) @compileError("Unable to parse into untagged union '" ++ @typeName(T) ++ "'");
             if (value != .object or value.object.count() != 1) return error.UnexpectedToken;
             const key = value.object.keys()[0];
@@ -176,6 +167,71 @@ fn collections(comptime T: type, allocator: Allocator, value: std.json.Value, op
         },
         else => unreachable,
     }
+}
+
+/// An object's members into the struct `result`, a member named `skip`
+/// passed over: the tag of a union tagged inside its object.
+fn fields(
+    comptime T: type,
+    result: *T,
+    allocator: Allocator,
+    object: std.json.ObjectMap,
+    options: std.json.ParseOptions,
+    comptime skip: ?[]const u8,
+) std.json.ParseFromValueError!void {
+    const info = @typeInfo(T).@"struct";
+    var seen = [_]bool{false} ** info.fields.len;
+    _ = &seen;
+    for (object.keys(), object.values()) |key, item| {
+        if (skip) |tag| if (std.mem.eql(u8, key, tag)) continue;
+        inline for (info.fields, 0..) |field, i| {
+            if (field.is_comptime) @compileError("comptime fields are not supported: " ++ @typeName(T) ++ "." ++ field.name);
+            if (std.mem.eql(u8, key, field.name)) {
+                @field(result, field.name) = try parseFromValue(field.type, allocator, item, options);
+                seen[i] = true;
+                break;
+            }
+        } else if (!options.ignore_unknown_fields) return error.UnknownField;
+    }
+    inline for (info.fields, 0..) |field, i| if (!seen[i]) {
+        if (field.defaultValue()) |default| @field(result, field.name) = default else return error.MissingField;
+    };
+}
+
+/// A union tagged inside its object, from the object: the arm its tag
+/// member names, and the arm's fields from the members around it.
+fn tagged(
+    comptime T: type,
+    comptime inside: anytype,
+    allocator: Allocator,
+    value: std.json.Value,
+    options: std.json.ParseOptions,
+) std.json.ParseFromValueError!T {
+    if (value != .object) return error.UnexpectedToken;
+    const name = switch (value.object.get(inside.tag) orelse return error.MissingField) {
+        .string => |text| text,
+        else => return error.UnexpectedToken,
+    };
+    inline for (@typeInfo(T).@"union".fields) |field| {
+        const is_other = comptime inside.other != null and
+            std.mem.eql(u8, field.name, @tagName(inside.other.?));
+        if (!is_other and std.mem.eql(u8, field.name, name)) {
+            if (field.type == void) {
+                var none: struct {} = .{};
+                try fields(@TypeOf(none), &none, allocator, value.object, options, inside.tag);
+                return @unionInit(T, field.name, {});
+            }
+            var result: T = @unionInit(T, field.name, undefined);
+            try fields(field.type, &@field(result, field.name), allocator, value.object, options, inside.tag);
+            return result;
+        }
+    }
+    if (comptime inside.other) |other| {
+        const Payload = @FieldType(T, @tagName(other));
+        if (Payload == void) return @unionInit(T, @tagName(other), {});
+        return @unionInit(T, @tagName(other), try std.json.parseFromValueLeaky(Payload, allocator, value, options));
+    }
+    return error.InvalidEnumTag;
 }
 
 //=========================================================================

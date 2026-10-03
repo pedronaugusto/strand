@@ -4,6 +4,8 @@
 //! `Raw` has a `jsonStringify` for that path and is written here directly.
 
 const std = @import("std");
+const tagging = @import("tagging.zig");
+const Indent = @import("indent.zig").Indent;
 
 pub fn Encoder(comptime Raw: type) type {
     return struct {
@@ -14,7 +16,11 @@ pub fn Encoder(comptime Raw: type) type {
             // for a schema's size, never a loop that does not end: the walk
             // stops at any type it is already inside.
             @setEvalBranchQuota(1_000_000);
-            return supportsType(T, .{});
+            // A union tagged inside its object is a shape only this encoder
+            // writes, so a value that reaches one is written here whatever
+            // else it holds: a type with its own `jsonStringify` in it is
+            // handed to `std.json` where it is met.
+            return supportsType(T, .{}) or tagging.reaches(T);
         }
 
         fn supportsType(comptime T: type, comptime ancestors: anytype) bool {
@@ -44,9 +50,22 @@ pub fn Encoder(comptime Raw: type) type {
             };
         }
 
+        /// `value`, laid out as `options.whitespace` says, as `std.json`
+        /// lays a value out: the pretty path of a value `std.json` cannot
+        /// write, because it reaches a union tagged inside its object.
+        pub fn indented(v: anytype, options: std.json.Stringify.Options, writer: *std.Io.Writer) std.Io.Writer.Error!void {
+            var buffer: [256]u8 = undefined;
+            var indent: Indent = .init(writer, options.whitespace, &buffer);
+            var minified = options;
+            minified.whitespace = .minified;
+            try value(v, minified, &indent.interface);
+            try indent.interface.flush();
+        }
+
         pub fn value(v: anytype, options: std.json.Stringify.Options, writer: *std.Io.Writer) std.Io.Writer.Error!void {
             const T = @TypeOf(v);
             if (T == Raw) return raw(v.bytes, options, writer);
+            if (comptime hasOwnStringify(T)) return std.json.Stringify.value(v, options, writer);
             switch (@typeInfo(T)) {
                 .bool => try writer.writeAll(if (v) "true" else "false"),
                 .int => |info| if (info.bits > 128) {
@@ -82,6 +101,7 @@ pub fn Encoder(comptime Raw: type) type {
                     try writer.writeByte(if (info.is_tuple) ']' else '}');
                 },
                 .@"union" => |info| {
+                    if (comptime tagging.internal(T)) |inside| return tagged(v, inside, options, WriterSink{ .writer = writer });
                     const Tag = info.tag_type.?;
                     try writer.writeByte('{');
                     inline for (info.fields) |field| {
@@ -206,6 +226,10 @@ pub fn Encoder(comptime Raw: type) type {
                 self.end += fixed.end;
             }
 
+            fn members(self: *Buffer, v: anytype, options: std.json.Stringify.Options) BufferError!void {
+                return bufferMembers(v, options, self, true);
+            }
+
             fn stdString(self: *Buffer, s: []const u8, options: std.json.Stringify.Options) BufferError!void {
                 var fixed: std.Io.Writer = .fixed(self.bytes[self.end..]);
                 std.json.Stringify.encodeJsonString(s, options, &fixed) catch return error.NoSpace;
@@ -216,6 +240,7 @@ pub fn Encoder(comptime Raw: type) type {
         fn bufferValue(v: anytype, options: std.json.Stringify.Options, out: *Buffer) BufferError!void {
             const T = @TypeOf(v);
             if (T == Raw) return out.raw(v.bytes, options);
+            if (comptime hasOwnStringify(T)) return out.stdValue(v, options);
             switch (@typeInfo(T)) {
                 .bool => try out.write(if (v) "true" else "false"),
                 .int => try out.integer(v),
@@ -241,41 +266,11 @@ pub fn Encoder(comptime Raw: type) type {
                 .error_set => try bufferString(@errorName(v), options, out),
                 .@"struct" => |info| {
                     try out.byte(if (info.is_tuple) '[' else '{');
-                    var first = true;
-                    // Whether a member before this one is always written, which
-                    // makes the comma in front of this one a constant.
-                    comptime var written_before = false;
-                    inline for (info.fields) |field| {
-                        if (field.type == void) continue;
-                        const optional = !info.is_tuple and @typeInfo(field.type) == .optional;
-                        var emit = true;
-                        if (optional and !options.emit_null_optional_fields) {
-                            if (@field(v, field.name) == null) emit = false;
-                        }
-                        if (emit) {
-                            if (!info.is_tuple and comptime safeFieldName(field.name)) {
-                                const key = comptime "\"" ++ field.name ++ "\":";
-                                if (written_before) {
-                                    try out.write("," ++ key);
-                                } else {
-                                    if (!first) try out.byte(',');
-                                    try out.write(key);
-                                }
-                            } else {
-                                if (!first) try out.byte(',');
-                                if (!info.is_tuple) {
-                                    try bufferString(field.name, options, out);
-                                    try out.byte(':');
-                                }
-                            }
-                            first = false;
-                            try bufferValue(@field(v, field.name), options, out);
-                        }
-                        if (!optional) written_before = true;
-                    }
+                    try bufferMembers(v, options, out, false);
                     try out.byte(if (info.is_tuple) ']' else '}');
                 },
                 .@"union" => |info| {
+                    if (comptime tagging.internal(T)) |inside| return tagged(v, inside, options, out);
                     const Tag = info.tag_type.?;
                     try out.byte('{');
                     inline for (info.fields) |field| {
@@ -320,6 +315,81 @@ pub fn Encoder(comptime Raw: type) type {
             }
         }
 
+        /// A struct's members, or a tuple's items, between its brackets. `lead`
+        /// says a member is already written in front of them, so every one of
+        /// them takes a comma: the tag of a union tagged inside its object.
+        fn bufferMembers(v: anytype, options: std.json.Stringify.Options, out: *Buffer, comptime lead: bool) BufferError!void {
+            const info = @typeInfo(@TypeOf(v)).@"struct";
+            var first = !lead;
+            _ = &first;
+            // Whether a member before this one is always written, which
+            // makes the comma in front of this one a constant.
+            comptime var written_before = lead;
+            inline for (info.fields) |field| {
+                if (field.type == void) continue;
+                const optional = !info.is_tuple and @typeInfo(field.type) == .optional;
+                var emit = true;
+                if (optional and !options.emit_null_optional_fields) {
+                    if (@field(v, field.name) == null) emit = false;
+                }
+                if (emit) {
+                    if (!info.is_tuple and comptime safeFieldName(field.name)) {
+                        const key = comptime "\"" ++ field.name ++ "\":";
+                        if (written_before) {
+                            try out.write("," ++ key);
+                        } else {
+                            if (!first) try out.byte(',');
+                            try out.write(key);
+                        }
+                    } else {
+                        if (!first) try out.byte(',');
+                        if (!info.is_tuple) {
+                            try bufferString(field.name, options, out);
+                            try out.byte(':');
+                        }
+                    }
+                    first = false;
+                    try bufferValue(@field(v, field.name), options, out);
+                }
+                if (!optional) written_before = true;
+            }
+        }
+
+        /// A union tagged inside its object: the tag first, then the arm's
+        /// members, in one object. The arm a tag naming no arm was read as is
+        /// written as it was read: a `Raw` holds the record, tag and all, and
+        /// a `void` one is its own name.
+        fn tagged(v: anytype, comptime inside: anytype, options: std.json.Stringify.Options, sink: anytype) !void {
+            const T = @TypeOf(v);
+            const tag_key = comptime "\"" ++ inside.tag ++ "\":";
+            switch (v) {
+                inline else => |payload, arm| {
+                    const Payload = @TypeOf(payload);
+                    if (comptime inside.other != null and arm == inside.other.? and Payload == Raw) {
+                        return sink.raw(payload.bytes, options);
+                    }
+                    try sink.write("{" ++ tag_key);
+                    if (comptime safeFieldName(@tagName(arm))) {
+                        try sink.write(comptime "\"" ++ @tagName(arm) ++ "\"");
+                    } else if (!try text(sink, @tagName(arm), options)) {
+                        try sink.stdString(@tagName(arm), options);
+                    }
+                    if (Payload != void) try sink.members(payload, options);
+                    try sink.byte('}');
+                },
+            }
+            _ = T;
+        }
+
+        /// A type that writes itself, met inside a value this encoder writes
+        /// only because it reaches a union tagged inside its object.
+        fn hasOwnStringify(comptime T: type) bool {
+            return switch (@typeInfo(T)) {
+                .@"struct", .@"union", .@"enum", .@"opaque" => std.meta.hasFn(T, "jsonStringify"),
+                else => false,
+            };
+        }
+
         fn bufferArray(items: anytype, options: std.json.Stringify.Options, out: *Buffer) BufferError!void {
             try out.byte('[');
             for (items, 0..) |item, i| {
@@ -348,6 +418,12 @@ pub fn Encoder(comptime Raw: type) type {
             }
             fn stdString(self: WriterSink, bytes: []const u8, options: std.json.Stringify.Options) std.Io.Writer.Error!void {
                 return std.json.Stringify.encodeJsonString(bytes, options, self.writer);
+            }
+            fn raw(self: WriterSink, bytes: []const u8, options: std.json.Stringify.Options) std.Io.Writer.Error!void {
+                return Encoder(Raw).raw(bytes, options, self.writer);
+            }
+            fn members(self: WriterSink, v: anytype, options: std.json.Stringify.Options) std.Io.Writer.Error!void {
+                _ = try Encoder(Raw).members(v, options, self.writer, false);
             }
         };
 

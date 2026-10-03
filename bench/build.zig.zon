@@ -6,8 +6,8 @@
     .dependencies = .{
         .strand = .{ .path = ".." },
         .after = .{
-            .url = "https://github.com/pedronaugusto/strand/archive/97333b0b4b4e395403e8ac40c4a458ee5882c485.tar.gz",
-            .hash = "strand-0.7.0-8LNWVkT6CwA5jPn4KrCZDfmDasNRjQnpkoclDmARBC4L",
+            .url = "https://github.com/pedronaugusto/strand/archive/fe8b1e0f470e890073288b7b72a6ef309e37e972.tar.gz",
+            .hash = "strand-0.7.0-8LNWVkmhDABEHsCxdQ8n5dMuHTjeuHXQbY0Jnyv9EQBr",
         },
     },
     .paths = .{ "build.zig", "build.zig.zon", "src" },

@@ -44,6 +44,9 @@ pub fn Reader(comptime T: type) type {
         options: Options,
         /// Internal. What parsing the current line allocated, reset per line.
         arena: std.heap.ArenaAllocator,
+        /// Internal. Where a `.pretty` record being joined ends; live only
+        /// inside `parse`.
+        pretty: PrettyEnd = undefined,
 
         const Self = @This();
 
@@ -223,63 +226,45 @@ pub fn Reader(comptime T: type) type {
         /// mode a record that is only a prefix of a value is joined to the
         /// lines after it here, which means reading them.
         pub fn parse(self: *Self, raw: RawLine) NextError!?Line(T) {
-            const record = raw.line;
-            _ = self.arena.reset(.retain_capacity);
-            // Asked for by name: what is left of `parseLine` once the
-            // line is good is a scanner on the stack and one call under
-            // it, and a second call around that is a cost every line
-            // pays for nothing.
-            const how: ParseOptions = .{
-                .ignore_unknown_fields = self.options.ignore_unknown_fields,
-                .duplicate_fields = self.options.duplicate_fields,
-                .copy_strings = false,
-            };
-            // The value is decoded into the `Line` it is handed back in,
-            // not copied into it; `parseLineInto` says what a copy costs.
-            var line: Line(T) = .{
-                .value = undefined,
-                .line = record,
-                .number = raw.number,
-                .offset = raw.offset,
-            };
-            if (@call(.always_inline, parseLineInto, .{ T, self.arena.allocator(), record, how, &line.value })) {
-                return line;
-            } else |err| switch (err) {
-                error.OutOfMemory => return error.OutOfMemory,
-                else => |parse_err| {
-                    if (self.options.format != .pretty) return self.malformed(raw.number, record, parse_err);
-                    return self.parseJoined(raw, parse_err);
-                },
-            }
-        }
-
-        /// `parse` for a `.pretty` record that did not parse on its first
-        /// line, apart from the path every minified line takes.
-        noinline fn parseJoined(self: *Self, raw: RawLine, first: ParseLineError) NextError!?Line(T) {
-            var pretty: PrettyEnd = undefined;
-            pretty.init(self.arena.child_allocator, raw.line);
-            defer pretty.deinit();
             var record = raw.line;
-            var failed = first;
+            // A `.pretty` record that has to be joined is parsed again here,
+            // at the one place every line is parsed: a second call site of
+            // `parseLineInto` changes what is inlined into this one, and a
+            // minified line paid four percent for it over long lines.
+            var joining = false;
+            defer if (joining) self.pretty.deinit();
             while (true) {
-                record = (try self.grow(&pretty, raw.number, record, failed)) orelse return null;
                 _ = self.arena.reset(.retain_capacity);
+                // Asked for by name: what is left of `parseLine` once the
+                // line is good is a scanner on the stack and one call under
+                // it, and a second call around that is a cost every line
+                // pays for nothing.
                 const how: ParseOptions = .{
                     .ignore_unknown_fields = self.options.ignore_unknown_fields,
                     .duplicate_fields = self.options.duplicate_fields,
                     .copy_strings = false,
                 };
+                // The value is decoded into the `Line` it is handed back in,
+                // not copied into it; `parseLineInto` says what a copy costs.
                 var line: Line(T) = .{
                     .value = undefined,
                     .line = record,
                     .number = raw.number,
                     .offset = raw.offset,
                 };
-                if (parseLineInto(T, self.arena.allocator(), record, how, &line.value)) {
+                if (@call(.always_inline, parseLineInto, .{ T, self.arena.allocator(), record, how, &line.value })) {
                     return line;
                 } else |err| switch (err) {
                     error.OutOfMemory => return error.OutOfMemory,
-                    else => |parse_err| failed = parse_err,
+                    else => |parse_err| {
+                        @branchHint(.unlikely);
+                        if (self.options.format != .pretty) return self.malformed(raw.number, record, parse_err);
+                        if (!joining) {
+                            self.pretty.init(self.arena.child_allocator, record);
+                            joining = true;
+                        }
+                        record = (try self.grow(&self.pretty, raw.number, record, parse_err)) orelse return null;
+                    },
                 }
             }
         }
@@ -299,7 +284,7 @@ pub fn Reader(comptime T: type) type {
         /// is refused where its value ends, as one record, and not on the
         /// line where it stopped being a `T`, which would read the rest of
         /// its lines as records of their own.
-        fn grow(self: *Self, pretty: *PrettyEnd, number: u64, prefix: []const u8, failed: ParseLineError) NextError!?[]const u8 {
+        noinline fn grow(self: *Self, pretty: *PrettyEnd, number: u64, prefix: []const u8, failed: ParseLineError) NextError!?[]const u8 {
             switch (pretty.state) {
                 .open => {},
                 .closed => if (failed == error.UnexpectedEndOfInput) {
@@ -412,7 +397,7 @@ const PrettyEnd = struct {
     },
     scanner: Scanner,
 
-    fn init(self: *PrettyEnd, allocator: Allocator, line: []const u8) void {
+    noinline fn init(self: *PrettyEnd, allocator: Allocator, line: []const u8) void {
         self.scanner = .initCompleteInput(allocator, line);
         self.state = .open;
         self.follow(line);

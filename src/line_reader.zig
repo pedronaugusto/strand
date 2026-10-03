@@ -345,6 +345,44 @@ pub const LineReader = struct {
         return discarded;
     }
 
+    /// What `input` holds from the start of `record` on — its bytes, its
+    /// `\n`, and everything buffered after them — when `record` is the line
+    /// `next` last handed back as a slice of `input`'s own buffer, ended by a
+    /// lone `\n`. `null` for any other line: one copied out across a refill,
+    /// one ended by `\r\n`, one framed by a record separator.
+    ///
+    /// A `.pretty` reader parses a record from here, in place, across the
+    /// line breaks that are only whitespace to JSON, and gives the lines it
+    /// read to `takeThrough`.
+    pub fn bufferedFrom(self: *const LineReader, record: RawLine) ?[]const u8 {
+        if (!self.borrowed or self.options.record_separator) return null;
+        const buffer = self.input.buffer;
+        const start = @intFromPtr(record.line.ptr) -% @intFromPtr(buffer.ptr); // safe: addresses compared as numbers; a line that is not in `buffer` fails the check below
+        const after = start +% record.line.len;
+        if (after +% 1 != self.input.seek or after >= self.input.end or buffer[after] != '\n') return null;
+        return buffer[start..self.input.end];
+    }
+
+    /// Takes the physical lines after `record`'s first through the one the
+    /// `\n` at `rest[end]` ends, `rest` being what `bufferedFrom` gave, as
+    /// lines of `record`: counted and consumed as `join` counts and consumes
+    /// them. The record is `rest[0..end]`, which is what `join` would have
+    /// made of the same lines.
+    ///
+    /// `null`, with nothing taken, for lines `join` would have had more to
+    /// say about: a blank one, which ends a record, a `\r`, which is either
+    /// a terminator `join` trims or a control byte, and a record past
+    /// `max_line_bytes`. The caller joins those itself.
+    pub fn takeThrough(self: *LineReader, record: RawLine, rest: []const u8, end: usize) ?[]const u8 {
+        const first = record.line.len;
+        if (end > self.options.max_line_bytes) return null;
+        const lines = newlinesAfter(rest[first .. end + 1]) orelse return null;
+        self.input.toss(end - first);
+        self.consumed += end - first;
+        self.number += lines;
+        return rest[0..end];
+    }
+
     /// Where the record `next` was last working on began, and how many lines
     /// came before it.
     ///
@@ -893,3 +931,31 @@ pub const LineReader = struct {
         };
     }
 };
+
+/// How many `\n` there are in `bytes` after its first byte, which is one:
+/// the lines a record runs on for past its first. `null` when two of them
+/// are side by side, which is a blank line, or there is a `\r`.
+fn newlinesAfter(bytes: []const u8) ?u64 {
+    var count: u64 = 0;
+    var i: usize = 0;
+    const width = 32;
+    const V = @Vector(width, u8);
+    const B = std.meta.Int(.unsigned, width);
+    while (i + width + 1 <= bytes.len) : (i += width) {
+        const here: V = bytes[i..][0..width].*;
+        const next: V = bytes[i + 1 ..][0..width].*;
+        const breaks = next == @as(V, @splat('\n'));
+        const blank = (here == @as(V, @splat('\n'))) & breaks;
+        if (@reduce(.Or, blank | (next == @as(V, @splat('\r'))))) return null;
+        count += @popCount(@as(B, @bitCast(breaks)));
+    }
+    while (i + 1 < bytes.len) : (i += 1) switch (bytes[i + 1]) {
+        '\r' => return null,
+        '\n' => {
+            if (bytes[i] == '\n') return null;
+            count += 1;
+        },
+        else => {},
+    };
+    return count;
+}

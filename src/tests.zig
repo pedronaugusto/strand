@@ -1021,6 +1021,38 @@ test "pretty: a record is parsed once its value ends, not once per line" {
     try testing.expect(parses[1] <= 4);
 }
 
+test "pretty: a record whole in the buffer is parsed where it lies, once" {
+    const work = @import("work.zig");
+    const input = "{\n  \"kind\": \"open\",\n  \"tags\": [\n    \"a\"\n  ]\n}\n\n{\"kind\":\"flat\"}   \n{\n\"kind\": \"last\"}\n";
+    var source: std.Io.Reader = .fixed(input);
+    var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{ .format = .pretty });
+    defer reader.deinit();
+    var counts: work.Counts = .{};
+    work.observe(&counts);
+    defer work.observe(null);
+
+    const open = (try reader.next()).?;
+    try testing.expectEqualStrings("open", open.value.kind);
+    // A view of the input, not a copy, and parsed by one call.
+    try testing.expect(open.line.ptr == input.ptr);
+    try testing.expectEqualStrings(input[0 .. std.mem.indexOf(u8, input, "\n}\n").? + 2], open.line);
+    try testing.expectEqual(@as(usize, 1), counts.parses);
+    try testing.expectEqual(@as(u64, 1), open.number);
+    try testing.expectEqual(@as(u64, 6), reader.lines.number);
+
+    const flat = (try reader.next()).?;
+    try testing.expectEqualStrings("flat", flat.value.kind);
+    try testing.expectEqual(@as(u64, 8), flat.number);
+    try testing.expectEqual(@as(u64, std.mem.indexOf(u8, input, "{\"kind\":\"flat").?), flat.offset);
+
+    const last = (try reader.next()).?;
+    try testing.expectEqualStrings("last", last.value.kind);
+    try testing.expectEqual(@as(u64, 9), last.number);
+    try testing.expectEqual(@as(u64, 10), reader.lines.number);
+    try testing.expectEqual(@as(?strand.Line(Event), null), try reader.next());
+    try testing.expectEqual(@as(u64, input.len), reader.lines.consumed);
+}
+
 test "pretty: a record that is JSON but not a T is one malformed record" {
     const input =
         \\{

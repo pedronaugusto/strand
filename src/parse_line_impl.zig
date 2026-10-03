@@ -145,6 +145,28 @@ pub fn Parser(comptime decode: type) type {
             out.* = try typed_parse.parse(T, allocator, &scanner, jsonOptions(options, line.len));
         }
 
+        /// Whether `T` is read by the direct decoder, which `parsePrefixInto`
+        /// is.
+        pub fn direct(comptime T: type) bool {
+            return decode.supports(T);
+        }
+
+        /// The value at the start of `bytes`, decoded into `out`, and how far
+        /// into `bytes` it ran; the bytes after it are not looked at. Only for
+        /// a `T` that is `direct`. A refusal says only that this was not a
+        /// value: `parseLine` over the bytes that should have been one is
+        /// what names the error.
+        pub fn parsePrefixInto(
+            comptime T: type,
+            allocator: Allocator,
+            bytes: []const u8,
+            options: ParseOptions,
+            out: *T,
+        ) ParseLineError!usize {
+            comptime std.debug.assert(decode.supports(T));
+            return decode.parsePrefixInto(T, allocator, bytes, jsonOptions(options, bytes.len), out);
+        }
+
         /// `parseLine` for the caller who asked where a line gave up.
         ///
         /// It is a function of its own rather than a branch inside `parseLine`

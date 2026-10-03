@@ -734,6 +734,47 @@ fn checkPrettyPerLine(input: []const u8, options: strand.Reader(std.json.Value).
     }
 }
 
+/// A record every JSON object is, and nothing else is: a `T` the direct
+/// decoder reads, which a `.pretty` reader parses in place.
+const AnyObject = struct {};
+
+/// A `.pretty` reader of a `T` the direct decoder reads parses a record in
+/// place in the input's buffer when the record is there whole, and joins its
+/// lines when it is not: over bytes that come whole, and the same bytes three
+/// at a time, which never are, the two say the same about every record.
+fn checkPrettyInPlace(comptime T: type, input: []const u8, options: strand.Reader(T).Options) !void {
+    var used = options;
+    used.format = .pretty;
+    var whole: std.Io.Reader = .fixed(input);
+    var buffer: [4]u8 = undefined;
+    var chunks: fixtures.Chunked = .init(input, &buffer, 3);
+    var in_place: strand.Reader(T) = .init(testing.allocator, &whole, used);
+    defer in_place.deinit();
+    var joined: strand.Reader(T) = .init(testing.allocator, &chunks.interface, used);
+    defer joined.deinit();
+    for (0..input.len + 2) |_| {
+        const want = joined.next();
+        const got = in_place.next();
+        if (want) |maybe| {
+            const line = try got;
+            try testing.expectEqual(maybe == null, line == null);
+            if (maybe) |w| {
+                try testing.expectEqualStrings(w.line, line.?.line);
+                try testing.expectEqual(w.number, line.?.number);
+                try testing.expectEqual(w.offset, line.?.offset);
+            }
+        } else |err| try testing.expectError(err, got);
+        try testing.expectEqual(joined.lines.fault, in_place.lines.fault);
+        try testing.expectEqual(joined.lines.skipped, in_place.lines.skipped);
+        try testing.expectEqual(joined.lines.number, in_place.lines.number);
+        try testing.expectEqual(joined.lines.consumed, in_place.lines.consumed);
+        try testing.expectEqual(joined.lines.unfinished, in_place.lines.unfinished);
+        if (want) |maybe| {
+            if (maybe == null) break;
+        } else |_| {}
+    }
+}
+
 /// A round trip through `.pretty`: what the writer indents over several lines,
 /// the reader puts back together as one record, whatever the values held.
 fn checkPrettyRoundTrip(events: []const Event) !void {
@@ -1496,6 +1537,13 @@ fn fuzzPrettyPerLine(_: void, smith: *std.testing.Smith) anyerror!void {
     try checkPrettyPerLine(input, .{});
     try checkPrettyPerLine(input, .{ .require_terminator = true });
     try checkPrettyPerLine(input, .{ .max_line_bytes = 24 });
+    inline for (.{ AnyObject, Event }) |T| {
+        try checkPrettyInPlace(T, input, .{ .on_malformed = .skip });
+        try checkPrettyInPlace(T, input, .{});
+        try checkPrettyInPlace(T, input, .{ .require_terminator = true });
+        try checkPrettyInPlace(T, input, .{ .max_line_bytes = 24 });
+        try checkPrettyInPlace(T, input, .{ .reject_control_bytes = false, .crlf = false });
+    }
 }
 
 test "fuzz: a pretty round trip over generated values" {
@@ -1805,6 +1853,11 @@ test "the properties hold on a table of awkward inputs" {
         try checkPretty(input);
         try checkPrettyPerLine(input, .{ .on_malformed = .skip });
         try checkPrettyPerLine(input, .{});
+        inline for (.{ AnyObject, Event }) |T| {
+            try checkPrettyInPlace(T, input, .{ .on_malformed = .skip });
+            try checkPrettyInPlace(T, input, .{});
+            try checkPrettyInPlace(T, input, .{ .require_terminator = true });
+        }
         try checkTail(input);
 
         var it = strand.lines(input);

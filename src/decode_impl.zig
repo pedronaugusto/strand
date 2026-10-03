@@ -68,6 +68,23 @@ pub fn Decoder(comptime Raw: type) type {
             if (p.cursor != input.len) return error.SyntaxError;
         }
 
+        /// A value at the start of `input`, decoded into `out` as `parseInto`
+        /// decodes one, and how far into `input` it ran: what comes after it
+        /// is the caller's. A `.pretty` reader parses a record this way out of
+        /// the bytes buffered behind it, across the line breaks inside it.
+        pub fn parsePrefixInto(
+            comptime T: type,
+            allocator: Allocator,
+            input: []const u8,
+            options: std.json.ParseOptions,
+            out: *T,
+        ) std.json.ParseError(std.json.Scanner)!usize {
+            @import("work.zig").parse();
+            var p: Parser = .{ .allocator = allocator, .input = input, .options = options };
+            try p.valueInto(T, out);
+            return p.cursor;
+        }
+
         const Parser = struct {
             allocator: Allocator,
             input: []const u8,

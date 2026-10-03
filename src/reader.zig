@@ -223,6 +223,11 @@ pub fn Reader(comptime T: type) type {
         /// mode a record that is only a prefix of a value is joined to the
         /// lines after it here, which means reading them.
         pub fn parse(self: *Self, raw: RawLine) NextError!?Line(T) {
+            if (comptime parse_line.direct(T)) if (self.options.format == .pretty) {
+                if (self.lines.bufferedFrom(raw)) |rest| {
+                    if (self.inPlace(raw, rest)) |line| return line;
+                }
+            };
             var record = raw.line;
             // A `.pretty` record that has to be joined is parsed again here,
             // at the one place every line is parsed: a second call site of
@@ -266,6 +271,41 @@ pub fn Reader(comptime T: type) type {
                     },
                 }
             }
+        }
+
+        /// A `.pretty` record parsed where it lies in the input's buffer:
+        /// from its first byte, across the line breaks inside its value, to
+        /// where the value ends. One parse on the decoder a minified line
+        /// takes, and no copy. The lines it ran over are then the record's,
+        /// as joining them would have made them.
+        ///
+        /// `null` hands the record to the joining path below, which says
+        /// what is wrong with it: a value that does not parse, or that is
+        /// cut off by the end of what is buffered, something after it on
+        /// its last line, and lines `takeThrough` will not take. What that
+        /// path makes of a record this one takes is the same record.
+        noinline fn inPlace(self: *Self, raw: RawLine, rest: []const u8) ?Line(T) {
+            _ = self.arena.reset(.retain_capacity);
+            const how: ParseOptions = .{
+                .ignore_unknown_fields = self.options.ignore_unknown_fields,
+                .duplicate_fields = self.options.duplicate_fields,
+                .copy_strings = false,
+            };
+            var line: Line(T) = .{
+                .value = undefined,
+                .line = raw.line,
+                .number = raw.number,
+                .offset = raw.offset,
+            };
+            const end = parse_line.parsePrefixInto(T, self.arena.allocator(), rest, how, &line.value) catch return null;
+            // Whitespace to the end of the line the value ended on, which
+            // is where the record ends.
+            var at = end;
+            while (at < rest.len and (rest[at] == ' ' or rest[at] == '\t')) at += 1;
+            if (at == rest.len or rest[at] != '\n') return null;
+            if (at == raw.line.len) return line;
+            line.line = self.lines.takeThrough(raw, rest, at) orelse return null;
+            return line;
         }
 
         /// What a `.pretty` record that did not parse does next: the record

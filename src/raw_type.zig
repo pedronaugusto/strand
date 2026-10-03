@@ -103,7 +103,18 @@ pub fn RawType(comptime strand: type) type {
                     if (Source == std.json.Scanner and !source.is_end_of_input) break :whole;
                     // The peek steps over whitespace and the colon before a
                     // field's value, so the cursor is on the value's first byte.
-                    _ = try source.peekNextTokenType();
+                    switch (try source.peekNextTokenType()) {
+                        // No value starts here. `std.json.Scanner`'s peek
+                        // names a bracket by its own kind even where it closes
+                        // the other kind of container, and the token is
+                        // taken so the scanner says which error it is; to
+                        // skip it would be to skip a value that is not there.
+                        .object_end, .array_end, .end_of_document => {
+                            _ = try source.next();
+                            return error.UnexpectedToken;
+                        },
+                        else => {},
+                    }
                     const start = source.cursor;
                     try source.skipValue();
                     return keep(allocator, source.input[start..source.cursor], options);

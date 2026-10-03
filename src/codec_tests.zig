@@ -364,6 +364,29 @@ test "a line that ends inside a character is cut short, as std.json says" {
     }
 }
 
+test "a bracket that closes the other kind of container is a syntax error" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // Read through the token path a `Raw` member takes, where an array closed
+    // by `}` came back as the end of an object and a value was skipped that
+    // was not there.
+    const Carrying = struct { data: strand.Raw = .null, more: []const strand.Raw = &.{} };
+    for ([_][]const u8{
+        "{\"more\":[1}",
+        "{\"more\":[1,2}}",
+        "{\"more\":[{\"a\":1]]}",
+        "{\"data\":1]",
+        "{\"data\":[1}}",
+        "[1}",
+        "{\"a\":1]",
+    }) |line| {
+        try expectSameParse(Carrying, a, line);
+        try expectSameParse(std.json.Value, a, line);
+        try expectSameParse(strand.Raw, a, line);
+    }
+}
+
 test "a whole number std.json cannot cast is read as the number it is, or refused" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();

@@ -1501,6 +1501,7 @@ const table: []const []const u8 = &.{
     "{\"kind\":\"\xff\xfe\"}\n",
     "{ \"kind\" : \"spaced\" }\n",
     "{\"tags\":[\"a\",\"b\"],\"span\":{\"id\":1}}\n",
+    "{\"more\":[1}\n{\"data\":[1}}\n",
 };
 
 test "the properties hold on a table of awkward inputs" {

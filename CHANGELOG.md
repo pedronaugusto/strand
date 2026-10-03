@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A `Raw` read where no value starts, as in `[1}` read through `std.json` or the token path, is an error rather than a panic in `skipValue`.
+
 - A line that ends inside a character is `UnexpectedEndOfInput`, as `std.json` reads it, rather than `SyntaxError`.
 
 - Check a string's high bytes in the vector that found its closing quote or escape.

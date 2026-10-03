@@ -49,7 +49,9 @@ pub fn indexOfControl(bytes: []const u8) ?usize {
 /// vectors into one answer because it is written for a line that holds none
 /// of these bytes at all; this one asks each vector on its own, because the
 /// answer is usually in the first.
-pub fn firstControlOrTerminator(bytes: []const u8) ?usize {
+// Keep the vector loop out of the reader's larger state machine so its
+// constants stay in registers rather than being loaded for each block.
+pub noinline fn firstControlOrTerminator(bytes: []const u8) ?usize {
     var i: usize = 0;
     if (!@inComptime() and !std.debug.inValgrind()) {
         if (std.simd.suggestVectorLength(u8)) |block_len| {
@@ -77,18 +79,22 @@ pub fn firstControlOrTerminator(bytes: []const u8) ?usize {
 /// are the whole answer. NEON reduces byte lanes directly: choose each
 /// matching lane's index or 255, then take the smallest. The narrow index
 /// type std.simd.firstTrue uses can require unpacking on that architecture.
+/// First ask whether any lane matches: the empty vectors of a long line
+/// need no index selection or minimum reduction.
 inline fn firstHit(comptime n: usize, hits: @Vector(n, bool)) ?usize {
+    if (!@reduce(.Or, hits)) return null;
+    work.laneSearch();
     if (comptime builtin.cpu.arch.isX86()) {
         const mask: std.meta.Int(.unsigned, n) = @bitCast(hits);
-        return if (mask == 0) null else @ctz(mask);
+        return @ctz(mask);
     }
     if (comptime builtin.cpu.arch == .aarch64 or builtin.cpu.arch == .aarch64_be) {
         comptime std.debug.assert(n < 256);
         const indices = @select(u8, hits, std.simd.iota(u8, n), @as(@Vector(n, u8), @splat(255)));
         const first = @reduce(.Min, indices);
-        return if (first == 255) null else first;
+        return first;
     }
-    return if (@reduce(.Or, hits)) std.simd.firstTrue(hits).? else null;
+    return std.simd.firstTrue(hits).?;
 }
 
 test firstControlOrTerminator {
@@ -211,4 +217,17 @@ test "indexOfControl reads a line by the vector the way it reads it by the byte"
         @memset(bytes, '\t');
         try std.testing.expectEqual(scalarControl(bytes), indexOfControl(bytes));
     }
+}
+
+// Long payloads have many empty vectors and only one terminator vector.
+test "framing searches lanes only in a vector that holds a control byte" {
+    var counts: work.Counts = .{};
+    work.observe(&counts);
+    defer work.observe(null);
+    const payload = "x" ** 4096;
+    try std.testing.expectEqual(@as(?usize, null), firstControlOrTerminator(payload));
+    try std.testing.expectEqual(@as(usize, 0), counts.lane_searches);
+    counts = .{};
+    try std.testing.expectEqual(@as(?usize, payload.len), firstControlOrTerminator(payload ++ "\n" ++ "x" ** 64));
+    try std.testing.expectEqual(@as(usize, 1), counts.lane_searches);
 }

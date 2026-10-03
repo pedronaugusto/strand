@@ -5,6 +5,7 @@ const builtin = @import("builtin");
 pub const Counts = struct {
     scan_bytes: usize = 0,
     parses: usize = 0,
+    lane_searches: usize = 0,
 };
 
 threadlocal var observer: ?*Counts = null;
@@ -22,5 +23,12 @@ pub inline fn scan(bytes: usize) void {
 pub inline fn parse() void {
     if (builtin.is_test) if (observer) |counts| {
         counts.parses += 1;
+    };
+}
+
+// Finding a lane is separate from asking whether a vector has any hits.
+pub inline fn laneSearch() void {
+    if (builtin.is_test) if (observer) |counts| {
+        counts.lane_searches += 1;
     };
 }

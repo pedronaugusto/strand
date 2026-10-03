@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Keep the framing scan in its own call and find a control lane only in a vector that holds one.
+
 - Reject undeclared dependencies, duplicate layer membership and imports of source executables.
 
 - Assemble codecs around one raw value type and keep integration tests above the public module.

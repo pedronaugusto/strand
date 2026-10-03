@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A `.pretty` reader follows a record to where its JSON value ends and parses it there, once; it parsed the record again after every line joined to it, so a record of n lines cost n parses. A record that is JSON but not a `T` is refused as the lines its value takes, where it was refused at the line it went wrong on and the lines after that were read as records of their own.
+
 - A `Raw` read where no value starts, as in `[1}` read through `std.json` or the token path, is an error rather than a panic in `skipValue`.
 
 - A line that ends inside a character is `UnexpectedEndOfInput`, as `std.json` reads it, rather than `SyntaxError`.

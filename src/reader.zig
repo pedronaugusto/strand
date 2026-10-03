@@ -15,6 +15,7 @@ const RawLine = line_mod.RawLine;
 const Format = line_mod.Format;
 
 const LineReader = @import("line_reader.zig").LineReader;
+const Scanner = @import("scanner.zig");
 
 /// A stream of `T`, one per line, over a `*std.Io.Reader`.
 ///
@@ -223,6 +224,10 @@ pub fn Reader(comptime T: type) type {
         /// lines after it here, which means reading them.
         pub fn parse(self: *Self, raw: RawLine) NextError!?Line(T) {
             var record = raw.line;
+            // Set up only when a `.pretty` record has to be joined.
+            var pretty: PrettyEnd = undefined;
+            var joining = false;
+            defer if (joining) pretty.deinit();
             while (true) {
                 _ = self.arena.reset(.retain_capacity);
                 // Asked for by name: what is left of `parseLine` once the
@@ -246,29 +251,85 @@ pub fn Reader(comptime T: type) type {
                     return line;
                 } else |err| switch (err) {
                     error.OutOfMemory => return error.OutOfMemory,
-                    error.UnexpectedEndOfInput => if (self.options.format == .pretty) {
-                        // A prefix of a value: the rest of it is on the lines
-                        // that follow, unless there are none.
-                        switch (try self.lines.join(raw.number, record)) {
-                            .grown => |joined| {
-                                record = joined;
-                                continue;
-                            },
-                            // The record is damaged rather than unfinished,
-                            // and the line reader has already said where and
-                            // counted it: saying anything else here would
-                            // replace the true diagnosis with a guess.
-                            .damaged => return null,
-                            .ended => if (self.options.require_terminator)
-                                return null
-                            else
-                                return self.malformed(raw.number, record, error.UnexpectedEndOfInput),
+                    else => |parse_err| {
+                        if (self.options.format != .pretty) return self.malformed(raw.number, record, parse_err);
+                        if (!joining) {
+                            pretty.init(self.arena.child_allocator, record);
+                            joining = true;
                         }
-                    } else {
-                        return self.malformed(raw.number, record, error.UnexpectedEndOfInput);
+                        record = (try self.grow(&pretty, raw.number, record, parse_err)) orelse return null;
                     },
-                    else => |parse_err| return self.malformed(raw.number, record, parse_err),
                 }
+            }
+        }
+
+        /// What a `.pretty` record that did not parse does next: the record
+        /// joined to the lines after it, as far as the next place a parse can
+        /// decide it, or `null` when it is decided without one — refused under
+        /// `.skip`, damaged, or unfinished under `require_terminator`.
+        ///
+        /// A record ends where its JSON value does. Parsing it after every
+        /// joined line would find that too, but it parses a record of `n`
+        /// lines `n` times, so a scan follows the value's end a line at a
+        /// time instead and the record is parsed again only where the value
+        /// ends, where it stops being JSON, or at a blank line, which
+        /// `parseLine` refuses. That is the same record a parse per line
+        /// makes, with one exception: a record that is JSON but not a `T`
+        /// is refused where its value ends, as one record, and not on the
+        /// line where it stopped being a `T`, which would read the rest of
+        /// its lines as records of their own.
+        fn grow(self: *Self, pretty: *PrettyEnd, number: u64, prefix: []const u8, failed: ParseLineError) NextError!?[]const u8 {
+            switch (pretty.state) {
+                .open => {},
+                .closed => if (failed == error.UnexpectedEndOfInput) {
+                    // The parse wants more than the value the scan saw end,
+                    // which `std.json` as the oracle of both rules out. Join
+                    // and parse a line at a time rather than guess.
+                    pretty.state = .per_line;
+                } else {
+                    _ = try self.malformed(number, prefix, failed);
+                    return null;
+                },
+                .per_line => if (failed != error.UnexpectedEndOfInput) {
+                    _ = try self.malformed(number, prefix, failed);
+                    return null;
+                },
+                // The stream ended inside the value, and this was the parse
+                // that says what the record is.
+                .ended => {
+                    _ = try self.malformed(number, prefix, failed);
+                    return null;
+                },
+            }
+            var record = prefix;
+            while (true) {
+                const before = record.len;
+                switch (try self.lines.join(number, record)) {
+                    .grown => |joined| record = joined,
+                    // The record is damaged rather than unfinished, and the
+                    // line reader has already said where and counted it:
+                    // saying anything else here would replace the true
+                    // diagnosis with a guess.
+                    .damaged => return null,
+                    .ended => {
+                        if (self.options.require_terminator) return null;
+                        if (pretty.state == .per_line) {
+                            _ = try self.malformed(number, record, failed);
+                            return null;
+                        }
+                        pretty.state = .ended;
+                        return record;
+                    },
+                }
+                if (pretty.state == .per_line) return record;
+                if (record.len == before + 1) {
+                    // A blank line, which leaves the record ending in its
+                    // terminator: the parse refuses that.
+                    pretty.state = .closed;
+                    return record;
+                }
+                pretty.follow(record);
+                if (pretty.state != .open) return record;
             }
         }
 
@@ -309,3 +370,74 @@ pub fn Reader(comptime T: type) type {
         }
     };
 }
+
+/// Where a `.pretty` record's value ends, followed a line at a time.
+///
+/// The scanner a parse reads tokens from, which `std.json` is the oracle of,
+/// so the value it sees end is the one a parse sees end. A line ends between
+/// two tokens of a value that goes on after it — a string, a literal or a
+/// number cut by the `\n` is not JSON — so the scanner picks up the next line
+/// where it left off. It keeps no token and borrows nothing between lines.
+const PrettyEnd = struct {
+    state: enum {
+        /// Inside the value.
+        open,
+        /// The value ended, or what was followed stopped being JSON.
+        closed,
+        /// The stream ended inside the value.
+        ended,
+        /// Not followed: parsed after every joined line.
+        per_line,
+    },
+    scanner: Scanner,
+
+    fn init(self: *PrettyEnd, allocator: Allocator, line: []const u8) void {
+        self.scanner = .initCompleteInput(allocator, line);
+        self.state = .open;
+        self.follow(line);
+    }
+
+    fn deinit(self: *PrettyEnd) void {
+        self.scanner.deinit();
+    }
+
+    /// Follows `record`, whose front is what was followed before, to its end
+    /// or to where its value does.
+    fn follow(self: *PrettyEnd, record: []const u8) void {
+        @import("work.zig").scan(record.len - self.scanner.cursor);
+        // The bytes before the cursor are the same, wherever they are now.
+        self.scanner.input = record;
+        while (true) {
+            const from = self.scanner.cursor;
+            const between = self.scanner.state != .string and self.scanner.state != .string_escape;
+            const token = self.scanner.next() catch |err| switch (err) {
+                error.OutOfMemory => {
+                    self.state = .per_line;
+                    return;
+                },
+                // Out of input between two tokens is a value that goes on;
+                // inside one, it is not JSON once the `\n` after it is there.
+                error.UnexpectedEndOfInput => if (between and blank(record[from..])) return else break,
+                else => break,
+            };
+            switch (token) {
+                .object_end, .array_end, .number, .string, .true, .false, .null => {
+                    if (self.scanner.stackHeight() == 0) break;
+                },
+                .end_of_document => break,
+                else => {},
+            }
+        }
+        self.state = .closed;
+    }
+
+    /// Whether `bytes` hold no part of a token: only the whitespace, commas
+    /// and colons the scanner passes over between two.
+    fn blank(bytes: []const u8) bool {
+        for (bytes) |c| switch (c) {
+            ' ', '\t', '\r', '\n', ',', ':' => {},
+            else => return false,
+        };
+        return true;
+    }
+};

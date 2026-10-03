@@ -546,6 +546,110 @@ fn checkPretty(input: []const u8) !void {
     try testing.expect(reader.lines.number <= all.number);
 }
 
+/// What a `.pretty` reader did before it followed a value to its end: parse
+/// the record after every line joined to it. For a type that every JSON value
+/// is (`std.json.Value`, duplicates allowed), a parse fails only where the
+/// JSON does, so the reader that parses once the value ends has to make the
+/// same records out of any bytes, and say the same things about them.
+const PerLine = struct {
+    lines: strand.LineReader,
+    arena: std.heap.ArenaAllocator,
+    options: strand.Reader(std.json.Value).Options,
+
+    const Got = struct { line: []const u8, number: u64, offset: u64 };
+    const how: strand.ParseOptions = .{ .duplicate_fields = .use_last };
+
+    fn next(self: *PerLine) strand.Reader(std.json.Value).NextError!?Got {
+        while (true) {
+            const raw = (try self.lines.next()) orelse return null;
+            if (try self.parse(raw)) |got| return got;
+            if (self.lines.unfinished) return null;
+        }
+    }
+
+    fn parse(self: *PerLine, raw: strand.RawLine) strand.Reader(std.json.Value).NextError!?Got {
+        var record = raw.line;
+        while (true) {
+            _ = self.arena.reset(.retain_capacity);
+            if (strand.parseLine(std.json.Value, self.arena.allocator(), record, how)) |_| {
+                return .{ .line = record, .number = raw.number, .offset = raw.offset };
+            } else |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.UnexpectedEndOfInput => switch (try self.lines.join(raw.number, record)) {
+                    .grown => |joined| record = joined,
+                    .damaged => return null,
+                    .ended => return if (self.options.require_terminator) null else self.malformed(raw.number, record, err),
+                },
+                else => |parse_err| return self.malformed(raw.number, record, parse_err),
+            }
+        }
+    }
+
+    fn malformed(self: *PerLine, number: u64, record: []const u8, err: strand.ParseLineError) error{MalformedLine}!?Got {
+        var where: strand.Diagnostics = .{};
+        var with = how;
+        with.diagnostics = &where;
+        const at: ?usize = if (strand.parseLine(std.json.Value, self.arena.allocator(), record, with)) |_| null else |_| where.offset;
+        self.lines.fault.parse(number, err, at);
+        if (self.options.on_malformed == .fail) return error.MalformedLine;
+        self.lines.skipped += 1;
+        return null;
+    }
+};
+
+/// A `.pretty` reader makes the records a parse after every joined line
+/// makes, and says the same about each: see `PerLine`.
+fn checkPrettyPerLine(input: []const u8, options: strand.Reader(std.json.Value).Options) !void {
+    var options_used = options;
+    options_used.format = .pretty;
+    options_used.duplicate_fields = .use_last;
+    for ([_]bool{ false, true }) |streamed| {
+        var fixed: [2]std.Io.Reader = .{ .fixed(input), .fixed(input) };
+        var buffers: [2][4]u8 = undefined;
+        var chunks: [2]fixtures.Chunked = .{ .init(input, &buffers[0], 3), .init(input, &buffers[1], 3) };
+        var reader: strand.Reader(std.json.Value) = .init(
+            testing.allocator,
+            if (streamed) &chunks[0].interface else &fixed[0],
+            options_used,
+        );
+        defer reader.deinit();
+        var oracle: PerLine = .{
+            .lines = .init(testing.allocator, if (streamed) &chunks[1].interface else &fixed[1], .{
+                .max_line_bytes = options_used.max_line_bytes,
+                .require_terminator = options_used.require_terminator,
+                .on_malformed = options_used.on_malformed,
+            }),
+            .arena = .init(testing.allocator),
+            .options = options_used,
+        };
+        defer oracle.lines.deinit();
+        defer oracle.arena.deinit();
+
+        // Every call takes at least one line, so the input bounds the calls.
+        for (0..input.len + 2) |_| {
+            const want = oracle.next();
+            const got = reader.next();
+            if (want) |maybe| {
+                const line = try got;
+                try testing.expectEqual(maybe == null, line == null);
+                if (maybe) |w| {
+                    try testing.expectEqualStrings(w.line, line.?.line);
+                    try testing.expectEqual(w.number, line.?.number);
+                    try testing.expectEqual(w.offset, line.?.offset);
+                }
+            } else |err| try testing.expectError(err, got);
+            try testing.expectEqual(oracle.lines.fault, reader.lines.fault);
+            try testing.expectEqual(oracle.lines.skipped, reader.lines.skipped);
+            try testing.expectEqual(oracle.lines.number, reader.lines.number);
+            try testing.expectEqual(oracle.lines.consumed, reader.lines.consumed);
+            try testing.expectEqual(oracle.lines.unfinished, reader.lines.unfinished);
+            if (want) |maybe| {
+                if (maybe == null) break;
+            } else |_| {}
+        }
+    }
+}
+
 /// A round trip through `.pretty`: what the writer indents over several lines,
 /// the reader puts back together as one record, whatever the values held.
 fn checkPrettyRoundTrip(events: []const Event) !void {
@@ -984,6 +1088,30 @@ fn generate(smith: *std.testing.Smith, buf: []u8) []u8 {
     return buf[0..end];
 }
 
+/// Lines of indented values, cut where a value can and cannot be cut: what a
+/// `.pretty` reader joins.
+fn generatePretty(smith: *std.testing.Smith, buf: []u8) []u8 {
+    @disableInstrumentation();
+    const pieces = [_][]const u8{
+        "{",            "}",         "[",     "]",       "  \"kind\": \"open\",",
+        "  \"at\": 12", "1,",        "12",    "-0.5e3",  "tr",
+        "ue",           "null",      "",      "   ",     ",",
+        "\"str",        "ing\"",     "{}",    "[1,",     "\"a\": {",
+        "\"\\u00",      "41\"",      "} {",   "}]",      "\"x\":",
+        "\"\xff\"",     "\"a\x01\"", "\x1e{", "\"k\" 1", "{\"kind\":\"flat\"}",
+    };
+    var end: usize = 0;
+    while (end < buf.len and !smith.eos()) {
+        append(buf, &end, pieces[smith.valueRangeAtMost(u8, 0, pieces.len - 1)]);
+        switch (smith.valueRangeAtMost(u8, 0, 5)) {
+            0 => append(buf, &end, "\r\n"),
+            1 => {},
+            else => append(buf, &end, "\n"),
+        }
+    }
+    return buf[0..end];
+}
+
 /// Appends what fits and drops the rest, so the generator cannot overrun.
 fn append(buf: []u8, end: *usize, bytes: []const u8) void {
     @disableInstrumentation();
@@ -1226,6 +1354,20 @@ fn fuzzPretty(_: void, smith: *std.testing.Smith) anyerror!void {
     try checkPretty(generate(smith, &buf));
 }
 
+test "fuzz: a pretty reader parses where a parse per line would" {
+    try std.testing.fuzz({}, fuzzPrettyPerLine, .{ .corpus = corpus });
+}
+
+fn fuzzPrettyPerLine(_: void, smith: *std.testing.Smith) anyerror!void {
+    @disableInstrumentation();
+    var buf: [1024]u8 = undefined;
+    const input = generatePretty(smith, &buf);
+    try checkPrettyPerLine(input, .{ .on_malformed = .skip });
+    try checkPrettyPerLine(input, .{});
+    try checkPrettyPerLine(input, .{ .require_terminator = true });
+    try checkPrettyPerLine(input, .{ .max_line_bytes = 24 });
+}
+
 test "fuzz: a pretty round trip over generated values" {
     try std.testing.fuzz({}, fuzzPrettyRoundTrip, .{ .corpus = corpus });
 }
@@ -1425,6 +1567,7 @@ fn oneRound(bytes: []const u8) !void {
         fuzzLines,
         fuzzPretty,
         fuzzPrettyRoundTrip,
+        fuzzPrettyPerLine,
         fuzzWriter,
         fuzzSeparated,
         fuzzRotation,
@@ -1502,6 +1645,17 @@ const table: []const []const u8 = &.{
     "{ \"kind\" : \"spaced\" }\n",
     "{\"tags\":[\"a\",\"b\"],\"span\":{\"id\":1}}\n",
     "{\"more\":[1}\n{\"data\":[1}}\n",
+    // Values over several lines, cut where a `.pretty` reader joins them.
+    "{\n  \"kind\": \"open\",\n  \"at\": 12\n}\n{\"kind\":\"flat\"}\n",
+    "{\n\n}\n",
+    "[1,\n2\n]\n12\n",
+    "\"str\ning\"\n",
+    "{\n} {\n}\n",
+    "[\ntr\nue]\n",
+    "{\n  \"kind\": 7\n}\n",
+    "[\n{\n\"a\": [\n]\n}\n]",
+    "[\"a\\n  \n\"]\n",
+    "[\"a\\n  ",
 };
 
 test "the properties hold on a table of awkward inputs" {
@@ -1518,6 +1672,8 @@ test "the properties hold on a table of awkward inputs" {
         try checkResume(input);
 
         try checkPretty(input);
+        try checkPrettyPerLine(input, .{ .on_malformed = .skip });
+        try checkPrettyPerLine(input, .{});
         try checkTail(input);
 
         var it = strand.lines(input);

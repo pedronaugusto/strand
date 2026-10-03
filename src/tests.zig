@@ -987,6 +987,66 @@ test "pretty: a record written over several lines is read back as one" {
     try testing.expectEqual(@as(?strand.Line(Event), null), try tolerant.next());
 }
 
+test "pretty: a record is parsed once its value ends, not once per line" {
+    const work = @import("work.zig");
+    var parses: [2]usize = undefined;
+    for ([_]usize{ 16, 512 }, &parses) |n, *parsed| {
+        var out: std.Io.Writer.Allocating = .init(testing.allocator);
+        defer out.deinit();
+        try out.writer.writeAll("{\n  \"kind\": \"wide\",\n  \"tags\": [\n");
+        for (0..n) |i| try out.writer.print("    \"t{d}\"{s}\n", .{ i, if (i + 1 < n) "," else "" });
+        try out.writer.writeAll("  ]\n}\n{\"kind\": \"after\"}\n");
+        const record_len = std.mem.indexOf(u8, out.written(), "\n}\n").? + 2;
+
+        var source: std.Io.Reader = .fixed(out.written());
+        var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{ .format = .pretty });
+        defer reader.deinit();
+        var counts: work.Counts = .{};
+        work.observe(&counts);
+        defer work.observe(null);
+        const wide = (try reader.next()).?;
+        try testing.expectEqual(n, wide.value.tags.len);
+        try testing.expectEqual(@as(u64, 1), wide.number);
+        try testing.expectEqual(record_len, wide.line.len);
+        parsed.* = counts.parses;
+        // Every byte is looked at a bounded number of times: framed, checked
+        // for control bytes, followed to where its value ends, and parsed.
+        try testing.expect(counts.scan_bytes <= 3 * record_len);
+        const after = (try reader.next()).?;
+        try testing.expectEqualStrings("after", after.value.kind);
+        try testing.expectEqual(@as(u64, n + 6), after.number);
+    }
+    // The count does not grow with the record's lines.
+    try testing.expectEqual(parses[0], parses[1]);
+    try testing.expect(parses[1] <= 4);
+}
+
+test "pretty: a record that is JSON but not a T is one malformed record" {
+    const input =
+        \\{
+        \\  "kind": 7,
+        \\  "at": 1
+        \\}
+        \\{"kind": "next"}
+        \\
+    ;
+    var source: std.Io.Reader = .fixed(input);
+    var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{
+        .format = .pretty,
+        .on_malformed = .skip,
+    });
+    defer reader.deinit();
+
+    // Refused as the four lines its value takes, not on its second line with
+    // the two after it read as records of their own.
+    const next = (try reader.next()).?;
+    try testing.expectEqualStrings("next", next.value.kind);
+    try testing.expectEqual(@as(u64, 5), next.number);
+    try testing.expectEqual(@as(u64, 1), reader.lines.skipped);
+    try testing.expectEqual(@as(u64, 1), reader.lines.fault.line);
+    try testing.expectEqual(error.UnexpectedToken, reader.lines.fault.err.?);
+}
+
 test "pretty: a record that never finishes is one malformed record" {
     const input =
         \\{

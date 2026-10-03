@@ -143,7 +143,7 @@ pub const Format = enum {
     /// still holds — `std.json` escapes every line terminator that could
     /// appear inside a string, so a record ends at the first `\n` that is not
     /// part of one — but putting the record back together means joining lines
-    /// until they parse, which only a reader in `.pretty` mode does.
+    /// until its value ends, which only a reader in `.pretty` mode does.
     pretty,
 };
 

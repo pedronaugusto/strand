@@ -463,7 +463,7 @@ pub const LineReader = struct {
     /// made of it, and `number` is that line's number. This is how a record
     /// written over several lines is put back together by a reader that can
     /// tell when it is finished, which a line reader cannot: `Reader` in
-    /// `.pretty` mode joins until the record parses. The joined record is
+    /// `.pretty` mode joins until the record's value ends. The joined record is
     /// held to `max_line_bytes`, the separator excluded, and the line
     /// joined on is checked for control bytes like any other; one found
     /// under `on_malformed = .skip` is `.damaged`, and counted in `skipped`.

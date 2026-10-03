@@ -12,6 +12,9 @@ const bom = line_mod.bom;
 const trimCr = line_mod.trimCr;
 const isBlank = line_mod.isBlank;
 
+const Raw = @import("raw.zig").Raw;
+const MemberScan = @import("member_scan.zig").MemberScan;
+
 const control = @import("control.zig");
 const indexOfControl = control.indexOfControl;
 const firstControlOrTerminator = control.firstControlOrTerminator;
@@ -97,6 +100,15 @@ pub const LineReader = struct {
     record_offset: u64 = 0,
     /// Internal. How many physical lines preceded the current record.
     record_number: u64 = 0,
+    /// Internal. The `oversized_member` of the line last refused as too
+    /// long; see `oversizedMember`.
+    oversized: [max_oversized_member_bytes]u8 = undefined,
+    /// Internal. How many bytes of `oversized` are the member, or `null`
+    /// when there is none.
+    oversized_len: ?u8 = null,
+
+    /// The longest `oversized_member` value kept, in bytes.
+    pub const max_oversized_member_bytes = @import("member_scan.zig").max_value_bytes;
 
     /// Framing policy, fixed at `init`. `Reader.Options` carries the same
     /// fields under the same names and hands them down.
@@ -158,6 +170,20 @@ pub const LineReader = struct {
         /// a format whose lines are checked byte for byte, a checksum over
         /// each of them, which a `\r` changes.
         crlf: bool = true,
+        /// The name of a member to keep from a line refused as too long, for
+        /// a caller that has to answer the line under it: a request's id, so
+        /// the host that sent it is told rather than left waiting. The line's
+        /// bytes go by as they are discarded and the member's value is kept
+        /// as `oversizedMember`; the rest of the line is gone. `null`, the
+        /// default, keeps nothing and looks at nothing.
+        ///
+        /// The member is the outermost object's own, wherever on the line it
+        /// is, and the last one when there are several; its key is matched as
+        /// written, escapes and all. The value is kept only when it is one
+        /// JSON scalar — a string, a number, `true`, `false` or `null` — of at
+        /// most `max_oversized_member_bytes`, so what comes back is always a
+        /// value that can be written into a reply as it is.
+        oversized_member: ?[]const u8 = null,
         /// What a damaged line does: one holding a raw control byte, or in
         /// separated mode one with no record on it. `Reader` applies the
         /// same setting to a line that is not a `T`.
@@ -270,6 +296,53 @@ pub const LineReader = struct {
         // begins anywhere else must not eat three bytes of a line looking for
         // one, and a reader put back at the start must look again.
         self.bom_checked = start.offset != 0;
+    }
+
+    /// The value of `options.oversized_member` on the line `next` or `join`
+    /// last refused as `error.LineTooLong`, as its bytes; `null` when that
+    /// line had none that could be kept, or no `oversized_member` was named.
+    /// Borrowed from this reader until the next line refused as too long.
+    pub fn oversizedMember(self: *const LineReader) ?Raw {
+        const len = self.oversized_len orelse return null;
+        return .{ .bytes = self.oversized[0..len] };
+    }
+
+    /// Notes the oversized member of a refused record whose bytes, so far
+    /// as they are kept, are `kept`, discarding the rest of the line from
+    /// `input` when `rest` says to. Returns the bytes discarded, as
+    /// `discardLine` counts them.
+    fn refuseOversized(self: *LineReader, kept: []const u8, comptime rest: enum { whole, discard }) error{ReadFailed}!u64 {
+        const name = self.options.oversized_member orelse {
+            self.oversized_len = null;
+            return if (rest == .discard) self.discardLine() else 0;
+        };
+        var scan: MemberScan = .init(name);
+        scan.feed(kept);
+        const discarded: u64 = if (rest == .discard) discarded: {
+            var n: u64 = 0;
+            while (true) {
+                const available = self.input.peekGreedy(1) catch |err| switch (err) {
+                    error.ReadFailed => return error.ReadFailed,
+                    // The over-long line was the last one, with no terminator.
+                    error.EndOfStream => break :discarded 0,
+                };
+                if (std.mem.findScalar(u8, available, '\n')) |at| {
+                    scan.feed(available[0..at]);
+                    self.input.toss(at + 1);
+                    break :discarded n + at + 1;
+                }
+                scan.feed(available);
+                self.input.toss(available.len);
+                n += available.len;
+            }
+        } else 0;
+        // Counting is `discardLine`'s: the bytes up to the terminator and the
+        // terminator, and nothing for a line the stream ended inside.
+        if (scan.finish()) |value| {
+            @memcpy(self.oversized[0..value.len], value);
+            self.oversized_len = @intCast(value.len);
+        } else self.oversized_len = null;
+        return discarded;
     }
 
     /// Where the record `next` was last working on began, and how many lines
@@ -632,7 +705,7 @@ pub const LineReader = struct {
                 self.fault.framing(self.number);
                 self.offset = self.record_offset;
                 self.consumed += self.line_buf.writer.end - before;
-                const discarded = try self.discardLine();
+                const discarded = try self.refuseOversized(self.line_buf.written(), .discard);
                 self.consumed += discarded;
                 self.unfinished = discarded == 0;
                 return error.LineTooLong;
@@ -673,6 +746,7 @@ pub const LineReader = struct {
             self.number += 1;
             self.fault.framing(self.number);
             self.offset = self.record_offset;
+            _ = try self.refuseOversized(self.line_buf.written()[0..record_len], .whole);
             return error.LineTooLong;
         }
 
@@ -744,6 +818,7 @@ pub const LineReader = struct {
         if (record.len > room) {
             self.fault.framing(self.number);
             self.offset = self.record_offset;
+            _ = try self.refuseOversized(record, .whole);
             return error.LineTooLong;
         }
         self.borrowed = true;

@@ -27,6 +27,7 @@ test {
     _ = @import("raw.zig");
     _ = @import("int.zig");
     _ = @import("file_id.zig");
+    _ = @import("member_scan.zig");
     _ = @import("from_value.zig");
     _ = @import("codec_tests.zig");
 }

@@ -84,6 +84,11 @@ pub fn Reader(comptime T: type) type {
             skip_bom: bool = true,
             /// See `LineReader.Options.crlf`.
             crlf: bool = true,
+            /// See `LineReader.Options.oversized_member`; the member is
+            /// `lines.oversizedMember()`. A `.pretty` record refused while
+            /// it was being joined is looked at as far as the physical line
+            /// that took it past the bound.
+            oversized_member: ?[]const u8 = null,
             /// What a line that is not a `T` does, and a damaged one.
             on_malformed: @FieldType(LineReader.Options, "on_malformed") = .fail,
 
@@ -97,6 +102,7 @@ pub fn Reader(comptime T: type) type {
                     .require_terminator = options.require_terminator,
                     .skip_bom = options.skip_bom,
                     .crlf = options.crlf,
+                    .oversized_member = options.oversized_member,
                     .on_malformed = options.on_malformed,
                 };
             }

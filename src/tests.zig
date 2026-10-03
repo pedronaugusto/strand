@@ -380,6 +380,62 @@ test "a line reader answers a line past its bound and reads on" {
     }
 }
 
+test "a line past the bound keeps the member it is answered under" {
+    // A JSON-RPC host writes the id after the params, so neither the head of
+    // a line past the bound nor a parse of it could give the id back: the
+    // bytes are looked at as they are thrown away.
+    const pad = "x" ** 200;
+    const input =
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}\n" ++
+        // the SDK's order: params first, the id last, a decoy id inside
+        "{\"method\":\"tools/call\",\"params\":{\"id\":99,\"s\":\"" ++ pad ++ "\"},\"jsonrpc\":\"2.0\",\"id\":\"a\\\"b\"}\n" ++
+        // a notification: no id of its own, only one inside its params
+        "{\"method\":\"notifications/x\",\"params\":{\"id\":5,\"s\":\"" ++ pad ++ "\"}}\n" ++
+        // a key that only reads as id once unescaped is not it
+        "{\"i\\\"d\":3,\"s\":\"" ++ pad ++ "\",\"id\" : -12 }\n" ++
+        // over the bound by its terminator's `\r` alone is not over it; by
+        // one byte, it is
+        "{\"id\":8,\"s\":\"" ++ "y" ** 113 ++ "\"}\r\n" ++
+        "{\"id\":9,\"s\":\"" ++ "y" ** 114 ++ "\"}\r\n" ++
+        "{\"id\":7,\"method\":\"ping\"}\n";
+    const Request = struct { id: ?strand.Raw = null, method: []const u8 = "" };
+
+    // Through a buffer the long lines straddle, and one that holds them whole.
+    inline for (.{ 16, 4096 }) |buffer_len| {
+        var buffer: [buffer_len]u8 = undefined;
+        var stream = fixtures.Chunked.init(input, &buffer, 7);
+        var requests: strand.Reader(Request) = .init(testing.allocator, &stream.interface, .{
+            .max_line_bytes = 128,
+            .oversized_member = "id",
+        });
+        defer requests.deinit();
+
+        try testing.expectEqualStrings("1", (try requests.next()).?.value.id.?.bytes);
+        try testing.expectError(error.LineTooLong, requests.next());
+        try testing.expectEqualStrings("\"a\\\"b\"", requests.lines.oversizedMember().?.bytes);
+        try testing.expectError(error.LineTooLong, requests.next());
+        try testing.expectEqual(@as(?strand.Raw, null), requests.lines.oversizedMember());
+        try testing.expectError(error.LineTooLong, requests.next());
+        try testing.expectEqualStrings("-12", requests.lines.oversizedMember().?.bytes);
+        try testing.expectEqualStrings("8", (try requests.next()).?.value.id.?.bytes);
+        try testing.expectError(error.LineTooLong, requests.next());
+        try testing.expectEqualStrings("9", requests.lines.oversizedMember().?.bytes);
+        const last = (try requests.next()).?;
+        try testing.expectEqualStrings("7", last.value.id.?.bytes);
+        try testing.expectEqual(@as(u64, 7), last.number);
+        try testing.expectEqual(@as(u64, input.len - "{\"id\":7,\"method\":\"ping\"}\n".len), last.offset);
+        try testing.expectEqual(null, try requests.next());
+    }
+
+    // Not asked for, nothing is kept.
+    var whole: std.Io.Reader = .fixed(input);
+    var lines: strand.LineReader = .init(testing.allocator, &whole, .{ .max_line_bytes = 128 });
+    defer lines.deinit();
+    _ = try lines.next();
+    try testing.expectError(error.LineTooLong, lines.next());
+    try testing.expectEqual(@as(?strand.Raw, null), lines.oversizedMember());
+}
+
 test "a line reader puts an unfinished record back and reads it once it is finished" {
     var fixture = try fixtures.Fixture.init("{\"kind\":\"one\"}\n{\"kind\":", 64);
     defer fixture.deinit();

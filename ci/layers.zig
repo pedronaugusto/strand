@@ -8,6 +8,7 @@ pub const layers: []const gantry.rules.Layer = &.{
         "src/file_id.zig",
         "src/fixtures.zig",
         "src/int.zig",
+        "src/member_scan.zig",
         "src/owned.zig",
         "src/route.zig",
         "src/scanner.zig",

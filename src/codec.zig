@@ -9,3 +9,5 @@ pub const parseLine = parser.parseLine;
 const values = @import("value_api.zig").Values(encode);
 pub const ValueOptions = values.ValueOptions;
 pub const writeValue = values.writeValue;
+pub const writeObjectOpen = values.writeObjectOpen;
+pub const OpenObject = values.OpenObject;

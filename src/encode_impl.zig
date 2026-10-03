@@ -78,27 +78,7 @@ pub fn Encoder(comptime Raw: type) type {
                 .error_set => try string(@errorName(v), options, writer),
                 .@"struct" => |info| {
                     try writer.writeByte(if (info.is_tuple) '[' else '{');
-                    var first = true;
-                    inline for (info.fields) |field| {
-                        if (field.type == void) continue;
-                        var emit = true;
-                        if (!info.is_tuple and @typeInfo(field.type) == .optional and !options.emit_null_optional_fields) {
-                            if (@field(v, field.name) == null) emit = false;
-                        }
-                        if (emit) {
-                            if (!first) try writer.writeByte(',');
-                            first = false;
-                            if (!info.is_tuple) {
-                                if (comptime safeFieldName(field.name)) {
-                                    try writer.writeAll(comptime "\"" ++ field.name ++ "\":");
-                                } else {
-                                    try string(field.name, options, writer);
-                                    try writer.writeByte(':');
-                                }
-                            }
-                            try value(@field(v, field.name), options, writer);
-                        }
-                    }
+                    _ = try members(v, options, writer, true);
                     try writer.writeByte(if (info.is_tuple) ']' else '}');
                 },
                 .@"union" => |info| {
@@ -106,12 +86,7 @@ pub fn Encoder(comptime Raw: type) type {
                     try writer.writeByte('{');
                     inline for (info.fields) |field| {
                         if (v == @field(Tag, field.name)) {
-                            if (comptime safeFieldName(field.name)) {
-                                try writer.writeAll(comptime "\"" ++ field.name ++ "\":");
-                            } else {
-                                try string(field.name, options, writer);
-                                try writer.writeByte(':');
-                            }
+                            try memberName(field.name, options, writer);
                             if (field.type == void) {
                                 try writer.writeAll("{}");
                             } else {
@@ -145,6 +120,39 @@ pub fn Encoder(comptime Raw: type) type {
                     try value(&a, options, writer);
                 },
                 else => @compileError("Unable to stringify type '" ++ @typeName(T) ++ "'"),
+            }
+        }
+
+        /// A struct's members, or a tuple's items, with no bracket either side:
+        /// what `value` writes between them. `first` says whether nothing has
+        /// been written inside the bracket yet; the answer is whether that is
+        /// still so, which is whether the next member needs a comma.
+        pub fn members(v: anytype, options: std.json.Stringify.Options, writer: *std.Io.Writer, first: bool) std.Io.Writer.Error!bool {
+            const info = @typeInfo(@TypeOf(v)).@"struct";
+            var none = first;
+            inline for (info.fields) |field| {
+                if (field.type == void) continue;
+                var emit = true;
+                if (!info.is_tuple and @typeInfo(field.type) == .optional and !options.emit_null_optional_fields) {
+                    if (@field(v, field.name) == null) emit = false;
+                }
+                if (emit) {
+                    if (!none) try writer.writeByte(',');
+                    none = false;
+                    if (!info.is_tuple) try memberName(field.name, options, writer);
+                    try value(@field(v, field.name), options, writer);
+                }
+            }
+            return none;
+        }
+
+        /// A member's name and the colon after it.
+        pub fn memberName(comptime name: []const u8, options: std.json.Stringify.Options, writer: *std.Io.Writer) std.Io.Writer.Error!void {
+            if (comptime safeFieldName(name)) {
+                try writer.writeAll(comptime "\"" ++ name ++ "\":");
+            } else {
+                try string(name, options, writer);
+                try writer.writeByte(':');
             }
         }
 

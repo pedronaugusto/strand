@@ -138,6 +138,25 @@ test "owned copy gives every std.json.Value arm independent storage" {
     try allocationFailures(numbers);
 }
 
+test "owned copy of a std.json.Value is the value a stringify and parse would give" {
+    // What a caller copying a tree by writing it out and reading it back
+    // gets, without the text in between.
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = try std.json.parseFromSliceLeaky(std.json.Value, a,
+        \\{"session":"s-1","cwd":"/w","n":[1,-2.5,1e300,123456789012345678901234567890],
+        \\ "flags":[true,false,null],"nested":{"k":[{"x":"\u00e9\n"}]},"empty":{},"none":[]}
+    , .{});
+    const round = try std.json.parseFromSliceLeaky(std.json.Value, a, try std.json.Stringify.valueAlloc(a, source, .{}), .{ .allocate = .alloc_always });
+    const copy = try strand.copyOwned(testing.allocator, source);
+    defer strand.freeOwned(testing.allocator, copy);
+    try testing.expectEqualStrings(
+        try std.json.Stringify.valueAlloc(a, round, .{}),
+        try std.json.Stringify.valueAlloc(a, copy, .{}),
+    );
+}
+
 test "owned copy's dynamic containers live and grow after the source arena is gone" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     const source = strand.parseLine(std.json.Value, arena.allocator(), "{\"items\":[\"kept\"]}", .{}) catch |err| {

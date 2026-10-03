@@ -6,9 +6,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A `.pretty` reader of a type the direct decoder reads parses a record where it lies in the input's buffer, across its line breaks, in one pass; it joins lines only for a record that straddles a refill, or one with a blank line, a `\r` or a fault in it, as before.
+
 - A union that declares `jsonl_tag` is read and written tagged inside its object, `{"type":"assistant",...}`, as serde's `#[serde(tag)]` reads and writes it, by every decoder and by `Writer` in both formats; `jsonl_other` names an arm for a tag naming no arm, and `tagOf` reads the arm from the tag member.
 
-- `memberOf` and `memberStringOf` read one top-level member of a line by name, wherever it is, without parsing the line.
+- `memberOf` and `memberStringOf` read one top-level member of a line by name, wherever it is, without parsing the line; the first of a repeated member is the answer.
 
 - A `Follower` with an opener waits while the path names nothing, as it does between a rotation's rename and its create, where it ended with `error.ReopenFailed`; an opener reports that moment as `error.FileNotFound`, and `PathOpener` does.
 

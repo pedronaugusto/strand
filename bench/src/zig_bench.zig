@@ -10,7 +10,7 @@ pub fn main(init: std.process.Init) !void {
     var obuf: [4096]u8 = undefined;
     var ow = std.Io.File.stdout().writer(init.io, &obuf);
     const out = &ow.interface;
-    if (std.mem.eql(u8, args[1], "read")) try read(init, args[2], out, false) else if (std.mem.eql(u8, args[1], "raw")) try read(init, args[2], out, true) else if (std.mem.eql(u8, args[1], "write")) try write(init, args[2], out, false) else if (std.mem.eql(u8, args[1], "write-flush")) try write(init, args[2], out, true) else if (std.mem.eql(u8, args[1], "tail")) try tail(init, args[2], out) else return error.Usage;
+    if (std.mem.eql(u8, args[1], "read")) try read(init, args[2], out, false) else if (std.mem.eql(u8, args[1], "raw")) try read(init, args[2], out, true) else if (std.mem.eql(u8, args[1], "write")) try write(init, args[2], out, false) else if (std.mem.eql(u8, args[1], "write-flush")) try write(init, args[2], out, true) else if (std.mem.eql(u8, args[1], "tail")) try tail(init, args[2], out) else if (!try @import("zig_cover.zig").run(init, args[1], args[2..], out)) return error.Usage;
     try out.flush();
 }
 

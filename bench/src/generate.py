@@ -33,5 +33,49 @@ def make(name, count, payload_len):
     with open(expected, "w") as f:
         f.write(str(count))
 
-make("regular.jsonl", 1 if os.environ.get("BENCH_SMOKE") == "1" else 1_000_000, 72)
-make("long.jsonl", 1 if os.environ.get("BENCH_SMOKE") == "1" else 200_000, 1024)
+def make_lines(name, count, line):
+    path = os.path.join(OUT, name)
+    expected = os.path.join(OUT, name + ".count")
+    if os.path.exists(path) and os.path.exists(expected):
+        with open(expected) as f:
+            if int(f.read()) == count:
+                return
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+        for i in range(count):
+            f.write(line(i + 1))
+    os.replace(tmp, path)
+    with open(expected, "w") as f:
+        f.write(str(count))
+
+def compact(value):
+    return json.dumps(value, separators=(",", ":"))
+
+def damaged(i):
+    """Every 97th line cut short (not JSON), every 1009th with a raw control byte."""
+    line = compact(record(i, 72))
+    if i % 97 == 0:
+        return line[:-5] + "\n"
+    if i % 1009 == 0:
+        return line.replace("abcdefghij", "abcd\x01fghij", 1) + "\n"
+    return line + "\n"
+
+def tagged(i):
+    arm = i % 3
+    if arm == 0:
+        return compact({"open": {"at": i, "who": f"user-{i % 10000:04d}"}}) + "\n"
+    if arm == 1:
+        return compact({"retry": {"at": i, "attempt": i % 5}}) + "\n"
+    return compact({"close": {"at": i, "code": -(i % 3)}}) + "\n"
+
+def carried(i):
+    return compact({"kind": "mark", "at": i, "data": {"who": "ada", "beat": i % 7, "tags": ["a", "b"]}}) + "\n"
+
+SMOKE = os.environ.get("BENCH_SMOKE") == "1"
+make("regular.jsonl", 1 if SMOKE else 1_000_000, 72)
+make("long.jsonl", 1 if SMOKE else 200_000, 1024)
+make_lines("damaged.jsonl", 2200 if SMOKE else 1_000_000, damaged)
+make_lines("pretty.jsonl", 3 if SMOKE else 200_000, lambda i: json.dumps(record(i, 72), indent=2) + "\n")
+make_lines("seq.jsonl", 3 if SMOKE else 1_000_000, lambda i: "\x1e" + compact(record(i, 72)) + "\n")
+make_lines("tagged.jsonl", 3 if SMOKE else 1_000_000, tagged)
+make_lines("carried.jsonl", 3 if SMOKE else 1_000_000, carried)

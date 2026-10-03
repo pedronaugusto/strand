@@ -122,7 +122,9 @@ func main() {
 	case "write-flush":
 		write(os.Args[2], true)
 	default:
-		panic("bad workload")
+		if !cover(os.Args[1], os.Args[2]) {
+			panic("bad workload")
+		}
 	}
 }
 

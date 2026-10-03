@@ -8,7 +8,7 @@ pub fn main(init: std.process.Init) !void {
     if (args.len < 3) return error.Usage;
     var obuf: [4096]u8 = undefined;
     var ow = std.Io.File.stdout().writer(init.io, &obuf);
-    if (std.mem.eql(u8, args[1], "read")) try read(init, args[2], &ow.interface) else if (std.mem.eql(u8, args[1], "write")) try write(init, args[2], &ow.interface, false) else if (std.mem.eql(u8, args[1], "write-flush")) try write(init, args[2], &ow.interface, true) else return error.Usage;
+    if (std.mem.eql(u8, args[1], "read")) try read(init, args[2], &ow.interface) else if (std.mem.eql(u8, args[1], "write")) try write(init, args[2], &ow.interface, false) else if (std.mem.eql(u8, args[1], "write-flush")) try write(init, args[2], &ow.interface, true) else if (!try @import("zig_stdcover.zig").run(init, args[1], args[2..], &ow.interface)) return error.Usage;
     try ow.interface.flush();
 }
 

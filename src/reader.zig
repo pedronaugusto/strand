@@ -44,9 +44,6 @@ pub fn Reader(comptime T: type) type {
         options: Options,
         /// Internal. What parsing the current line allocated, reset per line.
         arena: std.heap.ArenaAllocator,
-        /// Internal. Where a `.pretty` record being joined ends; live only
-        /// inside `parse`.
-        pretty: PrettyEnd = undefined,
 
         const Self = @This();
 
@@ -230,9 +227,11 @@ pub fn Reader(comptime T: type) type {
             // A `.pretty` record that has to be joined is parsed again here,
             // at the one place every line is parsed: a second call site of
             // `parseLineInto` changes what is inlined into this one, and a
-            // minified line paid four percent for it over long lines.
+            // minified line paid four percent for it over long lines. The
+            // join itself stays out of line.
+            var pretty: PrettyEnd = undefined;
             var joining = false;
-            defer if (joining) self.pretty.deinit();
+            defer if (joining) pretty.deinit();
             while (true) {
                 _ = self.arena.reset(.retain_capacity);
                 // Asked for by name: what is left of `parseLine` once the
@@ -260,10 +259,10 @@ pub fn Reader(comptime T: type) type {
                         @branchHint(.unlikely);
                         if (self.options.format != .pretty) return self.malformed(raw.number, record, parse_err);
                         if (!joining) {
-                            self.pretty.init(self.arena.child_allocator, record);
+                            pretty.init(self.arena.child_allocator, record);
                             joining = true;
                         }
-                        record = (try self.grow(&self.pretty, raw.number, record, parse_err)) orelse return null;
+                        record = (try self.grow(&pretty, raw.number, record, parse_err)) orelse return null;
                     },
                 }
             }

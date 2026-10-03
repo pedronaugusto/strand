@@ -1378,6 +1378,7 @@ const decode_corpus = [_][]const u8{
     smithSlice("{\"huge\":1.8e38}"),
     smithSlice("{\"negative\":1.7014118346046923173168730371588410572e38}"),
     smithSlice("{\"huge\":3.402823669209384634633746074317682114555e38}"),
+    smithSlice("{\"text\":\"caf\xc3"),
 };
 
 //=========================================================================
@@ -1500,6 +1501,7 @@ const table: []const []const u8 = &.{
     "{\"kind\":\"\xff\xfe\"}\n",
     "{ \"kind\" : \"spaced\" }\n",
     "{\"tags\":[\"a\",\"b\"],\"span\":{\"id\":1}}\n",
+    "{\"more\":[1}\n{\"data\":[1}}\n",
 };
 
 test "the properties hold on a table of awkward inputs" {

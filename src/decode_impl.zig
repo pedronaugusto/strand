@@ -366,7 +366,8 @@ pub fn Decoder(comptime Raw: type) type {
                 while (true) {
                     const found = Scanner.stringSpecial(self.input[self.cursor..]);
                     const at = self.cursor + found.at;
-                    if (found.non_ascii and !std.unicode.utf8ValidateSlice(self.input[self.cursor..at])) return error.SyntaxError;
+                    if (found.non_ascii and !std.unicode.utf8ValidateSlice(self.input[self.cursor..at]))
+                        return Scanner.invalidUtf8(self.input[self.cursor..at], at == self.input.len);
                     if (at == self.input.len) return error.UnexpectedEndOfInput;
                     if (self.input[at] < 0x20) return error.SyntaxError;
                     if (self.input[at] == '"') {
@@ -536,7 +537,8 @@ pub fn Decoder(comptime Raw: type) type {
                 while (true) {
                     const found = Scanner.stringSpecial(self.input[self.cursor..]);
                     const at = self.cursor + found.at;
-                    if (found.non_ascii and !std.unicode.utf8ValidateSlice(self.input[self.cursor..at])) return error.SyntaxError;
+                    if (found.non_ascii and !std.unicode.utf8ValidateSlice(self.input[self.cursor..at]))
+                        return Scanner.invalidUtf8(self.input[self.cursor..at], at == self.input.len);
                     if (at == self.input.len) return error.UnexpectedEndOfInput;
                     if (self.input[at] < 0x20) return error.SyntaxError;
                     self.cursor = at + 1;

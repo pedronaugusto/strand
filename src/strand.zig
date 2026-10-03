@@ -25,7 +25,8 @@
 //! * `copyOwned` copies an already parsed value and every piece of storage
 //!   it reaches, without parsing again; `freeOwned` releases that copy.
 //! * `kindOf` and `tagOf` answer "what kind of line is this" from the first
-//!   key alone, without parsing the value.
+//!   key alone, without parsing the value; `memberOf` and `memberStringOf`
+//!   answer it from a member named for it, wherever it is in the object.
 //! * `Writer` emits one value per line — minified, or indented for a human —
 //!   and counts them, draining the destination and syncing the file under it
 //!   as often as it is told to.
@@ -88,6 +89,8 @@ pub const copyOwned = owned.copyOwned;
 pub const freeOwned = owned.freeOwned;
 pub const kindOf = @import("route.zig").kindOf;
 pub const tagOf = @import("route.zig").tagOf;
+pub const memberOf = @import("route.zig").memberOf;
+pub const memberStringOf = @import("route.zig").memberStringOf;
 pub const indexOfControl = @import("control.zig").indexOfControl;
 pub const syncFile = @import("sync.zig").syncFile;
 pub const syncDir = @import("sync.zig").syncDir;

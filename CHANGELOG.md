@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- `memberOf` and `memberStringOf` read one top-level member of a line by name, wherever it is, without parsing the line.
+
 - A `Follower` with an opener waits while the path names nothing, as it does between a rotation's rename and its create, where it ended with `error.ReopenFailed`; an opener reports that moment as `error.FileNotFound`, and `PathOpener` does.
 
 - A `.pretty` reader follows a record to where its JSON value ends and parses it there, once; it parsed the record again after every line joined to it, so a record of n lines cost n parses. A record that is JSON but not a `T` is refused as the lines its value takes, where it was refused at the line it went wrong on and the lines after that were read as records of their own.

@@ -1,8 +1,9 @@
 //! One top-level member of a JSON object, found by name in bytes that go by
 //! once and are not kept: what `LineReader` holds on to of a line too long
-//! to hold.
+//! to hold, and where `memberOf` finds a member of a line it has whole.
 
 const std = @import("std");
+const stringSpecial = @import("scanner.zig").stringSpecial;
 
 /// The longest value kept, in bytes. A member whose value is longer is not
 /// kept, and nor is one whose value is an object or an array: what is wanted
@@ -41,22 +42,54 @@ pub const MemberScan = struct {
     value_len: usize = 0,
     found: [max_value_bytes]u8 = undefined,
     found_len: ?u8 = null,
+    /// Bytes fed so far: where the byte being looked at is.
+    fed: usize = 0,
+    /// Where the value being read began, counted as `fed` counts.
+    value_start: usize = 0,
+    /// Where the last value of the name began and ended, whatever its
+    /// length, or `null` when it had none: `span` and `finishSpan`.
+    found_span: ?Span = null,
+
+    /// A stretch of the bytes fed, counted from the first of them.
+    pub const Span = struct { start: usize, end: usize };
 
     pub fn init(name: []const u8) MemberScan {
         return .{ .name = name };
     }
 
     pub fn feed(s: *MemberScan, bytes: []const u8) void {
-        for (bytes) |b| s.byte(b);
+        var i: usize = 0;
+        while (i < bytes.len) {
+            if (s.in_string and !s.in_key and !s.in_value and !s.escaped) {
+                // A string that is neither a key nor the value: only where
+                // it ends matters, and that is found a vector at a time.
+                const at = stringSpecial(bytes[i..]).at;
+                i += at;
+                s.fed += at;
+                if (i == bytes.len) return;
+            }
+            s.byte(bytes[i]);
+            s.fed += 1;
+            i += 1;
+        }
     }
 
     /// The member's value as its bytes, borrowed from `s`, after the last
     /// byte of the line has been fed; `null` when the line had none that
     /// could be kept.
     pub fn finish(s: *MemberScan) ?[]const u8 {
-        s.endValue();
+        s.endValue(s.fed);
         const len = s.found_len orelse return null;
         return s.found[0..len];
+    }
+
+    /// Where the member's value lies in the bytes fed, after the last of
+    /// them, whatever its length; `null` when the line had none, or when
+    /// the last of the name's values is an object or an array. Not checked
+    /// to be one JSON scalar: the caller holding the bytes does that.
+    pub fn finishSpan(s: *MemberScan) ?Span {
+        s.endValue(s.fed);
+        return s.found_span;
     }
 
     fn byte(s: *MemberScan, b: u8) void {
@@ -75,17 +108,17 @@ pub const MemberScan = struct {
             },
             '{', '[' => {
                 s.value_next = false;
-                s.endValue();
+                s.endValue(s.fed);
                 s.depth +|= 1;
                 if (s.depth == 1) s.object = b == '{';
                 s.expect_key = s.depth == 1 and s.object;
             },
             '}', ']' => {
-                s.endValue();
+                s.endValue(s.fed);
                 s.depth -|= 1;
             },
             ',' => {
-                s.endValue();
+                s.endValue(s.fed);
                 s.expect_key = s.depth == 1 and s.object;
             },
             ':' => if (s.depth == 1 and s.named) {
@@ -93,8 +126,9 @@ pub const MemberScan = struct {
                 s.value_next = true;
                 // The last member of the name is the answer, whatever it is.
                 s.found_len = null;
+                s.found_span = null;
             },
-            ' ', '\t', '\r', '\n' => s.endValue(),
+            ' ', '\t', '\r', '\n' => s.endValue(s.fed),
             else => if (s.value_next) s.startValue(b) else if (s.in_value) s.keep(b),
         }
     }
@@ -116,7 +150,7 @@ pub const MemberScan = struct {
         if (s.in_value) s.keep(b);
         if (closes) {
             s.in_string = false;
-            s.endValue();
+            s.endValue(s.fed + 1);
         }
     }
 
@@ -124,6 +158,7 @@ pub const MemberScan = struct {
         s.value_next = false;
         s.in_value = true;
         s.value_len = 0;
+        s.value_start = s.fed;
         s.keep(b);
     }
 
@@ -132,10 +167,12 @@ pub const MemberScan = struct {
         s.value_len +|= 1;
     }
 
-    /// A value ended: kept when it fit and is one JSON scalar.
-    fn endValue(s: *MemberScan) void {
+    /// A value ended just before `end`: placed, and kept when it fit and is
+    /// one JSON scalar.
+    fn endValue(s: *MemberScan, end: usize) void {
         if (!s.in_value) return;
         s.in_value = false;
+        s.found_span = .{ .start = s.value_start, .end = end };
         if (s.value_len > max_value_bytes) return;
         const value = s.value[0..s.value_len];
         if (!scalar(value)) return;
@@ -147,7 +184,7 @@ pub const MemberScan = struct {
 /// Whether `bytes` are one JSON value with no structure in it. A scalar
 /// nests nothing, so the check allocates nothing, and an allocator with no
 /// room is enough: a value that asks for any is not a scalar.
-fn scalar(bytes: []const u8) bool {
+pub fn scalar(bytes: []const u8) bool {
     var none: [0]u8 = undefined;
     var fixed: std.heap.FixedBufferAllocator = .init(&none);
     return std.json.validate(fixed.allocator(), bytes) catch false;

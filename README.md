@@ -79,6 +79,10 @@ path names nothing between a rotation's rename and its create. File identity can
 use the platform's file identifier or an opening-byte fingerprint; checkpoints retain
 that identity, the byte offset and line numbering.
 
+`kindOf` and `tagOf` route a line by its first key without parsing it. `memberOf` and
+`memberStringOf` read one top-level member's scalar value wherever it sits, as a view
+into the line.
+
 `Raw` retains a JSON value's bytes for later parsing or forwarding. `Versioned(T)` wraps
 records with a version and a migration hook. Both compose with the readers and writer.
 Parsing a `Raw` checks JSON syntax and UTF-8 before returning its bytes.

@@ -1,6 +1,8 @@
-//! What kind of line this is, read from its first key without parsing it.
+//! What kind of line this is, read from its first key or from a member
+//! named for it, without parsing it.
 
 const std = @import("std");
+const member_scan = @import("member_scan.zig");
 
 /// The first key of the object on `line`, or `null` when there is not one to
 /// read cheaply.
@@ -57,6 +59,48 @@ test kindOf {
     try std.testing.expectEqual(@as(?[]const u8, null), kindOf("{}"));
 }
 
+/// The value of the member `name` of the object on `line`, as its bytes:
+/// a string with its quotes and escapes as written, a number, `true`,
+/// `false` or `null`. `null` when there is not one to read cheaply.
+///
+/// This is `kindOf` for a line whose kind is in a member rather than in its
+/// first key — `{"type":"assistant",...}` — wherever in the object the
+/// member is. It reads the line once, a vector at a time through strings
+/// it is not looking for, and allocates nothing.
+///
+/// Ownership: the result points into `line`.
+///
+/// The member is one of the outermost object's own, matched by its name as
+/// written: a key spelled with a `\` escape is not decoded, as `kindOf`
+/// does not decode one. When the name is there more than once, the last is
+/// the answer, as for a reader that keeps the last of a duplicate field.
+/// `null` means: not an object, no such member, or a member whose value is
+/// an object or an array, which is not something to route on. The rest of
+/// the line is not checked, so an answer is not a claim that the line is
+/// valid JSON.
+pub fn memberOf(line: []const u8, name: []const u8) ?[]const u8 {
+    var scan: member_scan.MemberScan = .init(name);
+    scan.feed(line);
+    const span = scan.finishSpan() orelse return null;
+    const value = line[span.start..span.end];
+    if (!member_scan.scalar(value)) return null;
+    return value;
+}
+
+/// The member `name` of the object on `line` as the text of its string:
+/// `memberOf` without the quotes. `null` for anything `memberOf` answers
+/// `null` for, for a value that is not a string, and for a string written
+/// with a `\` escape, which this does not decode (`parseLine` does).
+///
+/// Ownership: the result points into `line`.
+pub fn memberStringOf(line: []const u8, name: []const u8) ?[]const u8 {
+    const value = memberOf(line, name) orelse return null;
+    if (value[0] != '"') return null;
+    const text = value[1 .. value.len - 1];
+    if (std.mem.findScalar(u8, text, '\\') != null) return null;
+    return text;
+}
+
 /// The arm of the tagged union `U` that `line` names, or `null`.
 ///
 /// `std.json` encodes a tagged union as a one-key object whose key is the
@@ -76,6 +120,19 @@ pub fn tagOf(comptime U: type, line: []const u8) ?std.meta.Tag(U) {
     }
     const key = kindOf(line) orelse return null;
     return std.meta.stringToEnum(std.meta.Tag(U), key);
+}
+
+test memberOf {
+    const line = "{\"session\":{\"type\":\"inner\"},\"type\":\"assistant\",\"n\":17,\"s\":\"a\\\"b\"}";
+    try std.testing.expectEqualStrings("\"assistant\"", memberOf(line, "type").?);
+    try std.testing.expectEqualStrings("17", memberOf(line, "n").?);
+    try std.testing.expectEqualStrings("\"a\\\"b\"", memberOf(line, "s").?);
+    try std.testing.expectEqual(@as(?[]const u8, null), memberOf(line, "session"));
+    try std.testing.expectEqual(@as(?[]const u8, null), memberOf(line, "missing"));
+    try std.testing.expectEqual(@as(?[]const u8, null), memberOf("[{\"type\":1}]", "type"));
+    try std.testing.expectEqualStrings("assistant", memberStringOf(line, "type").?);
+    try std.testing.expectEqual(@as(?[]const u8, null), memberStringOf(line, "n"));
+    try std.testing.expectEqual(@as(?[]const u8, null), memberStringOf(line, "s"));
 }
 
 test tagOf {

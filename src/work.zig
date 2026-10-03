@@ -6,6 +6,7 @@ pub const Counts = struct {
     scan_bytes: usize = 0,
     parses: usize = 0,
     lane_searches: usize = 0,
+    scalar_string_bytes: usize = 0,
 };
 
 threadlocal var observer: ?*Counts = null;
@@ -30,5 +31,12 @@ pub inline fn parse() void {
 pub inline fn laneSearch() void {
     if (builtin.is_test) if (observer) |counts| {
         counts.lane_searches += 1;
+    };
+}
+
+// String bytes checked individually rather than in a vector.
+pub inline fn scalarString(bytes: usize) void {
+    if (builtin.is_test) if (observer) |counts| {
+        counts.scalar_string_bytes += bytes;
     };
 }

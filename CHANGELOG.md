@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Check a string's high bytes in the vector that found its closing quote or escape.
+
 - Keep the framing scan in its own call and find a control lane only in a vector that holds one.
 
 - Reject undeclared dependencies, duplicate layer membership and imports of source executables.

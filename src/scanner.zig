@@ -8,6 +8,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const assert = std.debug.assert;
+const work = @import("work.zig");
 
 pub const Token = std.json.Token;
 pub const TokenType = std.json.TokenType;
@@ -289,7 +290,10 @@ pub fn stringSpecial(bytes: []const u8) Special {
                 const hits = (v == quote) | (v == slash) | (v < control);
                 if (@reduce(.Or, hits)) {
                     const at = std.simd.firstTrue(hits).?;
-                    for (bytes[i..][0..at]) |c| non_ascii = non_ascii or c >= 0x80;
+                    // The vector already holds the bytes before the hit.
+                    // Ignore high bits after it: they belong to another token.
+                    const before = std.simd.iota(u8, width) < @as(V, @splat(@intCast(at)));
+                    non_ascii = non_ascii or @reduce(.Or, ((v & high) == high) & before);
                     return .{ .at = i + at, .non_ascii = non_ascii };
                 }
                 non_ascii = non_ascii or @reduce(.Or, (v & high) == high);
@@ -297,6 +301,7 @@ pub fn stringSpecial(bytes: []const u8) Special {
         }
     }
     while (i < bytes.len) : (i += 1) {
+        work.scalarString(1);
         const c = bytes[i];
         if (c == '"' or c == '\\' or c < 0x20) return .{ .at = i, .non_ascii = non_ascii };
         non_ascii = non_ascii or c >= 0x80;
@@ -512,6 +517,36 @@ test "string scan agrees with scalar positions" {
             buf[at] = '"';
             try testing.expectEqual(at, stringSpecial(buf[0..len]).at);
             buf[at] = 'x';
+        }
+    }
+}
+
+test "string scan keeps the high-bit check in the vector that found the end" {
+    const width = std.simd.suggestVectorLength(u8) orelse return;
+    var bytes: [width]u8 = @splat('x');
+    bytes[width - 1] = '"';
+    var counts: work.Counts = .{};
+    work.observe(&counts);
+    defer work.observe(null);
+    const found = stringSpecial(&bytes);
+    try std.testing.expectEqual(width - 1, found.at);
+    try std.testing.expect(!found.non_ascii);
+    try std.testing.expectEqual(@as(usize, 0), counts.scalar_string_bytes);
+}
+
+test "string scan counts high bytes only before its first special byte" {
+    const width = std.simd.suggestVectorLength(u8) orelse 16;
+    var bytes: [2 * width + 3]u8 = undefined;
+    for ([_]u8{ '"', '\\', 0x1f }) |special| {
+        for (0..bytes.len) |at| {
+            for (0..bytes.len) |high| {
+                @memset(&bytes, 'x');
+                bytes[high] = 0xff;
+                bytes[at] = special;
+                const found = stringSpecial(&bytes);
+                try std.testing.expectEqual(at, found.at);
+                try std.testing.expectEqual(high < at, found.non_ascii);
+            }
         }
     }
 }

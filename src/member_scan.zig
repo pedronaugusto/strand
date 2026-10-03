@@ -108,6 +108,11 @@ pub const MemberScan = struct {
             return stringSpecial(rest).at;
         }
         if (s.depth > 1) return nextStructural(rest);
+        // Another member's object or array, whole in hand: nothing in it
+        // can be the name, and passing over it leaves every state as it was.
+        if (s.depth == 1 and !s.value_next and rest.len != 0 and (rest[0] == '{' or rest[0] == '[')) {
+            return closingAfter(rest) orelse 0;
+        }
         return 0;
     }
     /// The member's value as its bytes, borrowed from `s`, after the last
@@ -246,6 +251,90 @@ fn nextStructural(bytes: []const u8) usize {
     return i;
 }
 
+/// The length of the object or array `bytes` opens with, up to and with its
+/// closing bracket; `null` when it does not close in `bytes`. Not a check of
+/// the value: brackets are counted outside strings, and that is all.
+///
+/// Sixty-four bytes at a time: a mask of the quotes, the strings they make
+/// by a prefix XOR, and the brackets outside those, counted in order. A
+/// block with a backslash in it, whose quotes may be escaped, is walked a
+/// byte at a time.
+fn closingAfter(bytes: []const u8) ?usize {
+    var depth: usize = 0;
+    var in_string = false;
+    var escaped = false;
+    var i: usize = 0;
+    const V = @Vector(64, u8);
+    while (i + 64 <= bytes.len) : (i += 64) {
+        const block: V = bytes[i..][0..64].*;
+        const slashes: u64 = @bitCast(block == @as(V, @splat('\\')));
+        if (slashes != 0 or escaped) {
+            for (bytes[i..][0..64], 0..) |b, at| {
+                if (byteCloses(b, &depth, &in_string, &escaped)) return i + at + 1;
+            }
+            continue;
+        }
+        const quotes: u64 = @bitCast(block == @as(V, @splat('"')));
+        var strings = prefixXor(quotes);
+        if (in_string) strings = ~strings;
+        in_string = strings >> 63 == 1;
+        const folded = block | @as(V, @splat(0x20));
+        const opens = @as(u64, @bitCast(folded == @as(V, @splat('{')))) & ~strings;
+        const closes = @as(u64, @bitCast(folded == @as(V, @splat('}')))) & ~strings;
+        var brackets = opens | closes;
+        while (brackets != 0) : (brackets &= brackets - 1) {
+            const bit: u6 = @intCast(@ctz(brackets));
+            if (opens >> bit & 1 == 1) {
+                depth += 1;
+            } else {
+                depth -= 1;
+                if (depth == 0) return i + bit + 1;
+            }
+        }
+    }
+    for (bytes[i..], i..) |b, at| {
+        if (byteCloses(b, &depth, &in_string, &escaped)) return at + 1;
+    }
+    return null;
+}
+
+/// `closingAfter` for one byte: whether it closes the outermost bracket.
+inline fn byteCloses(b: u8, depth: *usize, in_string: *bool, escaped: *bool) bool {
+    if (in_string.*) {
+        if (escaped.*) {
+            escaped.* = false;
+        } else if (b == '\\') {
+            escaped.* = true;
+        } else if (b == '"') {
+            in_string.* = false;
+        }
+        return false;
+    }
+    switch (b) {
+        '"' => in_string.* = true,
+        '{', '[' => depth.* += 1,
+        '}', ']' => {
+            depth.* -= 1;
+            return depth.* == 0;
+        },
+        else => {},
+    }
+    return false;
+}
+
+/// Each bit set when an odd number of `bits` are set at or below it: the
+/// bytes from an opening quote up to its closing one.
+fn prefixXor(bits: u64) u64 {
+    var x = bits;
+    x ^= x << 1;
+    x ^= x << 2;
+    x ^= x << 4;
+    x ^= x << 8;
+    x ^= x << 16;
+    x ^= x << 32;
+    return x;
+}
+
 /// Whether `bytes` are one JSON value with no structure in it. A scalar
 /// nests nothing, so the check allocates nothing, and an allocator with no
 /// room is enough: a value that asks for any is not a scalar.
@@ -307,5 +396,31 @@ test "a member split across chunks is the same member" {
         s.feed(line[0..cut]);
         s.feed(line[cut..]);
         try std.testing.expectEqualStrings("\"call-42\"", s.finish().?);
+    }
+}
+
+test "a nested value is passed over to its own closing bracket, whatever is in its strings" {
+    var prng: std.Random.DefaultPrng = .init(0x5eed);
+    const random = prng.random();
+    const pieces = [_][]const u8{ "{", "}", "[", "]", "\"a{b\"", "\"]\\\"[\"", "\"\\\\\"", "1", ",", ":", " ", "\"x\"", "\"" ++ "y" ** 70 ++ "\"" };
+    var buffer: [2048]u8 = undefined;
+    for (0..2000) |_| {
+        var len: usize = 0;
+        buffer[len] = '{';
+        len += 1;
+        for (0..random.uintLessThan(usize, 60)) |_| {
+            const piece = pieces[random.uintLessThan(usize, pieces.len)];
+            if (len + piece.len > buffer.len) break;
+            @memcpy(buffer[len..][0..piece.len], piece);
+            len += piece.len;
+        }
+        const bytes = buffer[0..len];
+        var depth: usize = 0;
+        var in_string = false;
+        var escaped = false;
+        const want: ?usize = for (bytes, 0..) |b, at| {
+            if (byteCloses(b, &depth, &in_string, &escaped)) break at + 1;
+        } else null;
+        try std.testing.expectEqual(want, closingAfter(bytes));
     }
 }

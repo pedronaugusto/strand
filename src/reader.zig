@@ -223,42 +223,63 @@ pub fn Reader(comptime T: type) type {
         /// mode a record that is only a prefix of a value is joined to the
         /// lines after it here, which means reading them.
         pub fn parse(self: *Self, raw: RawLine) NextError!?Line(T) {
-            var record = raw.line;
-            // Set up only when a `.pretty` record has to be joined.
+            const record = raw.line;
+            _ = self.arena.reset(.retain_capacity);
+            // Asked for by name: what is left of `parseLine` once the
+            // line is good is a scanner on the stack and one call under
+            // it, and a second call around that is a cost every line
+            // pays for nothing.
+            const how: ParseOptions = .{
+                .ignore_unknown_fields = self.options.ignore_unknown_fields,
+                .duplicate_fields = self.options.duplicate_fields,
+                .copy_strings = false,
+            };
+            // The value is decoded into the `Line` it is handed back in,
+            // not copied into it; `parseLineInto` says what a copy costs.
+            var line: Line(T) = .{
+                .value = undefined,
+                .line = record,
+                .number = raw.number,
+                .offset = raw.offset,
+            };
+            if (@call(.always_inline, parseLineInto, .{ T, self.arena.allocator(), record, how, &line.value })) {
+                return line;
+            } else |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => |parse_err| {
+                    if (self.options.format != .pretty) return self.malformed(raw.number, record, parse_err);
+                    return self.parseJoined(raw, parse_err);
+                },
+            }
+        }
+
+        /// `parse` for a `.pretty` record that did not parse on its first
+        /// line, apart from the path every minified line takes.
+        noinline fn parseJoined(self: *Self, raw: RawLine, first: ParseLineError) NextError!?Line(T) {
             var pretty: PrettyEnd = undefined;
-            var joining = false;
-            defer if (joining) pretty.deinit();
+            pretty.init(self.arena.child_allocator, raw.line);
+            defer pretty.deinit();
+            var record = raw.line;
+            var failed = first;
             while (true) {
+                record = (try self.grow(&pretty, raw.number, record, failed)) orelse return null;
                 _ = self.arena.reset(.retain_capacity);
-                // Asked for by name: what is left of `parseLine` once the
-                // line is good is a scanner on the stack and one call under
-                // it, and a second call around that is a cost every line
-                // pays for nothing.
                 const how: ParseOptions = .{
                     .ignore_unknown_fields = self.options.ignore_unknown_fields,
                     .duplicate_fields = self.options.duplicate_fields,
                     .copy_strings = false,
                 };
-                // The value is decoded into the `Line` it is handed back in,
-                // not copied into it; `parseLineInto` says what a copy costs.
                 var line: Line(T) = .{
                     .value = undefined,
                     .line = record,
                     .number = raw.number,
                     .offset = raw.offset,
                 };
-                if (@call(.always_inline, parseLineInto, .{ T, self.arena.allocator(), record, how, &line.value })) {
+                if (parseLineInto(T, self.arena.allocator(), record, how, &line.value)) {
                     return line;
                 } else |err| switch (err) {
                     error.OutOfMemory => return error.OutOfMemory,
-                    else => |parse_err| {
-                        if (self.options.format != .pretty) return self.malformed(raw.number, record, parse_err);
-                        if (!joining) {
-                            pretty.init(self.arena.child_allocator, record);
-                            joining = true;
-                        }
-                        record = (try self.grow(&pretty, raw.number, record, parse_err)) orelse return null;
-                    },
+                    else => |parse_err| failed = parse_err,
                 }
             }
         }

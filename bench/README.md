@@ -15,7 +15,7 @@ Smoke stdout is consumed and discarded; reports retain no timing, rate or ratio
 values. A successful smoke run supports no performance claim.
 
 `revisions.json` fixes A at `5fb576f145aad1a3e033222e7408770bdbcc4b66` and B at
-`f2fcdd50e85644c2fd7b3811b1e977725cd56768`. A retains the original
+`97333b0b4b4e395403e8ac40c4a458ee5882c485`. A retains the original
 **2026-09-30 00:00:00 +01:00** cutoff. `--before REV --after REV` selects other
 immutable snapshots; refresh the pins when main advances.
 

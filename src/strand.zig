@@ -86,6 +86,7 @@ pub const kindOf = @import("route.zig").kindOf;
 pub const tagOf = @import("route.zig").tagOf;
 pub const indexOfControl = @import("control.zig").indexOfControl;
 pub const syncFile = @import("sync.zig").syncFile;
+pub const syncDir = @import("sync.zig").syncDir;
 pub const SyncLevel = @import("sync.zig").SyncLevel;
 pub const SyncKind = @import("sync.zig").SyncKind;
 pub const SyncError = @import("sync.zig").SyncError;

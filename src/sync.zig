@@ -86,6 +86,39 @@ pub fn syncFile(file: std.Io.File, io: std.Io, level: SyncLevel) SyncError!SyncK
     return .plain;
 }
 
+/// Puts a directory's entries — the names created, renamed and removed in
+/// it — onto the disk under it, and says which call did it, or that there is
+/// no call to make. A file's own sync does not do this: a file that was
+/// created or renamed is found through its directory, and until the
+/// directory is down a crash can leave the bytes on the disk with no name
+/// that reaches them.
+///
+/// The call is the one `syncFile` makes at `.all`, platform by platform:
+///
+/// | | |
+/// |---|---|
+/// | Linux | `fsync` on the directory, by syscall. A directory opened without `.iterate` is an `O_PATH` handle, which cannot be synced; that is `error.AccessDenied` here rather than the panic `std.Io.File.sync` makes of it |
+/// | macOS | `fcntl(F_FULLFSYNC)`, for the reason it is the call for a file. A filesystem with no such call gets `fsync` |
+/// | Windows | none, and the answer is `null`. A directory handle opened to be read cannot be flushed, and NTFS writes a directory's entries through its own journal rather than through the directory |
+///
+/// Other platforms get `fsync`. An interrupted call is made again, and any
+/// other failure is reported rather than retried, as `syncFile`'s is.
+pub fn syncDir(dir: std.Io.Dir, io: std.Io) SyncError!?SyncKind {
+    if (comptime builtin.os.tag == .windows) return null;
+    if (comptime builtin.os.tag == .linux) {
+        while (true) {
+            switch (std.os.linux.errno(std.os.linux.fsync(dir.handle))) {
+                .SUCCESS => return .plain,
+                .INTR => continue,
+                // An `O_PATH` handle: open, but not for this.
+                .BADF => return error.AccessDenied,
+                else => |e| return failure(e),
+            }
+        }
+    }
+    return try syncFile(.{ .handle = dir.handle, .flags = .{ .nonblocking = false } }, io, .all);
+}
+
 /// A sync's failure as `std.Io.File.sync` names it.
 fn failure(e: anytype) SyncError {
     return switch (e) {
@@ -115,4 +148,29 @@ test syncFile {
     // ordinary call is the whole of it, and still the strongest on Darwin.
     const all = try syncFile(fixture.write_file, std.testing.io, .all);
     try std.testing.expectEqual(@as(SyncKind, if (builtin.os.tag.isDarwin()) .full else .plain), all);
+}
+
+test syncDir {
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    const io = std.testing.io;
+    // A name made and then moved is what a directory sync is for.
+    try tmp.dir.writeFile(io, .{ .sub_path = "record.tmp", .data = "{}\n" });
+    try tmp.dir.rename("record.tmp", tmp.dir, "record", io);
+
+    const expected: ?SyncKind = switch (builtin.os.tag) {
+        .windows => null,
+        else => if (builtin.os.tag.isDarwin()) .full else .plain,
+    };
+    try std.testing.expectEqual(expected, try syncDir(tmp.dir, io));
+
+    // A directory opened only to be named is a handle that cannot be synced
+    // on Linux, and that is an error rather than a crash.
+    const path_only = try tmp.dir.openDir(io, ".", .{});
+    defer path_only.close(io);
+    if (comptime builtin.os.tag == .linux) {
+        try std.testing.expectError(error.AccessDenied, syncDir(path_only, io));
+    } else {
+        try std.testing.expectEqual(expected, try syncDir(path_only, io));
+    }
 }

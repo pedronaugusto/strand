@@ -80,6 +80,7 @@ that identity, the byte offset and line numbering.
 
 `Raw` retains a JSON value's bytes for later parsing or forwarding. `Versioned(T)` wraps
 records with a version and a migration hook. Both compose with the readers and writer.
+Parsing a `Raw` checks JSON syntax and UTF-8 before returning its bytes.
 Pretty records span physical lines; ASCII record separators provide optional RFC 7464
 framing when enabled at both ends. [examples/logbook.zig](examples/logbook.zig)
 exercises file following, tailing and a line protocol.

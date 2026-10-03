@@ -17,6 +17,7 @@ test {
     _ = @import("writer.zig");
     _ = @import("sync.zig");
     _ = @import("control.zig");
+    _ = @import("scanner.zig");
     _ = @import("route.zig");
     _ = @import("tests.zig");
     _ = @import("fuzz.zig");

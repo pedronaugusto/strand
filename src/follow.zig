@@ -54,10 +54,14 @@ pub const Opener = struct {
     /// Called on a file `openFn` returned and the follower is done with.
     closeFn: *const fn (context: *anyopaque, io: std.Io, file: std.Io.File) void,
 
-    /// What an opener may report. One member, on purpose: the reasons a file
-    /// will not open are the caller's to know and to report, the way
+    /// What an opener may report. `FileNotFound` is the path naming no file
+    /// right now, which is a moment in every rotation — between the rename
+    /// that takes the old file away and the create that puts a new one
+    /// there — and a follower waits it out on the file it holds.
+    /// `OpenFailed` is every other reason, and ends the follow: the reasons
+    /// a file will not open are the caller's to know and to report, the way
     /// `error.ReadFailed` leaves diagnostics to the stream.
-    pub const OpenError = error{OpenFailed} || std.Io.Cancelable;
+    pub const OpenError = error{ FileNotFound, OpenFailed } || std.Io.Cancelable;
 
     pub fn open(self: Opener, io: std.Io) OpenError!std.Io.File {
         return self.openFn(self.context, io);
@@ -88,6 +92,7 @@ pub const PathOpener = struct {
         const self: *PathOpener = @ptrCast(@alignCast(context)); // safe: `opener` is the only maker of this interface, with a *PathOpener as its context
         return self.dir.openFile(io, self.sub_path, .{}) catch |err| switch (err) {
             error.Canceled => error.Canceled,
+            error.FileNotFound => error.FileNotFound,
             else => error.OpenFailed,
         };
     }
@@ -267,6 +272,12 @@ pub fn Follower(comptime T: type) type {
             /// follower finishes the old file, then moves. The one thing it
             /// does not carry over is a final line the old file never
             /// finished, which was never a line.
+            ///
+            /// A path that names nothing (`error.FileNotFound` from the
+            /// opener) is a rotation half done: the follower stays on the
+            /// file it holds and looks again after its next wait, for as
+            /// long as the path stays empty. Only `error.OpenFailed` ends
+            /// `next`, as `error.ReopenFailed`.
             reopen: ?Opener = null,
             /// What makes the file the path holds now the file this follower
             /// is reading. Only looked at when `reopen` is set, since it is
@@ -301,7 +312,7 @@ pub fn Follower(comptime T: type) type {
         /// rotation seen from the inside: see `restart`. It is not reported
         /// at all when `Options.reopen` is set, because then a truncation is
         /// acted on rather than reported. `ReopenFailed` is that opener
-        /// declining, or the system refusing to say which file a handle is;
+        /// failing with `error.OpenFailed`, or the system refusing to say which file a handle is;
         /// ask your own opener for diagnostics.
         pub const NextError = strand.Reader(T).NextError || error{
             SeekFailed,
@@ -569,7 +580,17 @@ pub fn Follower(comptime T: type) type {
         fn rotate(self: *Self, opener: Opener, emptied: bool) NextError!void {
             const fresh = opener.open(self.io) catch |err| switch (err) {
                 error.Canceled => return error.Canceled,
-                else => return error.ReopenFailed,
+                // Renamed away and not yet created again. The file held is
+                // the only one there is, so it is the one to read on — from
+                // the top, if it was emptied as well.
+                error.FileNotFound => {
+                    if (emptied) {
+                        try self.restart();
+                        self.rotations += 1;
+                    }
+                    return;
+                },
+                error.OpenFailed => return error.ReopenFailed,
             };
             var adopted = false;
             defer if (!adopted) opener.close(self.io, fresh);

@@ -632,6 +632,111 @@ test "a follower given an opener follows the path across a rename" {
     try testing.expectEqual(@as(u64, 1), follower.rotations);
 }
 
+/// The second half of a rotation, landed inside a follower's own waits: the
+/// path is renamed away by the test before the follower waits, and the file
+/// that replaces it is written during the wait numbered `create_at`. Every
+/// wait in between finds the path naming nothing, which is what a rotation
+/// looks like from outside between its rename and its create — a window a
+/// writer may hold open for as long as it likes.
+const Gap = struct {
+    var dir: std.Io.Dir = undefined;
+    var waits: usize = 0;
+    var create_at: usize = 0;
+    var absent_looks: usize = 0;
+
+    fn sleep(userdata: ?*anyopaque, timeout: std.Io.Timeout) std.Io.Cancelable!void {
+        _ = userdata;
+        _ = timeout;
+        waits += 1;
+        if (waits == create_at) {
+            dir.writeFile(testing.io, .{ .sub_path = "log.jsonl", .data = "{\"kind\":\"new\"}\n" }) catch
+                @panic("could not write the replacement file");
+        }
+    }
+
+    /// A `PathOpener` that counts the times it found nothing at the path.
+    fn open(context: *anyopaque, io: std.Io) Opener.OpenError!std.Io.File {
+        const path: *PathOpener = @ptrCast(@alignCast(context)); // safe: `opener` below is the only maker of this interface, with a *PathOpener as its context
+        return path.opener().open(io) catch |err| {
+            if (err == error.FileNotFound) absent_looks += 1;
+            return err;
+        };
+    }
+
+    fn close(context: *anyopaque, io: std.Io, file: std.Io.File) void {
+        const path: *PathOpener = @ptrCast(@alignCast(context)); // safe: as in `open`
+        path.opener().close(io, file);
+    }
+
+    fn opener(path: *PathOpener) Opener {
+        return .{ .context = path, .openFn = open, .closeFn = close };
+    }
+};
+
+test "a path that names nothing between a rotation's rename and its create is waited out" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "log.jsonl", .data = "{\"kind\":\"old\"}\n" });
+
+    const file = try tmp.dir.openFile(testing.io, "log.jsonl", .{});
+    defer file.close(testing.io);
+    var buffer: [256]u8 = undefined;
+    var source = file.reader(testing.io, &buffer);
+
+    // The waits are the test's: each one is a step of the writer's, run on
+    // this thread, so the interleaving is the same on every run.
+    Gap.dir = tmp.dir;
+    Gap.waits = 0;
+    Gap.absent_looks = 0;
+    // A follower looks at the path once its file has stood still for two
+    // waits; by the sixth it has looked at least twice and found nothing.
+    Gap.create_at = 6;
+    var vtable = testing.io.vtable.*;
+    vtable.sleep = Gap.sleep;
+    const io: std.Io = .{ .userdata = testing.io.userdata, .vtable = &vtable };
+
+    var path: PathOpener = .{ .dir = tmp.dir, .sub_path = "log.jsonl" };
+    var follower: Follower(Event) = .init(testing.allocator, io, &source, .{
+        .wait = .{ .poll = .fromMicroseconds(100) },
+        .reopen = Gap.opener(&path),
+    });
+    defer follower.deinit();
+
+    try testing.expectEqualStrings("old", (try follower.next()).value.kind);
+    try tmp.dir.rename("log.jsonl", tmp.dir, "log.1", testing.io);
+
+    const line = try follower.next();
+    try testing.expectEqualStrings("new", line.value.kind);
+    try testing.expectEqual(@as(u64, 1), line.number);
+    try testing.expectEqual(@as(u64, 1), follower.rotations);
+    try testing.expect(Gap.absent_looks >= 2);
+}
+
+test "an opener that fails for any other reason ends the follow" {
+    var fixture = try Fixture.init("{\"kind\":\"only\"}\n", 64);
+    defer fixture.deinit();
+    const Refusing = struct {
+        fn open(context: *anyopaque, io: std.Io) Opener.OpenError!std.Io.File {
+            _ = context;
+            _ = io;
+            return error.OpenFailed;
+        }
+        fn close(context: *anyopaque, io: std.Io, file: std.Io.File) void {
+            _ = context;
+            _ = io;
+            _ = file;
+        }
+    };
+    var context: u8 = 0;
+    var follower: Follower(Event) = .init(testing.allocator, testing.io, &fixture.reader, .{
+        .wait = .{ .poll = .fromMicroseconds(100) },
+        .reopen = .{ .context = &context, .openFn = Refusing.open, .closeFn = Refusing.close },
+    });
+    defer follower.deinit();
+    try testing.expectEqualStrings("only", (try follower.next()).value.kind);
+    try testing.expectError(error.ReopenFailed, follower.next());
+}
+
 test "the old file is read to its end before the new one is started" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();

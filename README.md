@@ -74,7 +74,8 @@ Directory durability remains the caller's responsibility.
 
 `Tail(T)` reads a seekable file backwards. `Follower(T)` waits for complete terminated
 records and stops with `error.Canceled` when its `std.Io` is cancelled. A supplied
-`Opener` lets it follow replacement files after draining the old one. File identity can
+`Opener` lets it follow replacement files after draining the old one, waiting while the
+path names nothing between a rotation's rename and its create. File identity can
 use the platform's file identifier or an opening-byte fingerprint; checkpoints retain
 that identity, the byte offset and line numbering.
 

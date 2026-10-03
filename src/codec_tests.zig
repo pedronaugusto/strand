@@ -331,6 +331,39 @@ test "a line is read as std.json reads it, in the written shape and out of it" {
     }
 }
 
+test "a line that ends inside a character is cut short, as std.json says" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // The start of a character the input ends before finishing is input
+    // that ran out; a byte that cannot start or continue one is not UTF-8.
+    // Both in a value and in a member's name, and on the token path a
+    // `std.json.Value` is read on.
+    for ([_][]const u8{
+        "{\"text\":\"caf\xc3",
+        "{\"text\":\"\xe2\x82",
+        "{\"text\":\"\xf0\x9f\x98",
+        "{\"text\":\"\xf4\x8f",
+        "{\"text\":\"\xed\xa0",
+        "{\"text\":\"\xe0\x80",
+        "{\"text\":\"\xf0\x80",
+        "{\"text\":\"\xf4\x90",
+        "{\"text\":\"\xc0",
+        "{\"text\":\"\xff",
+        "{\"text\":\"\xc3\xc3",
+        "{\"te\xc3",
+        "{\"te\xe2\x82",
+        "{\"text\":\"x\\u0041\xc3",
+        "\"\xc3",
+    }) |line| {
+        try expectSameParse(Plain, a, line);
+        try expectSameParse(Flat, a, line);
+        try expectSameParse(Pair, a, line);
+        try expectSameParse(std.json.Value, a, line);
+        try expectSameParse([]const u8, a, line);
+    }
+}
+
 test "a whole number std.json cannot cast is read as the number it is, or refused" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();

@@ -309,12 +309,56 @@ pub fn stringSpecial(bytes: []const u8) Special {
     return .{ .at = bytes.len, .non_ascii = non_ascii };
 }
 
+/// The error for a run of string bytes that is not UTF-8, when `ends` says
+/// whether the input ends with it: running out in the middle of a character
+/// is input that ended, as `std.json` reads it, and anything else is not
+/// UTF-8.
+pub fn invalidUtf8(run: []const u8, ends: bool) error{ SyntaxError, UnexpectedEndOfInput } {
+    return if (ends and endsInsideCharacter(run)) error.UnexpectedEndOfInput else error.SyntaxError;
+}
+
+/// Whether `bytes` are UTF-8 up to a final character that begins as one
+/// does and stops before its last byte.
+fn endsInsideCharacter(bytes: []const u8) bool {
+    var start = bytes.len;
+    while (start > 0 and bytes.len - start < 4) {
+        start -= 1;
+        if (bytes[start] & 0xC0 != 0x80) break;
+    }
+    const tail = bytes[start..];
+    if (tail.len == 0) return false;
+    // A byte that begins a character, as `std.json` takes them: never
+    // C0 or C1, which only begin overlong ones, nor past F4.
+    const len: usize = switch (tail[0]) {
+        0xC2...0xDF => 2,
+        0xE0...0xEF => 3,
+        0xF0...0xF4 => 4,
+        else => return false,
+    };
+    if (tail.len >= len) return false;
+    for (tail[1..]) |b| if (b & 0xC0 != 0x80) return false;
+    // The second byte is narrower after the four leads whose characters
+    // would otherwise be overlong, a surrogate half, or past U+10FFFF.
+    if (tail.len >= 2) {
+        const second = tail[1];
+        const in_range = switch (tail[0]) {
+            0xE0 => second >= 0xA0,
+            0xED => second <= 0x9F,
+            0xF0 => second >= 0x90,
+            0xF4 => second <= 0x8F,
+            else => true,
+        };
+        if (!in_range) return false;
+    }
+    return std.unicode.utf8ValidateSlice(bytes[0..start]);
+}
+
 fn nextString(self: *@This()) Error!Token {
     const found = stringSpecial(self.input[self.cursor..]);
     const at = self.cursor + found.at;
     if (found.non_ascii and !std.unicode.utf8ValidateSlice(self.input[self.value_start..at])) {
         self.cursor = at;
-        return error.SyntaxError;
+        return invalidUtf8(self.input[self.value_start..at], at == self.input.len);
     }
     self.cursor = at;
     if (self.cursor == self.input.len) return error.UnexpectedEndOfInput;

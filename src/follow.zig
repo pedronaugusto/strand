@@ -26,7 +26,7 @@ const Allocator = std.mem.Allocator;
 
 const strand = struct {
     pub const Line = @import("line.zig").Line;
-    pub const ParseLineError = @import("parse_line.zig").ParseLineError;
+    pub const ParseLineError = @import("codec.zig").parser.ParseLineError;
     pub const Reader = @import("reader.zig").Reader;
 };
 const Line = strand.Line;

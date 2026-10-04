@@ -13,7 +13,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-const parse_line = @import("parse_line.zig");
+const parse_line = @import("codec.zig").parser;
 const ParseLineError = parse_line.ParseLineError;
 
 /// The UTF-8 byte-order mark. Not part of the first line of a stream, and

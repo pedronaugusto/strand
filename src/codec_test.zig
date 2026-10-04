@@ -590,9 +590,9 @@ fn expectVectorPaths(expected: anytype, bytes: []const u8) !void {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    if (comptime @import("decode.zig").supports(T)) {
+    if (comptime @import("codec.zig").decode.supports(T)) {
         var direct: T = undefined;
-        try @import("decode.zig").parseInto(T, a, bytes, .{ .allocate = .alloc_if_needed, .max_value_len = bytes.len }, &direct);
+        try @import("codec.zig").decode.parseInto(T, a, bytes, .{ .allocate = .alloc_if_needed, .max_value_len = bytes.len }, &direct);
         try testing.expectEqualDeep(expected, direct);
     }
     for ([_]bool{ false, true }) |copy| {

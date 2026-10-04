@@ -3,8 +3,8 @@ const gantry = @import("gantry");
 
 pub const layers: []const gantry.rules.Layer = &.{
     .{ .name = "primitives", .patterns = &.{
-        "src/encode_buffer.zig",
-        "src/encode_impl.zig",
+        "src/encode/buffer.zig",
+        "src/encode.zig",
         "src/file_id.zig",
         "src/testing/fixtures.zig",
         "src/indent.zig",
@@ -20,31 +20,26 @@ pub const layers: []const gantry.rules.Layer = &.{
     } },
     .{ .name = "decoding and conversion", .patterns = &.{
         "src/control.zig",
-        "src/decode_impl.zig",
+        "src/decode.zig",
         "src/from_value.zig",
         "src/testing/owned_rejected.zig",
         "src/parse.zig",
-        "src/Raw/raw_type.zig",
+        "src/raw.zig",
         "src/sync.zig",
     } },
     .{ .name = "parsing and schema", .patterns = &.{
-        "src/parse_line_impl.zig",
+        "src/parse/line.zig",
         "src/versioned.zig",
     } },
     .{ .name = "codec assembly", .patterns = &.{
         "src/codec.zig",
     } },
-    .{ .name = "codec interfaces", .patterns = &.{
-        "src/decode.zig",
-        "src/encode.zig",
-        "src/parse_line.zig",
-        "src/raw.zig",
-    } },
+    .{ .name = "codec interfaces", .patterns = &.{} },
     .{ .name = "records", .patterns = &.{
         "src/line.zig",
     } },
     .{ .name = "line framing", .patterns = &.{
-        "src/line_reader.zig",
+        "src/line/reader.zig",
         "src/tail.zig",
         "src/writer.zig",
     } },
@@ -61,19 +56,19 @@ pub const layers: []const gantry.rules.Layer = &.{
         "src/codec_test.zig",
         "src/follow_test.zig",
         "src/from_value_test.zig",
-        "src/keep_test.zig",
+        "src/testing/keep_test.zig",
         "src/owned_test.zig",
-        "src/Raw/raw_test.zig",
-        "src/tagged_test.zig",
+        "src/raw_test.zig",
+        "src/tagging_test.zig",
         "src/tail_test.zig",
         "src/strand_test.zig",
         "src/versioned_test.zig",
     } },
     .{ .name = "properties", .patterns = &.{
-        "src/fuzz.zig",
+        "src/testing/fuzz_test.zig",
     } },
     .{ .name = "tests", .patterns = &.{
-        "src/test_root.zig",
+        "src/tests.zig",
     } },
 };
 

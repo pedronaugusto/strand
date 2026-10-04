@@ -51,7 +51,7 @@
 //! validate a line it is not asked to parse, and has no opinion about what a
 //! line means. There is no global state and no dependency beyond `std`.
 
-const parse_line = @import("parse_line.zig");
+const parse_line = @import("codec.zig").parser;
 pub const parseLine = parse_line.parseLine;
 pub const innerParse = @import("parse.zig").inner;
 pub const ParseOptions = parse_line.ParseOptions;
@@ -68,7 +68,7 @@ pub const separator = line.separator;
 pub const lines = line.lines;
 pub const LineIterator = line.LineIterator;
 
-pub const LineReader = @import("line_reader.zig").LineReader;
+pub const LineReader = @import("line/reader.zig").LineReader;
 pub const Reader = @import("reader.zig").Reader;
 pub const Writer = @import("writer.zig").Writer;
 pub const writeLine = @import("writer.zig").writeLine;
@@ -86,7 +86,7 @@ pub const Identity = @import("follow.zig").Identity;
 pub const FileId = @import("file_id.zig").FileId;
 pub const Versioned = @import("versioned.zig").Versioned;
 pub const payloadOf = @import("versioned.zig").payloadOf;
-pub const Raw = @import("raw.zig").Raw;
+pub const Raw = @import("codec.zig").Raw;
 const owned = @import("owned.zig");
 pub const copyOwned = owned.copyOwned;
 pub const freeOwned = owned.freeOwned;

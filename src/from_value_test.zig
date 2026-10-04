@@ -32,7 +32,7 @@ const NestedVectors = struct {
     array: [1]@Vector(2, u64),
     rows: ?[]const *const @Vector(2, u64),
     arm: union(enum) { vector: @Vector(2, u64), none },
-    raw: @import("raw.zig").Raw,
+    raw: @import("codec.zig").Raw,
     hook: struct {
         vector: @Vector(2, u64),
         pub fn jsonParseFromValue(_: Allocator, value: std.json.Value, _: std.json.ParseOptions) std.json.ParseFromValueError!@This() {

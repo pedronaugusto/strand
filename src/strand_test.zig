@@ -2644,8 +2644,8 @@ test "a malformed raw value is a malformed line, under the error std.json gives 
 test "a type holding a raw value stays on the direct path both ways" {
     // The point of the type: a `std.json.Value` in the same place sends the
     // whole line to the token parser.
-    const decode = @import("decode.zig");
-    const encode = @import("encode.zig");
+    const decode = @import("codec.zig").decode;
+    const encode = @import("codec.zig").encode;
     try testing.expect(comptime decode.supports(Carried));
     try testing.expect(comptime encode.supports(Carried));
     try testing.expect(comptime decode.supports(strand.Raw));

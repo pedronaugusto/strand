@@ -2,18 +2,18 @@
 
 test {
     _ = @import("strand.zig");
-    _ = @import("Raw/raw_test.zig");
+    _ = @import("raw_test.zig");
     _ = @import("tail_test.zig");
     _ = @import("follow_test.zig");
-    _ = @import("tagged_test.zig");
+    _ = @import("tagging_test.zig");
     _ = @import("versioned_test.zig");
     _ = @import("from_value_test.zig");
 
     _ = @import("owned_test.zig");
-    _ = @import("keep_test.zig");
-    _ = @import("parse_line.zig");
+    _ = @import("testing/keep_test.zig");
+    _ = @import("codec.zig").parser;
     _ = @import("line.zig");
-    _ = @import("line_reader.zig");
+    _ = @import("line/reader.zig");
     _ = @import("reader.zig");
     _ = @import("writer.zig");
     _ = @import("sync.zig");
@@ -21,11 +21,11 @@ test {
     _ = @import("scanner.zig");
     _ = @import("route.zig");
     _ = @import("strand_test.zig");
-    _ = @import("fuzz.zig");
+    _ = @import("testing/fuzz_test.zig");
     _ = @import("tail.zig");
     _ = @import("follow.zig");
     _ = @import("versioned.zig");
-    _ = @import("raw.zig");
+    _ = @import("codec.zig");
     _ = @import("int.zig");
     _ = @import("file_id.zig");
     _ = @import("member_scan.zig");

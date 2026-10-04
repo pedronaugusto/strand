@@ -6,7 +6,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-- Keep Raw internals and tests in `src/Raw/`, and test support in `src/testing/`; name adjacent test files `_test.zig`.
+- Keep the Raw codec in `src/raw.zig` and its tests in `src/raw_test.zig`, and test support in `src/testing/`; name adjacent test files `_test.zig`.
 
 - A `.pretty` reader of a type the direct decoder reads parses a record where it lies in the input's buffer, across its line breaks, in one pass; it joins lines only for a record that straddles a refill, or one with a blank line, a `\r` or a fault in it, as before.
 

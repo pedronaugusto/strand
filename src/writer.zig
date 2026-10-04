@@ -3,9 +3,9 @@
 
 const std = @import("std");
 const assert = std.debug.assert;
-const encode = @import("encode.zig");
+const encode = @import("codec.zig").encode;
 const tagging = @import("tagging.zig");
-const EncodeBuffer = @import("encode_buffer.zig");
+const EncodeBuffer = @import("encode/buffer.zig");
 
 const line_mod = @import("line.zig");
 const Format = line_mod.Format;

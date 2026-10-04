@@ -1,7 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
-const strand = @import("strand.zig");
-const Fixture = @import("testing/fixtures.zig").Fixture;
+const strand = @import("../strand.zig");
+const Fixture = @import("fixtures.zig").Fixture;
 
 // A hook's output depends on state outside the JSON. Keeping the result
 // must preserve the decision already made, even if that state changes.

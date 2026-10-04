@@ -4,8 +4,8 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const Scanner = @import("scanner.zig");
-const typed_parse = @import("parse.zig");
+const Scanner = @import("../scanner.zig");
+const typed_parse = @import("../parse.zig");
 
 pub fn Parser(comptime decode: type) type {
     return struct {

@@ -25,8 +25,8 @@ const strand = struct {
     pub const Line = @import("line.zig").Line;
     pub const RawLine = @import("line.zig").RawLine;
     pub const separator = @import("line.zig").separator;
-    pub const DuplicateFields = @import("parse_line.zig").DuplicateFields;
-    pub const parseLine = @import("parse_line.zig").parseLine;
+    pub const DuplicateFields = @import("codec.zig").parser.DuplicateFields;
+    pub const parseLine = @import("codec.zig").parser.parseLine;
     pub const indexOfControl = @import("control.zig").indexOfControl;
 };
 const line_mod = @import("line.zig");

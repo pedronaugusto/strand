@@ -4,7 +4,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-const line_mod = @import("line.zig");
+const line_mod = @import("../line.zig");
 const RawLine = line_mod.RawLine;
 const Fault = line_mod.Fault;
 const separator = line_mod.separator;
@@ -12,10 +12,10 @@ const bom = line_mod.bom;
 const trimCr = line_mod.trimCr;
 const isBlank = line_mod.isBlank;
 
-const Raw = @import("raw.zig").Raw;
-const MemberScan = @import("member_scan.zig").MemberScan;
+const Raw = @import("../codec.zig").Raw;
+const MemberScan = @import("../member_scan.zig").MemberScan;
 
-const control = @import("control.zig");
+const control = @import("../control.zig");
 const indexOfControl = control.indexOfControl;
 const firstControlOrTerminator = control.firstControlOrTerminator;
 
@@ -108,7 +108,7 @@ pub const LineReader = struct {
     oversized_len: ?u8 = null,
 
     /// The longest `oversized_member` value kept, in bytes.
-    pub const max_oversized_member_bytes = @import("member_scan.zig").max_value_bytes;
+    pub const max_oversized_member_bytes = @import("../member_scan.zig").max_value_bytes;
 
     /// Framing policy, fixed at `init`. `Reader.Options` carries the same
     /// fields under the same names and hands them down.

@@ -13,9 +13,9 @@
 
 const std = @import("std");
 const testing = std.testing;
-const strand = @import("strand.zig");
-const fixtures = @import("testing/fixtures.zig");
-const codec = @import("codec_test.zig");
+const strand = @import("../strand.zig");
+const fixtures = @import("fixtures.zig");
+const codec = @import("../codec_test.zig");
 
 /// The shape a log line is parsed into here. Optional, defaulted and nested
 /// fields so that a generated line can go wrong in more than one way.
@@ -1400,19 +1400,19 @@ fn generateEvents(smith: *std.testing.Smith, events: []Event, text: []u8) []Even
 /// says what they are, add the line here, and every later run starts from it
 /// too.
 const corpus: []const []const u8 = &.{
-    @embedFile("corpus/lines/plain.jsonl"),
-    @embedFile("corpus/lines/control-bytes.jsonl"),
-    @embedFile("corpus/lines/not-utf8.jsonl"),
-    @embedFile("corpus/lines/empty-objects.jsonl"),
-    @embedFile("corpus/lines/escapes.jsonl"),
-    @embedFile("corpus/lines/byte-order-mark.jsonl"),
+    @embedFile("../corpus/lines/plain.jsonl"),
+    @embedFile("../corpus/lines/control-bytes.jsonl"),
+    @embedFile("../corpus/lines/not-utf8.jsonl"),
+    @embedFile("../corpus/lines/empty-objects.jsonl"),
+    @embedFile("../corpus/lines/escapes.jsonl"),
+    @embedFile("../corpus/lines/byte-order-mark.jsonl"),
 };
 
 /// Seeds for the versioned property, from `src/corpus/versioned`.
 const versioned_corpus: []const []const u8 = &.{
-    @embedFile("corpus/versioned/current.jsonl"),
-    @embedFile("corpus/versioned/older-and-unknown.jsonl"),
-    @embedFile("corpus/versioned/damaged.jsonl"),
+    @embedFile("../corpus/versioned/current.jsonl"),
+    @embedFile("../corpus/versioned/older-and-unknown.jsonl"),
+    @embedFile("../corpus/versioned/damaged.jsonl"),
 };
 
 test "fuzz: Reader.next over generated lines" {

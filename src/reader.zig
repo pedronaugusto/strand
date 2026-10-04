@@ -3,7 +3,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-const parse_line = @import("parse_line.zig");
+const parse_line = @import("codec.zig").parser;
 const ParseOptions = parse_line.ParseOptions;
 const DuplicateFields = parse_line.DuplicateFields;
 const ParseLineError = parse_line.ParseLineError;
@@ -14,7 +14,7 @@ const Line = line_mod.Line;
 const RawLine = line_mod.RawLine;
 const Format = line_mod.Format;
 
-const LineReader = @import("line_reader.zig").LineReader;
+const LineReader = @import("line/reader.zig").LineReader;
 const Scanner = @import("scanner.zig");
 
 /// A stream of `T`, one per line, over a `*std.Io.Reader`.

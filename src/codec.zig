@@ -1,8 +1,8 @@
 //! Assemble one Raw type and its codecs without coupling their implementations.
-pub const Raw = @import("Raw/raw_type.zig").RawType(@This()).Raw;
-pub const encode = @import("encode_impl.zig").Encoder(Raw);
-pub const decode = @import("decode_impl.zig").Decoder(Raw);
-pub const parser = @import("parse_line_impl.zig").Parser(decode);
+pub const Raw = @import("raw.zig").RawType(@This()).Raw;
+pub const encode = @import("encode.zig").Encoder(Raw);
+pub const decode = @import("decode.zig").Decoder(Raw);
+pub const parser = @import("parse/line.zig").Parser(decode);
 pub const ParseOptions = parser.ParseOptions;
 pub const ParseLineError = parser.ParseLineError;
 pub const parseLine = parser.parseLine;

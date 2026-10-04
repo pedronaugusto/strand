@@ -1,0 +1,1136 @@
+[
+  {
+    "rule": "Z023",
+    "path": "src/follow_test.zig",
+    "source": "fn open(context: *anyopaque, io: std.Io) Opener.OpenError!std.Io.File {",
+    "detail": "'Io' parameter should come before 'other'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z023",
+    "path": "src/follow_test.zig",
+    "source": "fn close(context: *anyopaque, io: std.Io, file: std.Io.File) void {",
+    "detail": "'Io' parameter should come before 'other'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z023",
+    "path": "src/follow_test.zig",
+    "source": "fn open(context: *anyopaque, io: std.Io) Opener.OpenError!std.Io.File {",
+    "detail": "'Io' parameter should come before 'other'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z023",
+    "path": "src/follow_test.zig",
+    "source": "fn close(context: *anyopaque, io: std.Io, file: std.Io.File) void {",
+    "detail": "'Io' parameter should come before 'other'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z023",
+    "path": "src/follow_test.zig",
+    "source": "fn open(context: *anyopaque, io: std.Io) Opener.OpenError!std.Io.File {",
+    "detail": "'Io' parameter should come before 'other'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z023",
+    "path": "src/follow_test.zig",
+    "source": "fn close(context: *anyopaque, io: std.Io, file: std.Io.File) void {",
+    "detail": "'Io' parameter should come before 'other'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z026",
+    "path": "src/follow_test.zig",
+    "source": "_ = consumer.cancel(testing.io) catch {};",
+    "detail": "empty catch block suppresses errors: `catch {}`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z026",
+    "path": "src/follow_test.zig",
+    "source": "_ = a.await(testing.io) catch {};",
+    "detail": "empty catch block suppresses errors: `catch {}`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z023",
+    "path": "src/codec_test.zig",
+    "source": "fn randomPlain(random: std.Random, a: std.mem.Allocator, depth: u8, clean_strings: bool) !Plain {",
+    "detail": "'Allocator' parameter should come before 'other'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z023",
+    "path": "src/codec_test.zig",
+    "source": "fn mutate(random: std.Random, a: std.mem.Allocator, bytes: []const u8) ![]const u8 {",
+    "detail": "'Allocator' parameter should come before 'other'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z012",
+    "path": "src/codec_test.zig",
+    "source": "pub fn jsonStringify(self: Custom, jw: anytype) !void {",
+    "detail": "public function exposes private type 'Custom'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/codec_test.zig",
+    "source": "const T = case[0];",
+    "detail": "variable 'T' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/codec_test.zig",
+    "source": "pub fn jsonParse(a: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) std.json.ParseError(@TypeOf(source.*))!@This() {",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/codec_test.zig",
+    "source": "pub fn jsonlMigrate(allocator: std.mem.Allocator, from: u32, data: std.json.Value) std.json.ParseFromValueError!@This() {",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/codec_test.zig",
+    "source": "if (comptime @import(\"decode.zig\").supports(T)) {",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/codec_test.zig",
+    "source": "try @import(\"decode.zig\").parseInto(T, a, bytes, .{ .allocate = .alloc_if_needed, .max_value_len = bytes.len }, &direct);",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/codec_test.zig",
+    "source": "try testing.expectEqualDeep(expected, try @import(\"parse.zig\").inner(T, a, &scanner, .{ .allocate = .alloc_if_needed, .max_value_len = bytes.len }));",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/codec_test.zig",
+    "source": "try testing.expectEqualDeep(expected, try @import(\"parse.zig\").inner(T, a, &tokens, .{ .allocate = .alloc_always, .max_value_len = bytes.len }));",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/codec_test.zig",
+    "source": "var fixture = try @import(\"testing/fixtures.zig\").Fixture.init(framed, 1);",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z030",
+    "path": "src/reader.zig",
+    "source": "fn deinit(self: *PrettyEnd) void {",
+    "detail": "deinit should set self.* = undefined",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/reader.zig",
+    "source": "return @import(\"owned.zig\").copyOwned(allocator, line.value);",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/reader.zig",
+    "source": "@import(\"testing/work.zig\").scan(record.len - self.scanner.cursor);",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z011",
+    "path": "src/file_id.zig",
+    "source": "const Bits = std.meta.Int(.unsigned, @bitSizeOf(@TypeOf(x)));",
+    "detail": "'Int' is deprecated: Deprecated: use @Int",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/parse_line_impl.zig",
+    "source": "const self: *@This() = @ptrCast(@alignCast(ctx)); // safe: this vtable receives only a FailOnce installed by the test below",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/parse_line_impl.zig",
+    "source": "fn allocator(self: *@This()) Allocator {",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/parse_line_impl.zig",
+    "source": "pub fn jsonParse(_: Allocator, _: anytype, _: std.json.ParseOptions) !@This() {",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/control.zig",
+    "source": "const Block = @Vector(block_len, u8);",
+    "detail": "variable 'Block' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z011",
+    "path": "src/control.zig",
+    "source": "const mask: std.meta.Int(.unsigned, n) = @bitCast(hits);",
+    "detail": "'Int' is deprecated: Deprecated: use @Int",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/control.zig",
+    "source": "const Block = @Vector(block_len, u8);",
+    "detail": "variable 'Block' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z009",
+    "path": "src/encode_buffer.zig",
+    "source": "//! Owned encoding bytes and the allocation failure behind a writer error.",
+    "detail": "file 'encode_buffer.zig' has top-level fields and should be PascalCase",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/decode_impl.zig",
+    "source": "@import(\"testing/work.zig\").parse();",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/decode_impl.zig",
+    "source": "@import(\"testing/work.zig\").parse();",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z023",
+    "path": "src/from_value.zig",
+    "source": "allocator: Allocator,",
+    "detail": "'Allocator' parameter should come before 'other'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z023",
+    "path": "src/from_value.zig",
+    "source": "comptime skip: ?[]const u8,",
+    "detail": "'comptime' parameter should come before 'other'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z023",
+    "path": "src/from_value.zig",
+    "source": "allocator: Allocator,",
+    "detail": "'Allocator' parameter should come before 'other'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/from_value.zig",
+    "source": "const Payload = @FieldType(T, @tagName(other));",
+    "detail": "variable 'Payload' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z012",
+    "path": "src/versioned_test.zig",
+    "source": "pub fn jsonlMigrate(",
+    "detail": "public function exposes private type 'Event'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z012",
+    "path": "src/versioned_test.zig",
+    "source": "pub fn jsonlMigrate(allocator: Allocator, from: u32, data: std.json.Value) std.json.ParseFromValueError!Wide {",
+    "detail": "public function exposes private type 'Wide'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/versioned_test.zig",
+    "source": "pub fn jsonlMigrate(_: Allocator, from: u32, _: std.json.Value) std.json.ParseFromValueError!@This() {",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z023",
+    "path": "src/follow.zig",
+    "source": "fn openPath(context: *anyopaque, io: std.Io) Opener.OpenError!std.Io.File {",
+    "detail": "'Io' parameter should come before 'other'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z023",
+    "path": "src/follow.zig",
+    "source": "fn closePath(context: *anyopaque, io: std.Io, file: std.Io.File) void {",
+    "detail": "'Io' parameter should come before 'other'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z012",
+    "path": "src/follow.zig",
+    "source": "pub fn eql(a: Taken, b: Taken) bool {",
+    "detail": "public function exposes private type 'Taken'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z012",
+    "path": "src/follow.zig",
+    "source": "pub fn eql(a: Taken, b: Taken) bool {",
+    "detail": "public function exposes private type 'Taken'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z012",
+    "path": "src/follow.zig",
+    "source": "pub fn take(self: Identity, io: std.Io, file: std.Io.File) !Taken {",
+    "detail": "public function exposes private type 'Taken'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/follow.zig",
+    "source": "pub const Line = @import(\"line.zig\").Line;",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/follow.zig",
+    "source": "pub const ParseLineError = @import(\"parse_line.zig\").ParseLineError;",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/follow.zig",
+    "source": "pub const Reader = @import(\"reader.zig\").Reader;",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/codec.zig",
+    "source": "pub const Raw = @import(\"Raw/raw_type.zig\").RawType(@This()).Raw;",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/codec.zig",
+    "source": "pub const encode = @import(\"encode_impl.zig\").Encoder(Raw);",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/codec.zig",
+    "source": "pub const decode = @import(\"decode_impl.zig\").Decoder(Raw);",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/codec.zig",
+    "source": "pub const parser = @import(\"parse_line_impl.zig\").Parser(decode);",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/codec.zig",
+    "source": "const values = @import(\"value_api.zig\").Values(encode);",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z012",
+    "path": "src/fuzz.zig",
+    "source": "pub fn jsonlMigrate(",
+    "detail": "public function exposes private type 'Versioned2'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z007",
+    "path": "src/strand_test.zig",
+    "source": "const work = @import(\"testing/work.zig\");",
+    "detail": "duplicate import '\"testing/work.zig\"'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z011",
+    "path": "src/strand_test.zig",
+    "source": "try testing.expectEqual(@as(?usize, null), std.mem.indexOf(u8, left_out.written(), \"note\"));",
+    "detail": "'indexOf' is deprecated: Deprecated in favor of `find`.",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z030",
+    "path": "src/strand_test.zig",
+    "source": "fn deinit(self: *Draining) void {",
+    "detail": "deinit should set self.* = undefined",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z007",
+    "path": "src/strand_test.zig",
+    "source": "const work = @import(\"testing/work.zig\");",
+    "detail": "duplicate import '\"testing/work.zig\"'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/strand_test.zig",
+    "source": "const Arm = @Struct(.auto, null, &field_names, &@splat(u32), &@splat(.{}));",
+    "detail": "variable 'Arm' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/strand_test.zig",
+    "source": "const Tag = @Enum(u8, .exhaustive, &arm_names, &std.simd.iota(u8, arms));",
+    "detail": "variable 'Tag' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/strand_test.zig",
+    "source": "next: ?*@This() = null,",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/strand_test.zig",
+    "source": "pub fn jsonStringify(self: @This(), jw: anytype) !void {",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/strand_test.zig",
+    "source": "pub fn jsonStringify(self: @This(), jw: anytype) !void {",
+    "detail": "inline @This() in named struct; use 'Packed' instead",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/strand_test.zig",
+    "source": "pub fn jsonlMigrate(allocator: std.mem.Allocator, from: u32, data: std.json.Value) std.json.ParseFromValueError!@This() {",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/strand_test.zig",
+    "source": "pub fn jsonParse(a: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) std.json.ParseError(@TypeOf(source.*))!@This() {",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/strand_test.zig",
+    "source": "pub fn jsonStringify(self: @This(), json: *std.json.Stringify) !void {",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/strand_test.zig",
+    "source": "pub fn jsonStringify(_: @This(), json: *std.json.Stringify) !void {",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/strand_test.zig",
+    "source": "pub fn jsonStringify(_: @This(), json: *std.json.Stringify) !void {",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/strand_test.zig",
+    "source": "return .{ .row = try @import(\"parse.zig\").inner(Row, a, source, options) };",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/member_scan.zig",
+    "source": "const V = @Vector(width, u8);",
+    "detail": "variable 'V' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/member_scan.zig",
+    "source": "const V = @Vector(64, u8);",
+    "detail": "variable 'V' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z012",
+    "path": "src/keep_test.zig",
+    "source": "pub fn jsonParse(allocator: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) !Stateful {",
+    "detail": "public function exposes private type 'Stateful'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z012",
+    "path": "src/keep_test.zig",
+    "source": "pub fn jsonlMigrate(allocator: std.mem.Allocator, from: u32, data: std.json.Value) std.json.ParseFromValueError!Stateful {",
+    "detail": "public function exposes private type 'Stateful'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z012",
+    "path": "src/keep_test.zig",
+    "source": "pub fn jsonParse(a: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) !LastData {",
+    "detail": "public function exposes private type 'LastData'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/keep_test.zig",
+    "source": "const Result = @typeInfo(@TypeOf(strand.Tail(LastData).last)).@\"fn\".return_type.?;",
+    "detail": "variable 'Result' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/keep_test.zig",
+    "source": "const Errors = @typeInfo(Result).error_union.error_set;",
+    "detail": "variable 'Errors' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/from_value_test.zig",
+    "source": "const Vec = @Vector(2, u64);",
+    "detail": "variable 'Vec' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/from_value_test.zig",
+    "source": "pub fn jsonParseFromValue(_: Allocator, value: std.json.Value, _: std.json.ParseOptions) std.json.ParseFromValueError!@This() {",
+    "detail": "inline @This() in named struct; use 'NestedVectors' instead",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/from_value_test.zig",
+    "source": "const value = try @import(\"strand.zig\").payloadOf(T, a, good);",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/from_value_test.zig",
+    "source": "try testing.expectError(error.Overflow, @import(\"strand.zig\").payloadOf(T, a, overflow));",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/from_value_test.zig",
+    "source": "try testing.expectError(error.UnexpectedToken, @import(\"strand.zig\").payloadOf(T, a, .null));",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/from_value_test.zig",
+    "source": "raw: @import(\"raw.zig\").Raw,",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/from_value_test.zig",
+    "source": "try testing.expectEqualDeep(@as([0]Child, .{}), try @import(\"strand.zig\").payloadOf([0]Child, a, empty));",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/from_value_test.zig",
+    "source": "try testing.expectEqualDeep(Nested{ .rows = .{.{}} }, try @import(\"strand.zig\").payloadOf(Nested, a, source));",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/from_value_test.zig",
+    "source": "try testing.expectError(error.LengthMismatch, @import(\"strand.zig\").payloadOf([0]Child, a, try std.json.parseFromSliceLeaky(std.json.Value, a, \"[0]\", .{})));",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/from_value_test.zig",
+    "source": "try testing.expectEqualDeep(@as([0]u8, .{}), try @import(\"strand.zig\").payloadOf([0]u8, a, .{ .string = \"\" }));",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/from_value_test.zig",
+    "source": "try testing.expectError(error.LengthMismatch, @import(\"strand.zig\").payloadOf([0]u8, a, .{ .string = \"x\" }));",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z023",
+    "path": "src/parse.zig",
+    "source": "allocator: Allocator,",
+    "detail": "'Allocator' parameter should come before 'other'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/parse.zig",
+    "source": "const Payload = @FieldType(T, @tagName(other));",
+    "detail": "variable 'Payload' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z023",
+    "path": "src/parse.zig",
+    "source": "fn tagIn(allocator: Allocator, bytes: []const u8, comptime tag: []const u8, options: std.json.ParseOptions) std.json.ParseError(Scanner)![]const u8 {",
+    "detail": "'comptime' parameter should come before 'other'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z023",
+    "path": "src/parse.zig",
+    "source": "comptime skip: ?[]const u8,",
+    "detail": "'comptime' parameter should come before 'other'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/parse.zig",
+    "source": "@import(\"testing/work.zig\").parse();",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z011",
+    "path": "src/owned_test.zig",
+    "source": "const T = std.meta.Tuple(&([_]type{Leaf} ** 64));",
+    "detail": "'Tuple' is deprecated: Deprecated; use `@Tuple` instead.\n\nTo be removed after Zig 0.16.0 releases.",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/owned_test.zig",
+    "source": "const Node = struct { text: []const u8, children: []const @This() };",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/owned_test.zig",
+    "source": "pub fn jsonParse(_: std.mem.Allocator, _: anytype, _: std.json.ParseOptions) !@This() {",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/owned_test.zig",
+    "source": "pub fn jsonStringify(_: @This(), _: anytype) !void {",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z023",
+    "path": "src/line_reader.zig",
+    "source": "fn refuseOversized(self: *LineReader, kept: []const u8, comptime rest: enum { whole, discard }) error{ReadFailed}!u64 {",
+    "detail": "'comptime' parameter should come before 'other'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/line_reader.zig",
+    "source": "const V = @Vector(width, u8);",
+    "detail": "variable 'V' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z011",
+    "path": "src/line_reader.zig",
+    "source": "const B = std.meta.Int(.unsigned, width);",
+    "detail": "'Int' is deprecated: Deprecated: use @Int",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/line_reader.zig",
+    "source": "pub const max_oversized_member_bytes = @import(\"member_scan.zig\").max_value_bytes;",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z012",
+    "path": "src/tagged_test.zig",
+    "source": "pub fn jsonStringify(self: Stamp, jw: anytype) !void {",
+    "detail": "public function exposes private type 'Stamp'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z012",
+    "path": "src/tagged_test.zig",
+    "source": "pub fn jsonParse(a: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) std.json.ParseError(@TypeOf(source.*))!Stamp {",
+    "detail": "public function exposes private type 'Stamp'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z009",
+    "path": "src/scanner.zig",
+    "source": "//! Complete-input JSON scanner used by strand's typed hot path.",
+    "detail": "file 'scanner.zig' has top-level fields and should be PascalCase",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z015",
+    "path": "src/scanner.zig",
+    "source": "pub fn peekNextTokenType(self: *@This()) PeekError!TokenType {",
+    "detail": "public function exposes private error set 'PeekError'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z015",
+    "path": "src/scanner.zig",
+    "source": "pub fn next(self: *@This()) NextError!Token {",
+    "detail": "public function exposes private error set 'NextError'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/scanner.zig",
+    "source": "const V = @Vector(width, u8);",
+    "detail": "variable 'V' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z015",
+    "path": "src/scanner.zig",
+    "source": "pub fn nextAlloc(self: *@This(), allocator: Allocator, when: AllocWhen) AllocError!Token {",
+    "detail": "public function exposes private error set 'AllocError'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z015",
+    "path": "src/scanner.zig",
+    "source": "pub fn nextAllocMax(self: *@This(), allocator: Allocator, when: AllocWhen, max: usize) AllocError!Token {",
+    "detail": "public function exposes private error set 'AllocError'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z015",
+    "path": "src/scanner.zig",
+    "source": "pub fn allocNextIntoArrayList(self: *@This(), list: *std.array_list.Managed(u8), when: AllocWhen) AllocIntoArrayListError!?[]const u8 {",
+    "detail": "public function exposes private error set 'AllocIntoArrayListError'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z015",
+    "path": "src/scanner.zig",
+    "source": "pub fn allocNextIntoArrayListMax(self: *@This(), list: *std.array_list.Managed(u8), when: AllocWhen, max: usize) AllocIntoArrayListError!?[]const u8 {",
+    "detail": "public function exposes private error set 'AllocIntoArrayListError'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z015",
+    "path": "src/scanner.zig",
+    "source": "pub fn skipValue(self: *@This()) SkipError!void {",
+    "detail": "public function exposes private error set 'SkipError'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z015",
+    "path": "src/scanner.zig",
+    "source": "pub fn skipUntilStackHeight(self: *@This(), terminal: usize) NextError!void {",
+    "detail": "public function exposes private error set 'NextError'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/scanner.zig",
+    "source": "pub fn initCompleteInput(allocator: Allocator, input: []const u8) @This() {",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/scanner.zig",
+    "source": "pub fn deinit(self: *@This()) void {",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/scanner.zig",
+    "source": "pub fn enableDiagnostics(self: *@This(), diagnostics: *std.json.Diagnostics) void {",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/scanner.zig",
+    "source": "pub fn stackHeight(self: *const @This()) usize {",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/scanner.zig",
+    "source": "pub fn ensureTotalStackCapacity(self: *@This(), height: usize) Allocator.Error!void {",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/scanner.zig",
+    "source": "fn push(self: *@This(), mode: Mode) Allocator.Error!void {",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/scanner.zig",
+    "source": "fn pop(self: *@This()) ?Mode {",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/scanner.zig",
+    "source": "fn top(self: *const @This()) ?Mode {",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/scanner.zig",
+    "source": "fn skipWhitespace(self: *@This()) void {",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/scanner.zig",
+    "source": "fn byte(self: *const @This()) Error!u8 {",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/scanner.zig",
+    "source": "fn prepare(self: *@This()) Error!TokenType {",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/scanner.zig",
+    "source": "pub fn peekNextTokenType(self: *@This()) PeekError!TokenType {",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/scanner.zig",
+    "source": "pub fn next(self: *@This()) NextError!Token {",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/scanner.zig",
+    "source": "fn nextLiteral(self: *@This(), comptime word: []const u8, token: Token) Error!Token {",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/scanner.zig",
+    "source": "fn nextNumber(self: *@This()) Error!Token {",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/scanner.zig",
+    "source": "fn nextString(self: *@This()) Error!Token {",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/scanner.zig",
+    "source": "fn nextStringEscape(self: *@This()) Error!Token {",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/scanner.zig",
+    "source": "fn unicodeEscape(self: *@This()) Error!u21 {",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/scanner.zig",
+    "source": "fn hexQuad(self: *@This()) Error!u16 {",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/scanner.zig",
+    "source": "pub fn nextAlloc(self: *@This(), allocator: Allocator, when: AllocWhen) AllocError!Token {",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/scanner.zig",
+    "source": "pub fn nextAllocMax(self: *@This(), allocator: Allocator, when: AllocWhen, max: usize) AllocError!Token {",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/scanner.zig",
+    "source": "pub fn allocNextIntoArrayList(self: *@This(), list: *std.array_list.Managed(u8), when: AllocWhen) AllocIntoArrayListError!?[]const u8 {",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/scanner.zig",
+    "source": "pub fn allocNextIntoArrayListMax(self: *@This(), list: *std.array_list.Managed(u8), when: AllocWhen, max: usize) AllocIntoArrayListError!?[]const u8 {",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/scanner.zig",
+    "source": "pub fn skipValue(self: *@This()) SkipError!void {",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/scanner.zig",
+    "source": "pub fn skipUntilStackHeight(self: *@This(), terminal: usize) NextError!void {",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z015",
+    "path": "src/int.zig",
+    "source": "pub fn fromSlice(comptime T: type, slice: []const u8) Error!T {",
+    "detail": "public function exposes private error set 'Error'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z015",
+    "path": "src/int.zig",
+    "source": "pub fn fromFloat(comptime T: type, float: f128) Error!T {",
+    "detail": "public function exposes private error set 'Error'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z011",
+    "path": "src/int.zig",
+    "source": "const U = std.meta.Int(.unsigned, info.bits);",
+    "detail": "'Int' is deprecated: Deprecated: use @Int",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z023",
+    "path": "src/sync.zig",
+    "source": "pub fn syncFile(file: std.Io.File, io: std.Io, level: SyncLevel) SyncError!SyncKind {",
+    "detail": "'Io' parameter should come before 'other'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z023",
+    "path": "src/sync.zig",
+    "source": "pub fn syncDir(dir: std.Io.Dir, io: std.Io) SyncError!?SyncKind {",
+    "detail": "'Io' parameter should come before 'other'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z017",
+    "path": "src/sync.zig",
+    "source": "return try syncFile(.{ .handle = dir.handle, .flags = .{ .nonblocking = false } }, io, .all);",
+    "detail": "avoid try in return; hoist it to preserve payload coercion: `const value = try syncFile(.{; return value;`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/sync.zig",
+    "source": "var fixture = try @import(\"testing/fixtures.zig\").Fixture.init(\"{\\\"kind\\\":\\\"one\\\"}\\n\", 64);",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/tail.zig",
+    "source": "const Block = @Vector(block_len, u8);",
+    "detail": "variable 'Block' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z011",
+    "path": "src/tail.zig",
+    "source": "try testing.expectEqual(std.mem.lastIndexOfScalar(u8, bytes, '\\n'), lastNewline(bytes));",
+    "detail": "'lastIndexOfScalar' is deprecated: Deprecated in favor of `findScalarLast`.",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/tail.zig",
+    "source": "pub const Line = @import(\"line.zig\").Line;",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/tail.zig",
+    "source": "pub const RawLine = @import(\"line.zig\").RawLine;",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/tail.zig",
+    "source": "pub const separator = @import(\"line.zig\").separator;",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/tail.zig",
+    "source": "pub const DuplicateFields = @import(\"parse_line.zig\").DuplicateFields;",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/tail.zig",
+    "source": "pub const parseLine = @import(\"parse_line.zig\").parseLine;",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/tail.zig",
+    "source": "pub const indexOfControl = @import(\"control.zig\").indexOfControl;",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/tail.zig",
+    "source": "return @import(\"owned.zig\").copyOwned(allocator, line.value);",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/tail.zig",
+    "source": "for (out.items) |value| @import(\"owned.zig\").freeOwned(allocator, value);",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z013",
+    "path": "src/Raw/raw_test.zig",
+    "source": "const EncodeBuffer = @import(\"../encode_buffer.zig\");",
+    "detail": "unused import 'EncodeBuffer'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/Raw/raw_test.zig",
+    "source": "pub fn jsonStringify(self: @This(), json: *std.json.Stringify) !void {",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/Raw/raw_test.zig",
+    "source": "pub fn jsonStringify(_: @This(), json: *std.json.Stringify) !void {",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "examples/scratch.zig",
+    "source": "pub fn init(io: std.Io) !@This() {",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "examples/scratch.zig",
+    "source": "pub fn deinit(self: *@This(), io: std.Io) void {",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z026",
+    "path": "examples/scratch.zig",
+    "source": "std.Io.Dir.cwd().deleteTree(io, &self.path) catch {};",
+    "detail": "empty catch block suppresses errors: `catch {}`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z023",
+    "path": "examples/logbook.zig",
+    "source": "fn follow(gpa: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, comptime Entry: type) !void {",
+    "detail": "'type' parameter should come before 'other'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "examples/logbook.zig",
+    "source": ") std.json.ParseFromValueError!@This() {",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "examples/logbook.zig",
+    "source": "var scratch = try @import(\"scratch.zig\").Scratch.init(io);",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  }
+]

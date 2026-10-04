@@ -1,0 +1,97 @@
+{
+  "sources": [
+    "src"
+  ],
+  "test_roots": [
+    "src/test_root.zig"
+  ],
+  "test_support": [
+    "src/testing/*",
+    "src/fuzz.zig"
+  ],
+  "function_exceptions": {
+    "src/Raw/raw_type.zig:RawType": {
+      "lines": 143,
+      "reason": "Existing implementation at adoption; this exact bound cannot grow and shrinks when the function is split."
+    },
+    "src/decode_impl.zig:Decoder": {
+      "lines": 739,
+      "reason": "Existing implementation at adoption; this exact bound cannot grow and shrinks when the function is split."
+    },
+    "src/decode_impl.zig:value": {
+      "lines": 130,
+      "reason": "Existing implementation at adoption; this exact bound cannot grow and shrinks when the function is split."
+    },
+    "src/encode_impl.zig:Encoder": {
+      "lines": 651,
+      "reason": "Existing implementation at adoption; this exact bound cannot grow and shrinks when the function is split."
+    },
+    "src/follow.zig:Follower": {
+      "lines": 461,
+      "reason": "Existing implementation at adoption; this exact bound cannot grow and shrinks when the function is split."
+    },
+    "src/parse_line_impl.zig:Parser": {
+      "lines": 283,
+      "reason": "Existing implementation at adoption; this exact bound cannot grow and shrinks when the function is split."
+    },
+    "src/reader.zig:Reader": {
+      "lines": 396,
+      "reason": "Existing implementation at adoption; this exact bound cannot grow and shrinks when the function is split."
+    },
+    "src/tail.zig:Tail": {
+      "lines": 489,
+      "reason": "Existing implementation at adoption; this exact bound cannot grow and shrinks when the function is split."
+    },
+    "src/versioned.zig:Versioned": {
+      "lines": 130,
+      "reason": "Existing implementation at adoption; this exact bound cannot grow and shrinks when the function is split."
+    },
+    "src/writer.zig:Writer": {
+      "lines": 390,
+      "reason": "Existing implementation at adoption; this exact bound cannot grow and shrinks when the function is split."
+    }
+  },
+  "layout_exceptions": {
+    "src/encode": {
+      "files": [
+        "src/encode.zig",
+        "src/encode_buffer.zig",
+        "src/encode_impl.zig"
+      ],
+      "reason": "Existing namespace at adoption; these exact members are retained until its layout branch lands."
+    },
+    "src/decode": {
+      "files": [
+        "src/decode.zig",
+        "src/decode_impl.zig"
+      ],
+      "reason": "Existing namespace at adoption; these exact members are retained until its layout branch lands."
+    },
+    "src/line": {
+      "files": [
+        "src/line.zig",
+        "src/line_reader.zig"
+      ],
+      "reason": "Existing namespace at adoption; these exact members are retained until its layout branch lands."
+    },
+    "src/parse": {
+      "files": [
+        "src/parse.zig",
+        "src/parse_line.zig",
+        "src/parse_line_impl.zig"
+      ],
+      "reason": "Existing namespace at adoption; these exact members are retained until its layout branch lands."
+    }
+  },
+  "docs": {
+    "zig build docs -- usage": {
+      "source": "examples/usage.zig",
+      "region": "usage",
+      "imports": [
+        "strand"
+      ]
+    }
+  },
+  "ziglint_exceptions": "ci/ziglint-exceptions.json",
+  "extra_checks": []
+}

@@ -6,7 +6,7 @@
 //! past the bound is answered rather than taken for the end of the
 //! connection.
 //!
-//! `zig build examples` builds AND runs this; `ci/readme_usage.sh` extracts
+//! `zig build examples` builds AND runs this; `zig build docs -- usage` extracts
 //! its marked regions into README.md, so the snippets a reader copies are
 //! code CI executes.
 

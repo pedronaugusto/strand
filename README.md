@@ -16,7 +16,7 @@ settings.
 optional `note` and defaulted `level` fields. `arena` is released after the retained
 values are used.
 
-<!-- BEGIN GENERATED ci/readme_usage.sh -->
+<!-- BEGIN GENERATED zig build docs -- usage -->
 ```zig
 const strand = @import("strand");
 
@@ -106,14 +106,14 @@ exercises file following, tailing and a line protocol.
 
 ## Testing
 
-Local build scripts clear `.zig-cache/{o,h,z,tmp}` above the measured cap in `ci/cache.sh`; run `sh ci/cache.sh` before direct Zig builds (only a rebuild is lost).
+Local build scripts clear `.zig-cache/{o,h,z,tmp}` above the measured cap through preflight; run `zig build cache` before direct Zig builds (only a rebuild is lost).
 
 `zig build test` runs the unit suite, scratch tests and examples in Debug by default.
 The suite covers framing, codec agreement with `std.json`, owned copies, rotation,
 cancellation and malformed records. Properties run from corpus inputs and 32 seeded
 rounds by default; `-Dcampaign=N` and `-Dseed=N` select a generated-input run. `zig
 build test --fuzz` runs the coverage-guided targets until stopped. CI also runs
-`ci/check-readme.sh`.
+`zig build lint`.
 
 [CI](.github/workflows/ci.yml) runs tests and examples in Debug and ReleaseSafe on
 `ubuntu-latest`, `macos-latest` and `windows-latest`, plus ReleaseFast on Ubuntu.

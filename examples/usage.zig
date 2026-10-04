@@ -2,7 +2,7 @@
 //! events in through a `strand.Reader`, one line kept past the line it came
 //! from, and a line routed by its first key without being parsed.
 //!
-//! `zig build examples` builds AND runs this; `ci/readme_usage.sh` extracts
+//! `zig build examples` builds AND runs this; `zig build docs -- usage` extracts
 //! the region between the usage markers into README.md, so the snippet a
 //! reader copies is code CI executes.
 

@@ -1,4 +1,4 @@
-# strand — the Linux image `ci/linux.sh` runs the suite in.
+# strand — the Linux image `zig build ci-linux --` runs the suite in.
 #
 # Debian plus one Zig tarball, pinned to the version build.zig.zon asks for,
 # and nothing else: the package has no dependency beyond `std`, so an image

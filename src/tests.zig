@@ -12,6 +12,7 @@ test {
     _ = @import("owned_test.zig");
     _ = @import("testing/keep_test.zig");
     _ = @import("codec.zig").parser;
+    _ = @import("parse/line.zig");
     _ = @import("line.zig");
     _ = @import("line/reader.zig");
     _ = @import("reader.zig");

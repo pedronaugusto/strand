@@ -162,21 +162,21 @@
   },
   {
     "rule": "Z020",
-    "path": "src/parse_line_impl.zig",
+    "path": "src/parse/line.zig",
     "source": "const self: *@This() = @ptrCast(@alignCast(ctx)); // safe: this vtable receives only a FailOnce installed by the test below",
     "detail": "inline @This(); assign it to `const Self = @This();`",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z020",
-    "path": "src/parse_line_impl.zig",
+    "path": "src/parse/line.zig",
     "source": "fn allocator(self: *@This()) Allocator {",
     "detail": "inline @This(); assign it to `const Self = @This();`",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z020",
-    "path": "src/parse_line_impl.zig",
+    "path": "src/parse/line.zig",
     "source": "pub fn jsonParse(_: Allocator, _: anytype, _: std.json.ParseOptions) !@This() {",
     "detail": "inline @This(); assign it to `const Self = @This();`",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
@@ -204,21 +204,21 @@
   },
   {
     "rule": "Z009",
-    "path": "src/encode_buffer.zig",
+    "path": "src/encode/buffer.zig",
     "source": "//! Owned encoding bytes and the allocation failure behind a writer error.",
     "detail": "file 'encode_buffer.zig' has top-level fields and should be PascalCase",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z028",
-    "path": "src/decode_impl.zig",
+    "path": "src/decode.zig",
     "source": "@import(\"testing/work.zig\").parse();",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z028",
-    "path": "src/decode_impl.zig",
+    "path": "src/decode.zig",
     "source": "@import(\"testing/work.zig\").parse();",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
@@ -317,7 +317,7 @@
   {
     "rule": "Z028",
     "path": "src/follow.zig",
-    "source": "pub const ParseLineError = @import(\"parse_line.zig\").ParseLineError;",
+    "source": "pub const ParseLineError = @import(\"parse/line.zig\").ParseLineError;",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
@@ -331,28 +331,28 @@
   {
     "rule": "Z028",
     "path": "src/codec.zig",
-    "source": "pub const Raw = @import(\"Raw/raw_type.zig\").RawType(@This()).Raw;",
+    "source": "pub const Raw = @import(\"raw.zig\").RawType(@This()).Raw;",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z028",
     "path": "src/codec.zig",
-    "source": "pub const encode = @import(\"encode_impl.zig\").Encoder(Raw);",
+    "source": "pub const encode = @import(\"encode.zig\").Encoder(Raw);",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z028",
     "path": "src/codec.zig",
-    "source": "pub const decode = @import(\"decode_impl.zig\").Decoder(Raw);",
+    "source": "pub const decode = @import(\"decode.zig\").Decoder(Raw);",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z028",
     "path": "src/codec.zig",
-    "source": "pub const parser = @import(\"parse_line_impl.zig\").Parser(decode);",
+    "source": "pub const parser = @import(\"parse/line.zig\").Parser(decode);",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
@@ -365,7 +365,7 @@
   },
   {
     "rule": "Z012",
-    "path": "src/fuzz.zig",
+    "path": "src/testing/fuzz_test.zig",
     "source": "pub fn jsonlMigrate(",
     "detail": "public function exposes private type 'Versioned2'",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
@@ -491,35 +491,35 @@
   },
   {
     "rule": "Z012",
-    "path": "src/keep_test.zig",
+    "path": "src/testing/keep_test.zig",
     "source": "pub fn jsonParse(allocator: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) !Stateful {",
     "detail": "public function exposes private type 'Stateful'",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z012",
-    "path": "src/keep_test.zig",
+    "path": "src/testing/keep_test.zig",
     "source": "pub fn jsonlMigrate(allocator: std.mem.Allocator, from: u32, data: std.json.Value) std.json.ParseFromValueError!Stateful {",
     "detail": "public function exposes private type 'Stateful'",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z012",
-    "path": "src/keep_test.zig",
+    "path": "src/testing/keep_test.zig",
     "source": "pub fn jsonParse(a: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) !LastData {",
     "detail": "public function exposes private type 'LastData'",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z006",
-    "path": "src/keep_test.zig",
+    "path": "src/testing/keep_test.zig",
     "source": "const Result = @typeInfo(@TypeOf(strand.Tail(LastData).last)).@\"fn\".return_type.?;",
     "detail": "variable 'Result' should be snake_case",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z006",
-    "path": "src/keep_test.zig",
+    "path": "src/testing/keep_test.zig",
     "source": "const Errors = @typeInfo(Result).error_union.error_set;",
     "detail": "variable 'Errors' should be snake_case",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
@@ -666,42 +666,42 @@
   },
   {
     "rule": "Z023",
-    "path": "src/line_reader.zig",
+    "path": "src/line/reader.zig",
     "source": "fn refuseOversized(self: *LineReader, kept: []const u8, comptime rest: enum { whole, discard }) error{ReadFailed}!u64 {",
     "detail": "'comptime' parameter should come before 'other'",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z006",
-    "path": "src/line_reader.zig",
+    "path": "src/line/reader.zig",
     "source": "const V = @Vector(width, u8);",
     "detail": "variable 'V' should be snake_case",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z011",
-    "path": "src/line_reader.zig",
+    "path": "src/line/reader.zig",
     "source": "const B = std.meta.Int(.unsigned, width);",
     "detail": "'Int' is deprecated: Deprecated: use @Int",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z028",
-    "path": "src/line_reader.zig",
+    "path": "src/line/reader.zig",
     "source": "pub const max_oversized_member_bytes = @import(\"member_scan.zig\").max_value_bytes;",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z012",
-    "path": "src/tagged_test.zig",
+    "path": "src/tagging_test.zig",
     "source": "pub fn jsonStringify(self: Stamp, jw: anytype) !void {",
     "detail": "public function exposes private type 'Stamp'",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z012",
-    "path": "src/tagged_test.zig",
+    "path": "src/tagging_test.zig",
     "source": "pub fn jsonParse(a: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) std.json.ParseError(@TypeOf(source.*))!Stamp {",
     "detail": "public function exposes private type 'Stamp'",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
@@ -1038,14 +1038,14 @@
   {
     "rule": "Z028",
     "path": "src/tail.zig",
-    "source": "pub const DuplicateFields = @import(\"parse_line.zig\").DuplicateFields;",
+    "source": "pub const DuplicateFields = @import(\"parse/line.zig\").DuplicateFields;",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z028",
     "path": "src/tail.zig",
-    "source": "pub const parseLine = @import(\"parse_line.zig\").parseLine;",
+    "source": "pub const parseLine = @import(\"parse/line.zig\").parseLine;",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
@@ -1072,21 +1072,21 @@
   },
   {
     "rule": "Z013",
-    "path": "src/Raw/raw_test.zig",
-    "source": "const EncodeBuffer = @import(\"../encode_buffer.zig\");",
+    "path": "src/raw_test.zig",
+    "source": "const EncodeBuffer = @import(\"encode/buffer.zig\");",
     "detail": "unused import 'EncodeBuffer'",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z020",
-    "path": "src/Raw/raw_test.zig",
+    "path": "src/raw_test.zig",
     "source": "pub fn jsonStringify(self: @This(), json: *std.json.Stringify) !void {",
     "detail": "inline @This(); assign it to `const Self = @This();`",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z020",
-    "path": "src/Raw/raw_test.zig",
+    "path": "src/raw_test.zig",
     "source": "pub fn jsonStringify(_: @This(), json: *std.json.Stringify) !void {",
     "detail": "inline @This(); assign it to `const Self = @This();`",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
@@ -1132,5 +1132,61 @@
     "source": "var scratch = try @import(\"scratch.zig\").Scratch.init(io);",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/codec_test.zig",
+    "source": "if (comptime @import(\"codec.zig\").decode.supports(T)) {",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing declaration moved or import retargeted by the main layout; retain this exact diagnostic while landing preflight."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/codec_test.zig",
+    "source": "try @import(\"codec.zig\").decode.parseInto(T, a, bytes, .{ .allocate = .alloc_if_needed, .max_value_len = bytes.len }, &direct);",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing declaration moved or import retargeted by the main layout; retain this exact diagnostic while landing preflight."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/follow.zig",
+    "source": "pub const ParseLineError = @import(\"codec.zig\").parser.ParseLineError;",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing declaration moved or import retargeted by the main layout; retain this exact diagnostic while landing preflight."
+  },
+  {
+    "rule": "Z009",
+    "path": "src/encode/buffer.zig",
+    "source": "//! Owned encoding bytes and the allocation failure behind a writer error.",
+    "detail": "file 'buffer.zig' has top-level fields and should be PascalCase",
+    "reason": "Existing declaration moved or import retargeted by the main layout; retain this exact diagnostic while landing preflight."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/from_value_test.zig",
+    "source": "raw: @import(\"codec.zig\").Raw,",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing declaration moved or import retargeted by the main layout; retain this exact diagnostic while landing preflight."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/line/reader.zig",
+    "source": "pub const max_oversized_member_bytes = @import(\"../member_scan.zig\").max_value_bytes;",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing declaration moved or import retargeted by the main layout; retain this exact diagnostic while landing preflight."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/tail.zig",
+    "source": "pub const DuplicateFields = @import(\"codec.zig\").parser.DuplicateFields;",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing declaration moved or import retargeted by the main layout; retain this exact diagnostic while landing preflight."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/tail.zig",
+    "source": "pub const parseLine = @import(\"codec.zig\").parser.parseLine;",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing declaration moved or import retargeted by the main layout; retain this exact diagnostic while landing preflight."
   }
 ]

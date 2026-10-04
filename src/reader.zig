@@ -177,6 +177,9 @@ pub fn Reader(comptime T: type) type {
         /// can arrive in the middle of a line, and leave the stream wherever
         /// they found it.
         pub fn next(self: *Self) NextError!?Line(T) {
+            // A `.pretty` reader of a type the direct decoder reads has a
+            // loop of its own, so that a minified line's is as it was.
+            if (comptime parse_line.direct(T)) if (self.options.format == .pretty) return self.nextPretty();
             while (true) {
                 // Keep the frame and the decoded value in this call's
                 // result rather than returning each through a separate
@@ -223,11 +226,6 @@ pub fn Reader(comptime T: type) type {
         /// mode a record that is only a prefix of a value is joined to the
         /// lines after it here, which means reading them.
         pub fn parse(self: *Self, raw: RawLine) NextError!?Line(T) {
-            if (comptime parse_line.direct(T)) if (self.options.format == .pretty) {
-                if (self.lines.bufferedFrom(raw)) |rest| {
-                    if (self.inPlace(raw, rest)) |line| return line;
-                }
-            };
             var record = raw.line;
             // A `.pretty` record that has to be joined is parsed again here,
             // at the one place every line is parsed: a second call site of
@@ -270,6 +268,20 @@ pub fn Reader(comptime T: type) type {
                         record = (try self.grow(&pretty, raw.number, record, parse_err)) orelse return null;
                     },
                 }
+            }
+        }
+
+        /// `next` in `.pretty` mode: each record parsed where it lies in the
+        /// input's buffer when it can be, and joined line by line by `parse`
+        /// when it cannot.
+        noinline fn nextPretty(self: *Self) NextError!?Line(T) {
+            while (true) {
+                const raw = (try self.lines.next()) orelse return null;
+                if (self.lines.bufferedFrom(raw)) |rest| {
+                    if (self.inPlace(raw, rest)) |line| return line;
+                }
+                if (try self.parse(raw)) |line| return line;
+                if (self.lines.unfinished) return null;
             }
         }
 

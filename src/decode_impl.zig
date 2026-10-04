@@ -268,7 +268,7 @@ pub fn Decoder(comptime Raw: type) type {
             /// member named `skip` is passed over once and is a duplicate the
             /// second time: the tag of a union tagged inside its object, which
             /// is not one of the arm's fields.
-            fn members(self: *Parser, comptime T: type, result: *T, comptime skip: ?[]const u8, from: From) !void {
+            fn members(self: *Parser, comptime T: type, result: *T, comptime skip: ?[]const u8, comptime from: From) !void {
                 const fields = @typeInfo(T).@"struct".fields;
                 var seen = [_]bool{false} ** fields.len;
                 _ = &seen;
@@ -383,11 +383,15 @@ pub fn Decoder(comptime Raw: type) type {
                     if (!is_other and std.mem.eql(u8, field.name, name)) {
                         if (field.type == void) {
                             var none: struct {} = .{};
-                            try self.members(@TypeOf(none), &none, inside.tag, from);
+                            switch (from) {
+                                inline else => |at| try self.members(@TypeOf(none), &none, inside.tag, at),
+                            }
                             return @unionInit(T, field.name, {});
                         }
                         var result: T = @unionInit(T, field.name, undefined);
-                        try self.members(field.type, &@field(result, field.name), inside.tag, from);
+                        switch (from) {
+                            inline else => |at| try self.members(field.type, &@field(result, field.name), inside.tag, at),
+                        }
                         return result;
                     }
                 }

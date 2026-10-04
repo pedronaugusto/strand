@@ -8,7 +8,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const assert = std.debug.assert;
-const work = @import("work.zig");
+const work = @import("testing/work.zig");
 
 pub const Token = std.json.Token;
 pub const TokenType = std.json.TokenType;

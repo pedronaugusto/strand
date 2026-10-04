@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Keep Raw internals and tests in `src/Raw/`, and test support in `src/testing/`; name adjacent test files `_test.zig`.
+
 - A `.pretty` reader of a type the direct decoder reads parses a record where it lies in the input's buffer, across its line breaks, in one pass; it joins lines only for a record that straddles a refill, or one with a blank line, a `\r` or a fault in it, as before.
 
 - A union that declares `jsonl_tag` is read and written tagged inside its object, `{"type":"assistant",...}`, as serde's `#[serde(tag)]` reads and writes it, by every decoder and by `Writer` in both formats; `jsonl_other` names an arm for a tag naming no arm, and `tagOf` reads the arm from the tag member.
@@ -401,7 +403,7 @@ when it goes wrong, and how it is found again after a crash.
 - **Two internal files.** `src/line.zig` for what a line is whichever
   direction it is read in — the mark, the terminator, the blank line, `keep`,
   where `std.json` gave up, and the `Fault` a reader records — and
-  `src/fixtures.zig` for the scaffolding three test files were each carrying.
+  `src/testing/fixtures.zig` for the scaffolding three test files were each carrying.
 
 ### Fixed
 

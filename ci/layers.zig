@@ -6,7 +6,7 @@ pub const layers: []const gantry.rules.Layer = &.{
         "src/encode_buffer.zig",
         "src/encode_impl.zig",
         "src/file_id.zig",
-        "src/fixtures.zig",
+        "src/testing/fixtures.zig",
         "src/indent.zig",
         "src/int.zig",
         "src/leading.zig",
@@ -16,15 +16,15 @@ pub const layers: []const gantry.rules.Layer = &.{
         "src/scanner.zig",
         "src/tagging.zig",
         "src/value_api.zig",
-        "src/work.zig",
+        "src/testing/work.zig",
     } },
     .{ .name = "decoding and conversion", .patterns = &.{
         "src/control.zig",
         "src/decode_impl.zig",
         "src/from_value.zig",
-        "src/owned_rejected.zig",
+        "src/testing/owned_rejected.zig",
         "src/parse.zig",
-        "src/raw_type.zig",
+        "src/Raw/raw_type.zig",
         "src/sync.zig",
     } },
     .{ .name = "parsing and schema", .patterns = &.{
@@ -58,15 +58,15 @@ pub const layers: []const gantry.rules.Layer = &.{
         "src/strand.zig",
     } },
     .{ .name = "scenarios", .patterns = &.{
-        "src/codec_tests.zig",
+        "src/codec_test.zig",
         "src/follow_test.zig",
         "src/from_value_test.zig",
-        "src/keep_tests.zig",
-        "src/owned_tests.zig",
-        "src/raw_test.zig",
+        "src/keep_test.zig",
+        "src/owned_test.zig",
+        "src/Raw/raw_test.zig",
         "src/tagged_test.zig",
         "src/tail_test.zig",
-        "src/tests.zig",
+        "src/strand_test.zig",
         "src/versioned_test.zig",
     } },
     .{ .name = "properties", .patterns = &.{
@@ -79,7 +79,7 @@ pub const layers: []const gantry.rules.Layer = &.{
 
 pub const entries: []const []const u8 = &.{};
 
-pub const modules: []const gantry.NamedModule = &.{};
+pub const modules: []const gantry.NamedModule = &.{.{ .name = "strand.owned", .path = "src/owned.zig" }};
 pub const references: []const gantry.rules.ReferenceRule = &.{
     .{ .name = "named dependencies", .unresolved_only = true, .except_targets = &.{
         "build_options",

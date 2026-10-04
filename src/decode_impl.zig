@@ -61,7 +61,7 @@ pub fn Decoder(comptime Raw: type) type {
             options: std.json.ParseOptions,
             out: *T,
         ) std.json.ParseError(std.json.Scanner)!void {
-            @import("work.zig").parse();
+            @import("testing/work.zig").parse();
             var p: Parser = .{ .allocator = allocator, .input = input, .options = options };
             try p.valueInto(T, out);
             p.space();
@@ -79,7 +79,7 @@ pub fn Decoder(comptime Raw: type) type {
             options: std.json.ParseOptions,
             out: *T,
         ) std.json.ParseError(std.json.Scanner)!usize {
-            @import("work.zig").parse();
+            @import("testing/work.zig").parse();
             var p: Parser = .{ .allocator = allocator, .input = input, .options = options };
             try p.valueInto(T, out);
             return p.cursor;

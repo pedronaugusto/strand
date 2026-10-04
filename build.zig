@@ -100,9 +100,14 @@ pub fn build(b: *std.Build) void {
                 const rejected = b.addObject(.{
                     .name = b.fmt("owned-rejected-{d}-{s}", .{ case, if (free_only) "free" else "copy" }),
                     .root_module = b.createModule(.{
-                        .root_source_file = b.path("src/owned_rejected.zig"),
+                        .root_source_file = b.path("src/testing/owned_rejected.zig"),
                         .target = target,
                         .optimize = optimize,
+                        .imports = &.{.{ .name = "strand.owned", .module = b.createModule(.{
+                            .root_source_file = b.path("src/owned.zig"),
+                            .target = target,
+                            .optimize = optimize,
+                        }) }},
                     }),
                 });
                 rejected.root_module.addOptions("rejection_options", rejection_options);

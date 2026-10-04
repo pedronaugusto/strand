@@ -12,8 +12,8 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-const Scanner = @import("scanner.zig");
-const EncodeBuffer = @import("encode_buffer.zig");
+const Scanner = @import("../scanner.zig");
+const EncodeBuffer = @import("../encode_buffer.zig");
 
 pub fn RawType(comptime strand: type) type {
     return struct {
@@ -153,7 +153,7 @@ pub fn RawType(comptime strand: type) type {
         };
 
         //=========================================================================
-        // Tests. The scenarios with a stream in them are in `tests.zig`.
+        // Tests. The scenarios with a stream in them are in `strand_test.zig`.
         //=========================================================================
 
     };

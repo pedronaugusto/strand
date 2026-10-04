@@ -7,7 +7,7 @@
 const std = @import("std");
 const testing = std.testing;
 
-/// The smallest record worth reading: a string and a number. `tests.zig` and
+/// The smallest record worth reading: a string and a number. `strand_test.zig` and
 /// `fuzz.zig` have their own, richer, because what they are about is what a
 /// line can go wrong in; the readers are about the lines themselves.
 pub const Event = struct {

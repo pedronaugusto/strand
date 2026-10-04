@@ -8,7 +8,7 @@ const Fault = line_mod.Fault;
 const Line = line_mod.Line;
 const testing = std.testing;
 
-const fixtures = @import("fixtures.zig");
+const fixtures = @import("testing/fixtures.zig");
 const Fixture = fixtures.Fixture;
 const Event = fixtures.Event;
 

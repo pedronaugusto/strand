@@ -6,7 +6,7 @@
 const std = @import("std");
 const testing = std.testing;
 const strand = @import("strand.zig");
-const fixtures = @import("fixtures.zig");
+const fixtures = @import("testing/fixtures.zig");
 
 /// A line of a log: an optional field, two defaults, an enum, a nested array
 /// and a nested struct.
@@ -988,7 +988,7 @@ test "pretty: a record written over several lines is read back as one" {
 }
 
 test "pretty: a record is parsed once its value ends, not once per line" {
-    const work = @import("work.zig");
+    const work = @import("testing/work.zig");
     var parses: [2]usize = undefined;
     for ([_]usize{ 16, 512 }, &parses) |n, *parsed| {
         var out: std.Io.Writer.Allocating = .init(testing.allocator);
@@ -1022,7 +1022,7 @@ test "pretty: a record is parsed once its value ends, not once per line" {
 }
 
 test "pretty: a record whole in the buffer is parsed where it lies, once" {
-    const work = @import("work.zig");
+    const work = @import("testing/work.zig");
     const input = "{\n  \"kind\": \"open\",\n  \"tags\": [\n    \"a\"\n  ]\n}\n\n{\"kind\":\"flat\"}   \n{\n\"kind\": \"last\"}\n";
     var source: std.Io.Reader = .fixed(input);
     var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{ .format = .pretty });
@@ -2732,7 +2732,7 @@ test "a raw value comes off the end of a file owned" {
 // Read-ahead within the last SIMD block is counted too; elapsed time belongs
 // in the benchmark, where the machine's load can be controlled.
 test "a buffered record is scanned once parsed once and borrowed without allocation" {
-    const work = @import("work.zig");
+    const work = @import("testing/work.zig");
     const Row = struct { text: []const u8, note: ?[]const u8 = null };
     const Hook = struct {
         row: Row,

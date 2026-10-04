@@ -319,7 +319,7 @@ test "a migrated record is written back in today's shape" {
 // every reader in the package reads one without being told about it.
 //=========================================================================
 
-const fixtures = @import("fixtures.zig");
+const fixtures = @import("testing/fixtures.zig");
 
 /// A log with one line of the old shape on it and two of the new, which is
 /// what a file written across a version change looks like.

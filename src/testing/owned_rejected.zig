@@ -1,7 +1,7 @@
 //! Compile-error fixtures: neither ownership operation may silently accept
 //! a type it cannot walk, regardless of the value in that type.
 const std = @import("std");
-const owned = @import("owned.zig");
+const owned = @import("strand.owned");
 const options = @import("rejection_options");
 const sentinel: u8 = 0;
 const pointer_lanes: @Vector(2, *const u8) = .{ &sentinel, &sentinel };

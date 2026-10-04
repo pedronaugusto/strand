@@ -638,7 +638,7 @@ fn expectVectorPaths(expected: anytype, bytes: []const u8) !void {
     var reader = strand.Reader(T).init(testing.allocator, &stream, .{});
     defer reader.deinit();
     try testing.expectEqualDeep(expected, (try reader.next()).?.value);
-    var fixture = try @import("fixtures.zig").Fixture.init(framed, 1);
+    var fixture = try @import("testing/fixtures.zig").Fixture.init(framed, 1);
     defer fixture.deinit();
     var tail = try strand.Tail(T).init(testing.allocator, &fixture.reader, .{ .block_bytes = 1 });
     defer tail.deinit();

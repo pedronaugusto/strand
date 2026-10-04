@@ -145,7 +145,7 @@ fn failure(e: anytype) SyncError {
 }
 
 test syncFile {
-    var fixture = try @import("fixtures.zig").Fixture.init("{\"kind\":\"one\"}\n", 64);
+    var fixture = try @import("testing/fixtures.zig").Fixture.init("{\"kind\":\"one\"}\n", 64);
     defer fixture.deinit();
 
     // A sync is the strongest call the platform has, and on the two platforms

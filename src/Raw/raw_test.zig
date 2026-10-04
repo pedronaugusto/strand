@@ -1,9 +1,9 @@
 //! Raw codec scenarios through the public API.
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const strand = @import("strand.zig");
+const strand = @import("../strand.zig");
 const Raw = strand.Raw;
-const EncodeBuffer = @import("encode_buffer.zig");
+const EncodeBuffer = @import("../encode_buffer.zig");
 
 const testing = std.testing;
 

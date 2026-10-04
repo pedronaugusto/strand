@@ -14,8 +14,8 @@
 const std = @import("std");
 const testing = std.testing;
 const strand = @import("strand.zig");
-const fixtures = @import("fixtures.zig");
-const codec = @import("codec_tests.zig");
+const fixtures = @import("testing/fixtures.zig");
+const codec = @import("codec_test.zig");
 
 /// The shape a log line is parsed into here. Optional, defaulted and nested
 /// fields so that a generated line can go wrong in more than one way.

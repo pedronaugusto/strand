@@ -677,7 +677,7 @@ pub fn Follower(comptime T: type) type {
 //=========================================================================
 
 const testing = std.testing;
-const fixtures = @import("fixtures.zig");
+const fixtures = @import("testing/fixtures.zig");
 const Event = fixtures.Event;
 const Fixture = fixtures.Fixture;
 

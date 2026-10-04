@@ -118,7 +118,7 @@ pub fn fromFloat(comptime T: type, float: f128) Error!T {
 }
 
 //=========================================================================
-// Tests. The differential property over whole lines is in `tests.zig`.
+// Tests. The differential property over whole lines is in `strand_test.zig`.
 //=========================================================================
 
 const testing = std.testing;

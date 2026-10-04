@@ -461,7 +461,7 @@ const PrettyEnd = struct {
     /// Follows `record`, whose front is what was followed before, to its end
     /// or to where its value does.
     fn follow(self: *PrettyEnd, record: []const u8) void {
-        @import("work.zig").scan(record.len - self.scanner.cursor);
+        @import("testing/work.zig").scan(record.len - self.scanner.cursor);
         // The bytes before the cursor are the same, wherever they are now.
         self.scanner.input = record;
         while (true) {

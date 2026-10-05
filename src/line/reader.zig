@@ -377,6 +377,9 @@ pub const LineReader = struct {
     /// `max_line_bytes`. The caller joins those itself.
     pub fn takeThrough(self: *LineReader, record: RawLine, rest: []const u8, end: usize) ?[]const u8 {
         const first = record.line.len;
+        std.debug.assert(first <= end);
+        std.debug.assert(end < rest.len);
+        std.debug.assert(rest[end] == '\n');
         if (end > self.options.max_line_bytes) return null;
         const lines = newlinesAfter(rest[first .. end + 1]) orelse return null;
         self.input.toss(end - first);

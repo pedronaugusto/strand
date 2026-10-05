@@ -545,6 +545,7 @@ const owner_methods = struct {
     /// caller's and is left alone. Every `Line` this follower returned
     /// dangles afterwards.
     pub fn deinit(self: anytype) void {
+        std.debug.assert(self.opened == null or self.options.reopen != null);
         if (self.opened) |file| {
             if (self.options.reopen) |opener| opener.close(self.io, file);
         }
@@ -741,6 +742,7 @@ const owner_methods = struct {
 
     /// Puts the line layer back to where it stands at the top of a file.
     fn atStart(self: anytype) void {
+        std.debug.assert(self.source.logicalPos() == 0);
         self.reader.lines.reset(.{});
         self.size_seen = null;
         self.held = null;

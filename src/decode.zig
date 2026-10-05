@@ -56,6 +56,7 @@ pub fn Decoder(comptime Raw: type) type {
             work_module.parse();
             var p: Parser = .{ .allocator = allocator, .input = input, .options = options };
             try p.valueInto(T, out);
+            std.debug.assert(p.cursor <= input.len);
             return p.cursor;
         }
 
@@ -192,6 +193,8 @@ const owner_methods = struct {
     pub const From = owner_types.From;
 
     fn space(self: anytype) void {
+        std.debug.assert(self.cursor <= self.input.len);
+        defer std.debug.assert(self.cursor <= self.input.len);
         while (self.cursor < self.input.len) : (self.cursor += 1) switch (self.input[self.cursor]) {
             ' ', '\t', '\r', '\n' => {},
             else => return,
@@ -453,8 +456,12 @@ const owner_methods = struct {
         }
 
         inline for (fields, 0..) |field, i| if (!seen[i]) {
-            if (field.defaultValue()) |default| @field(result, field.name) = default else return error.MissingField;
+            if (field.defaultValue()) |default| {
+                @field(result, field.name) = default;
+                seen[i] = true;
+            } else return error.MissingField;
         };
+        std.debug.assert(std.mem.allEqual(bool, &seen, true));
     }
 
     /// A union tagged inside its object. The tag is read where most
@@ -679,6 +686,8 @@ const owner_methods = struct {
                     self.cursor += 1;
                     const cp = try self.unicodeEscape();
                     var encoded: [4]u8 = undefined;
+                    std.debug.assert(cp <= 0x10FFFF);
+                    std.debug.assert(cp < 0xD800 or cp > 0xDFFF);
                     // unreachable: unicodeEscape rejects lone surrogates and combines valid pairs into scalars at most U+10FFFF; four bytes suffice.
                     const len = std.unicode.utf8Encode(cp, &encoded) catch unreachable;
                     try list.appendSlice(self.allocator, encoded[0..len]);

@@ -224,12 +224,16 @@ const implementation = struct {
         end: usize = 0,
 
         inline fn byte(self: *Buffer, b: u8) BufferError!void {
+            std.debug.assert(self.end <= self.bytes.len);
+            defer std.debug.assert(self.end <= self.bytes.len);
             if (self.end == self.bytes.len) return error.NoSpace;
             self.bytes[self.end] = b;
             self.end += 1;
         }
 
         inline fn write(self: *Buffer, src: []const u8) BufferError!void {
+            std.debug.assert(self.end <= self.bytes.len);
+            defer std.debug.assert(self.end <= self.bytes.len);
             if (src.len > self.bytes.len - self.end) return error.NoSpace;
             @memcpy(self.bytes[self.end..][0..src.len], src);
             self.end += src.len;
@@ -545,6 +549,10 @@ const implementation = struct {
     /// Enough for any integer up to 128 bits and its sign. Wider ones are
     /// written by `std.fmt`.
     const decimal_max = 40;
+    comptime {
+        // A signed 128-bit magnitude needs 39 decimal digits and its sign.
+        std.debug.assert(decimal_max >= 39 + 1);
+    }
 
     /// `v` in base ten, as `{d}` writes it, at the end of `buffer`.
     ///
@@ -684,6 +692,8 @@ const implementation = struct {
     /// `std.json`'s escape for a character: lowercase hex, and a surrogate pair
     /// past the Basic Multilingual Plane.
     fn unicodeEscape(codepoint: u21, writer: *std.Io.Writer) std.Io.Writer.Error!void {
+        std.debug.assert(codepoint <= 0x10FFFF);
+        std.debug.assert(codepoint < 0xD800 or codepoint > 0xDFFF);
         if (codepoint <= 0xFFFF) {
             try writer.writeAll("\\u");
             try writer.printInt(codepoint, 16, .lower, .{ .width = 4, .fill = '0' });

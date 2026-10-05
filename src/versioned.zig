@@ -56,7 +56,11 @@ const data_key = "data";
 /// Every field of `T` belongs inside `data`, including fields named `v` or
 /// `data`. Only the envelope's own `v` selects the schema version.
 pub fn Versioned(comptime T: type) type {
-    comptime checkShape(T);
+    comptime {
+        checkShape(T);
+        std.debug.assert(!std.mem.eql(u8, version_key, data_key));
+        std.debug.assert(@sizeOf(u32) == 4);
+    }
     return struct {
         /// The record, in the shape this build understands. A line from an
         /// older version has already been through `T.jsonlMigrate` by the

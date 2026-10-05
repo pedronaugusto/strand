@@ -174,6 +174,7 @@ test "wherever std.json answers, the answer is the same" {
 fn stdSliceToInt(comptime T: type, slice: []const u8) !T {
     const Holder = struct { n: T };
     var buffer: [128]u8 = undefined;
+    std.debug.assert(slice.len <= buffer.len - 8);
     // unreachable: the test bounds slice length below the fixed buffer capacity minus the eight envelope bytes.
     const line = std.fmt.bufPrint(&buffer, "{{\"n\":\"{s}\"}}", .{slice}) catch unreachable;
     var memory: [1024]u8 = undefined;

@@ -22,3 +22,13 @@
   failure is sticky and forbids subsequent records.
 - Versioned envelopes retain the source version, and successful migration yields
   the current schema. Every written envelope carries that schema's version.
+
+The paired checks live at scanner stack push/pop and token advancement, direct
+parser whitespace scans, bounded sink writes, encoding-buffer growth and
+ownership transfer, and reverse-block loading/reading. Public line joining checks
+its documented newline span; pretty scans check their resumed cursor. Follower
+teardown checks handle ownership, restart checks position zero, and a write checks
+that it can publish at most one record even if flushing subsequently fails.
+Compile-time checks reserve a signed 128-bit decimal spelling and keep envelope
+keys distinct with a four-byte version. Required decode fields are marked both
+when read and when defaulted, then checked complete before the result is returned.

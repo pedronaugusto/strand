@@ -418,6 +418,11 @@ const owner_methods = struct {
     /// `Options.sync` says so; otherwise draining is the caller's to do,
     /// on the writer it owns.
     pub fn write(self: anytype, value: @TypeOf(self.*).Value) Error!void {
+        const before = self.count;
+        defer {
+            assert(self.count >= before);
+            assert(self.count - before <= 1);
+        }
         if (self.sync_failed) return error.SyncFailed;
         if (self.scratch) |*scratch| {
             scratch.buffer.reset();

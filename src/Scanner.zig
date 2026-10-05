@@ -66,7 +66,13 @@ pub fn ensureTotalStackCapacity(self: *Self, height: usize) Allocator.Error!void
         try self.extra_stack.ensureTotalCapacity(self.allocator, height - self.inline_stack.len);
 }
 
+fn assertStack(self: *const Self) void {
+    assert(self.extra_stack.items.len == self.depth - @min(self.depth, self.inline_stack.len));
+}
+
 fn push(self: *Self, mode: Mode) Allocator.Error!void {
+    self.assertStack();
+    defer self.assertStack();
     if (self.depth < self.inline_stack.len) {
         self.inline_stack[self.depth] = mode;
     } else {
@@ -76,6 +82,8 @@ fn push(self: *Self, mode: Mode) Allocator.Error!void {
 }
 
 fn pop(self: *Self) ?Mode {
+    self.assertStack();
+    defer self.assertStack();
     if (self.depth == 0) return null;
     self.depth -= 1;
     if (self.depth < self.inline_stack.len) return self.inline_stack[self.depth];
@@ -176,6 +184,9 @@ pub fn peekNextTokenType(self: *Self) PeekError!TokenType {
 }
 
 pub fn next(self: *Self) NextError!Token {
+    assert(self.cursor <= self.input.len);
+    defer assert(self.cursor <= self.input.len);
+    assert(self.value_start <= self.input.len);
     while (true) {
         switch (self.state) {
             .string => return self.nextString(),
@@ -452,6 +463,8 @@ fn hexQuad(self: *Self) Error!u16 {
 }
 
 fn codepointToken(cp: u21) Token {
+    assert(cp <= 0x10FFFF);
+    assert(cp < 0xD800 or cp > 0xDFFF);
     var buf: [4]u8 = undefined;
     // unreachable: unicodeEscape validates surrogate pairs and rejects lone surrogates; a Unicode scalar fits the four-byte buffer.
     return switch (std.unicode.utf8Encode(cp, &buf) catch unreachable) {

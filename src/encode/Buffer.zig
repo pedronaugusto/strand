@@ -35,6 +35,7 @@ pub fn diagnose(self: *const Self, err: std.Io.Writer.Error) (std.Io.Writer.Erro
 
 /// Transfer the bytes as one allocation of exactly their length.
 pub fn toOwnedSlice(self: *Self) std.mem.Allocator.Error![]u8 {
+    std.debug.assert(self.writer.end <= self.writer.buffer.len);
     var storage: std.ArrayList(u8) = .{
         .items = self.writer.buffered(),
         .capacity = self.writer.buffer.len,
@@ -42,10 +43,13 @@ pub fn toOwnedSlice(self: *Self) std.mem.Allocator.Error![]u8 {
     const bytes = try storage.toOwnedSlice(self.allocator);
     self.writer.buffer = &.{};
     self.writer.end = 0;
+    std.debug.assert(self.writer.buffer.len == 0);
+    std.debug.assert(self.writer.end == 0);
     return bytes;
 }
 
 fn grow(self: *Self, additional: usize) std.Io.Writer.Error!void {
+    std.debug.assert(self.writer.end <= self.writer.buffer.len);
     var storage: std.ArrayList(u8) = .{
         .items = self.writer.buffered(),
         .capacity = self.writer.buffer.len,
@@ -55,11 +59,14 @@ fn grow(self: *Self, additional: usize) std.Io.Writer.Error!void {
         return error.WriteFailed;
     };
     self.writer.buffer = storage.allocatedSlice();
+    std.debug.assert(self.writer.buffer.len - self.writer.end >= additional);
 }
 
 fn drain(writer: *std.Io.Writer, data: []const []const u8, splat: usize) std.Io.Writer.Error!usize {
     const self: *Self = @fieldParentPtr("writer", writer);
+    std.debug.assert(data.len > 0);
     const start = writer.end;
+    defer std.debug.assert(writer.end <= writer.buffer.len);
     for (data[0 .. data.len - 1]) |bytes| {
         try self.grow(bytes.len);
         @memcpy(writer.buffer[writer.end..][0..bytes.len], bytes);

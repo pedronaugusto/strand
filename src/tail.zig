@@ -405,6 +405,8 @@ const owner_methods = struct {
     /// Ownership: the bytes borrow the reader's block buffer, and the
     /// next `prev` or `prevRaw` takes them back.
     pub fn prevRaw(self: anytype) NextError!?strand.RawLine {
+        assert(self.end <= self.buf.items.len);
+        defer assert(self.end <= self.buf.items.len);
         while (true) {
             var raw = if (self.options.record_separator)
                 (self.prevSeparated() catch |err| switch (err) {
@@ -623,6 +625,8 @@ const owner_methods = struct {
     /// Prepends the block of file bytes that ends where the buffer begins.
     fn fillBefore(self: anytype) NextError!void {
         assert(self.lo > 0);
+        assert(self.end <= self.buf.items.len);
+        const old_lo = self.lo;
         const take: usize = @intCast(@min(self.options.block_bytes, self.lo));
         const kept = self.end;
 
@@ -644,6 +648,9 @@ const owner_methods = struct {
         };
         self.lo -= take;
         self.end = kept + take;
+        assert(self.lo < old_lo);
+        assert(self.lo + take == old_lo);
+        assert(self.end == self.buf.items.len);
 
         if (!self.trimmed) {
             self.trimmed = true;

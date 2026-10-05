@@ -32,7 +32,10 @@ pub fn Directory(comptime name: []const u8) type {
 
         pub fn deinit(self: *@This(), io: std.Io) void {
             self.dir.close(io);
-            std.Io.Dir.cwd().deleteTree(io, &self.path) catch {};
+            std.Io.Dir.cwd().deleteTree(io, &self.path) catch |err| {
+            // Best-effort teardown: the example has already completed its work.
+            std.log.warn("scratch cleanup failed: {s}", .{@errorName(err)});
+        };
             self.* = undefined;
         }
     };

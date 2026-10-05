@@ -68,7 +68,10 @@ test "a producer task and a follower task over one growing file" {
     produce(testing.io, fixture.write_file, fixture.write_buffer, count) catch |err| {
         // The consumer is waiting for lines that are not coming now, so it
         // has to be stopped before the failure is reported.
-        _ = consumer.cancel(testing.io) catch {};
+        _ = consumer.cancel(testing.io) catch |cause| {
+            // Preserve the producer failure after joining the canceled consumer.
+            std.log.debug("consumer stopped during cleanup: {s}", .{@errorName(cause)});
+        };
         return err;
     };
     try consumer.await(testing.io);
@@ -837,7 +840,7 @@ test "two writers on two tasks share nothing" {
     };
     var b = testing.io.concurrent(Task.run, .{ testing.io, "right", &right }) catch |err| switch (err) {
         error.ConcurrencyUnavailable => {
-            _ = a.await(testing.io) catch {};
+            _ = try a.await(testing.io);
             return error.SkipZigTest;
         },
     };

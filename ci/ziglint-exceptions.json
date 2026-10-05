@@ -42,20 +42,6 @@
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
-    "rule": "Z026",
-    "path": "src/follow_test.zig",
-    "source": "_ = consumer.cancel(testing.io) catch {};",
-    "detail": "empty catch block suppresses errors: `catch {}`",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z026",
-    "path": "src/follow_test.zig",
-    "source": "_ = a.await(testing.io) catch {};",
-    "detail": "empty catch block suppresses errors: `catch {}`",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
     "rule": "Z023",
     "path": "src/codec_test.zig",
     "source": "fn randomPlain(random: std.Random, a: std.mem.Allocator, depth: u8, clean_strings: bool) !Plain {",
@@ -1047,13 +1033,6 @@
     "path": "examples/scratch.zig",
     "source": "pub fn deinit(self: *@This(), io: std.Io) void {",
     "detail": "inline @This(); assign it to `const Self = @This();`",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z026",
-    "path": "examples/scratch.zig",
-    "source": "std.Io.Dir.cwd().deleteTree(io, &self.path) catch {};",
-    "detail": "empty catch block suppresses errors: `catch {}`",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {

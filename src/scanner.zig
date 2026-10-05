@@ -452,6 +452,7 @@ fn hexQuad(self: *@This()) Error!u16 {
 
 fn codepointToken(cp: u21) Token {
     var buf: [4]u8 = undefined;
+    // unreachable: unicodeEscape validates surrogate pairs and rejects lone surrogates; a Unicode scalar fits the four-byte buffer.
     return switch (std.unicode.utf8Encode(cp, &buf) catch unreachable) {
         1 => .{ .partial_string_escaped_1 = buf[0..1].* },
         2 => .{ .partial_string_escaped_2 = buf[0..2].* },

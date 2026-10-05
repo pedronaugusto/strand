@@ -573,6 +573,7 @@ pub fn Decoder(comptime Raw: type) type {
                             self.cursor += 1;
                             const cp = try self.unicodeEscape();
                             var encoded: [4]u8 = undefined;
+                            // unreachable: unicodeEscape rejects lone surrogates and combines valid pairs into scalars at most U+10FFFF; four bytes suffice.
                             const len = std.unicode.utf8Encode(cp, &encoded) catch unreachable;
                             try list.appendSlice(self.allocator, encoded[0..len]);
                         },

@@ -500,6 +500,7 @@ pub fn Encoder(comptime Raw: type) type {
                 if (b >= 0x20 and b != '"' and b != '\\') continue;
                 var buffer: [6]u8 = undefined;
                 var w: std.Io.Writer = .fixed(&buffer);
+                // unreachable: one ASCII control, quote or backslash expands to at most six JSON bytes in this fixed buffer.
                 std.json.Stringify.encodeJsonStringChars(&.{@as(u8, b)}, .{}, &w) catch unreachable;
                 const frozen = buffer[0..w.end].*;
                 table[b] = &frozen;

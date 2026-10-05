@@ -100,20 +100,6 @@
   {
     "rule": "Z028",
     "path": "src/codec_test.zig",
-    "source": "if (comptime @import(\"decode.zig\").supports(T)) {",
-    "detail": "inline @import; assign to a top-level const",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z028",
-    "path": "src/codec_test.zig",
-    "source": "try @import(\"decode.zig\").parseInto(T, a, bytes, .{ .allocate = .alloc_if_needed, .max_value_len = bytes.len }, &direct);",
-    "detail": "inline @import; assign to a top-level const",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z028",
-    "path": "src/codec_test.zig",
     "source": "try testing.expectEqualDeep(expected, try @import(\"parse.zig\").inner(T, a, &scanner, .{ .allocate = .alloc_if_needed, .max_value_len = bytes.len }));",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
@@ -200,13 +186,6 @@
     "path": "src/control.zig",
     "source": "const Block = @Vector(block_len, u8);",
     "detail": "variable 'Block' should be snake_case",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z009",
-    "path": "src/encode/buffer.zig",
-    "source": "//! Owned encoding bytes and the allocation failure behind a writer error.",
-    "detail": "file 'encode_buffer.zig' has top-level fields and should be PascalCase",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
@@ -311,13 +290,6 @@
     "rule": "Z028",
     "path": "src/follow.zig",
     "source": "pub const Line = @import(\"line.zig\").Line;",
-    "detail": "inline @import; assign to a top-level const",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z028",
-    "path": "src/follow.zig",
-    "source": "pub const ParseLineError = @import(\"parse/line.zig\").ParseLineError;",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
@@ -562,13 +534,6 @@
   {
     "rule": "Z028",
     "path": "src/from_value_test.zig",
-    "source": "raw: @import(\"raw.zig\").Raw,",
-    "detail": "inline @import; assign to a top-level const",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z028",
-    "path": "src/from_value_test.zig",
     "source": "try testing.expectEqualDeep(@as([0]Child, .{}), try @import(\"strand.zig\").payloadOf([0]Child, a, empty));",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
@@ -683,13 +648,6 @@
     "path": "src/line/reader.zig",
     "source": "const B = std.meta.Int(.unsigned, width);",
     "detail": "'Int' is deprecated: Deprecated: use @Int",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z028",
-    "path": "src/line/reader.zig",
-    "source": "pub const max_oversized_member_bytes = @import(\"member_scan.zig\").max_value_bytes;",
-    "detail": "inline @import; assign to a top-level const",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
@@ -1032,20 +990,6 @@
     "rule": "Z028",
     "path": "src/tail.zig",
     "source": "pub const separator = @import(\"line.zig\").separator;",
-    "detail": "inline @import; assign to a top-level const",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z028",
-    "path": "src/tail.zig",
-    "source": "pub const DuplicateFields = @import(\"parse/line.zig\").DuplicateFields;",
-    "detail": "inline @import; assign to a top-level const",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z028",
-    "path": "src/tail.zig",
-    "source": "pub const parseLine = @import(\"parse/line.zig\").parseLine;",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },

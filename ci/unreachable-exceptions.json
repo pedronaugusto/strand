@@ -1,0 +1,30 @@
+[
+  {
+    "rule": "catch-unreachable",
+    "path": "src/decode.zig",
+    "source": "const len = std.unicode.utf8Encode(cp, &encoded) catch unreachable;",
+    "detail": "catch unreachable needs // unreachable: <why> on the same or previous line",
+    "reason": "existing at gate adoption; burned down in the cleanup pass"
+  },
+  {
+    "rule": "catch-unreachable",
+    "path": "src/encode.zig",
+    "source": "std.json.Stringify.encodeJsonStringChars(&.{@as(u8, b)}, .{}, &w) catch unreachable;",
+    "detail": "catch unreachable needs // unreachable: <why> on the same or previous line",
+    "reason": "existing at gate adoption; burned down in the cleanup pass"
+  },
+  {
+    "rule": "catch-unreachable",
+    "path": "src/int.zig",
+    "source": "const line = std.fmt.bufPrint(&buffer, \"{{\\\"n\\\":\\\"{s}\\\"}}\", .{slice}) catch unreachable;",
+    "detail": "catch unreachable needs // unreachable: <why> on the same or previous line",
+    "reason": "existing at gate adoption; burned down in the cleanup pass"
+  },
+  {
+    "rule": "catch-unreachable",
+    "path": "src/scanner.zig",
+    "source": "return switch (std.unicode.utf8Encode(cp, &buf) catch unreachable) {",
+    "detail": "catch unreachable needs // unreachable: <why> on the same or previous line",
+    "reason": "existing at gate adoption; burned down in the cleanup pass"
+  }
+]

@@ -1,9 +1,13 @@
 //! `Reader`: a `*std.Io.Reader` as a stream of typed lines.
+const codec_module = @import("codec.zig");
+const reader_module = @import("line/reader.zig");
+const owned_module = @import("owned.zig");
+const work_module = @import("testing/work.zig");
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-const parse_line = @import("codec.zig").parser;
+const parse_line = codec_module.parser;
 const ParseOptions = parse_line.ParseOptions;
 const DuplicateFields = parse_line.DuplicateFields;
 const ParseLineError = parse_line.ParseLineError;
@@ -14,8 +18,8 @@ const Line = line_mod.Line;
 const RawLine = line_mod.RawLine;
 const Format = line_mod.Format;
 
-const LineReader = @import("line/reader.zig").LineReader;
-const Scanner = @import("scanner.zig");
+const LineReader = reader_module.LineReader;
+const Scanner = @import("Scanner.zig");
 
 /// A stream of `T`, one per line, over a `*std.Io.Reader`.
 ///
@@ -423,7 +427,7 @@ pub fn Reader(comptime T: type) type {
         /// everything it allocated and leaves the source value intact.
         pub fn keep(self: *Self, allocator: Allocator, line: Line(T)) Allocator.Error!T {
             _ = self;
-            return @import("owned.zig").copyOwned(allocator, line.value);
+            return owned_module.copyOwned(allocator, line.value);
         }
     };
 }
@@ -462,7 +466,7 @@ const PrettyEnd = struct {
     /// Follows `record`, whose front is what was followed before, to its end
     /// or to where its value does.
     fn follow(self: *PrettyEnd, record: []const u8) void {
-        @import("testing/work.zig").scan(record.len - self.scanner.cursor);
+        work_module.scan(record.len - self.scanner.cursor);
         // The bytes before the cursor are the same, wherever they are now.
         self.scanner.input = record;
         while (true) {

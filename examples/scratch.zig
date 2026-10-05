@@ -6,12 +6,13 @@ pub const Scratch = Directory("logbook");
 // The name belongs to the example; creation and cleanup belong here.
 pub fn Directory(comptime name: []const u8) type {
     return struct {
+        pub const Self = @This();
         dir: std.Io.Dir,
         path: [prefix.len + 16]u8,
 
         const prefix = ".zig-cache/" ++ name ++ "-";
 
-        pub fn init(io: std.Io) !@This() {
+        pub fn init(io: std.Io) !Self {
             const cwd = std.Io.Dir.cwd();
             try cwd.createDirPath(io, ".zig-cache");
             var path: [prefix.len + 16]u8 = undefined;
@@ -30,7 +31,7 @@ pub fn Directory(comptime name: []const u8) type {
             }
         }
 
-        pub fn deinit(self: *@This(), io: std.Io) void {
+        pub fn deinit(self: *Self, io: std.Io) void {
             self.dir.close(io);
             std.Io.Dir.cwd().deleteTree(io, &self.path) catch |err| {
                 // Best-effort teardown: the example has already completed its work.

@@ -4,7 +4,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const Scanner = @import("../scanner.zig");
+const Scanner = @import("../Scanner.zig");
 const typed_parse = @import("../parse.zig");
 
 pub fn Parser(comptime decode: type) type {
@@ -232,22 +232,23 @@ pub fn Parser(comptime decode: type) type {
             try std.testing.expectEqual(@as(?[]const u8, null), event.note);
             try std.testing.expectEqual(.info, event.level);
             // "open" needed no unescaping, so it is a view into `line`.
-            try std.testing.expect(event.kind.ptr == line.ptr + std.mem.indexOf(u8, line, "open").?);
+            try std.testing.expect(event.kind.ptr == line.ptr + std.mem.find(u8, line, "open").?);
         }
 
         test "a direct decoder allocation failure is not retried as a parse refusal" {
             const FailOnce = struct {
+                pub const Self = @This();
                 backing: Allocator,
                 calls: usize = 0,
 
                 fn alloc(ctx: *anyopaque, len: usize, alignment: std.mem.Alignment, ra: usize) ?[*]u8 {
-                    const self: *@This() = @ptrCast(@alignCast(ctx)); // safe: this vtable receives only a FailOnce installed by the test below
+                    const self: *Self = @ptrCast(@alignCast(ctx)); // safe: this vtable receives only a FailOnce installed by the test below
                     self.calls += 1;
                     if (self.calls == 1) return null;
                     return self.backing.rawAlloc(len, alignment, ra);
                 }
 
-                fn allocator(self: *@This()) Allocator {
+                fn allocator(self: *Self) Allocator {
                     return .{
                         .ptr = self,
                         .vtable = &.{
@@ -270,7 +271,8 @@ pub fn Parser(comptime decode: type) type {
         test "parseLine diagnoses a trailing terminator before any parse" {
             const testing = std.testing;
             const Hook = struct {
-                pub fn jsonParse(_: Allocator, _: anytype, _: std.json.ParseOptions) !@This() {
+                pub const Self = @This();
+                pub fn jsonParse(_: Allocator, _: anytype, _: std.json.ParseOptions) !Self {
                     return error.UnexpectedToken;
                 }
             };

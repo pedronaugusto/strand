@@ -4,8 +4,8 @@ const testing = std.testing;
 
 // Compare the data and every allocation, including dynamic object keys.
 fn independent(source: anytype, copy: @TypeOf(source)) anyerror!void {
-    const T = @TypeOf(source);
-    if (T == std.json.Value) {
+    const tuple_type = @TypeOf(source);
+    if (tuple_type == std.json.Value) {
         try testing.expectEqual(std.meta.activeTag(source), std.meta.activeTag(copy));
         switch (source) {
             .array => |array| {
@@ -20,7 +20,7 @@ fn independent(source: anytype, copy: @TypeOf(source)) anyerror!void {
         }
         return;
     }
-    switch (@typeInfo(T)) {
+    switch (@typeInfo(tuple_type)) {
         .pointer => |info| switch (info.size) {
             .one => {
                 if (@sizeOf(info.child) != 0) try testing.expect(source != copy);
@@ -60,7 +60,7 @@ fn copyAndFree(allocator: std.mem.Allocator, source: anytype) !void {
 }
 
 test "owned copy outlives the input and parse arena, including Raw" {
-    const T = struct {
+    const tuple_type = struct {
         text: []const u8,
         escaped: []const u8,
         rows: []const struct { words: [2][]const u8 },
@@ -71,7 +71,7 @@ test "owned copy outlives the input and parse arena, including Raw" {
     };
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     var input = "{\"text\":\"borrowed\",\"escaped\":\"es\\u0063aped\",\"rows\":[{\"words\":[\"one\",\"two\"]}],\"maybe\":\"yes\",\"absent\":null,\"arm\":{\"words\":\"arm\"},\"raw\":{ \"n\": 2.50 }}".*;
-    const source = try strand.parseLine(T, arena.allocator(), &input, .{});
+    const source = try strand.parseLine(tuple_type, arena.allocator(), &input, .{});
     const copy = strand.copyOwned(testing.allocator, source) catch |err| {
         arena.deinit();
         return err;
@@ -98,7 +98,7 @@ test "owned copy outlives the input and parse arena, including Raw" {
 }
 
 test "owned copy covers parsed shapes and every allocation failure" {
-    const T = struct {
+    const tuple_type = struct {
         tuple: struct { []const u8, u32 },
         array: [2]struct { words: []const []const u8 },
         slices: []const ?union(enum) { words: []const u8, none },
@@ -116,7 +116,7 @@ test "owned copy covers parsed shapes and every allocation failure" {
     };
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
-    const source = try strand.parseLine(T, arena.allocator(),
+    const source = try strand.parseLine(tuple_type, arena.allocator(),
         \\{"tuple":["tuple",3],"array":[{"words":["a","b"]},{"words":["c"]}],
         \\ "slices":[null,{"words":"word"},{"none":{}}],"sentinel":"end",
         \\ "sentinel_array":[1,2],"pointer":{"text":"pointed"},"empty":[],
@@ -179,7 +179,7 @@ test "owned copy's dynamic containers live and grow after the source arena is go
 }
 
 test "owned copy preserves mutable storage, alignment, empty sentinels and repeated references" {
-    const T = struct {
+    const tuple_type = struct {
         bytes: []align(32) u8,
         ptr: *align(32) u8,
         empty: [:0]const u8,
@@ -189,7 +189,7 @@ test "owned copy preserves mutable storage, alignment, empty sentinels and repea
     };
     var bytes: [3]u8 align(32) = .{ 1, 2, 3 };
     var nums: [2:99]u16 = .{ 4, 5 };
-    const source: T = .{ .bytes = &bytes, .ptr = &bytes[0], .empty = "", .sentinel = &nums, .array = .{ 6, 7 }, .again = &bytes };
+    const source: tuple_type = .{ .bytes = &bytes, .ptr = &bytes[0], .empty = "", .sentinel = &nums, .array = .{ 6, 7 }, .again = &bytes };
     try allocationFailures(source);
     const copy = try strand.copyOwned(testing.allocator, source);
     defer strand.freeOwned(testing.allocator, copy);
@@ -202,17 +202,22 @@ test "owned copy preserves mutable storage, alignment, empty sentinels and repea
 }
 
 test "owned copy walks recursive schemas and ignores JSON hooks" {
-    const Node = struct { text: []const u8, children: []const @This() };
+    const Node = struct {
+        pub const Self = @This();
+        text: []const u8,
+        children: []const Self,
+    };
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
     const source = try strand.parseLine(Node, arena.allocator(), "{\"text\":\"root\",\"children\":[{\"text\":\"leaf\",\"children\":[]}]}", .{});
     try allocationFailures(source);
     const Hooks = struct {
+        pub const Self = @This();
         text: []const u8,
-        pub fn jsonParse(_: std.mem.Allocator, _: anytype, _: std.json.ParseOptions) !@This() {
+        pub fn jsonParse(_: std.mem.Allocator, _: anytype, _: std.json.ParseOptions) !Self {
             return error.UnexpectedToken;
         }
-        pub fn jsonStringify(_: @This(), _: anytype) !void {
+        pub fn jsonStringify(_: Self, _: anytype) !void {
             return error.WriteFailed;
         }
     };
@@ -228,10 +233,10 @@ test "owned copy walks recursive schemas and ignores JSON hooks" {
 }
 
 test "owned copy preserves null sentinels around optional pointers" {
-    const T = [:null]const ?*const struct { text: []const u8 };
+    const tuple_type = [:null]const ?*const struct { text: []const u8 };
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
-    const source = try strand.parseLine(T, arena.allocator(), "[{\"text\":\"word\"},null]", .{});
+    const source = try strand.parseLine(tuple_type, arena.allocator(), "[{\"text\":\"word\"},null]", .{});
     try allocationFailures(source);
     const array: [1:null]?*const u32 = .{null};
     try copyAndFree(testing.allocator, array);
@@ -239,16 +244,16 @@ test "owned copy preserves null sentinels around optional pointers" {
 
 test "owned copy accepts a full protocol schema" {
     const Leaf = struct { text: []const u8, rows: []const struct { text: []const u8 } };
-    const T = std.meta.Tuple(&([_]type{Leaf} ** 64));
-    var source: T = undefined;
+    const tuple_type = @Tuple(&([_]type{Leaf} ** 64));
+    var source: tuple_type = undefined;
     inline for (0..64) |i| source[i] = .{ .text = "protocol", .rows = &.{.{ .text = "row" }} };
     try copyAndFree(testing.allocator, source);
 }
 
 fn allocationFailures(source: anytype) !void {
-    const T = @TypeOf(source);
+    const tuple_type = @TypeOf(source);
     const Case = struct {
-        fn run(allocator: std.mem.Allocator, value: T) !void {
+        fn run(allocator: std.mem.Allocator, value: tuple_type) !void {
             try copyAndFree(allocator, value);
         }
     };

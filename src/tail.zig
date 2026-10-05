@@ -15,6 +15,9 @@
 //!
 //! The other thing it does not do is `.pretty`. `Tail.Options` is where the
 //! setting would be, and it carries the reason it is not there.
+const codec_module = @import("codec.zig");
+const control_module = @import("control.zig");
+const owned_module = @import("owned.zig");
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -22,12 +25,12 @@ const assert = std.debug.assert;
 const testing = std.testing;
 
 const strand = struct {
-    pub const Line = @import("line.zig").Line;
-    pub const RawLine = @import("line.zig").RawLine;
-    pub const separator = @import("line.zig").separator;
-    pub const DuplicateFields = @import("codec.zig").parser.DuplicateFields;
-    pub const parseLine = @import("codec.zig").parser.parseLine;
-    pub const indexOfControl = @import("control.zig").indexOfControl;
+    pub const Line = line_mod.Line;
+    pub const RawLine = line_mod.RawLine;
+    pub const separator = line_mod.separator;
+    pub const DuplicateFields = codec_module.parser.DuplicateFields;
+    pub const parseLine = codec_module.parser.parseLine;
+    pub const indexOfControl = control_module.indexOfControl;
 };
 const line_mod = @import("line.zig");
 const Fault = line_mod.Fault;
@@ -330,7 +333,7 @@ pub fn Tail(comptime T: type) type {
         /// `allocator`. See `Reader.keep`, whose contract this is.
         pub fn keep(self: *Self, allocator: Allocator, line: Line(T)) Allocator.Error!T {
             _ = self;
-            return @import("owned.zig").copyOwned(allocator, line.value);
+            return owned_module.copyOwned(allocator, line.value);
         }
 
         /// The last `n` values of the file, in file order, allocated on
@@ -350,7 +353,7 @@ pub fn Tail(comptime T: type) type {
         pub fn last(self: *Self, allocator: Allocator, n: usize) NextError![]T {
             var out: std.ArrayList(T) = .empty;
             errdefer {
-                for (out.items) |value| @import("owned.zig").freeOwned(allocator, value);
+                for (out.items) |value| owned_module.freeOwned(allocator, value);
                 out.deinit(allocator);
             }
             try out.ensureTotalCapacity(allocator, @min(n, 1024));
@@ -544,10 +547,10 @@ fn lastNewline(bytes: []const u8) ?usize {
     var i = bytes.len;
     if (!@inComptime() and !std.debug.inValgrind()) {
         if (std.simd.suggestVectorLength(u8)) |block_len| {
-            const Block = @Vector(block_len, u8);
-            const wanted: Block = @splat('\n');
+            const block_type = @Vector(block_len, u8);
+            const wanted: block_type = @splat('\n');
             while (i >= block_len) : (i -= block_len) {
-                const block: Block = bytes[i - block_len ..][0..block_len].*;
+                const block: block_type = bytes[i - block_len ..][0..block_len].*;
                 const matches = block == wanted;
                 // The last line of a block is the first thing a backwards
                 // read wants, so the usual case is one block and one answer.
@@ -557,7 +560,7 @@ fn lastNewline(bytes: []const u8) ?usize {
             }
         }
     }
-    return std.mem.lastIndexOfScalar(u8, bytes[0..i], '\n');
+    return std.mem.findScalarLast(u8, bytes[0..i], '\n');
 }
 
 test lastNewline {
@@ -570,7 +573,7 @@ test lastNewline {
     for (0..longest) |len| {
         const bytes = buf[0..len];
         @memset(bytes, 'x');
-        try testing.expectEqual(std.mem.lastIndexOfScalar(u8, bytes, '\n'), lastNewline(bytes));
+        try testing.expectEqual(std.mem.findScalarLast(u8, bytes, '\n'), lastNewline(bytes));
         for (0..len) |at| {
             @memset(bytes, 'x');
             bytes[at] = '\n';

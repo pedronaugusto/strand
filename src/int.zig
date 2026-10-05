@@ -109,10 +109,10 @@ pub fn fromFloat(comptime T: type, float: f128) Error!T {
     // is the whole of it; above, a whole `f128` is its 113-bit significand
     // shifted left.
     if (@abs(float) < 0x1p127) return @intCast(@as(i128, @intFromFloat(float)));
-    const U = std.meta.Int(.unsigned, info.bits);
+    const unsigned_type = @Int(.unsigned, info.bits);
     const split = std.math.frexp(@abs(float));
     const significand: u128 = @intFromFloat(std.math.ldexp(split.significand, 113));
-    const magnitude = @as(U, significand) << @intCast(split.exponent - 113);
+    const magnitude = @as(unsigned_type, significand) << @intCast(split.exponent - 113);
     if (float < 0) return @bitCast(0 -% magnitude);
     return @intCast(magnitude);
 }

@@ -1,17 +1,19 @@
 //! `Writer`: values as JSON Lines on a `*std.Io.Writer`, counted, drained and
 //! synced as often as it is told to.
+const codec_module = @import("codec.zig");
+const sync_module = @import("sync.zig");
 
 const std = @import("std");
 const assert = std.debug.assert;
-const encode = @import("codec.zig").encode;
+const encode = codec_module.encode;
 const tagging = @import("tagging.zig");
-const EncodeBuffer = @import("encode/buffer.zig");
+const EncodeBuffer = @import("encode/Buffer.zig");
 
 const line_mod = @import("line.zig");
 const Format = line_mod.Format;
 const separator = line_mod.separator;
 
-const syncFile = @import("sync.zig").syncFile;
+const syncFile = sync_module.syncFile;
 
 /// Writes values as JSON Lines to a `*std.Io.Writer`, and counts them.
 pub fn Writer(comptime T: type) type {
@@ -380,7 +382,7 @@ pub fn Writer(comptime T: type) type {
         fn drainAndSync(self: *Self) Error!void {
             try self.flushOutput();
             const dest = self.file orelse return self.syncFault();
-            _ = syncFile(dest.file, dest.io, .data) catch return self.syncFault();
+            _ = syncFile(dest.io, dest.file, .data) catch return self.syncFault();
         }
 
         /// The file constructors know the concrete writer behind `output`.
@@ -422,7 +424,7 @@ const RecordScratch = struct {
 
 /// How `writeValue` spells a value. The same two settings as
 /// `Writer.Options`, and the same defaults.
-pub const ValueOptions = @import("codec.zig").ValueOptions;
+pub const ValueOptions = codec_module.ValueOptions;
 
 /// Writes one value's JSON, minified, with no terminator: the bytes a line
 /// holds, for a caller that frames the line itself — an envelope around the
@@ -432,10 +434,10 @@ pub const ValueOptions = @import("codec.zig").ValueOptions;
 /// same options. A value that fits in the unused part of `output`'s buffer
 /// is encoded there directly, and one that does not goes through `output`'s
 /// interface, which drains or grows it as `output` does.
-pub const writeValue = @import("codec.zig").writeValue;
+pub const writeValue = codec_module.writeValue;
 /// See `writeValue`; members follow and `OpenObject.close` ends it.
-pub const writeObjectOpen = @import("codec.zig").writeObjectOpen;
-pub const OpenObject = @import("codec.zig").OpenObject;
+pub const writeObjectOpen = codec_module.writeObjectOpen;
+pub const OpenObject = codec_module.OpenObject;
 
 test writeValue {
     var out: std.Io.Writer.Allocating = .init(std.testing.allocator);

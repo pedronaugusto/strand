@@ -13,7 +13,7 @@ const EventV1 = struct {
 };
 
 /// Version 2: the count became a number, and `kind` gained a namespace.
-const Event = struct {
+pub const Event = struct {
     scope: []const u8 = "app",
     kind: []const u8,
     count: u32 = 0,
@@ -130,10 +130,11 @@ test "a line with no version at all is the unstamped one" {
 
     // And a type that says its unstamped lines were version 1 sees 1.
     const Stamped = struct {
+        pub const Self = @This();
         kind: []const u8,
         pub const jsonl_version: u32 = 2;
         pub const jsonl_version_unstamped: u32 = 1;
-        pub fn jsonlMigrate(_: Allocator, from: u32, _: std.json.Value) std.json.ParseFromValueError!@This() {
+        pub fn jsonlMigrate(_: Allocator, from: u32, _: std.json.Value) std.json.ParseFromValueError!Self {
             // The hook's error set is `std.json`'s, so a surprise here is
             // reported as one of those rather than as a test failure.
             if (from != 1) return error.UnknownField;

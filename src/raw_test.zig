@@ -3,7 +3,6 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const strand = @import("strand.zig");
 const Raw = strand.Raw;
-const EncodeBuffer = @import("encode/buffer.zig");
 
 const testing = std.testing;
 
@@ -20,7 +19,7 @@ test Raw {
     const mark = try strand.parseLine(Mark, a, line, .{});
     // The value's own bytes, spacing and all, borrowed from the line.
     try testing.expectEqualStrings("{ \"who\" : \"ada\", \"n\": [1, 2.50] }", mark.data.bytes);
-    try testing.expect(mark.data.bytes.ptr == line.ptr + std.mem.indexOf(u8, line, "{ ").?);
+    try testing.expect(mark.data.bytes.ptr == line.ptr + std.mem.find(u8, line, "{ ").?);
 
     // Decoded when it is wanted, as whatever it is wanted as.
     const Data = struct { who: []const u8, n: []const f64 };
@@ -53,9 +52,10 @@ test "encode makes a Raw of any value, one allocation long" {
 
 test "Raw.encode keeps hook failure distinct from allocation failure" {
     const Refusing = struct {
+        pub const Self = @This();
         partial: bool,
 
-        pub fn jsonStringify(self: @This(), json: *std.json.Stringify) !void {
+        pub fn jsonStringify(self: Self, json: *std.json.Stringify) !void {
             if (self.partial) try json.write("part");
             return error.WriteFailed;
         }
@@ -70,7 +70,8 @@ test "Raw.encode keeps hook failure distinct from allocation failure" {
 
 test "Raw.encode releases storage when encoding or transfer runs out of memory" {
     const Hook = struct {
-        pub fn jsonStringify(_: @This(), json: *std.json.Stringify) !void {
+        pub const Self = @This();
+        pub fn jsonStringify(_: Self, json: *std.json.Stringify) !void {
             try json.write("x" ** 2048);
         }
     };

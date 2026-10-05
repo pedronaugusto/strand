@@ -201,7 +201,7 @@ test "a Writer writes the tag inside the object in both formats, and reads it ba
             }
             try testing.expectEqual(@as(?strand.Line(Kept), null), try reader.next());
             if (format == .pretty) {
-                try testing.expect(std.mem.indexOf(u8, direct.written(), "{\n  \"type\": \"assistant\",\n  \"text\": ") != null);
+                try testing.expect(std.mem.find(u8, direct.written(), "{\n  \"type\": \"assistant\",\n  \"text\": ") != null);
             } else {
                 try testing.expect(std.mem.startsWith(u8, direct.written(), "{\"type\":\"assistant\",\"text\":"));
             }

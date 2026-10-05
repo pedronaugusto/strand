@@ -55,12 +55,12 @@ pub noinline fn firstControlOrTerminator(bytes: []const u8) ?usize {
     var i: usize = 0;
     if (!@inComptime() and !std.debug.inValgrind()) {
         if (std.simd.suggestVectorLength(u8)) |block_len| {
-            const Block = @Vector(block_len, u8);
-            const highest: Block = @splat(0x20);
-            const tab: Block = @splat('\t');
+            const block_type = @Vector(block_len, u8);
+            const highest: block_type = @splat(0x20);
+            const tab: block_type = @splat('\t');
             while (i + block_len <= bytes.len) : (i += block_len) {
                 work.scan(block_len);
-                const block: Block = bytes[i..][0..block_len].*;
+                const block: block_type = bytes[i..][0..block_len].*;
                 const hits = (block < highest) & (block != tab);
                 if (firstHit(block_len, hits)) |at| return i + at;
             }
@@ -85,7 +85,7 @@ inline fn firstHit(comptime n: usize, hits: @Vector(n, bool)) ?usize {
     if (!@reduce(.Or, hits)) return null;
     work.laneSearch();
     if (comptime builtin.cpu.arch.isX86()) {
-        const mask: std.meta.Int(.unsigned, n) = @bitCast(hits);
+        const mask: @Int(.unsigned, n) = @bitCast(hits);
         return @ctz(mask);
     }
     if (comptime builtin.cpu.arch == .aarch64 or builtin.cpu.arch == .aarch64_be) {
@@ -130,9 +130,9 @@ test "firstControlOrTerminator stops where the byte loop stops" {
 /// `indexOfControl` over `bytes`, which is at least `block_len` long, a
 /// vector of that width at a time.
 fn controlInBlocks(comptime block_len: usize, bytes: []const u8) ?usize {
-    const Block = @Vector(block_len, u8);
-    const highest: Block = @splat(0x20);
-    const tab: Block = @splat('\t');
+    const block_type = @Vector(block_len, u8);
+    const highest: block_type = @splat(0x20);
+    const tab: block_type = @splat('\t');
     const group = 4 * block_len;
 
     var i: usize = 0;
@@ -145,7 +145,7 @@ fn controlInBlocks(comptime block_len: usize, bytes: []const u8) ?usize {
         var any: @Vector(block_len, bool) = @splat(false);
         inline for (0..4) |k| {
             work.scan(block_len);
-            const block: Block = bytes[i + k * block_len ..][0..block_len].*;
+            const block: block_type = bytes[i + k * block_len ..][0..block_len].*;
             any = any | ((block < highest) & (block != tab));
         }
         // One of these four blocks holds it; which byte it is, is worth
@@ -161,12 +161,12 @@ fn controlInBlocks(comptime block_len: usize, bytes: []const u8) ?usize {
     var any: @Vector(block_len, bool) = @splat(false);
     while (i + block_len <= bytes.len) : (i += block_len) {
         work.scan(block_len);
-        const block: Block = bytes[i..][0..block_len].*;
+        const block: block_type = bytes[i..][0..block_len].*;
         any = any | ((block < highest) & (block != tab));
     }
     if (i < bytes.len) {
         work.scan(block_len);
-        const block: Block = bytes[bytes.len - block_len ..][0..block_len].*;
+        const block: block_type = bytes[bytes.len - block_len ..][0..block_len].*;
         any = any | ((block < highest) & (block != tab));
     }
     if (!@reduce(.Or, any)) return null;

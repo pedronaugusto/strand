@@ -2,6 +2,9 @@
 //! introduce each declaration live beside it, in the file that declares it;
 //! these are the ones that need a stream, a malformed line, or a look at
 //! where memory came from.
+const work_module = @import("testing/work.zig");
+const codec_module = @import("codec.zig");
+const parse_module = @import("parse.zig");
 
 const std = @import("std");
 const testing = std.testing;
@@ -110,8 +113,9 @@ test "round trip: tagged unions" {
 
 test "recursive pointer schemas use the standard JSON extension path" {
     const Node = struct {
+        pub const Self = @This();
         value: u8,
-        next: ?*@This() = null,
+        next: ?*Self = null,
     };
     const node: Node = .{ .value = 7 };
 
@@ -339,7 +343,7 @@ test "a line reader answers a line past its bound and reads on" {
     try input.writer.writeAll("\"}\n{\"kind\":\"after\"}\n");
     const bytes = input.written();
     const second_at = "{\"kind\":\"before\"}\n".len;
-    const third_at = std.mem.lastIndexOfScalar(u8, bytes[0 .. bytes.len - 1], '\n').? + 1;
+    const third_at = std.mem.findScalarLast(u8, bytes[0 .. bytes.len - 1], '\n').? + 1;
 
     const buffer = try testing.allocator.alloc(u8, 64 * 1024);
     defer testing.allocator.free(buffer);
@@ -472,8 +476,9 @@ test "an object written open is the value's bytes, members added, then closed" {
     // A field `std.json` writes for itself is written by it, and the rest
     // as ever.
     const Spelled = struct {
+        pub const Self = @This();
         n: u8,
-        pub fn jsonStringify(self: @This(), jw: anytype) !void {
+        pub fn jsonStringify(self: Self, jw: anytype) !void {
             try jw.print("\"n={d}\"", .{self.n});
         }
     };
@@ -988,7 +993,7 @@ test "pretty: a record written over several lines is read back as one" {
 }
 
 test "pretty: a record is parsed once its value ends, not once per line" {
-    const work = @import("testing/work.zig");
+    const work = work_module;
     var parses: [2]usize = undefined;
     for ([_]usize{ 16, 512 }, &parses) |n, *parsed| {
         var out: std.Io.Writer.Allocating = .init(testing.allocator);
@@ -996,7 +1001,7 @@ test "pretty: a record is parsed once its value ends, not once per line" {
         try out.writer.writeAll("{\n  \"kind\": \"wide\",\n  \"tags\": [\n");
         for (0..n) |i| try out.writer.print("    \"t{d}\"{s}\n", .{ i, if (i + 1 < n) "," else "" });
         try out.writer.writeAll("  ]\n}\n{\"kind\": \"after\"}\n");
-        const record_len = std.mem.indexOf(u8, out.written(), "\n}\n").? + 2;
+        const record_len = std.mem.find(u8, out.written(), "\n}\n").? + 2;
 
         var source: std.Io.Reader = .fixed(out.written());
         var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{ .format = .pretty });
@@ -1022,7 +1027,7 @@ test "pretty: a record is parsed once its value ends, not once per line" {
 }
 
 test "pretty: a record whole in the buffer is parsed where it lies, once" {
-    const work = @import("testing/work.zig");
+    const work = work_module;
     const input = "{\n  \"kind\": \"open\",\n  \"tags\": [\n    \"a\"\n  ]\n}\n\n{\"kind\":\"flat\"}   \n{\n\"kind\": \"last\"}\n";
     var source: std.Io.Reader = .fixed(input);
     var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{ .format = .pretty });
@@ -1035,7 +1040,7 @@ test "pretty: a record whole in the buffer is parsed where it lies, once" {
     try testing.expectEqualStrings("open", open.value.kind);
     // A view of the input, not a copy, and parsed by one call.
     try testing.expect(open.line.ptr == input.ptr);
-    try testing.expectEqualStrings(input[0 .. std.mem.indexOf(u8, input, "\n}\n").? + 2], open.line);
+    try testing.expectEqualStrings(input[0 .. std.mem.find(u8, input, "\n}\n").? + 2], open.line);
     try testing.expectEqual(@as(usize, 1), counts.parses);
     try testing.expectEqual(@as(u64, 1), open.number);
     try testing.expectEqual(@as(u64, 6), reader.lines.number);
@@ -1043,7 +1048,7 @@ test "pretty: a record whole in the buffer is parsed where it lies, once" {
     const flat = (try reader.next()).?;
     try testing.expectEqualStrings("flat", flat.value.kind);
     try testing.expectEqual(@as(u64, 8), flat.number);
-    try testing.expectEqual(@as(u64, std.mem.indexOf(u8, input, "{\"kind\":\"flat").?), flat.offset);
+    try testing.expectEqual(@as(u64, std.mem.find(u8, input, "{\"kind\":\"flat").?), flat.offset);
 
     const last = (try reader.next()).?;
     try testing.expectEqualStrings("last", last.value.kind);
@@ -1800,7 +1805,7 @@ test "escape_unicode writes a line with nothing but ASCII on it" {
     try as_written.write(event);
     // The default writes the characters themselves, which is what a log a
     // person reads wants.
-    try testing.expect(std.mem.indexOf(u8, plain.written(), "café") != null);
+    try testing.expect(std.mem.find(u8, plain.written(), "café") != null);
 
     var escaped: std.Io.Writer.Allocating = .init(testing.allocator);
     defer escaped.deinit();
@@ -1808,10 +1813,10 @@ test "escape_unicode writes a line with nothing but ASCII on it" {
     try as_ascii.write(event);
 
     for (escaped.written()) |byte| try testing.expect(byte < 0x80);
-    try testing.expect(std.mem.indexOf(u8, escaped.written(), "caf\\u00e9") != null);
+    try testing.expect(std.mem.find(u8, escaped.written(), "caf\\u00e9") != null);
     // A character outside the basic plane is a surrogate pair, which is how
     // JSON spells one.
-    try testing.expect(std.mem.indexOf(u8, escaped.written(), "\\ud83d\\ude00") != null);
+    try testing.expect(std.mem.find(u8, escaped.written(), "\\ud83d\\ude00") != null);
 
     // Either way it reads back as the same value.
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
@@ -1850,13 +1855,13 @@ test "emit_null_optional_fields writes the field rather than leaving it out" {
     defer left_out.deinit();
     var lean: strand.Writer(Event) = .init(&left_out.writer, .{});
     try lean.write(event);
-    try testing.expectEqual(@as(?usize, null), std.mem.indexOf(u8, left_out.written(), "note"));
+    try testing.expectEqual(@as(?usize, null), std.mem.find(u8, left_out.written(), "note"));
 
     var written_out: std.Io.Writer.Allocating = .init(testing.allocator);
     defer written_out.deinit();
     var full: strand.Writer(Event) = .init(&written_out.writer, .{ .emit_null_optional_fields = true });
     try full.write(event);
-    try testing.expect(std.mem.indexOf(u8, written_out.written(), "\"note\":null") != null);
+    try testing.expect(std.mem.find(u8, written_out.written(), "\"note\":null") != null);
 
     // A reader that defaults its missing fields reads both as the same
     // value, which is why leaving them out is the default.
@@ -2248,11 +2253,12 @@ test "a Zig string that is not UTF-8 is not written as a JSON string" {
 
 /// A record that writes itself: two fields flattened into one string, which
 /// is the shape a `jsonStringify` method usually exists for.
-const Packed = struct {
+pub const Packed = struct {
+    pub const Self = Packed;
     host: []const u8,
     port: u16,
 
-    pub fn jsonStringify(self: @This(), jw: anytype) !void {
+    pub fn jsonStringify(self: Self, jw: anytype) !void {
         try jw.beginObject();
         try jw.objectField("addr");
         try jw.print("\"{s}:{d}\"", .{ self.host, self.port });
@@ -2645,8 +2651,8 @@ test "a malformed raw value is a malformed line, under the error std.json gives 
 test "a type holding a raw value stays on the direct path both ways" {
     // The point of the type: a `std.json.Value` in the same place sends the
     // whole line to the token parser.
-    const decode = @import("codec.zig").decode;
-    const encode = @import("codec.zig").encode;
+    const decode = codec_module.decode;
+    const encode = codec_module.encode;
     try testing.expect(comptime decode.supports(Carried));
     try testing.expect(comptime encode.supports(Carried));
     try testing.expect(comptime decode.supports(strand.Raw));
@@ -2681,7 +2687,7 @@ test "a raw value is written as one line whatever its bytes hold" {
     var pretty: std.Io.Writer.Allocating = .init(arena.allocator());
     var pretty_writer: strand.Writer(Held) = .init(&pretty.writer, .{ .format = .pretty });
     try pretty_writer.write(value);
-    try testing.expect(std.mem.indexOf(u8, pretty.written(), value.data.bytes) != null);
+    try testing.expect(std.mem.find(u8, pretty.written(), value.data.bytes) != null);
     var source: std.Io.Reader = .fixed(pretty.written());
     var reader: strand.Reader(Held) = .init(testing.allocator, &source, .{ .format = .pretty });
     defer reader.deinit();
@@ -2693,12 +2699,13 @@ test "a raw value is written as one line whatever its bytes hold" {
 
 test "a raw value comes through a versioned record and its migration" {
     const Now = struct {
+        pub const Self = @This();
         kind: []const u8,
         data: strand.Raw = .null,
         pub const jsonl_version: u32 = 2;
-        pub fn jsonlMigrate(allocator: std.mem.Allocator, from: u32, data: std.json.Value) std.json.ParseFromValueError!@This() {
+        pub fn jsonlMigrate(allocator: std.mem.Allocator, from: u32, data: std.json.Value) std.json.ParseFromValueError!Self {
             _ = from;
-            return strand.payloadOf(@This(), allocator, data);
+            return strand.payloadOf(Self, allocator, data);
         }
     };
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
@@ -2733,12 +2740,13 @@ test "a raw value comes off the end of a file owned" {
 // Read-ahead within the last SIMD block is counted too; elapsed time belongs
 // in the benchmark, where the machine's load can be controlled.
 test "a buffered record is scanned once parsed once and borrowed without allocation" {
-    const work = @import("testing/work.zig");
+    const work = work_module;
     const Row = struct { text: []const u8, note: ?[]const u8 = null };
     const Hook = struct {
+        pub const Self = @This();
         row: Row,
-        pub fn jsonParse(a: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) std.json.ParseError(@TypeOf(source.*))!@This() {
-            return .{ .row = try @import("parse.zig").inner(Row, a, source, options) };
+        pub fn jsonParse(a: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) std.json.ParseError(@TypeOf(source.*))!Self {
+            return .{ .row = try parse_module.inner(Row, a, source, options) };
         }
     };
     var out: std.Io.Writer.Allocating = .init(testing.allocator);
@@ -2782,11 +2790,11 @@ fn Wide(comptime arms: usize, comptime fields: usize) type {
     @setEvalBranchQuota(100_000);
     var field_names: [fields][]const u8 = undefined;
     for (&field_names, 0..) |*name, i| name.* = std.fmt.comptimePrint("f{d}", .{i});
-    const Arm = @Struct(.auto, null, &field_names, &@splat(u32), &@splat(.{}));
+    const arm_type = @Struct(.auto, null, &field_names, &@splat(u32), &@splat(.{}));
     var arm_names: [arms][]const u8 = undefined;
     for (&arm_names, 0..) |*name, i| name.* = std.fmt.comptimePrint("arm{d}", .{i});
-    const Tag = @Enum(u8, .exhaustive, &arm_names, &std.simd.iota(u8, arms));
-    return @Union(.auto, Tag, &arm_names, &@splat(Arm), &@splat(.{}));
+    const tag_type = @Enum(u8, .exhaustive, &arm_names, &std.simd.iota(u8, arms));
+    return @Union(.auto, tag_type, &arm_names, &@splat(arm_type), &@splat(.{}));
 }
 
 test "a protocol of many arms decodes and encodes without raising a comptime quota" {
@@ -2923,9 +2931,10 @@ test "a separated blank line discards only one carriage return" {
 
 test "a bounded writer emits the encoding it measured once" {
     const Changing = struct {
+        pub const Self = @This();
         calls: *usize,
 
-        pub fn jsonStringify(self: @This(), json: *std.json.Stringify) !void {
+        pub fn jsonStringify(self: Self, json: *std.json.Stringify) !void {
             self.calls.* += 1;
             try json.write(if (self.calls.* == 1) "x" else "too long");
         }
@@ -2996,7 +3005,8 @@ test "bounded writer scratch survives allocation failures and reuses capacity" {
 
 test "bounded writer keeps hook failure distinct from allocation failure" {
     const Refusing = struct {
-        pub fn jsonStringify(_: @This(), json: *std.json.Stringify) !void {
+        pub const Self = @This();
+        pub fn jsonStringify(_: Self, json: *std.json.Stringify) !void {
             try json.write("part");
             return error.WriteFailed;
         }
@@ -3114,7 +3124,8 @@ test "an unfinished pretty record keeps its rewind point after complete records"
 
 test "a bounded writer completes a raw write with an empty repeated pattern" {
     const EmptyPattern = struct {
-        pub fn jsonStringify(_: @This(), json: *std.json.Stringify) !void {
+        pub const Self = @This();
+        pub fn jsonStringify(_: Self, json: *std.json.Stringify) !void {
             try json.beginWriteRaw();
             var parts = [_][]const u8{ "true", "" };
             try json.writer.writeSplatAll(&parts, std.math.maxInt(usize));

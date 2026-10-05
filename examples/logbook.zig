@@ -9,6 +9,7 @@
 //! `zig build examples` builds AND runs this; `zig build docs -- usage` extracts
 //! its marked regions into README.md, so the snippets a reader copies are
 //! code CI executes.
+const scratch_module = @import("scratch.zig");
 
 const std = @import("std");
 const strand = @import("strand");
@@ -27,7 +28,7 @@ pub fn main() !void {
     const io = threaded.io();
 
     // Scratch space under `.zig-cache`, which a build already owns.
-    var scratch = try @import("scratch.zig").Scratch.init(io);
+    var scratch = try scratch_module.Scratch.init(io);
     defer scratch.deinit(io);
     const dir = scratch.dir;
 
@@ -36,6 +37,7 @@ pub fn main() !void {
     // The record, as this build understands it. Version 1 had no `scope` and
     // wrote `at` as a string, so a line stamped 1 goes through the hook.
     const Entry = struct {
+        pub const Self = @This();
         scope: []const u8 = "app",
         kind: []const u8,
         at: u64 = 0,
@@ -46,7 +48,7 @@ pub fn main() !void {
             allocator: std.mem.Allocator,
             from: u32,
             data: std.json.Value,
-        ) std.json.ParseFromValueError!@This() {
+        ) std.json.ParseFromValueError!Self {
             if (from != 1) return error.UnknownField;
             const old = try strand.payloadOf(struct {
                 kind: []const u8,
@@ -113,7 +115,7 @@ pub fn main() !void {
     }
     // --- README:tail ---
 
-    try follow(gpa, io, dir, Entry);
+    try follow(Entry, gpa, io, dir);
     try separated(gpa);
     try arms(arena);
     try protocol(gpa, arena);
@@ -121,7 +123,7 @@ pub fn main() !void {
 
 /// Records appended to the log, a follower that picks them up, and a second
 /// follower that carries on from where the first one stood.
-fn follow(gpa: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, comptime Entry: type) !void {
+fn follow(comptime Entry: type, gpa: std.mem.Allocator, io: std.Io, dir: std.Io.Dir) !void {
     const appended = 2;
 
     const file = try dir.openFile(io, "log.jsonl", .{});

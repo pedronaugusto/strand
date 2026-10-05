@@ -421,7 +421,7 @@ const Staged = struct {
         return .{ .context = self, .openFn = open, .closeFn = close };
     }
 
-    fn open(context: *anyopaque, io: std.Io) Opener.OpenError!std.Io.File {
+    fn open(io: std.Io, context: *anyopaque) Opener.OpenError!std.Io.File {
         _ = io;
         const self: *Staged = @ptrCast(@alignCast(context)); // safe: `Staged.opener` is the only maker of this interface, with a *Staged as its context
         self.opens += 1;
@@ -430,7 +430,7 @@ const Staged = struct {
 
     /// The staged handles belong to the test, so this counts and does not
     /// close. A real opener closes; see `PathOpener`.
-    fn close(context: *anyopaque, io: std.Io, file: std.Io.File) void {
+    fn close(io: std.Io, context: *anyopaque, file: std.Io.File) void {
         _ = io;
         _ = file;
         const self: *Staged = @ptrCast(@alignCast(context)); // safe: `Staged.opener` is the only maker of this interface, with a *Staged as its context
@@ -658,7 +658,7 @@ const Gap = struct {
     }
 
     /// A `PathOpener` that counts the times it found nothing at the path.
-    fn open(context: *anyopaque, io: std.Io) Opener.OpenError!std.Io.File {
+    fn open(io: std.Io, context: *anyopaque) Opener.OpenError!std.Io.File {
         const path: *PathOpener = @ptrCast(@alignCast(context)); // safe: `opener` below is the only maker of this interface, with a *PathOpener as its context
         return path.opener().open(io) catch |err| {
             if (err == error.FileNotFound) absent_looks += 1;
@@ -666,7 +666,7 @@ const Gap = struct {
         };
     }
 
-    fn close(context: *anyopaque, io: std.Io, file: std.Io.File) void {
+    fn close(io: std.Io, context: *anyopaque, file: std.Io.File) void {
         const path: *PathOpener = @ptrCast(@alignCast(context)); // safe: as in `open`
         path.opener().close(io, file);
     }
@@ -719,12 +719,12 @@ test "an opener that fails for any other reason ends the follow" {
     var fixture = try Fixture.init("{\"kind\":\"only\"}\n", 64);
     defer fixture.deinit();
     const Refusing = struct {
-        fn open(context: *anyopaque, io: std.Io) Opener.OpenError!std.Io.File {
+        fn open(io: std.Io, context: *anyopaque) Opener.OpenError!std.Io.File {
             _ = context;
             _ = io;
             return error.OpenFailed;
         }
-        fn close(context: *anyopaque, io: std.Io, file: std.Io.File) void {
+        fn close(io: std.Io, context: *anyopaque, file: std.Io.File) void {
             _ = context;
             _ = io;
             _ = file;

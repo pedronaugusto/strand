@@ -12,8 +12,8 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-const Scanner = @import("scanner.zig");
-const EncodeBuffer = @import("encode/buffer.zig");
+const Scanner = @import("Scanner.zig");
+const EncodeBuffer = @import("encode/Buffer.zig");
 
 pub fn RawType(comptime strand: type) type {
     return struct {

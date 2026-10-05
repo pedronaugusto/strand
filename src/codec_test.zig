@@ -1,6 +1,9 @@
 //! The decoder and the encoder held to `std.json`, value for value and byte
 //! for byte, over values of every shape a line carries — and where
 //! `std.json` has no answer because it panics, held to having one.
+const codec_module = @import("codec.zig");
+const parse_module = @import("parse.zig");
+const fixtures_module = @import("testing/fixtures.zig");
 
 const std = @import("std");
 const testing = std.testing;
@@ -8,8 +11,9 @@ const strand = @import("strand.zig");
 
 fn Delegating(comptime T: type) type {
     return struct {
+        pub const Self = @This();
         value: T,
-        pub fn jsonParse(a: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) std.json.ParseError(@TypeOf(source.*))!@This() {
+        pub fn jsonParse(a: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) std.json.ParseError(@TypeOf(source.*))!Self {
             return .{ .value = try strand.innerParse(T, a, source, options) };
         }
     };
@@ -38,8 +42,8 @@ test "custom hooks delegate to the public checked token decoder" {
         try testing.expectEqual(@as(u8, 'b'), result.value.bytes[1]);
         try testing.expect(result.value.number > std.math.maxInt(i128));
         try testing.expectEqualStrings("borrowed", result.value.text);
-        if (path == 0) try testing.expect(result.value.text.ptr == bytes.ptr + std.mem.indexOf(u8, bytes, "borrowed").?);
-        if (path == 1) try testing.expect(result.value.text.ptr != bytes.ptr + std.mem.indexOf(u8, bytes, "borrowed").?);
+        if (path == 0) try testing.expect(result.value.text.ptr == bytes.ptr + std.mem.find(u8, bytes, "borrowed").?);
+        if (path == 1) try testing.expect(result.value.text.ptr != bytes.ptr + std.mem.find(u8, bytes, "borrowed").?);
     }
     const overflow = "{\"bytes\":\"ab\",\"number\":3.5e38,\"text\":\"x\"}";
     try testing.expectError(error.Overflow, strand.parseLine(Hook, a, overflow, .{}));
@@ -147,7 +151,7 @@ fn clean(random: std.Random, buffer: []u8) []const u8 {
     return buffer[0..len];
 }
 
-fn randomPlain(random: std.Random, a: std.mem.Allocator, depth: u8, clean_strings: bool) !Plain {
+fn randomPlain(a: std.mem.Allocator, random: std.Random, depth: u8, clean_strings: bool) !Plain {
     const text = if (clean_strings)
         try a.dupe(u8, clean(random, try a.alloc(u8, 200)))
     else
@@ -173,7 +177,7 @@ fn randomPlain(random: std.Random, a: std.mem.Allocator, depth: u8, clean_string
             .d = random.enumValue(Hue),
             .e = if (depth < 3 and random.boolean()) blk: {
                 const inner = try a.create(Plain);
-                inner.* = try randomPlain(random, a, depth + 1, clean_strings);
+                inner.* = try randomPlain(a, random, depth + 1, clean_strings);
                 break :blk inner;
             } else null,
         } },
@@ -249,7 +253,7 @@ pub fn expectSameParse(comptime T: type, a: std.mem.Allocator, bytes: []const u8
 /// other shape differs from it: whitespace, a byte replaced, dropped or
 /// doubled, a string escaped, a number written as a fraction or with an
 /// exponent, a member written that the type does not have.
-fn mutate(random: std.Random, a: std.mem.Allocator, bytes: []const u8) ![]const u8 {
+fn mutate(a: std.mem.Allocator, random: std.Random, bytes: []const u8) ![]const u8 {
     if (bytes.len == 0) return bytes;
     const at = random.uintLessThan(usize, bytes.len);
     const replacements = "{}[]\":,\\0-.e1anu\x00\xff";
@@ -294,12 +298,12 @@ test "a line is read as std.json reads it, in the written shape and out of it" {
     for (0..20_000) |_| {
         _ = arena.reset(.retain_capacity);
         const a = arena.allocator();
-        const value = try randomPlain(random, a, 0, random.boolean());
+        const value = try randomPlain(a, random, 0, random.boolean());
         const bytes = try std.json.Stringify.valueAlloc(a, value, .{});
         try expectSameParse(Plain, a, bytes);
         try expectSameParse(Flat, a, bytes);
         for (0..4) |_| {
-            const changed = try mutate(random, a, bytes);
+            const changed = try mutate(a, random, bytes);
             try expectSameParse(Plain, a, changed);
             try expectSameParse(Flat, a, changed);
         }
@@ -308,7 +312,7 @@ test "a line is read as std.json reads it, in the written shape and out of it" {
         const pair: Pair = .{ .value = random.int(u64), .padding = awkward(random, try a.alloc(u8, 200)) };
         const written = try std.json.Stringify.valueAlloc(a, pair, .{});
         try expectSameParse(Pair, a, written);
-        try expectSameParse(Pair, a, try mutate(random, a, written));
+        try expectSameParse(Pair, a, try mutate(a, random, written));
     }
     // The integers at their edges.
     _ = arena.reset(.retain_capacity);
@@ -573,11 +577,11 @@ test "vectors decode their elements without assuming array bit layout" {
         .{ @Vector(3, i3), "[-4,0,3]" },
         .{ @Vector(3, *const u32), "[1,2,7]" },
     }) |case| {
-        const T = case[0];
-        const expected = try std.json.parseFromSliceLeaky(T, a, case[1], .{});
-        const direct = try strand.parseLine(T, a, case[1], .{});
+        const case_type = case[0];
+        const expected = try std.json.parseFromSliceLeaky(case_type, a, case[1], .{});
+        const direct = try strand.parseLine(case_type, a, case[1], .{});
         var where: strand.Diagnostics = .{};
-        const diagnosed = try strand.parseLine(T, a, case[1], .{ .diagnostics = &where });
+        const diagnosed = try strand.parseLine(case_type, a, case[1], .{ .diagnostics = &where });
         inline for (0..3) |i| {
             try testing.expectEqualDeep(expected[i], direct[i]);
             try testing.expectEqualDeep(expected[i], diagnosed[i]);
@@ -590,9 +594,9 @@ fn expectVectorPaths(expected: anytype, bytes: []const u8) !void {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    if (comptime @import("codec.zig").decode.supports(T)) {
+    if (comptime codec_module.decode.supports(T)) {
         var direct: T = undefined;
-        try @import("codec.zig").decode.parseInto(T, a, bytes, .{ .allocate = .alloc_if_needed, .max_value_len = bytes.len }, &direct);
+        try codec_module.decode.parseInto(T, a, bytes, .{ .allocate = .alloc_if_needed, .max_value_len = bytes.len }, &direct);
         try testing.expectEqualDeep(expected, direct);
     }
     for ([_]bool{ false, true }) |copy| {
@@ -602,20 +606,21 @@ fn expectVectorPaths(expected: anytype, bytes: []const u8) !void {
     }
     var scanner = std.json.Scanner.initCompleteInput(a, bytes);
     defer scanner.deinit();
-    try testing.expectEqualDeep(expected, try @import("parse.zig").inner(T, a, &scanner, .{ .allocate = .alloc_if_needed, .max_value_len = bytes.len }));
+    try testing.expectEqualDeep(expected, try parse_module.inner(T, a, &scanner, .{ .allocate = .alloc_if_needed, .max_value_len = bytes.len }));
     var input: std.Io.Reader = .fixed(bytes);
     var tokens = std.json.Reader.init(a, &input);
     defer tokens.deinit();
-    try testing.expectEqualDeep(expected, try @import("parse.zig").inner(T, a, &tokens, .{ .allocate = .alloc_always, .max_value_len = bytes.len }));
+    try testing.expectEqualDeep(expected, try parse_module.inner(T, a, &tokens, .{ .allocate = .alloc_always, .max_value_len = bytes.len }));
     const dynamic = try std.json.parseFromSliceLeaky(std.json.Value, a, bytes, .{});
     try testing.expectEqualDeep(expected, try strand.payloadOf(T, a, dynamic));
 
     const Payload = struct {
+        pub const Self = @This();
         item: T,
         pub const jsonl_version: u32 = 2;
-        pub fn jsonlMigrate(allocator: std.mem.Allocator, from: u32, data: std.json.Value) std.json.ParseFromValueError!@This() {
+        pub fn jsonlMigrate(allocator: std.mem.Allocator, from: u32, data: std.json.Value) std.json.ParseFromValueError!Self {
             if (from != 1) return error.UnknownField;
-            return strand.payloadOf(@This(), allocator, data);
+            return strand.payloadOf(Self, allocator, data);
         }
     };
     const Envelope = strand.Versioned(Payload);
@@ -638,7 +643,7 @@ fn expectVectorPaths(expected: anytype, bytes: []const u8) !void {
     var reader = strand.Reader(T).init(testing.allocator, &stream, .{});
     defer reader.deinit();
     try testing.expectEqualDeep(expected, (try reader.next()).?.value);
-    var fixture = try @import("testing/fixtures.zig").Fixture.init(framed, 1);
+    var fixture = try fixtures_module.Fixture.init(framed, 1);
     defer fixture.deinit();
     var tail = try strand.Tail(T).init(testing.allocator, &fixture.reader, .{ .block_bytes = 1 });
     defer tail.deinit();

@@ -2,10 +2,11 @@
 //!
 //! Custom `jsonStringify` types and pretty output stay with `std.json`.
 //! `Raw` has a `jsonStringify` for that path and is written here directly.
+const indent_module = @import("indent.zig");
 
 const std = @import("std");
 const tagging = @import("tagging.zig");
-const Indent = @import("indent.zig").Indent;
+const Indent = indent_module.Indent;
 
 pub fn Encoder(comptime Raw: type) type {
     return struct {
@@ -474,14 +475,14 @@ pub fn Encoder(comptime Raw: type) type {
         /// `bytes.len` when there is none.
         fn nextSpecial(bytes: []const u8, from: usize, comptime ascii: bool) usize {
             const width = 16;
-            const V = @Vector(width, u8);
+            const vector_type = @Vector(width, u8);
             var at = from;
             while (at + width <= bytes.len) : (at += width) {
-                const chunk: V = bytes[at..][0..width].*;
-                var hit = (chunk < @as(V, @splat(0x20))) |
-                    (chunk == @as(V, @splat('"'))) |
-                    (chunk == @as(V, @splat('\\')));
-                if (ascii) hit |= chunk >= @as(V, @splat(0x7f));
+                const chunk: vector_type = bytes[at..][0..width].*;
+                var hit = (chunk < @as(vector_type, @splat(0x20))) |
+                    (chunk == @as(vector_type, @splat('"'))) |
+                    (chunk == @as(vector_type, @splat('\\')));
+                if (ascii) hit |= chunk >= @as(vector_type, @splat(0x7f));
                 if (@reduce(.Or, hit)) break;
             }
             while (at < bytes.len) : (at += 1) {
@@ -521,7 +522,7 @@ pub fn Encoder(comptime Raw: type) type {
             const info = @typeInfo(@TypeOf(v)).int;
             comptime std.debug.assert(info.bits <= 128);
             var at: usize = buffer.len;
-            var n: std.meta.Int(.unsigned, @max(info.bits, 1)) = @abs(v);
+            var n: @Int(.unsigned, @max(info.bits, 1)) = @abs(v);
             if (comptime info.bits > 64) {
                 while (n > std.math.maxInt(u64)) {
                     const low: u64 = @intCast(n % 10_000_000_000_000_000_000);
@@ -598,12 +599,12 @@ pub fn Encoder(comptime Raw: type) type {
             const escape = options.escape_unicode;
             if (!breaks and !escape) return true;
             const width = 16;
-            const V = @Vector(width, u8);
+            const vector_type = @Vector(width, u8);
             var i: usize = 0;
             while (i + width <= bytes.len) : (i += width) {
-                const v: V = bytes[i..][0..width].*;
-                if (breaks and (@reduce(.Or, v == @as(V, @splat('\n'))) or @reduce(.Or, v == @as(V, @splat('\r'))))) return false;
-                if (escape and @reduce(.Or, v >= @as(V, @splat(0x80)))) return false;
+                const v: vector_type = bytes[i..][0..width].*;
+                if (breaks and (@reduce(.Or, v == @as(vector_type, @splat('\n'))) or @reduce(.Or, v == @as(vector_type, @splat('\r'))))) return false;
+                if (escape and @reduce(.Or, v >= @as(vector_type, @splat(0x80)))) return false;
             }
             for (bytes[i..]) |b| {
                 if (breaks and (b == '\n' or b == '\r')) return false;

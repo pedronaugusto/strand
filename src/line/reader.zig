@@ -1,5 +1,7 @@
 //! `LineReader`: a `*std.Io.Reader` as a stream of lines, framed and
 //! bounded, with nothing parsed.
+const codec_module = @import("../codec.zig");
+const member_scan_module = @import("../member_scan.zig");
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -12,8 +14,8 @@ const bom = line_mod.bom;
 const trimCr = line_mod.trimCr;
 const isBlank = line_mod.isBlank;
 
-const Raw = @import("../codec.zig").Raw;
-const MemberScan = @import("../member_scan.zig").MemberScan;
+const Raw = codec_module.Raw;
+const MemberScan = member_scan_module.MemberScan;
 
 const control = @import("../control.zig");
 const indexOfControl = control.indexOfControl;
@@ -108,7 +110,7 @@ pub const LineReader = struct {
     oversized_len: ?u8 = null,
 
     /// The longest `oversized_member` value kept, in bytes.
-    pub const max_oversized_member_bytes = @import("../member_scan.zig").max_value_bytes;
+    pub const max_oversized_member_bytes = member_scan_module.max_value_bytes;
 
     /// Framing policy, fixed at `init`. `Reader.Options` carries the same
     /// fields under the same names and hands them down.
@@ -311,7 +313,7 @@ pub const LineReader = struct {
     /// as they are kept, are `kept`, discarding the rest of the line from
     /// `input` when `rest` says to. Returns the bytes discarded, as
     /// `discardLine` counts them.
-    fn refuseOversized(self: *LineReader, kept: []const u8, comptime rest: enum { whole, discard }) error{ReadFailed}!u64 {
+    fn refuseOversized(self: *LineReader, comptime rest: enum { whole, discard }, kept: []const u8) error{ReadFailed}!u64 {
         const name = self.options.oversized_member orelse {
             self.oversized_len = null;
             return if (rest == .discard) self.discardLine() else 0;
@@ -743,7 +745,7 @@ pub const LineReader = struct {
                 self.fault.framing(self.number);
                 self.offset = self.record_offset;
                 self.consumed += self.line_buf.writer.end - before;
-                const discarded = try self.refuseOversized(self.line_buf.written(), .discard);
+                const discarded = try self.refuseOversized(.discard, self.line_buf.written());
                 self.consumed += discarded;
                 self.unfinished = discarded == 0;
                 return error.LineTooLong;
@@ -784,7 +786,7 @@ pub const LineReader = struct {
             self.number += 1;
             self.fault.framing(self.number);
             self.offset = self.record_offset;
-            _ = try self.refuseOversized(self.line_buf.written()[0..record_len], .whole);
+            _ = try self.refuseOversized(.whole, self.line_buf.written()[0..record_len]);
             return error.LineTooLong;
         }
 
@@ -856,7 +858,7 @@ pub const LineReader = struct {
         if (record.len > room) {
             self.fault.framing(self.number);
             self.offset = self.record_offset;
-            _ = try self.refuseOversized(record, .whole);
+            _ = try self.refuseOversized(.whole, record);
             return error.LineTooLong;
         }
         self.borrowed = true;
@@ -939,15 +941,15 @@ fn newlinesAfter(bytes: []const u8) ?u64 {
     var count: u64 = 0;
     var i: usize = 0;
     const width = 32;
-    const V = @Vector(width, u8);
-    const B = std.meta.Int(.unsigned, width);
+    const vector_type = @Vector(width, u8);
+    const mask_type = @Int(.unsigned, width);
     while (i + width + 1 <= bytes.len) : (i += width) {
-        const here: V = bytes[i..][0..width].*;
-        const next: V = bytes[i + 1 ..][0..width].*;
-        const breaks = next == @as(V, @splat('\n'));
-        const blank = (here == @as(V, @splat('\n'))) & breaks;
-        if (@reduce(.Or, blank | (next == @as(V, @splat('\r'))))) return null;
-        count += @popCount(@as(B, @bitCast(breaks)));
+        const here: vector_type = bytes[i..][0..width].*;
+        const next: vector_type = bytes[i + 1 ..][0..width].*;
+        const breaks = next == @as(vector_type, @splat('\n'));
+        const blank = (here == @as(vector_type, @splat('\n'))) & breaks;
+        if (@reduce(.Or, blank | (next == @as(vector_type, @splat('\r'))))) return null;
+        count += @popCount(@as(mask_type, @bitCast(breaks)));
     }
     while (i + 1 < bytes.len) : (i += 1) switch (bytes[i + 1]) {
         '\r' => return null,

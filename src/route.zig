@@ -1,9 +1,10 @@
 //! What kind of line this is, read from its first key or from a member
 //! named for it, without parsing it.
+const Scanner_module = @import("Scanner.zig");
 
 const std = @import("std");
 const member_scan = @import("member_scan.zig");
-const stringSpecial = @import("scanner.zig").stringSpecial;
+const stringSpecial = Scanner_module.stringSpecial;
 const tagging = @import("tagging.zig");
 
 /// The first key of the object on `line`, or `null` when there is not one to

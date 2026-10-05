@@ -826,7 +826,7 @@ fn checkWriter(events: []const Event) !void {
 
 /// The versioned record this package writes is the versioned record it reads,
 /// and a version it does not know is refused rather than guessed at.
-const Versioned2 = struct {
+pub const Versioned2 = struct {
     kind: []const u8,
     at: u64 = 0,
 

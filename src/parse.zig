@@ -4,9 +4,10 @@
 //! the integer (`int.zig`), which `std.json` can panic on, and vectors,
 //! which accept the byte strings its encoder writes; everything else
 //! it does not walk itself is delegated to `std.json.innerParse`.
+const work_module = @import("testing/work.zig");
 
 const std = @import("std");
-const Scanner = @import("scanner.zig");
+const Scanner = @import("Scanner.zig");
 const int = @import("int.zig");
 const tagging = @import("tagging.zig");
 const from_value = @import("from_value.zig");
@@ -19,7 +20,7 @@ pub fn parse(
     scanner: *Scanner,
     options: std.json.ParseOptions,
 ) std.json.ParseError(Scanner)!T {
-    @import("testing/work.zig").parse();
+    work_module.parse();
     const value = try inner(T, allocator, scanner, options);
     if (try scanner.next() != .end_of_document) return error.UnexpectedToken;
     return value;
@@ -115,7 +116,7 @@ pub fn inner(
             else => return std.json.innerParse(T, allocator, source, options),
         },
         .@"union" => |info| {
-            if (comptime tagging.internal(T)) |inside| return tagged(T, inside, allocator, source, options);
+            if (comptime tagging.internal(T)) |inside| return tagged(T, allocator, inside, source, options);
             if (std.meta.hasFn(T, "jsonParse"))
                 return T.jsonParse(allocator, source, options);
             if (info.tag_type == null)
@@ -153,13 +154,7 @@ pub fn inner(
 /// source holding the whole input is where the object's bytes are, and both
 /// reads are over them; a source that streams has only one read to give, and
 /// there the object is held as a `std.json.Value` and read from that.
-fn tagged(
-    comptime T: type,
-    comptime inside: anytype,
-    allocator: Allocator,
-    source: anytype,
-    options: std.json.ParseOptions,
-) std.json.ParseError(@TypeOf(source.*))!T {
+fn tagged(comptime T: type, allocator: Allocator, comptime inside: anytype, source: anytype, options: std.json.ParseOptions) std.json.ParseError(@TypeOf(source.*))!T {
     const Source = @TypeOf(source.*);
     if (comptime Source == Scanner or Source == std.json.Scanner) whole: {
         if (Source == std.json.Scanner and !source.is_end_of_input) break :whole;
@@ -170,7 +165,7 @@ fn tagged(
         const start = source.cursor;
         try source.skipValue();
         const bytes = source.input[start..source.cursor];
-        const name = try tagIn(allocator, bytes, inside.tag, options);
+        const name = try tagIn(inside.tag, allocator, bytes, options);
 
         var again: Scanner = .initCompleteInput(allocator, bytes);
         defer again.deinit();
@@ -179,16 +174,16 @@ fn tagged(
                 std.mem.eql(u8, field.name, @tagName(inside.other.?));
             if (!is_other and std.mem.eql(u8, field.name, name)) {
                 if (field.type == void) {
-                    _ = try parseStructSkipping(struct {}, allocator, &again, options, inside.tag);
+                    _ = try parseStructSkipping(struct {}, inside.tag, allocator, &again, options);
                     return @unionInit(T, field.name, {});
                 }
-                return @unionInit(T, field.name, try parseStructSkipping(field.type, allocator, &again, options, inside.tag));
+                return @unionInit(T, field.name, try parseStructSkipping(field.type, inside.tag, allocator, &again, options));
             }
         }
         if (comptime inside.other) |other| {
-            const Payload = @FieldType(T, @tagName(other));
-            if (Payload == void) return @unionInit(T, @tagName(other), {});
-            return @unionInit(T, @tagName(other), try Payload.jsonParse(allocator, &again, options));
+            const payload_type = @FieldType(T, @tagName(other));
+            if (payload_type == void) return @unionInit(T, @tagName(other), {});
+            return @unionInit(T, @tagName(other), try payload_type.jsonParse(allocator, &again, options));
         }
         return error.InvalidEnumTag;
     }
@@ -198,7 +193,7 @@ fn tagged(
 
 /// The value of the member `tag` of the object that is all of `bytes`,
 /// which is checked JSON: a string, the name of an arm.
-fn tagIn(allocator: Allocator, bytes: []const u8, comptime tag: []const u8, options: std.json.ParseOptions) std.json.ParseError(Scanner)![]const u8 {
+fn tagIn(comptime tag: []const u8, allocator: Allocator, bytes: []const u8, options: std.json.ParseOptions) std.json.ParseError(Scanner)![]const u8 {
     var scanner: Scanner = .initCompleteInput(allocator, bytes);
     defer scanner.deinit();
     _ = try scanner.next();
@@ -233,18 +228,12 @@ fn parseStruct(
     source: anytype,
     options: std.json.ParseOptions,
 ) std.json.ParseError(@TypeOf(source.*))!T {
-    return parseStructSkipping(T, allocator, source, options, null);
+    return parseStructSkipping(T, null, allocator, source, options);
 }
 
 /// `parseStruct`, with a member named `skip` passed over once and a
 /// duplicate the second time: the tag of a union tagged inside its object.
-fn parseStructSkipping(
-    comptime T: type,
-    allocator: Allocator,
-    source: anytype,
-    options: std.json.ParseOptions,
-    comptime skip: ?[]const u8,
-) std.json.ParseError(@TypeOf(source.*))!T {
+fn parseStructSkipping(comptime T: type, comptime skip: ?[]const u8, allocator: Allocator, source: anytype, options: std.json.ParseOptions) std.json.ParseError(@TypeOf(source.*))!T {
     const fields = @typeInfo(T).@"struct".fields;
     if (try source.next() != .object_begin) return error.UnexpectedToken;
     var result: T = undefined;

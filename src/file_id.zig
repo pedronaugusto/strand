@@ -165,8 +165,8 @@ fn posix(fd: std.posix.fd_t) StatError!FileId {
 /// The bits of a `dev_t` or `ino_t`, whichever sign and width the platform
 /// gives it: Darwin's device number is an `i32`.
 fn unsigned(x: anytype) u64 {
-    const Bits = std.meta.Int(.unsigned, @bitSizeOf(@TypeOf(x)));
-    return @as(Bits, @bitCast(x));
+    const bits_type = @Int(.unsigned, @bitSizeOf(@TypeOf(x)));
+    return @as(bits_type, @bitCast(x));
 }
 
 /// `FILE_ID_INFORMATION`: the volume's 64-bit serial number and the file's

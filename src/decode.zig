@@ -4,10 +4,11 @@
 //! removes token construction between a contiguous JSON line and the same
 //! reflected field rules. `Raw` has a `jsonParse` for that path and is read
 //! here directly: skipping a value checks it, and what was skipped is kept.
+const work_module = @import("testing/work.zig");
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const Scanner = @import("scanner.zig");
+const Scanner = @import("Scanner.zig");
 const int = @import("int.zig");
 const tagging = @import("tagging.zig");
 
@@ -61,7 +62,7 @@ pub fn Decoder(comptime Raw: type) type {
             options: std.json.ParseOptions,
             out: *T,
         ) std.json.ParseError(std.json.Scanner)!void {
-            @import("testing/work.zig").parse();
+            work_module.parse();
             var p: Parser = .{ .allocator = allocator, .input = input, .options = options };
             try p.valueInto(T, out);
             p.space();
@@ -79,7 +80,7 @@ pub fn Decoder(comptime Raw: type) type {
             options: std.json.ParseOptions,
             out: *T,
         ) std.json.ParseError(std.json.Scanner)!usize {
-            @import("testing/work.zig").parse();
+            work_module.parse();
             var p: Parser = .{ .allocator = allocator, .input = input, .options = options };
             try p.valueInto(T, out);
             return p.cursor;
@@ -142,8 +143,8 @@ pub fn Decoder(comptime Raw: type) type {
                         const slice = try self.scalar();
                         if (std.meta.stringToEnum(T, slice)) |tag| return tag;
                         if (!std.json.isNumberFormattedLikeAnInteger(slice)) return error.InvalidEnumTag;
-                        const Tag = @typeInfo(T).@"enum".tag_type;
-                        const n = std.fmt.parseInt(Tag, slice, 10) catch return error.InvalidEnumTag;
+                        const tag_type = @typeInfo(T).@"enum".tag_type;
+                        const n = std.fmt.parseInt(tag_type, slice, 10) catch return error.InvalidEnumTag;
                         return std.enums.fromInt(T, n) orelse error.InvalidEnumTag;
                     },
                     .@"struct" => |i| {
@@ -396,11 +397,11 @@ pub fn Decoder(comptime Raw: type) type {
                     }
                 }
                 if (comptime inside.other) |other| {
-                    const Payload = @FieldType(T, @tagName(other));
+                    const payload_type = @FieldType(T, @tagName(other));
                     // Not this reader's to read: every member is passed over,
                     // and the record kept whole when there is a place for it.
                     try self.passOver(inside.tag, from);
-                    if (Payload == void) return @unionInit(T, @tagName(other), {});
+                    if (payload_type == void) return @unionInit(T, @tagName(other), {});
                     const bytes = self.input[start..self.cursor];
                     return @unionInit(T, @tagName(other), .{
                         .bytes = if (self.options.allocate.? == .alloc_always) try self.allocator.dupe(u8, bytes) else bytes,

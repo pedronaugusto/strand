@@ -1,9 +1,10 @@
 //! One top-level member of a JSON object, found by name in bytes that go by
 //! once and are not kept: what `LineReader` holds on to of a line too long
 //! to hold, and where `memberOf` finds a member of a line it has whole.
+const Scanner_module = @import("Scanner.zig");
 
 const std = @import("std");
-const stringSpecial = @import("scanner.zig").stringSpecial;
+const stringSpecial = Scanner_module.stringSpecial;
 
 /// The longest value kept, in bytes. A member whose value is longer is not
 /// kept, and nor is one whose value is an object or an array: what is wanted
@@ -233,14 +234,14 @@ pub const MemberScan = struct {
 fn nextStructural(bytes: []const u8) usize {
     var i: usize = 0;
     if (!@inComptime()) if (std.simd.suggestVectorLength(u8)) |width| {
-        const V = @Vector(width, u8);
+        const vector_type = @Vector(width, u8);
         while (i + width <= bytes.len) : (i += width) {
-            const v: V = bytes[i..][0..width].*;
+            const v: vector_type = bytes[i..][0..width].*;
             // `[` and `{`, and `]` and `}`, differ only in 0x20: set, an
             // opening bracket of either kind is one compare, and a closing
             // one another.
-            const folded = v | @as(V, @splat(0x20));
-            const hits = (v == @as(V, @splat('"'))) | (folded == @as(V, @splat('{'))) | (folded == @as(V, @splat('}')));
+            const folded = v | @as(vector_type, @splat(0x20));
+            const hits = (v == @as(vector_type, @splat('"'))) | (folded == @as(vector_type, @splat('{'))) | (folded == @as(vector_type, @splat('}')));
             if (@reduce(.Or, hits)) return i + std.simd.firstTrue(hits).?;
         }
     };
@@ -264,23 +265,23 @@ fn closingAfter(bytes: []const u8) ?usize {
     var in_string = false;
     var escaped = false;
     var i: usize = 0;
-    const V = @Vector(64, u8);
+    const vector_type = @Vector(64, u8);
     while (i + 64 <= bytes.len) : (i += 64) {
-        const block: V = bytes[i..][0..64].*;
-        const slashes: u64 = @bitCast(block == @as(V, @splat('\\')));
+        const block: vector_type = bytes[i..][0..64].*;
+        const slashes: u64 = @bitCast(block == @as(vector_type, @splat('\\')));
         if (slashes != 0 or escaped) {
             for (bytes[i..][0..64], 0..) |b, at| {
                 if (byteCloses(b, &depth, &in_string, &escaped)) return i + at + 1;
             }
             continue;
         }
-        const quotes: u64 = @bitCast(block == @as(V, @splat('"')));
+        const quotes: u64 = @bitCast(block == @as(vector_type, @splat('"')));
         var strings = prefixXor(quotes);
         if (in_string) strings = ~strings;
         in_string = strings >> 63 == 1;
-        const folded = block | @as(V, @splat(0x20));
-        const opens = @as(u64, @bitCast(folded == @as(V, @splat('{')))) & ~strings;
-        const closes = @as(u64, @bitCast(folded == @as(V, @splat('}')))) & ~strings;
+        const folded = block | @as(vector_type, @splat(0x20));
+        const opens = @as(u64, @bitCast(folded == @as(vector_type, @splat('{')))) & ~strings;
+        const closes = @as(u64, @bitCast(folded == @as(vector_type, @splat('}')))) & ~strings;
         var brackets = opens | closes;
         while (brackets != 0) : (brackets &= brackets - 1) {
             const bit: u6 = @intCast(@ctz(brackets));

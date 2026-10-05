@@ -19,15 +19,19 @@
 //! takes an `Opener` — one call that returns the file a path names right now —
 //! and the follower uses it only when the file it holds has stopped growing,
 //! so the old file is read to its end before the new one is started.
+const file_id_module = @import("file_id.zig");
+const line_module = @import("line.zig");
+const codec_module = @import("codec.zig");
+const reader_module = @import("reader.zig");
 
 const std = @import("std");
-const FileId = @import("file_id.zig").FileId;
+const FileId = file_id_module.FileId;
 const Allocator = std.mem.Allocator;
 
 const strand = struct {
-    pub const Line = @import("line.zig").Line;
-    pub const ParseLineError = @import("codec.zig").parser.ParseLineError;
-    pub const Reader = @import("reader.zig").Reader;
+    pub const Line = line_module.Line;
+    pub const ParseLineError = codec_module.parser.ParseLineError;
+    pub const Reader = reader_module.Reader;
 };
 const Line = strand.Line;
 const ParseLineError = strand.ParseLineError;
@@ -50,9 +54,9 @@ pub const Opener = struct {
     /// Whatever the implementation needs. Not touched here.
     context: *anyopaque,
     /// The file the path names now, open for reading.
-    openFn: *const fn (context: *anyopaque, io: std.Io) OpenError!std.Io.File,
+    openFn: *const fn (io: std.Io, context: *anyopaque) OpenError!std.Io.File,
     /// Called on a file `openFn` returned and the follower is done with.
-    closeFn: *const fn (context: *anyopaque, io: std.Io, file: std.Io.File) void,
+    closeFn: *const fn (io: std.Io, context: *anyopaque, file: std.Io.File) void,
 
     /// What an opener may report. `FileNotFound` is the path naming no file
     /// right now, which is a moment in every rotation — between the rename
@@ -64,11 +68,11 @@ pub const Opener = struct {
     pub const OpenError = error{ FileNotFound, OpenFailed } || std.Io.Cancelable;
 
     pub fn open(self: Opener, io: std.Io) OpenError!std.Io.File {
-        return self.openFn(self.context, io);
+        return self.openFn(io, self.context);
     }
 
     pub fn close(self: Opener, io: std.Io, file: std.Io.File) void {
-        self.closeFn(self.context, io, file);
+        self.closeFn(io, self.context, file);
     }
 };
 
@@ -88,7 +92,7 @@ pub const PathOpener = struct {
         return .{ .context = self, .openFn = openPath, .closeFn = closePath };
     }
 
-    fn openPath(context: *anyopaque, io: std.Io) Opener.OpenError!std.Io.File {
+    fn openPath(io: std.Io, context: *anyopaque) Opener.OpenError!std.Io.File {
         const self: *PathOpener = @ptrCast(@alignCast(context)); // safe: `opener` is the only maker of this interface, with a *PathOpener as its context
         return self.dir.openFile(io, self.sub_path, .{}) catch |err| switch (err) {
             error.Canceled => error.Canceled,
@@ -97,7 +101,7 @@ pub const PathOpener = struct {
         };
     }
 
-    fn closePath(context: *anyopaque, io: std.Io, file: std.Io.File) void {
+    fn closePath(io: std.Io, context: *anyopaque, file: std.Io.File) void {
         _ = context;
         file.close(io);
     }

@@ -9,11 +9,12 @@
 //! the two things a reader and a writer agree on beyond the schema — `Format`
 //! and `separator` — and `lines`, which walks the lines of a buffer already
 //! in memory.
+const codec_module = @import("codec.zig");
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-const parse_line = @import("codec.zig").parser;
+const parse_line = codec_module.parser;
 const ParseLineError = parse_line.ParseLineError;
 
 /// The UTF-8 byte-order mark. Not part of the first line of a stream, and

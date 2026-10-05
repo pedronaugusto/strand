@@ -41,7 +41,7 @@ while (try events.next()) |line| {
         last_open = try events.keep(arena, line);
     }
     if (line.value.level == .warn) warnings += 1;
-    std.debug.print("line {d}: {s}\n", .{ line.number, line.line });
+    std.log.info("line {d}: {s}", .{ line.number, line.line });
 }
 
 const kind = strand.kindOf("{\"kind\":\"open\",\"at\":1}");

@@ -8,6 +8,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const assert = std.debug.assert;
+const Self = @This();
 const work = @import("testing/work.zig");
 
 pub const Token = std.json.Token;
@@ -42,30 +43,30 @@ extra_stack: std.ArrayList(Mode) = .empty,
 depth: usize = 0,
 diagnostics: ?*std.json.Diagnostics = null,
 
-pub fn initCompleteInput(allocator: Allocator, input: []const u8) @This() {
+pub fn initCompleteInput(allocator: Allocator, input: []const u8) Self {
     return .{ .allocator = allocator, .input = input };
 }
 
-pub fn deinit(self: *@This()) void {
+pub fn deinit(self: *Self) void {
     self.extra_stack.deinit(self.allocator);
     self.* = undefined;
 }
 
-pub fn enableDiagnostics(self: *@This(), diagnostics: *std.json.Diagnostics) void {
+pub fn enableDiagnostics(self: *Self, diagnostics: *std.json.Diagnostics) void {
     diagnostics.cursor_pointer = &self.cursor;
     self.diagnostics = diagnostics;
 }
 
-pub fn stackHeight(self: *const @This()) usize {
+pub fn stackHeight(self: *const Self) usize {
     return self.depth;
 }
 
-pub fn ensureTotalStackCapacity(self: *@This(), height: usize) Allocator.Error!void {
+pub fn ensureTotalStackCapacity(self: *Self, height: usize) Allocator.Error!void {
     if (height > self.inline_stack.len)
         try self.extra_stack.ensureTotalCapacity(self.allocator, height - self.inline_stack.len);
 }
 
-fn push(self: *@This(), mode: Mode) Allocator.Error!void {
+fn push(self: *Self, mode: Mode) Allocator.Error!void {
     if (self.depth < self.inline_stack.len) {
         self.inline_stack[self.depth] = mode;
     } else {
@@ -74,20 +75,20 @@ fn push(self: *@This(), mode: Mode) Allocator.Error!void {
     self.depth += 1;
 }
 
-fn pop(self: *@This()) ?Mode {
+fn pop(self: *Self) ?Mode {
     if (self.depth == 0) return null;
     self.depth -= 1;
     if (self.depth < self.inline_stack.len) return self.inline_stack[self.depth];
     return self.extra_stack.pop();
 }
 
-fn top(self: *const @This()) ?Mode {
+fn top(self: *const Self) ?Mode {
     if (self.depth == 0) return null;
     const i = self.depth - 1;
     return if (i < self.inline_stack.len) self.inline_stack[i] else self.extra_stack.items[i - self.inline_stack.len];
 }
 
-fn skipWhitespace(self: *@This()) void {
+fn skipWhitespace(self: *Self) void {
     while (self.cursor < self.input.len) : (self.cursor += 1) switch (self.input[self.cursor]) {
         ' ', '\t', '\r' => {},
         '\n' => if (self.diagnostics) |diag| {
@@ -98,12 +99,12 @@ fn skipWhitespace(self: *@This()) void {
     };
 }
 
-fn byte(self: *const @This()) Error!u8 {
+fn byte(self: *const Self) Error!u8 {
     if (self.cursor == self.input.len) return error.UnexpectedEndOfInput;
     return self.input[self.cursor];
 }
 
-fn prepare(self: *@This()) Error!TokenType {
+fn prepare(self: *Self) Error!TokenType {
     while (true) switch (self.state) {
         .value => {
             self.skipWhitespace();
@@ -170,11 +171,11 @@ fn prepare(self: *@This()) Error!TokenType {
     };
 }
 
-pub fn peekNextTokenType(self: *@This()) PeekError!TokenType {
+pub fn peekNextTokenType(self: *Self) PeekError!TokenType {
     return self.prepare();
 }
 
-pub fn next(self: *@This()) NextError!Token {
+pub fn next(self: *Self) NextError!Token {
     while (true) {
         switch (self.state) {
             .string => return self.nextString(),
@@ -223,7 +224,7 @@ pub fn next(self: *@This()) NextError!Token {
     }
 }
 
-fn nextLiteral(self: *@This(), comptime word: []const u8, token: Token) Error!Token {
+fn nextLiteral(self: *Self, comptime word: []const u8, token: Token) Error!Token {
     for (word) |want| {
         if (self.cursor == self.input.len) return error.UnexpectedEndOfInput;
         if (self.input[self.cursor] != want) return error.SyntaxError;
@@ -233,7 +234,7 @@ fn nextLiteral(self: *@This(), comptime word: []const u8, token: Token) Error!To
     return token;
 }
 
-fn nextNumber(self: *@This()) Error!Token {
+fn nextNumber(self: *Self) Error!Token {
     const start = self.cursor;
     if (self.input[self.cursor] == '-') {
         self.cursor += 1;
@@ -280,19 +281,19 @@ pub fn stringSpecial(bytes: []const u8) Special {
     var non_ascii = false;
     if (!@inComptime() and !std.debug.inValgrind()) {
         if (std.simd.suggestVectorLength(u8)) |width| {
-            const V = @Vector(width, u8);
-            const quote: V = @splat('"');
-            const slash: V = @splat('\\');
-            const control: V = @splat(0x20);
-            const high: V = @splat(0x80);
+            const vector_type = @Vector(width, u8);
+            const quote: vector_type = @splat('"');
+            const slash: vector_type = @splat('\\');
+            const control: vector_type = @splat(0x20);
+            const high: vector_type = @splat(0x80);
             while (i + width <= bytes.len) : (i += width) {
-                const v: V = bytes[i..][0..width].*;
+                const v: vector_type = bytes[i..][0..width].*;
                 const hits = (v == quote) | (v == slash) | (v < control);
                 if (@reduce(.Or, hits)) {
                     const at = std.simd.firstTrue(hits).?;
                     // The vector already holds the bytes before the hit.
                     // Ignore high bits after it: they belong to another token.
-                    const before = std.simd.iota(u8, width) < @as(V, @splat(@intCast(at)));
+                    const before = std.simd.iota(u8, width) < @as(vector_type, @splat(@intCast(at)));
                     non_ascii = non_ascii or @reduce(.Or, ((v & high) == high) & before);
                     return .{ .at = i + at, .non_ascii = non_ascii };
                 }
@@ -353,7 +354,7 @@ fn endsInsideCharacter(bytes: []const u8) bool {
     return std.unicode.utf8ValidateSlice(bytes[0..start]);
 }
 
-fn nextString(self: *@This()) Error!Token {
+fn nextString(self: *Self) Error!Token {
     const found = stringSpecial(self.input[self.cursor..]);
     const at = self.cursor + found.at;
     if (found.non_ascii and !std.unicode.utf8ValidateSlice(self.input[self.value_start..at])) {
@@ -381,7 +382,7 @@ fn nextString(self: *@This()) Error!Token {
     }
 }
 
-fn nextStringEscape(self: *@This()) Error!Token {
+fn nextStringEscape(self: *Self) Error!Token {
     if (self.cursor == self.input.len) return error.UnexpectedEndOfInput;
     switch (self.input[self.cursor]) {
         '"', '\\', '/' => {
@@ -414,7 +415,7 @@ fn nextStringEscape(self: *@This()) Error!Token {
     }
 }
 
-fn unicodeEscape(self: *@This()) Error!u21 {
+fn unicodeEscape(self: *Self) Error!u21 {
     // `cursor` points at the u.
     self.cursor += 1;
     const first = try self.hexQuad();
@@ -433,7 +434,7 @@ fn unicodeEscape(self: *@This()) Error!u21 {
     return std.unicode.utf16DecodeSurrogatePair(&pair) catch return error.SyntaxError;
 }
 
-fn hexQuad(self: *@This()) Error!u16 {
+fn hexQuad(self: *Self) Error!u16 {
     var out: u16 = 0;
     for (0..4) |_| {
         if (self.cursor == self.input.len) return error.UnexpectedEndOfInput;
@@ -462,11 +463,11 @@ fn codepointToken(cp: u21) Token {
     };
 }
 
-pub fn nextAlloc(self: *@This(), allocator: Allocator, when: AllocWhen) AllocError!Token {
+pub fn nextAlloc(self: *Self, allocator: Allocator, when: AllocWhen) AllocError!Token {
     return self.nextAllocMax(allocator, when, std.json.default_max_value_len);
 }
 
-pub fn nextAllocMax(self: *@This(), allocator: Allocator, when: AllocWhen, max: usize) AllocError!Token {
+pub fn nextAllocMax(self: *Self, allocator: Allocator, when: AllocWhen, max: usize) AllocError!Token {
     const kind = self.peekNextTokenType() catch |err| switch (err) {
         error.BufferUnderrun => unreachable,
         else => |e| return e,
@@ -494,11 +495,11 @@ pub fn nextAllocMax(self: *@This(), allocator: Allocator, when: AllocWhen, max: 
     }
 }
 
-pub fn allocNextIntoArrayList(self: *@This(), list: *std.array_list.Managed(u8), when: AllocWhen) AllocIntoArrayListError!?[]const u8 {
+pub fn allocNextIntoArrayList(self: *Self, list: *std.array_list.Managed(u8), when: AllocWhen) AllocIntoArrayListError!?[]const u8 {
     return self.allocNextIntoArrayListMax(list, when, std.json.default_max_value_len);
 }
 
-pub fn allocNextIntoArrayListMax(self: *@This(), list: *std.array_list.Managed(u8), when: AllocWhen, max: usize) AllocIntoArrayListError!?[]const u8 {
+pub fn allocNextIntoArrayListMax(self: *Self, list: *std.array_list.Managed(u8), when: AllocWhen, max: usize) AllocIntoArrayListError!?[]const u8 {
     while (true) switch (try self.next()) {
         .partial_number, .partial_string => |slice| try append(list, slice, max),
         .partial_string_escaped_1 => |buf| try append(list, &buf, max),
@@ -519,7 +520,7 @@ fn append(list: *std.array_list.Managed(u8), slice: []const u8, max: usize) Allo
     try list.appendSlice(slice);
 }
 
-pub fn skipValue(self: *@This()) SkipError!void {
+pub fn skipValue(self: *Self) SkipError!void {
     switch (self.peekNextTokenType() catch |err| switch (err) {
         error.BufferUnderrun => unreachable,
         else => |e| return e,
@@ -544,7 +545,7 @@ pub fn skipValue(self: *@This()) SkipError!void {
     }
 }
 
-pub fn skipUntilStackHeight(self: *@This(), terminal: usize) NextError!void {
+pub fn skipUntilStackHeight(self: *Self, terminal: usize) NextError!void {
     while (true) switch (try self.next()) {
         .object_end, .array_end => if (self.stackHeight() == terminal) return,
         .end_of_document => unreachable,

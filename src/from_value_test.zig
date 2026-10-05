@@ -1,7 +1,10 @@
 //! from_value scenarios through the public API.
+const from_value_module = @import("from_value.zig");
+const strand_module = @import("strand.zig");
+const codec_module = @import("codec.zig");
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const parseFromValue = @import("from_value.zig").parseFromValue;
+const parseFromValue = from_value_module.parseFromValue;
 const testing = std.testing;
 
 test "payloadOf checks wide integers in arrays and vectors" {
@@ -11,11 +14,11 @@ test "payloadOf checks wide integers in arrays and vectors" {
     const good = try std.json.parseFromSliceLeaky(std.json.Value, a, "[1,2]", .{});
     const overflow = try std.json.parseFromSliceLeaky(std.json.Value, a, "[1,1.8446744073709552e19]", .{});
     inline for (.{ [2]u64, @Vector(2, u64) }) |T| {
-        const value = try @import("strand.zig").payloadOf(T, a, good);
+        const value = try strand_module.payloadOf(T, a, good);
         try testing.expectEqual(@as(u64, 1), value[0]);
         try testing.expectEqual(@as(u64, 2), value[1]);
-        try testing.expectError(error.Overflow, @import("strand.zig").payloadOf(T, a, overflow));
-        try testing.expectError(error.UnexpectedToken, @import("strand.zig").payloadOf(T, a, .null));
+        try testing.expectError(error.Overflow, strand_module.payloadOf(T, a, overflow));
+        try testing.expectError(error.UnexpectedToken, strand_module.payloadOf(T, a, .null));
     }
 }
 
@@ -32,10 +35,11 @@ const NestedVectors = struct {
     array: [1]@Vector(2, u64),
     rows: ?[]const *const @Vector(2, u64),
     arm: union(enum) { vector: @Vector(2, u64), none },
-    raw: @import("codec.zig").Raw,
+    raw: codec_module.Raw,
     hook: struct {
+        pub const Self = @This();
         vector: @Vector(2, u64),
-        pub fn jsonParseFromValue(_: Allocator, value: std.json.Value, _: std.json.ParseOptions) std.json.ParseFromValueError!@This() {
+        pub fn jsonParseFromValue(_: Allocator, value: std.json.Value, _: std.json.ParseOptions) std.json.ParseFromValueError!Self {
             if (value != .string) return error.UnexpectedToken;
             return .{ .vector = .{ 7, 8 } };
         }
@@ -66,24 +70,24 @@ test "payloadOf converts nested vectors with defaults and custom hooks" {
         \\ "arm":{"vector":[11,12]},"raw":[1,2],"hook":"custom"}
     , .{});
     try testing.checkAllAllocationFailures(testing.allocator, nestedVectors, .{source});
-    const Vec = @Vector(2, u64);
+    const vector_type = @Vector(2, u64);
     const short = try std.json.parseFromSliceLeaky(std.json.Value, a, "[1]", .{});
-    try testing.expectError(error.LengthMismatch, parseFromValue(Vec, a, short, .{}));
-    try testing.expectError(error.UnexpectedToken, parseFromValue(Vec, a, .{ .string = "12" }, .{}));
+    try testing.expectError(error.LengthMismatch, parseFromValue(vector_type, a, short, .{}));
+    try testing.expectError(error.UnexpectedToken, parseFromValue(vector_type, a, .{ .string = "12" }, .{}));
     const object = try std.json.parseFromSliceLeaky(std.json.Value, a, "{\"extra\":3,\"v\":[1,2]}", .{});
-    const T = struct { v: Vec };
+    const T = struct { v: vector_type };
     try testing.expectError(error.UnknownField, parseFromValue(T, a, object, .{}));
     try testing.expectEqual(@as(u64, 2), (try parseFromValue(T, a, object, .{ .ignore_unknown_fields = true })).v[1]);
     try testing.expectError(error.MissingField, parseFromValue(T, a, .{ .object = .empty }, .{}));
     const empty = try std.json.parseFromSliceLeaky(std.json.Value, a, "{\"none\":{}}", .{});
-    const Arm = union(enum) { vector: Vec, none };
+    const Arm = union(enum) { vector: vector_type, none };
     try testing.expectEqual(Arm.none, try parseFromValue(Arm, a, empty, .{}));
-    try testing.expectEqual(@as(?Vec, null), try parseFromValue(?Vec, a, .null, .{}));
+    try testing.expectEqual(@as(?vector_type, null), try parseFromValue(?vector_type, a, .null, .{}));
     const Event = struct {
-        vector: Vec,
+        vector: vector_type,
         pub const jsonl_version: u32 = 1;
     };
-    const strand = @import("strand.zig");
+    const strand = strand_module;
     const versioned = try strand.parseLine(strand.Versioned(Event), a, "{\"data\":{\"vector\":[1,2]},\"v\":1}", .{});
     try testing.expectEqual(@as(u64, 2), versioned.value.vector[1]);
 }
@@ -126,12 +130,12 @@ test "payloadOf reads empty arrays without indexing nonexistent elements" {
     const a = arena.allocator();
     const empty = try std.json.parseFromSliceLeaky(std.json.Value, a, "[]", .{});
     inline for (.{ u8, bool, u32, []const u8 }) |Child| {
-        try testing.expectEqualDeep(@as([0]Child, .{}), try @import("strand.zig").payloadOf([0]Child, a, empty));
+        try testing.expectEqualDeep(@as([0]Child, .{}), try strand_module.payloadOf([0]Child, a, empty));
         const Nested = struct { rows: [1][0]Child };
         const source = try std.json.parseFromSliceLeaky(std.json.Value, a, "{\"rows\":[[]]}", .{});
-        try testing.expectEqualDeep(Nested{ .rows = .{.{}} }, try @import("strand.zig").payloadOf(Nested, a, source));
-        try testing.expectError(error.LengthMismatch, @import("strand.zig").payloadOf([0]Child, a, try std.json.parseFromSliceLeaky(std.json.Value, a, "[0]", .{})));
+        try testing.expectEqualDeep(Nested{ .rows = .{.{}} }, try strand_module.payloadOf(Nested, a, source));
+        try testing.expectError(error.LengthMismatch, strand_module.payloadOf([0]Child, a, try std.json.parseFromSliceLeaky(std.json.Value, a, "[0]", .{})));
     }
-    try testing.expectEqualDeep(@as([0]u8, .{}), try @import("strand.zig").payloadOf([0]u8, a, .{ .string = "" }));
-    try testing.expectError(error.LengthMismatch, @import("strand.zig").payloadOf([0]u8, a, .{ .string = "x" }));
+    try testing.expectEqualDeep(@as([0]u8, .{}), try strand_module.payloadOf([0]u8, a, .{ .string = "" }));
+    try testing.expectError(error.LengthMismatch, strand_module.payloadOf([0]u8, a, .{ .string = "x" }));
 }

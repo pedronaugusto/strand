@@ -3,7 +3,7 @@ const gantry = @import("gantry");
 
 pub const layers: []const gantry.rules.Layer = &.{
     .{ .name = "primitives", .patterns = &.{
-        "src/encode/buffer.zig",
+        "src/encode/Buffer.zig",
         "src/encode.zig",
         "src/file_id.zig",
         "src/testing/fixtures.zig",
@@ -13,7 +13,7 @@ pub const layers: []const gantry.rules.Layer = &.{
         "src/member_scan.zig",
         "src/owned.zig",
         "src/route.zig",
-        "src/scanner.zig",
+        "src/Scanner.zig",
         "src/tagging.zig",
         "src/value_api.zig",
         "src/testing/work.zig",

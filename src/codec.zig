@@ -1,12 +1,17 @@
 //! Assemble one Raw type and its codecs without coupling their implementations.
-pub const Raw = @import("raw.zig").RawType(@This()).Raw;
-pub const encode = @import("encode.zig").Encoder(Raw);
-pub const decode = @import("decode.zig").Decoder(Raw);
-pub const parser = @import("parse/line.zig").Parser(decode);
+const raw_module = @import("raw.zig");
+const encode_module = @import("encode.zig");
+const decode_module = @import("decode.zig");
+const line_module = @import("parse/line.zig");
+const value_api_module = @import("value_api.zig");
+pub const Raw = raw_module.RawType(@This()).Raw;
+pub const encode = encode_module.Encoder(Raw);
+pub const decode = decode_module.Decoder(Raw);
+pub const parser = line_module.Parser(decode);
 pub const ParseOptions = parser.ParseOptions;
 pub const ParseLineError = parser.ParseLineError;
 pub const parseLine = parser.parseLine;
-const values = @import("value_api.zig").Values(encode);
+const values = value_api_module.Values(encode);
 pub const ValueOptions = values.ValueOptions;
 pub const writeValue = values.writeValue;
 pub const writeObjectOpen = values.writeObjectOpen;

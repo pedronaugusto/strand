@@ -1,7 +1,8 @@
+const fixtures_module = @import("fixtures.zig");
 const std = @import("std");
 const testing = std.testing;
 const strand = @import("../strand.zig");
-const Fixture = @import("fixtures.zig").Fixture;
+const Fixture = fixtures_module.Fixture;
 
 // A hook's output depends on state outside the JSON. Keeping the result
 // must preserve the decision already made, even if that state changes.
@@ -147,9 +148,9 @@ test "Tail last releases every partial owned batch on allocation failure" {
 }
 
 test "Tail last reports only NextError" {
-    const Result = @typeInfo(@TypeOf(strand.Tail(LastData).last)).@"fn".return_type.?;
-    const Errors = @typeInfo(Result).error_union.error_set;
-    try testing.expect(Errors == strand.Tail(LastData).NextError);
+    const result_type = @typeInfo(@TypeOf(strand.Tail(LastData).last)).@"fn".return_type.?;
+    const error_set = @typeInfo(result_type).error_union.error_set;
+    try testing.expect(error_set == strand.Tail(LastData).NextError);
 }
 
 test "Tail last releases owned values when a later line is malformed" {

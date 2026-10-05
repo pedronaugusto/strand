@@ -1,4 +1,5 @@
 //! A sync that is the call each platform means by one.
+const fixtures_module = @import("testing/fixtures.zig");
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -70,7 +71,7 @@ pub const SyncError = std.Io.File.SyncError;
 /// with a weaker call: a failed sync can clear the error the kernel was
 /// holding, so asking a second time is how the loss gets lost rather than
 /// how it gets fixed.
-pub fn syncFile(file: std.Io.File, io: std.Io, level: SyncLevel) SyncError!SyncKind {
+pub fn syncFile(io: std.Io, file: std.Io.File, level: SyncLevel) SyncError!SyncKind {
     if (comptime builtin.os.tag.isDarwin()) {
         while (true) {
             switch (std.posix.errno(std.c.fcntl(file.handle, std.c.F.FULLFSYNC, @as(c_int, 0)))) {
@@ -117,7 +118,7 @@ pub fn syncFile(file: std.Io.File, io: std.Io, level: SyncLevel) SyncError!SyncK
 ///
 /// Other platforms get `fsync`. An interrupted call is made again, and any
 /// other failure is reported rather than retried, as `syncFile`'s is.
-pub fn syncDir(dir: std.Io.Dir, io: std.Io) SyncError!?SyncKind {
+pub fn syncDir(io: std.Io, dir: std.Io.Dir) SyncError!?SyncKind {
     if (comptime builtin.os.tag == .windows) return null;
     if (comptime builtin.os.tag == .linux) {
         while (true) {
@@ -130,7 +131,7 @@ pub fn syncDir(dir: std.Io.Dir, io: std.Io) SyncError!?SyncKind {
             }
         }
     }
-    const kind = try syncFile(.{ .handle = dir.handle, .flags = .{ .nonblocking = false } }, io, .all);
+    const kind = try syncFile(io, .{ .handle = dir.handle, .flags = .{ .nonblocking = false } }, .all);
     return kind;
 }
 
@@ -146,13 +147,13 @@ fn failure(e: anytype) SyncError {
 }
 
 test syncFile {
-    var fixture = try @import("testing/fixtures.zig").Fixture.init("{\"kind\":\"one\"}\n", 64);
+    var fixture = try fixtures_module.Fixture.init("{\"kind\":\"one\"}\n", 64);
     defer fixture.deinit();
 
     // A sync is the strongest call the platform has, and on the two platforms
     // where that is not what `std` calls a sync, this is the test that the
     // other one is what was asked for.
-    const kind = try syncFile(fixture.write_file, std.testing.io, .data);
+    const kind = try syncFile(std.testing.io, fixture.write_file, .data);
     const expected: SyncKind = switch (builtin.os.tag) {
         .linux => .data,
         else => if (builtin.os.tag.isDarwin()) .full else .plain,
@@ -161,7 +162,7 @@ test syncFile {
 
     // Everything, timestamps included, is the ordinary call where the
     // ordinary call is the whole of it, and still the strongest on Darwin.
-    const all = try syncFile(fixture.write_file, std.testing.io, .all);
+    const all = try syncFile(std.testing.io, fixture.write_file, .all);
     try std.testing.expectEqual(@as(SyncKind, if (builtin.os.tag.isDarwin()) .full else .plain), all);
 
     // What was asked for is what a filesystem that takes it answers.
@@ -182,15 +183,15 @@ test syncDir {
         .windows => null,
         else => if (builtin.os.tag.isDarwin()) .full else .plain,
     };
-    try std.testing.expectEqual(expected, try syncDir(tmp.dir, io));
+    try std.testing.expectEqual(expected, try syncDir(io, tmp.dir));
 
     // A directory opened only to be named is a handle that cannot be synced
     // on Linux, and that is an error rather than a crash.
     const path_only = try tmp.dir.openDir(io, ".", .{});
     defer path_only.close(io);
     if (comptime builtin.os.tag == .linux) {
-        try std.testing.expectError(error.AccessDenied, syncDir(path_only, io));
+        try std.testing.expectError(error.AccessDenied, syncDir(io, path_only));
     } else {
-        try std.testing.expectEqual(expected, try syncDir(path_only, io));
+        try std.testing.expectEqual(expected, try syncDir(io, path_only));
     }
 }

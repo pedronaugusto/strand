@@ -47,17 +47,17 @@ pub fn main() !void {
             last_open = try events.keep(arena, line);
         }
         if (line.value.level == .warn) warnings += 1;
-        std.debug.print("line {d}: {s}\n", .{ line.number, line.line });
+        std.log.info("line {d}: {s}", .{ line.number, line.line });
     }
 
     const kind = strand.kindOf("{\"kind\":\"open\",\"at\":1}");
     // --- README:usage ---
 
-    std.debug.print("read {d} lines, {d} warning(s)\n", .{ events.lines.number, warnings });
-    std.debug.print("kept past its line: {s} at {d}, note {?s}\n", .{
+    std.log.info("read {d} lines, {d} warning(s)", .{ events.lines.number, warnings });
+    std.log.info("kept past its line: {s} at {d}, note {?s}", .{
         last_open.?.kind,
         last_open.?.at,
         last_open.?.note,
     });
-    std.debug.print("first key without parsing: {?s}\n", .{kind});
+    std.log.info("first key without parsing: {?s}", .{kind});
 }

@@ -78,7 +78,7 @@ pub fn main() !void {
     var entries: strand.Reader(strand.Versioned(Entry)) = .init(gpa, &source, .{});
     defer entries.deinit();
     while (try entries.next()) |line| {
-        std.debug.print("line {d}: v{d}{s} {s}/{s} at {d}\n", .{
+        std.log.info("line {d}: v{d}{s} {s}/{s} at {d}", .{
             line.number,
             line.value.from,
             if (line.value.migrated()) " (migrated)" else "",
@@ -108,7 +108,7 @@ pub fn main() !void {
 
         // In file order, on an arena, borrowing nothing from the reader.
         for (try tail.last(arena, 2)) |entry| {
-            std.debug.print("near the end: {s} at {d}\n", .{ entry.value.kind, entry.value.at });
+            std.log.info("near the end: {s} at {d}", .{ entry.value.kind, entry.value.at });
         }
     }
     // --- README:tail ---
@@ -168,7 +168,7 @@ fn follow(gpa: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, comptime Entry: t
 
     for (0..appended) |_| {
         const line = try follower.next();
-        std.debug.print("followed: {s} at {d}\n", .{ line.value.value.kind, line.value.value.at });
+        std.log.info("followed: {s} at {d}", .{ line.value.value.kind, line.value.value.at });
     }
     // --- README:follow ---
 
@@ -201,7 +201,7 @@ fn follow(gpa: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, comptime Entry: t
     defer resumed.deinit();
 
     const line = try resumed.next();
-    std.debug.print("resumed at line {d} of {d} rotation(s): {s} at {d}\n", .{
+    std.log.info("resumed at line {d} of {d} rotation(s): {s} at {d}", .{
         line.number,
         resumed.rotations,
         line.value.value.kind,
@@ -240,7 +240,7 @@ fn separated(gpa: std.mem.Allocator) !void {
     var events: strand.Reader(Event) = .init(gpa, &source, .{ .record_separator = true });
     defer events.deinit();
     while (try events.next()) |line| {
-        std.debug.print("record {d}: {s} at {d}\n", .{ line.number, line.value.kind, line.value.at });
+        std.log.info("record {d}: {s} at {d}", .{ line.number, line.value.kind, line.value.at });
     }
     // --- README:separator ---
 }
@@ -270,7 +270,7 @@ fn arms(arena: std.mem.Allocator) !void {
         .{ .unknown = try std.json.parseFromSliceLeaky(std.json.Value, arena, line, .{}) };
     // --- README:arms ---
 
-    std.debug.print("unrecognised arm kept whole: {s}\n", .{
+    std.log.info("unrecognised arm kept whole: {s}", .{
         message.unknown.object.keys()[0],
     });
 }
@@ -326,5 +326,5 @@ fn protocol(gpa: std.mem.Allocator, arena: std.mem.Allocator) !void {
     // --- README:protocol ---
 
     var it = strand.lines(answered.written());
-    while (it.next()) |line| std.debug.print("reply: {s}\n", .{line.line});
+    while (it.next()) |line| std.log.info("reply: {s}", .{line.line});
 }

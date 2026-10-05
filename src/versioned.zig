@@ -62,6 +62,7 @@ pub fn Versioned(comptime T: type) type {
         /// older version has already been through `T.jsonlMigrate` by the
         /// time it is here.
         value: T,
+
         /// The version the line was stamped with, before any migration —
         /// `current` for a line this build wrote, `unstamped` for a line with
         /// no `v` on it. Defaults to `current` so that a value being written
@@ -81,108 +82,20 @@ pub fn Versioned(comptime T: type) type {
             0;
 
         /// True when this record reached its current shape through
-        /// `T.jsonlMigrate` rather than by being written in it.
         pub fn migrated(self: Self) bool {
-            return self.from != current;
+            return owner_methods.migrated(self);
         }
 
         /// Reads the envelope. Called by `std.json`; see `Reader`.
-        ///
-        /// The two keys are read in whatever order the line puts them, but
-        /// `v` before `data` — the order this package writes — is the order
-        /// that costs nothing: the version is known by the time `data` is
-        /// reached, so the payload is parsed straight into `T` and its
-        /// strings still borrow from the line. A line that puts `data` first
-        /// is held as a `std.json.Value` until `v` turns up, which allocates
-        /// and copies; it is read correctly either way.
-        ///
-        /// `error.UnknownField` is what a version this build cannot read
-        /// comes back as, when `T` declares no `jsonlMigrate` or the line
-        /// carries a key that is neither `v` nor `data` under
-        /// `ignore_unknown_fields = false`. Through a `Reader` that is
-        /// `error.MalformedLine`, with the line number on the reader.
-        pub fn jsonParse(
-            allocator: Allocator,
-            source: anytype,
-            options: std.json.ParseOptions,
-        ) std.json.ParseError(@TypeOf(source.*))!Self {
-            if (.object_begin != try source.next()) return error.UnexpectedToken;
-
-            var from: ?u32 = null;
-            var parsed: ?T = null;
-            var stashed: ?std.json.Value = null;
-
-            while (true) {
-                const key = switch (try source.nextAllocMax(
-                    allocator,
-                    .alloc_if_needed,
-                    options.max_value_len.?,
-                )) {
-                    inline .string, .allocated_string => |slice| slice,
-                    .object_end => break,
-                    else => return error.UnexpectedToken,
-                };
-
-                if (std.mem.eql(u8, key, version_key)) {
-                    if (from != null) switch (options.duplicate_field_behavior) {
-                        .@"error" => return error.DuplicateField,
-                        .use_first => {
-                            try source.skipValue();
-                            continue;
-                        },
-                        .use_last => {},
-                    };
-                    from = try typed_parse.inner(u32, allocator, source, options);
-                } else if (std.mem.eql(u8, key, data_key)) {
-                    if (parsed != null or stashed != null) switch (options.duplicate_field_behavior) {
-                        .@"error" => return error.DuplicateField,
-                        .use_first => {
-                            try source.skipValue();
-                            continue;
-                        },
-                        .use_last => {},
-                    };
-                    if (options.duplicate_field_behavior == .use_last) {
-                        parsed = null;
-                        stashed = try std.json.innerParse(std.json.Value, allocator, source, options);
-                    } else if (from != null and from.? == current) {
-                        parsed = try typed_parse.inner(T, allocator, source, options);
-                    } else {
-                        stashed = try std.json.innerParse(std.json.Value, allocator, source, options);
-                    }
-                } else if (options.ignore_unknown_fields) {
-                    try source.skipValue();
-                } else {
-                    return error.UnknownField;
-                }
-            }
-
-            const version = from orelse unstamped;
-            if (parsed) |value| return .{ .value = value, .from = version };
-            const data = stashed orelse return error.MissingField;
-            if (version == current) {
-                return .{
-                    .value = try from_value.parseFromValue(T, allocator, data, options),
-                    .from = version,
-                };
-            }
-            if (!@hasDecl(T, "jsonlMigrate")) return error.UnknownField;
-            return .{ .value = try T.jsonlMigrate(allocator, version, data), .from = version };
+        pub fn jsonParse(allocator: Allocator, source: anytype, options: std.json.ParseOptions) std.json.ParseError(@TypeOf(source.*))!Self {
+            return owner_methods.jsonParse(Self, allocator, source, options);
         }
 
         /// Writes the envelope. Called by `std.json`; see `Writer`.
-        ///
-        /// Always stamps `current`, never `from`: `value` is in today's shape
-        /// whatever shape the line it came from was in, so writing it back
-        /// under an older version would be a lie about its contents.
         pub fn jsonStringify(self: Self, jw: anytype) !void {
-            try jw.beginObject();
-            try jw.objectField(version_key);
-            try jw.write(current);
-            try jw.objectField(data_key);
-            try jw.write(self.value);
-            try jw.endObject();
+            return owner_methods.jsonStringify(self, jw);
         }
+        pub const Value = T;
     };
 }
 
@@ -226,3 +139,116 @@ fn checkShape(comptime T: type) void {
 //=========================================================================
 
 const testing = std.testing;
+
+// Schema-independent policy types shared by the typed owners.
+const owner_types = struct {};
+// Operations infer the record type from the owner; the facade retains typed signatures.
+const owner_methods = struct {
+    /// True when this record reached its current shape through
+    /// `T.jsonlMigrate` rather than by being written in it.
+    pub fn migrated(self: anytype) bool {
+        const current = @TypeOf(self).current;
+
+        return self.from != current;
+    }
+
+    /// Reads the envelope. Called by `std.json`; see `Reader`.
+    ///
+    /// The two keys are read in whatever order the line puts them, but
+    /// `v` before `data` — the order this package writes — is the order
+    /// that costs nothing: the version is known by the time `data` is
+    /// reached, so the payload is parsed straight into `T` and its
+    /// strings still borrow from the line. A line that puts `data` first
+    /// is held as a `std.json.Value` until `v` turns up, which allocates
+    /// and copies; it is read correctly either way.
+    ///
+    /// `error.UnknownField` is what a version this build cannot read
+    /// comes back as, when `T` declares no `jsonlMigrate` or the line
+    /// carries a key that is neither `v` nor `data` under
+    /// `ignore_unknown_fields = false`. Through a `Reader` that is
+    /// `error.MalformedLine`, with the line number on the reader.
+    pub fn jsonParse(comptime Self: type, allocator: Allocator, source: anytype, options: std.json.ParseOptions) std.json.ParseError(@TypeOf(source.*))!Self {
+        const T = Self.Value;
+        const current = Self.current;
+        const unstamped = Self.unstamped;
+
+        if (.object_begin != try source.next()) return error.UnexpectedToken;
+
+        var from: ?u32 = null;
+        var parsed: ?T = null;
+        var stashed: ?std.json.Value = null;
+
+        while (true) {
+            const key = switch (try source.nextAllocMax(
+                allocator,
+                .alloc_if_needed,
+                options.max_value_len.?,
+            )) {
+                inline .string, .allocated_string => |slice| slice,
+                .object_end => break,
+                else => return error.UnexpectedToken,
+            };
+
+            if (std.mem.eql(u8, key, version_key)) {
+                if (from != null) switch (options.duplicate_field_behavior) {
+                    .@"error" => return error.DuplicateField,
+                    .use_first => {
+                        try source.skipValue();
+                        continue;
+                    },
+                    .use_last => {},
+                };
+                from = try typed_parse.inner(u32, allocator, source, options);
+            } else if (std.mem.eql(u8, key, data_key)) {
+                if (parsed != null or stashed != null) switch (options.duplicate_field_behavior) {
+                    .@"error" => return error.DuplicateField,
+                    .use_first => {
+                        try source.skipValue();
+                        continue;
+                    },
+                    .use_last => {},
+                };
+                if (options.duplicate_field_behavior == .use_last) {
+                    parsed = null;
+                    stashed = try std.json.innerParse(std.json.Value, allocator, source, options);
+                } else if (from != null and from.? == current) {
+                    parsed = try typed_parse.inner(T, allocator, source, options);
+                } else {
+                    stashed = try std.json.innerParse(std.json.Value, allocator, source, options);
+                }
+            } else if (options.ignore_unknown_fields) {
+                try source.skipValue();
+            } else {
+                return error.UnknownField;
+            }
+        }
+
+        const version = from orelse unstamped;
+        if (parsed) |value| return .{ .value = value, .from = version };
+        const data = stashed orelse return error.MissingField;
+        if (version == current) {
+            return .{
+                .value = try from_value.parseFromValue(T, allocator, data, options),
+                .from = version,
+            };
+        }
+        if (!@hasDecl(T, "jsonlMigrate")) return error.UnknownField;
+        return .{ .value = try T.jsonlMigrate(allocator, version, data), .from = version };
+    }
+
+    /// Writes the envelope. Called by `std.json`; see `Writer`.
+    ///
+    /// Always stamps `current`, never `from`: `value` is in today's shape
+    /// whatever shape the line it came from was in, so writing it back
+    /// under an older version would be a lie about its contents.
+    pub fn jsonStringify(self: anytype, jw: anytype) !void {
+        const current = @TypeOf(self).current;
+
+        try jw.beginObject();
+        try jw.objectField(version_key);
+        try jw.write(current);
+        try jw.objectField(data_key);
+        try jw.write(self.value);
+        try jw.endObject();
+    }
+};

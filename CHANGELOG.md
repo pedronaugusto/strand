@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Generic reader, tail, follower, writer and version envelope owners expose their
+  record type as `Value`; schema-independent policy types are shared across
+  instantiations. Typed method signatures remain unchanged.
+
 - Opener callbacks take `io` before `context`. `syncFile` and `syncDir` take `io` before the file or directory. Internal parse helpers put comptime selectors and allocators before data.
 
 - Name the scanner token and allocation error sets as public error sets, and name integer conversion failures as public `int.Error`. Qualify file identity results as public `Identity.Taken`. Expose custom JSON hook fixture types to match their public signatures.

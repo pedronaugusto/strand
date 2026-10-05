@@ -98,29 +98,7 @@ pub fn RawType(comptime strand: type) type {
                 source: anytype,
                 options: std.json.ParseOptions,
             ) std.json.ParseError(@TypeOf(source.*))!Raw {
-                const Source = @TypeOf(source.*);
-                if (comptime Source == Scanner or Source == std.json.Scanner) whole: {
-                    if (Source == std.json.Scanner and !source.is_end_of_input) break :whole;
-                    // The peek steps over whitespace and the colon before a
-                    // field's value, so the cursor is on the value's first byte.
-                    switch (try source.peekNextTokenType()) {
-                        // No value starts here. `std.json.Scanner`'s peek
-                        // names a bracket by its own kind even where it closes
-                        // the other kind of container, and the token is
-                        // taken so the scanner says which error it is; to
-                        // skip it would be to skip a value that is not there.
-                        .object_end, .array_end, .end_of_document => {
-                            _ = try source.next();
-                            return error.UnexpectedToken;
-                        },
-                        else => {},
-                    }
-                    const start = source.cursor;
-                    try source.skipValue();
-                    return keep(allocator, source.input[start..source.cursor], options);
-                }
-                const value = try std.json.innerParse(std.json.Value, allocator, source, options);
-                return fromValue(allocator, value);
+                return parseRaw(Raw, allocator, source, options);
             }
 
             /// A value `std.json` has already parsed into a `std.json.Value`: kept
@@ -151,10 +129,32 @@ pub fn RawType(comptime strand: type) type {
                 return .{ .bytes = bytes };
             }
         };
-
-        //=========================================================================
-        // Tests. The scenarios with a stream in them are in `strand_test.zig`.
-        //=========================================================================
-
     };
+}
+
+/// Validate the source span before borrowing or copying its original bytes.
+fn parseRaw(comptime Raw: type, allocator: Allocator, source: anytype, options: std.json.ParseOptions) std.json.ParseError(@TypeOf(source.*))!Raw {
+    const Source = @TypeOf(source.*);
+    if (comptime Source == Scanner or Source == std.json.Scanner) whole: {
+        if (Source == std.json.Scanner and !source.is_end_of_input) break :whole;
+        // The peek steps over whitespace and the colon before a
+        // field's value, so the cursor is on the value's first byte.
+        switch (try source.peekNextTokenType()) {
+            // No value starts here. `std.json.Scanner`'s peek
+            // names a bracket by its own kind even where it closes
+            // the other kind of container, and the token is
+            // taken so the scanner says which error it is; to
+            // skip it would be to skip a value that is not there.
+            .object_end, .array_end, .end_of_document => {
+                _ = try source.next();
+                return error.UnexpectedToken;
+            },
+            else => {},
+        }
+        const start = source.cursor;
+        try source.skipValue();
+        return Raw.keep(allocator, source.input[start..source.cursor], options);
+    }
+    const value = try std.json.innerParse(std.json.Value, allocator, source, options);
+    return Raw.fromValue(allocator, value);
 }

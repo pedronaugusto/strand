@@ -8,48 +8,7 @@
   "test_support": [
     "src/testing/*"
   ],
-  "function_exceptions": {
-    "src/raw.zig:RawType": {
-      "lines": 143,
-      "reason": "Existing implementation at adoption; this exact bound cannot grow and shrinks when the function is split."
-    },
-    "src/decode.zig:Decoder": {
-      "lines": 739,
-      "reason": "Existing implementation at adoption; this exact bound cannot grow and shrinks when the function is split."
-    },
-    "src/decode.zig:value": {
-      "lines": 130,
-      "reason": "Existing implementation at adoption; this exact bound cannot grow and shrinks when the function is split."
-    },
-    "src/encode.zig:Encoder": {
-      "lines": 651,
-      "reason": "Existing implementation at adoption; this exact bound cannot grow and shrinks when the function is split."
-    },
-    "src/follow.zig:Follower": {
-      "lines": 461,
-      "reason": "Existing implementation at adoption; this exact bound cannot grow and shrinks when the function is split."
-    },
-    "src/parse/line.zig:Parser": {
-      "lines": 283,
-      "reason": "Existing implementation at adoption; this exact bound cannot grow and shrinks when the function is split."
-    },
-    "src/reader.zig:Reader": {
-      "lines": 396,
-      "reason": "Existing implementation at adoption; this exact bound cannot grow and shrinks when the function is split."
-    },
-    "src/tail.zig:Tail": {
-      "lines": 489,
-      "reason": "Existing implementation at adoption; this exact bound cannot grow and shrinks when the function is split."
-    },
-    "src/versioned.zig:Versioned": {
-      "lines": 130,
-      "reason": "Existing implementation at adoption; this exact bound cannot grow and shrinks when the function is split."
-    },
-    "src/writer.zig:Writer": {
-      "lines": 390,
-      "reason": "Existing implementation at adoption; this exact bound cannot grow and shrinks when the function is split."
-    }
-  },
+  "function_exceptions": {},
   "layout_exceptions": {},
   "docs": {
     "zig build docs -- usage": {

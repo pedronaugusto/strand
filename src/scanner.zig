@@ -14,11 +14,11 @@ pub const Token = std.json.Token;
 pub const TokenType = std.json.TokenType;
 pub const AllocWhen = std.json.AllocWhen;
 pub const Error = error{ SyntaxError, UnexpectedEndOfInput };
-pub const NextError = Error || Allocator.Error || error{BufferUnderrun};
-pub const AllocError = Error || Allocator.Error || error{ValueTooLong};
-pub const PeekError = Error || error{BufferUnderrun};
-pub const SkipError = Error || Allocator.Error;
-pub const AllocIntoArrayListError = AllocError || error{BufferUnderrun};
+pub const NextError = error{ SyntaxError, UnexpectedEndOfInput, OutOfMemory, BufferUnderrun };
+pub const AllocError = error{ SyntaxError, UnexpectedEndOfInput, OutOfMemory, ValueTooLong };
+pub const PeekError = error{ SyntaxError, UnexpectedEndOfInput, BufferUnderrun };
+pub const SkipError = error{ SyntaxError, UnexpectedEndOfInput, OutOfMemory };
+pub const AllocIntoArrayListError = error{ SyntaxError, UnexpectedEndOfInput, OutOfMemory, ValueTooLong, BufferUnderrun };
 
 const Mode = enum { object, array };
 const State = enum {

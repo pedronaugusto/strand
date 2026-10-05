@@ -210,7 +210,7 @@ test "a Writer writes the tag inside the object in both formats, and reads it ba
 }
 
 /// A field that writes and reads itself, inside an arm.
-const Stamp = struct {
+pub const Stamp = struct {
     seconds: u32,
     pub fn jsonStringify(self: Stamp, jw: anytype) !void {
         try jw.print("\"{d}s\"", .{self.seconds});

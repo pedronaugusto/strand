@@ -5,7 +5,7 @@ const Fixture = @import("fixtures.zig").Fixture;
 
 // A hook's output depends on state outside the JSON. Keeping the result
 // must preserve the decision already made, even if that state changes.
-const Stateful = struct {
+pub const Stateful = struct {
     text: []const u8,
     count: u32,
 
@@ -89,7 +89,7 @@ test "Follower keep preserves edits and stateful parsing and migration" {
     try keepParsed(.follower);
 }
 
-const LastData = struct {
+pub const LastData = struct {
     text: []const u8,
     fallback: []const u8 = "default",
     raw: strand.Raw,

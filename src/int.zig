@@ -19,7 +19,7 @@
 
 const std = @import("std");
 
-pub const Error = std.fmt.ParseIntError || std.fmt.ParseFloatError || error{InvalidNumber};
+pub const Error = error{ InvalidCharacter, Overflow, InvalidNumber };
 
 /// `slice` — a JSON number token, or the contents of a string read as one —
 /// as a `T`.

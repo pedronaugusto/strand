@@ -56,13 +56,6 @@
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
-    "rule": "Z012",
-    "path": "src/codec_test.zig",
-    "source": "pub fn jsonStringify(self: Custom, jw: anytype) !void {",
-    "detail": "public function exposes private type 'Custom'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
     "rule": "Z006",
     "path": "src/codec_test.zig",
     "source": "const T = case[0];",
@@ -217,20 +210,6 @@
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
-    "rule": "Z012",
-    "path": "src/versioned_test.zig",
-    "source": "pub fn jsonlMigrate(",
-    "detail": "public function exposes private type 'Event'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z012",
-    "path": "src/versioned_test.zig",
-    "source": "pub fn jsonlMigrate(allocator: Allocator, from: u32, data: std.json.Value) std.json.ParseFromValueError!Wide {",
-    "detail": "public function exposes private type 'Wide'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
     "rule": "Z020",
     "path": "src/versioned_test.zig",
     "source": "pub fn jsonlMigrate(_: Allocator, from: u32, _: std.json.Value) std.json.ParseFromValueError!@This() {",
@@ -249,27 +228,6 @@
     "path": "src/follow.zig",
     "source": "fn closePath(context: *anyopaque, io: std.Io, file: std.Io.File) void {",
     "detail": "'Io' parameter should come before 'other'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z012",
-    "path": "src/follow.zig",
-    "source": "pub fn eql(a: Taken, b: Taken) bool {",
-    "detail": "public function exposes private type 'Taken'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z012",
-    "path": "src/follow.zig",
-    "source": "pub fn eql(a: Taken, b: Taken) bool {",
-    "detail": "public function exposes private type 'Taken'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z012",
-    "path": "src/follow.zig",
-    "source": "pub fn take(self: Identity, io: std.Io, file: std.Io.File) !Taken {",
-    "detail": "public function exposes private type 'Taken'",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
@@ -319,13 +277,6 @@
     "path": "src/codec.zig",
     "source": "const values = @import(\"value_api.zig\").Values(encode);",
     "detail": "inline @import; assign to a top-level const",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z012",
-    "path": "src/testing/fuzz_test.zig",
-    "source": "pub fn jsonlMigrate(",
-    "detail": "public function exposes private type 'Versioned2'",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
@@ -445,27 +396,6 @@
     "path": "src/member_scan.zig",
     "source": "const V = @Vector(64, u8);",
     "detail": "variable 'V' should be snake_case",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z012",
-    "path": "src/testing/keep_test.zig",
-    "source": "pub fn jsonParse(allocator: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) !Stateful {",
-    "detail": "public function exposes private type 'Stateful'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z012",
-    "path": "src/testing/keep_test.zig",
-    "source": "pub fn jsonlMigrate(allocator: std.mem.Allocator, from: u32, data: std.json.Value) std.json.ParseFromValueError!Stateful {",
-    "detail": "public function exposes private type 'Stateful'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z012",
-    "path": "src/testing/keep_test.zig",
-    "source": "pub fn jsonParse(a: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) !LastData {",
-    "detail": "public function exposes private type 'LastData'",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
@@ -637,20 +567,6 @@
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
-    "rule": "Z012",
-    "path": "src/tagging_test.zig",
-    "source": "pub fn jsonStringify(self: Stamp, jw: anytype) !void {",
-    "detail": "public function exposes private type 'Stamp'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z012",
-    "path": "src/tagging_test.zig",
-    "source": "pub fn jsonParse(a: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) std.json.ParseError(@TypeOf(source.*))!Stamp {",
-    "detail": "public function exposes private type 'Stamp'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
     "rule": "Z009",
     "path": "src/scanner.zig",
     "source": "//! Complete-input JSON scanner used by strand's typed hot path.",
@@ -658,66 +574,10 @@
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
-    "rule": "Z015",
-    "path": "src/scanner.zig",
-    "source": "pub fn peekNextTokenType(self: *@This()) PeekError!TokenType {",
-    "detail": "public function exposes private error set 'PeekError'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z015",
-    "path": "src/scanner.zig",
-    "source": "pub fn next(self: *@This()) NextError!Token {",
-    "detail": "public function exposes private error set 'NextError'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
     "rule": "Z006",
     "path": "src/scanner.zig",
     "source": "const V = @Vector(width, u8);",
     "detail": "variable 'V' should be snake_case",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z015",
-    "path": "src/scanner.zig",
-    "source": "pub fn nextAlloc(self: *@This(), allocator: Allocator, when: AllocWhen) AllocError!Token {",
-    "detail": "public function exposes private error set 'AllocError'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z015",
-    "path": "src/scanner.zig",
-    "source": "pub fn nextAllocMax(self: *@This(), allocator: Allocator, when: AllocWhen, max: usize) AllocError!Token {",
-    "detail": "public function exposes private error set 'AllocError'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z015",
-    "path": "src/scanner.zig",
-    "source": "pub fn allocNextIntoArrayList(self: *@This(), list: *std.array_list.Managed(u8), when: AllocWhen) AllocIntoArrayListError!?[]const u8 {",
-    "detail": "public function exposes private error set 'AllocIntoArrayListError'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z015",
-    "path": "src/scanner.zig",
-    "source": "pub fn allocNextIntoArrayListMax(self: *@This(), list: *std.array_list.Managed(u8), when: AllocWhen, max: usize) AllocIntoArrayListError!?[]const u8 {",
-    "detail": "public function exposes private error set 'AllocIntoArrayListError'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z015",
-    "path": "src/scanner.zig",
-    "source": "pub fn skipValue(self: *@This()) SkipError!void {",
-    "detail": "public function exposes private error set 'SkipError'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z015",
-    "path": "src/scanner.zig",
-    "source": "pub fn skipUntilStackHeight(self: *@This(), terminal: usize) NextError!void {",
-    "detail": "public function exposes private error set 'NextError'",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
@@ -893,20 +753,6 @@
     "path": "src/scanner.zig",
     "source": "pub fn skipUntilStackHeight(self: *@This(), terminal: usize) NextError!void {",
     "detail": "inline @This(); assign it to `const Self = @This();`",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z015",
-    "path": "src/int.zig",
-    "source": "pub fn fromSlice(comptime T: type, slice: []const u8) Error!T {",
-    "detail": "public function exposes private error set 'Error'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z015",
-    "path": "src/int.zig",
-    "source": "pub fn fromFloat(comptime T: type, float: f128) Error!T {",
-    "detail": "public function exposes private error set 'Error'",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {

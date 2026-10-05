@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Name the scanner token and allocation error sets as public error sets, and name integer conversion failures as public `int.Error`. Qualify file identity results as public `Identity.Taken`. Expose custom JSON hook fixture types to match their public signatures.
+
 - Share the Zig CI gate through preflight, with requested fast runs and full merge checks.
 
 - Keep the Raw codec in `src/raw.zig` and its tests in `src/raw_test.zig`, and test support in `src/testing/`; name adjacent test files `_test.zig`.

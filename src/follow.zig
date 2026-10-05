@@ -159,7 +159,7 @@ pub const Identity = union(enum) {
 
         /// Whether these are the same file. Two fingerprints settle it; with
         /// fewer than two, the number and the volume do.
-        pub fn eql(a: Taken, b: Taken) bool {
+        pub fn eql(a: Identity.Taken, b: Identity.Taken) bool {
             if (a.fingerprint) |mine| {
                 if (b.fingerprint) |yours| return mine == yours;
             }
@@ -169,7 +169,7 @@ pub const Identity = union(enum) {
 
     /// What `file` is, now. The handle must be open for reading: asking a
     /// file's attributes is read access, and so is reading its first bytes.
-    pub fn take(self: Identity, io: std.Io, file: std.Io.File) !Taken {
+    pub fn take(self: Identity, io: std.Io, file: std.Io.File) !Identity.Taken {
         const id = try FileId.of(file.handle);
         switch (self) {
             .file_id => return .{ .id = id },

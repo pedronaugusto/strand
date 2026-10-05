@@ -45,7 +45,7 @@ const Event = struct {
 };
 
 /// A record with integers `std.json` can panic on casting into.
-const Wide = struct {
+pub const Wide = struct {
     id: u128,
     count: u64 = 0,
 

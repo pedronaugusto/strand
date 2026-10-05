@@ -432,7 +432,7 @@ test "a whole number std.json cannot cast is read as the number it is, or refuse
 //=========================================================================
 
 /// A type with its own `jsonStringify`, which is handed to `std.json`.
-const Custom = struct {
+pub const Custom = struct {
     n: u8,
     pub fn jsonStringify(self: Custom, jw: anytype) !void {
         try jw.write(.{ .custom = self.n });

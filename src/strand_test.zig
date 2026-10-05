@@ -1905,6 +1905,7 @@ const Draining = struct {
 
     fn deinit(self: *Draining) void {
         self.written.deinit(testing.allocator);
+        self.* = undefined;
     }
 
     fn drain(io_writer: *std.Io.Writer, data: []const []const u8, splat: usize) std.Io.Writer.Error!usize {

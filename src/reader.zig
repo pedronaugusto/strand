@@ -456,6 +456,7 @@ const PrettyEnd = struct {
 
     fn deinit(self: *PrettyEnd) void {
         self.scanner.deinit();
+        self.* = undefined;
     }
 
     /// Follows `record`, whose front is what was followed before, to its end

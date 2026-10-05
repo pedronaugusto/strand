@@ -98,13 +98,6 @@
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
-    "rule": "Z030",
-    "path": "src/reader.zig",
-    "source": "fn deinit(self: *PrettyEnd) void {",
-    "detail": "deinit should set self.* = undefined",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
     "rule": "Z028",
     "path": "src/reader.zig",
     "source": "return @import(\"owned.zig\").copyOwned(allocator, line.value);",
@@ -291,13 +284,6 @@
     "path": "src/strand_test.zig",
     "source": "try testing.expectEqual(@as(?usize, null), std.mem.indexOf(u8, left_out.written(), \"note\"));",
     "detail": "'indexOf' is deprecated: Deprecated in favor of `find`.",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z030",
-    "path": "src/strand_test.zig",
-    "source": "fn deinit(self: *Draining) void {",
-    "detail": "deinit should set self.* = undefined",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
@@ -774,13 +760,6 @@
     "path": "src/sync.zig",
     "source": "pub fn syncDir(dir: std.Io.Dir, io: std.Io) SyncError!?SyncKind {",
     "detail": "'Io' parameter should come before 'other'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z017",
-    "path": "src/sync.zig",
-    "source": "return try syncFile(.{ .handle = dir.handle, .flags = .{ .nonblocking = false } }, io, .all);",
-    "detail": "avoid try in return; hoist it to preserve payload coercion: `const value = try syncFile(.{; return value;`",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {

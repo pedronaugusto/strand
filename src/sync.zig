@@ -130,7 +130,8 @@ pub fn syncDir(dir: std.Io.Dir, io: std.Io) SyncError!?SyncKind {
             }
         }
     }
-    return try syncFile(.{ .handle = dir.handle, .flags = .{ .nonblocking = false } }, io, .all);
+    const kind = try syncFile(.{ .handle = dir.handle, .flags = .{ .nonblocking = false } }, io, .all);
+    return kind;
 }
 
 /// A sync's failure as `std.Io.File.sync` names it.

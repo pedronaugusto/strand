@@ -4,7 +4,7 @@
 //! the integer (`int.zig`), which `std.json` can panic on, and vectors,
 //! which accept the byte strings its encoder writes; everything else
 //! it does not walk itself is delegated to `std.json.innerParse`.
-const work_module = @import("testing/work.zig");
+const work_module = @import("work.zig");
 
 const std = @import("std");
 const Scanner = @import("Scanner.zig");

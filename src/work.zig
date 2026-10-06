@@ -1,5 +1,7 @@
-//! Internal work counts for tests. The observer belongs to the test that
-//! installs it; each thread has its own, and consumer builds contain no calls.
+//! Internal work counts, which tests read to hold the hot paths to the work
+//! they claim. The observer belongs to the test that installs it, and each
+//! thread has its own. Outside test builds the calls compile to nothing; a
+//! consumer's own test build pays one thread-local load per call.
 const builtin = @import("builtin");
 
 pub const Counts = struct {

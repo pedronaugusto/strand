@@ -724,17 +724,20 @@ pub fn Follower(comptime T: type) type {
 //=========================================================================
 
 const testing = std.testing;
-const fixtures = @import("testing/fixtures.zig");
-const Event = fixtures.Event;
-const Fixture = fixtures.Fixture;
 
 test "a rotated follower checkpoints the identity it adopted before reading" {
-    var fixture = try Fixture.init("{\"kind\":\"old\"}\n", 8);
-    defer fixture.deinit();
-    try fixture.tmp.dir.writeFile(testing.io, .{ .sub_path = "new.jsonl", .data = "{\"kind\":\"new\"}\n" });
-    var path: PathOpener = .{ .dir = fixture.tmp.dir, .sub_path = "new.jsonl" };
+    const Event = struct { kind: []const u8 };
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "log.jsonl", .data = "{\"kind\":\"old\"}\n" });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "new.jsonl", .data = "{\"kind\":\"new\"}\n" });
+    const file = try tmp.dir.openFile(testing.io, "log.jsonl", .{});
+    defer file.close(testing.io);
+    var buffer: [8]u8 = undefined;
+    var source = file.reader(testing.io, &buffer);
+    var path: PathOpener = .{ .dir = tmp.dir, .sub_path = "new.jsonl" };
     const identity: Identity = .{ .fingerprint = .{ .length = 14 } };
-    var follower = Follower(Event).init(testing.allocator, testing.io, &fixture.reader, .{
+    var follower = Follower(Event).init(testing.allocator, testing.io, &source, .{
         .reopen = path.opener(),
         .identity = identity,
     });
@@ -742,12 +745,12 @@ test "a rotated follower checkpoints the identity it adopted before reading" {
     // Exercise the two operations inside one next call after its wait,
     // without a second next entry capturing the identity again.
     try follower.rotate(path.opener(), false);
-    const adopted = try identity.take(testing.io, fixture.reader.file);
+    const adopted = try identity.take(testing.io, source.file);
     try testing.expectEqualStrings("new", (try follower.reader.next()).?.value.kind);
     // An in-place rewrite after that read cannot change what the follower
     // says it has already consumed, even when the native id stays the same.
-    try fixture.tmp.dir.writeFile(testing.io, .{ .sub_path = "new.jsonl", .data = "{\"kind\":\"now\"}\n" });
-    const rewritten = try identity.take(testing.io, fixture.reader.file);
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "new.jsonl", .data = "{\"kind\":\"now\"}\n" });
+    const rewritten = try identity.take(testing.io, source.file);
     try testing.expect(!adopted.eql(rewritten));
     const point = try follower.checkpoint();
     try testing.expect(adopted.eql(point.file));

@@ -2,7 +2,7 @@
 const codec_module = @import("codec.zig");
 const reader_module = @import("line/reader.zig");
 const owned_module = @import("owned.zig");
-const work_module = @import("testing/work.zig");
+const work_module = @import("work.zig");
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;

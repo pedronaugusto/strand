@@ -2,7 +2,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const work = @import("testing/work.zig");
+const work = @import("work.zig");
 
 /// The offset of the first byte in `bytes` that must not appear raw in a JSON
 /// Lines line, or `null`.

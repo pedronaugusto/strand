@@ -4,7 +4,7 @@
 //! removes token construction between a contiguous JSON line and the same
 //! reflected field rules. `Raw` has a `jsonParse` for that path and is read
 //! here directly: skipping a value checks it, and what was skipped is kept.
-const work_module = @import("testing/work.zig");
+const work_module = @import("work.zig");
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;

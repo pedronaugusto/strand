@@ -1,5 +1,4 @@
 //! A sync that is the call each platform means by one.
-const fixtures_module = @import("testing/fixtures.zig");
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -147,13 +146,16 @@ fn failure(e: anytype) SyncError {
 }
 
 test syncFile {
-    var fixture = try fixtures_module.Fixture.init("{\"kind\":\"one\"}\n", 64);
-    defer fixture.deinit();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "log.jsonl", .data = "{\"kind\":\"one\"}\n" });
+    const file = try tmp.dir.openFile(std.testing.io, "log.jsonl", .{ .mode = .write_only });
+    defer file.close(std.testing.io);
 
     // A sync is the strongest call the platform has, and on the two platforms
     // where that is not what `std` calls a sync, this is the test that the
     // other one is what was asked for.
-    const kind = try syncFile(std.testing.io, fixture.write_file, .data);
+    const kind = try syncFile(std.testing.io, file, .data);
     const expected: SyncKind = switch (builtin.os.tag) {
         .linux => .data,
         else => if (builtin.os.tag.isDarwin()) .full else .plain,
@@ -162,7 +164,7 @@ test syncFile {
 
     // Everything, timestamps included, is the ordinary call where the
     // ordinary call is the whole of it, and still the strongest on Darwin.
-    const all = try syncFile(std.testing.io, fixture.write_file, .all);
+    const all = try syncFile(std.testing.io, file, .all);
     try std.testing.expectEqual(@as(SyncKind, if (builtin.os.tag.isDarwin()) .full else .plain), all);
 
     // What was asked for is what a filesystem that takes it answers.

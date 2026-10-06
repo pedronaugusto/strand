@@ -59,6 +59,10 @@ pub fn Reader(comptime T: type) type {
             ignore_unknown_fields: bool = true,
             /// See `ParseOptions.duplicate_fields`.
             duplicate_fields: DuplicateFields = .@"error",
+            /// See `ParseOptions.max_depth`. A line nested deeper is
+            /// `error.MalformedLine`, with `error.NestingTooDeep` in
+            /// `lines.fault.err`.
+            max_depth: usize = parse_line.default_max_depth,
             /// The longest JSON payload accepted, in bytes, excluding the
             /// terminator, separator and discarded torn prefix; in `.pretty` mode this bounds the joined record
             /// rather than one physical line. A longer one is
@@ -249,6 +253,7 @@ pub fn Reader(comptime T: type) type {
                     .ignore_unknown_fields = self.options.ignore_unknown_fields,
                     .duplicate_fields = self.options.duplicate_fields,
                     .copy_strings = false,
+                    .max_depth = self.options.max_depth,
                 };
                 // The value is decoded into the `Line` it is handed back in,
                 // not copied into it; `parseLineInto` says what a copy costs.
@@ -306,6 +311,7 @@ pub fn Reader(comptime T: type) type {
                 .ignore_unknown_fields = self.options.ignore_unknown_fields,
                 .duplicate_fields = self.options.duplicate_fields,
                 .copy_strings = false,
+                .max_depth = self.options.max_depth,
             };
             var line: Line(T) = .{
                 .value = undefined,
@@ -425,6 +431,10 @@ pub fn Reader(comptime T: type) type {
         /// Release the result with `freeOwned` on the same allocator, or
         /// release its destination arena as a whole. A failed copy frees
         /// everything it allocated and leaves the source value intact.
+        ///
+        /// The copy recurses once per level of the value. A recursive schema
+        /// read by this reader is no deeper than `Options.max_depth`, which
+        /// is what bounds that recursion too.
         pub fn keep(self: *Self, allocator: Allocator, line: Line(T)) Allocator.Error!T {
             _ = self;
             return owned_module.copyOwned(allocator, line.value);

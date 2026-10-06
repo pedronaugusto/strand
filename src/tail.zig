@@ -133,6 +133,8 @@ pub fn Tail(comptime T: type) type {
             ignore_unknown_fields: bool = true,
             /// See `ParseOptions.duplicate_fields`.
             duplicate_fields: strand.DuplicateFields = .@"error",
+            /// See `ParseOptions.max_depth`.
+            max_depth: usize = codec_module.parser.default_max_depth,
             /// The longest line accepted, in bytes. A longer one is
             /// `error.LineTooLong`, and is discarded whole: `prev` continues
             /// with the line before it. The terminator and a leading
@@ -254,6 +256,7 @@ pub fn Tail(comptime T: type) type {
                 const value = strand.parseLine(T, self.arena.allocator(), raw.line, .{
                     .ignore_unknown_fields = self.options.ignore_unknown_fields,
                     .duplicate_fields = self.options.duplicate_fields,
+                    .max_depth = self.options.max_depth,
                 }) catch |err| switch (err) {
                     error.OutOfMemory => return error.OutOfMemory,
                     else => |parse_err| {

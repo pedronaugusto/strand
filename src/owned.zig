@@ -14,7 +14,10 @@ const Allocator = std.mem.Allocator;
 /// keys and containers, with its arrays using the destination allocator.
 /// JSON parse and stringify hooks are not called.
 ///
-/// The input must be a finite tree of data, as a parsed value is. Repeated
+/// The input must be a finite tree of data, as a parsed value is. The copy
+/// recurses once per level of it, as `freeOwned` does; a recursive schema
+/// parsed by this package is held to `ParseOptions.max_depth`, which bounds
+/// that. Repeated
 /// references are copied separately; cycles and external resources are not
 /// data this operation can own. Unsupported field types, untagged unions,
 /// sentinels holding pointers and comptime fields that hold pointers are

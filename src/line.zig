@@ -58,6 +58,7 @@ pub fn whereItFailed(
         .duplicate_fields = options.duplicate_fields,
         .copy_strings = false,
         .diagnostics = &where,
+        .max_depth = options.max_depth,
     }) catch return where.offset;
     return null;
 }

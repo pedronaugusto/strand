@@ -3255,3 +3255,64 @@ test "a bounded writer completes a raw write with an empty repeated pattern" {
     try testing.expectEqualStrings("true\n", output.written());
     try testing.expectEqual(@as(u64, 1), writer.count);
 }
+
+/// A schema that reaches itself: decoded by recursion, one level per level
+/// of the line.
+pub const Nested = struct { kids: []const Nested = &.{} };
+
+/// `levels` nested `Nested`s as one line.
+fn nestedNesteds(allocator: std.mem.Allocator, levels: usize) ![]u8 {
+    var out: std.Io.Writer.Allocating = .init(allocator);
+    errdefer out.deinit();
+    for (0..levels) |_| try out.writer.writeAll("{\"kids\":[");
+    try out.writer.writeAll("{}");
+    for (0..levels) |_| try out.writer.writeAll("]}");
+    try out.writer.writeByte('\n');
+    return out.toOwnedSlice();
+}
+
+test "a recursive schema nested past max_depth is a malformed line, not a crash" {
+    // Deep enough to overflow the stack were it decoded by recursion, and
+    // well inside the default line bound.
+    const deep = try nestedNesteds(testing.allocator, 50_000);
+    defer testing.allocator.free(deep);
+    const fits = try nestedNesteds(testing.allocator, 200);
+    defer testing.allocator.free(fits);
+    const input = try std.mem.concat(testing.allocator, u8, &.{ deep, fits });
+    defer testing.allocator.free(input);
+
+    for ([_]strand.Format{ .minified, .pretty }) |format| {
+        var source: std.Io.Reader = .fixed(input);
+        var reader: strand.Reader(Nested) = .init(testing.allocator, &source, .{ .format = format });
+        defer reader.deinit();
+        try testing.expectError(error.MalformedLine, reader.next());
+        try testing.expectEqual(@as(?strand.ParseLineError, error.NestingTooDeep), reader.lines.fault.err);
+        try testing.expectEqual(@as(usize, 1), (try reader.next()).?.value.kids.len);
+        try testing.expect(try reader.next() == null);
+    }
+
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    // Each level is an object and an array, and the innermost is an object.
+    const line = fits[0 .. fits.len - 1];
+    try testing.expectError(error.NestingTooDeep, strand.parseLine(Nested, arena.allocator(), line, .{ .max_depth = 400 }));
+    _ = try strand.parseLine(Nested, arena.allocator(), line, .{ .max_depth = 401 });
+    // A schema that does not reach itself is bounded by its shape and is
+    // not held to the depth: `std.json.Value` is read without recursion.
+    _ = try strand.parseLine(std.json.Value, arena.allocator(), deep[0 .. deep.len - 1], .{});
+}
+
+test "a backward read holds a recursive schema to max_depth" {
+    const deep = try nestedNesteds(testing.allocator, 50_000);
+    defer testing.allocator.free(deep);
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "log", .data = deep });
+    const file = try tmp.dir.openFile(testing.io, "log", .{});
+    defer file.close(testing.io);
+    var source = file.reader(testing.io, &.{});
+    var tail = try strand.Tail(Nested).init(testing.allocator, &source, .{});
+    defer tail.deinit();
+    try testing.expectError(error.MalformedLine, tail.prev());
+    try testing.expectEqual(@as(?strand.ParseLineError, error.NestingTooDeep), tail.fault.err);
+}

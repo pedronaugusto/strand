@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A recursive schema, one that reaches itself, is held to `ParseOptions.max_depth` (and `Reader.Options.max_depth`, `Tail.Options.max_depth`), 512 levels of arrays and objects by default: a line nested deeper is `error.NestingTooDeep`, which a reader reports as `MalformedLine`. One deeply nested line inside the default line bound overflowed the stack. `ParseLineError` gains `NestingTooDeep`.
+
 - `Writer.write` publishes a record whole: one that fails partway leaves nothing in the destination, where the next record was appended to its bytes and lost with them. A record that fails after outgrowing the destination's buffer sets `torn`, and the next record starts on a line of its own.
 
 - A line refused as too long that the stream ended inside is discarded to its end when the rest arrives. A `Follower` read its tail as a malformed line, misplaced the next record and read the refused line again.

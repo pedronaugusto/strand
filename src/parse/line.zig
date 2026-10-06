@@ -35,7 +35,22 @@ pub fn Parser(comptime decode: type) type {
             /// Asking costs the scan a little bookkeeping per line, which is why the
             /// readers ask only about a line that has already failed.
             diagnostics: ?*Diagnostics = null,
+            /// The deepest a line may nest its arrays and objects when `T` is
+            /// a recursive schema, one that reaches itself through a pointer
+            /// or slice. Such a `T` is decoded by recursion, one stack frame
+            /// or more per level, so a line nested deeper than the stack can
+            /// hold would take the process down; past this depth the line is
+            /// `error.NestingTooDeep` instead. A `T` that does not reach itself
+            /// is bounded by its own shape and is not checked, nor is
+            /// `std.json.Value`, which is read without recursion.
+            ///
+            /// The same bound covers `copyOwned` and `freeOwned` of a value
+            /// read this way, which walk it by recursion too.
+            max_depth: usize = default_max_depth,
         };
+
+        /// The default `ParseOptions.max_depth`.
+        pub const default_max_depth = 512;
 
         /// How far into a line `std.json` got.
         ///
@@ -67,7 +82,10 @@ pub fn Parser(comptime decode: type) type {
         /// Everything `std.json` can report about a line whose bytes are already in
         /// memory. `error.OutOfMemory` is the allocator's; every other member means
         /// the line did not describe a `T`.
-        pub const ParseLineError = std.json.ParseError(std.json.Scanner);
+        ///
+        /// `error.NestingTooDeep` is `ParseOptions.max_depth`, for a
+        /// recursive `T`.
+        pub const ParseLineError = std.json.ParseError(std.json.Scanner) || error{NestingTooDeep};
 
         /// Parses one line's bytes as a `T`.
         ///
@@ -125,6 +143,12 @@ pub fn Parser(comptime decode: type) type {
                 }
                 return error.SyntaxError;
             }
+            if (comptime recursive(T)) {
+                if (!nestsWithin(line, options.max_depth)) {
+                    if (options.diagnostics) |where| where.* = .{ .offset = line.len };
+                    return error.NestingTooDeep;
+                }
+            }
             if (options.diagnostics) |where| {
                 out.* = try parseDiagnosed(T, allocator, line, options, where);
                 return;
@@ -164,6 +188,9 @@ pub fn Parser(comptime decode: type) type {
             out: *T,
         ) ParseLineError!usize {
             comptime std.debug.assert(decode.supports(T));
+            if (comptime recursive(T)) {
+                if (!nestsWithin(bytes, options.max_depth)) return error.NestingTooDeep;
+            }
             return decode.parsePrefixInto(T, allocator, bytes, jsonOptions(options, bytes.len), out);
         }
 
@@ -196,6 +223,67 @@ pub fn Parser(comptime decode: type) type {
                 .column = where.getColumn(),
             };
             return parsed;
+        }
+
+        /// Whether `T` reaches itself, which is what makes decoding it
+        /// recursive in the depth of the line rather than of the type.
+        pub fn recursive(comptime T: type) bool {
+            comptime {
+                @setEvalBranchQuota(1_000_000);
+                return reachesItself(T, .{});
+            }
+        }
+
+        fn reachesItself(comptime T: type, comptime ancestors: anytype) bool {
+            inline for (ancestors) |ancestor| if (T == ancestor) return true;
+            if (T == std.json.Value) return false;
+            const next = ancestors ++ .{T};
+            return switch (@typeInfo(T)) {
+                .optional => |i| reachesItself(i.child, next),
+                .array => |i| reachesItself(i.child, next),
+                .vector => |i| reachesItself(i.child, next),
+                .pointer => |i| reachesItself(i.child, next),
+                .@"struct" => |i| fields: {
+                    for (i.fields) |field| if (reachesItself(field.type, next)) break :fields true;
+                    break :fields false;
+                },
+                .@"union" => |i| fields: {
+                    for (i.fields) |field| if (reachesItself(field.type, next)) break :fields true;
+                    break :fields false;
+                },
+                else => false,
+            };
+        }
+
+        /// Whether `bytes` nest their arrays and objects no deeper than
+        /// `max`. Brackets inside strings are not nesting. Ill-formed JSON
+        /// is left to the parse to name.
+        fn nestsWithin(bytes: []const u8, max: usize) bool {
+            var depth: usize = 0;
+            var in_string = false;
+            var escaped = false;
+            for (bytes) |byte| {
+                if (in_string) {
+                    if (escaped) {
+                        escaped = false;
+                    } else switch (byte) {
+                        '\\' => escaped = true,
+                        '"' => in_string = false,
+                        else => {},
+                    }
+                    continue;
+                }
+                switch (byte) {
+                    '"' => in_string = true,
+                    '{', '[' => {
+                        depth += 1;
+                        if (depth > max) return false;
+                    },
+                    '}', ']' => depth -|= 1,
+                    else => {},
+                }
+            }
+            return true;
         }
 
         /// This package's parse options as `std.json`'s.

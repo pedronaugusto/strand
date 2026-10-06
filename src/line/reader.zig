@@ -102,6 +102,11 @@ pub const LineReader = struct {
     record_offset: u64 = 0,
     /// Internal. How many physical lines preceded the current record.
     record_number: u64 = 0,
+    /// Internal. Set while the rest of a line refused as too long has yet to
+    /// arrive: the stream ended inside it. The next read discards up to its
+    /// `\n` before it frames anything, so the tail of the refused line is
+    /// never read as a line of its own.
+    discarding: bool = false,
     /// Internal. The `oversized_member` of the line last refused as too
     /// long; see `oversizedMember`.
     oversized: [max_oversized_member_bytes]u8 = undefined,
@@ -284,7 +289,16 @@ pub const LineReader = struct {
     /// file back to `recordStart()` and resetting to it; a file that was
     /// truncated is read again from the top by seeking it to 0 and resetting
     /// to `.{}`. `Follower` does both.
+    ///
+    /// A line refused as too long that the stream ended inside is still
+    /// discarded to its end after a reset to `recordStart()`, which is where
+    /// the reader stands then; a reset to any other place forgets it.
     pub fn reset(self: *LineReader, start: Start) void {
+        // The rest of a refused line is still owed by the stream only when
+        // the reader is put back where it stands. Anywhere else is a
+        // different place in the file, or a different file.
+        self.discarding = self.discarding and
+            start.offset == self.consumed and start.lines_before == self.number;
         self.line_buf.writer.end = 0;
         self.number = start.lines_before;
         self.offset = start.offset;
@@ -316,30 +330,13 @@ pub const LineReader = struct {
     fn refuseOversized(self: *LineReader, comptime rest: enum { whole, discard }, kept: []const u8) error{ReadFailed}!u64 {
         const name = self.options.oversized_member orelse {
             self.oversized_len = null;
-            return if (rest == .discard) self.discardLine() else 0;
+            return if (rest == .discard) self.discardLine(null) else 0;
         };
         var scan: MemberScan = .init(name);
         scan.feed(kept);
-        const discarded: u64 = if (rest == .discard) discarded: {
-            var n: u64 = 0;
-            while (true) {
-                const available = self.input.peekGreedy(1) catch |err| switch (err) {
-                    error.ReadFailed => return error.ReadFailed,
-                    // The over-long line was the last one, with no terminator.
-                    error.EndOfStream => break :discarded 0,
-                };
-                if (std.mem.findScalar(u8, available, '\n')) |at| {
-                    scan.feed(available[0..at]);
-                    self.input.toss(at + 1);
-                    break :discarded n + at + 1;
-                }
-                scan.feed(available);
-                self.input.toss(available.len);
-                n += available.len;
-            }
-        } else 0;
-        // Counting is `discardLine`'s: the bytes up to the terminator and the
-        // terminator, and nothing for a line the stream ended inside.
+        const discarded: u64 = if (rest == .discard) try self.discardLine(&scan) else 0;
+        // A line the stream ended inside is scanned as far as it goes: the
+        // error is reported now, and what arrives later is only discarded.
         if (scan.finish()) |value| {
             @memcpy(self.oversized[0..value.len], value);
             self.oversized_len = @intCast(value.len);
@@ -419,6 +416,10 @@ pub const LineReader = struct {
     /// a line, and leave the stream wherever they found it.
     pub fn next(self: *LineReader) NextError!?RawLine {
         self.unfinished = false;
+        if (self.discarding and !try self.finishDiscard()) {
+            self.unfinished = true;
+            return null;
+        }
         while (true) {
             self.line_buf.writer.end = 0;
 
@@ -748,9 +749,8 @@ pub const LineReader = struct {
                 self.fault.framing(self.number);
                 self.offset = self.record_offset;
                 self.consumed += self.line_buf.writer.end - before;
-                const discarded = try self.refuseOversized(.discard, self.line_buf.written());
-                self.consumed += discarded;
-                self.unfinished = discarded == 0;
+                self.consumed += try self.refuseOversized(.discard, self.line_buf.written());
+                self.unfinished = self.discarding;
                 return error.LineTooLong;
             },
         };
@@ -925,15 +925,40 @@ pub const LineReader = struct {
     }
 
     /// Discards the remainder of an over-long line, terminator included,
-    /// and says how many bytes that was. An over-long line with no
-    /// terminator ends the stream, so what it discarded is not counted:
-    /// there is no offset after it to be wrong.
-    fn discardLine(self: *LineReader) error{ReadFailed}!u64 {
-        return self.input.discardDelimiterInclusive('\n') catch |err| switch (err) {
-            // The over-long line was the last one, with no terminator.
-            error.EndOfStream => 0,
-            error.ReadFailed => error.ReadFailed,
-        };
+    /// feeding it to `scan` when there is one, and says how many bytes that
+    /// was. A stream that ends first leaves `discarding` set, so the rest of
+    /// the line is discarded when it arrives rather than read as a line.
+    fn discardLine(self: *LineReader, scan: ?*MemberScan) error{ReadFailed}!u64 {
+        var n: u64 = 0;
+        while (true) {
+            const available = self.input.peekGreedy(1) catch |err| switch (err) {
+                error.ReadFailed => return error.ReadFailed,
+                error.EndOfStream => {
+                    self.discarding = true;
+                    return n;
+                },
+            };
+            if (std.mem.findScalar(u8, available, '\n')) |at| {
+                if (scan) |member| member.feed(available[0..at]);
+                self.input.toss(at + 1);
+                self.discarding = false;
+                return n + at + 1;
+            }
+            if (scan) |member| member.feed(available);
+            self.input.toss(available.len);
+            n += available.len;
+        }
+    }
+
+    /// Discards what is left of a refused line the stream ended inside.
+    /// False when the stream ends again first; the reader then stands where
+    /// the discard stopped, which is what `recordStart` says.
+    fn finishDiscard(self: *LineReader) error{ReadFailed}!bool {
+        self.consumed += try self.discardLine(null);
+        if (!self.discarding) return true;
+        self.record_offset = self.consumed;
+        self.record_number = self.number;
+        return false;
     }
 };
 

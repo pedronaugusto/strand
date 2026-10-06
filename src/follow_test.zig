@@ -136,6 +136,63 @@ test "a half-written line is not a line until it is finished" {
     try testing.expectEqual(@as(u64, 2), second.number);
 }
 
+/// An over-long record the writer has written only part of: the follower
+/// meets the end of the file inside the line it refused.
+const torn_long_head = "{\"kind\":\"" ++ "a" ** 45;
+const torn_long_tail = "aaa\"}\n{\"kind\":\"b\"}\n";
+
+test "an over-long line finished after it was refused is not read twice" {
+    var fixture = try Fixture.init(torn_long_head, 512);
+    defer fixture.deinit();
+
+    var follower: Follower(Event) = .init(testing.allocator, testing.io, &fixture.reader, .{
+        .reader = .{ .max_line_bytes = 16 },
+        .wait = .{ .poll = .fromMicroseconds(100) },
+    });
+    defer follower.deinit();
+
+    try testing.expectError(error.LineTooLong, follower.next());
+    try fixture.write_file.writePositionalAll(testing.io, torn_long_tail, torn_long_head.len);
+
+    const line = try follower.next();
+    try testing.expectEqualStrings("b", line.value.kind);
+    try testing.expectEqual(@as(u64, 2), line.number);
+    try testing.expectEqual(@as(u64, torn_long_head.len + "aaa\"}\n".len), line.offset);
+    // Nothing else is on the file: the refused line is not read again.
+    try testing.expectEqual(@as(?strand.Line(Event), null), try follower.reader.next());
+    try testing.expectEqual(@as(u64, 0), follower.reader.lines.skipped);
+}
+
+test "an over-long line finished while the follower waits is not read twice" {
+    var fixture = try Fixture.init(torn_long_head, 512);
+    defer fixture.deinit();
+
+    var follower: Follower(Event) = .init(testing.allocator, testing.io, &fixture.reader, .{
+        .reader = .{ .max_line_bytes = 16 },
+        .wait = .{ .poll = .fromMicroseconds(100) },
+    });
+    defer follower.deinit();
+    try testing.expectError(error.LineTooLong, follower.next());
+
+    const Next = struct {
+        fn run(active: *Follower(Event)) !void {
+            const line = try active.next();
+            try testing.expectEqualStrings("b", line.value.kind);
+            try testing.expectEqual(@as(u64, 2), line.number);
+            try testing.expectEqual(@as(u64, torn_long_head.len + "aaa\"}\n".len), line.offset);
+        }
+    };
+    var task = testing.io.concurrent(Next.run, .{&follower}) catch |err| switch (err) {
+        error.ConcurrencyUnavailable => return error.SkipZigTest,
+    };
+    // The follower reaches the end inside the refused line, rewinds to where
+    // it stands and waits; the rest of the line and a whole one arrive.
+    try testing.io.sleep(.fromMilliseconds(10), .awake);
+    try fixture.write_file.writePositionalAll(testing.io, torn_long_tail, torn_long_head.len);
+    try task.await(testing.io);
+    try testing.expectEqual(@as(?strand.Line(Event), null), try follower.reader.next());
+}
+
 test "a follower still recognizes a byte-order mark after starting empty" {
     var fixture = try Fixture.init("", 512);
     defer fixture.deinit();

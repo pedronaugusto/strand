@@ -6,7 +6,7 @@
     "src/tests.zig"
   ],
   "test_support": [
-    "src/testing/*"
+    "src/testing/**"
   ],
   "function_exceptions": {
     "src/raw.zig:RawType": {

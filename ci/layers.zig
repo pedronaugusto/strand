@@ -32,7 +32,6 @@ pub const layers: []const gantry.rules.Layer = &.{
     .{ .name = "codec assembly", .patterns = &.{
         "src/codec.zig",
     } },
-    .{ .name = "codec interfaces", .patterns = &.{} },
     .{ .name = "records", .patterns = &.{
         "src/line.zig",
     } },
@@ -49,26 +48,6 @@ pub const layers: []const gantry.rules.Layer = &.{
     } },
     .{ .name = "public", .patterns = &.{
         "src/strand.zig",
-    } },
-    .{ .name = "scenarios", .patterns = &.{
-        "src/testing/fixtures.zig",
-        "src/testing/owned_rejected.zig",
-        "src/codec_test.zig",
-        "src/follow_test.zig",
-        "src/from_value_test.zig",
-        "src/testing/keep_test.zig",
-        "src/owned_test.zig",
-        "src/raw_test.zig",
-        "src/tagging_test.zig",
-        "src/tail_test.zig",
-        "src/strand_test.zig",
-        "src/versioned_test.zig",
-    } },
-    .{ .name = "properties", .patterns = &.{
-        "src/testing/fuzz_test.zig",
-    } },
-    .{ .name = "tests", .patterns = &.{
-        "src/tests.zig",
     } },
 };
 

@@ -155,17 +155,10 @@ pub fn build(b: *std.Build) void {
     if (b.pkg_hash.len != 0) return;
     if (b.lazyImport(@This(), "preflight")) |preflight| {
         preflight.addCi(b, .{ .tests = test_step, .portable_tests = true });
+        // A project that depends on strand by path, with no packages to
+        // fetch: the build a consumer gets.
+        preflight.addConsumerCheck(b, .{ .package = "strand", .program = b.path("ci/consumer.zig") });
     }
-
-    // A project that depends on strand by path, built with an empty package
-    // directory, so nothing strand fetches for itself can be reached. It is
-    // the build a consumer gets.
-    const consumer = b.addSystemCommand(&.{ b.graph.zig_exe, "build", "--system" });
-    consumer.addDirectoryArg(b.addWriteFiles().add("README", "No packages.\n").dirname());
-    consumer.setCwd(b.path("ci/consumer"));
-    consumer.has_side_effects = true;
-    consumer.expectExitCode(0);
-    b.step("check-consumer", "Build a project that depends on strand, with no packages fetched").dependOn(&consumer.step);
 }
 
 /// Every example, listed rather than globbed: a build graph that scans a

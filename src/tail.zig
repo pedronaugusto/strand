@@ -36,6 +36,123 @@ const line_mod = @import("line.zig");
 const Fault = line_mod.Fault;
 const Line = strand.Line;
 
+/// The policy types of every `Tail`, whatever its record type: shared,
+/// so that options and errors mean the same thing across instantiations.
+const shared = struct {
+    /// Reading and parsing policy, fixed at `init`.
+    ///
+    /// The same policy as `Reader.Options`, minus the two settings a
+    /// backwards read cannot honour.
+    ///
+    /// **`require_terminator`** is absent because a file being appended
+    /// to is `Follower`'s job, not this one's.
+    ///
+    /// **`format`** is absent because joining lines needs an answer to
+    /// "is this the whole of a value, or only part of one", and there is
+    /// one answer only going forwards. `Reader` in `.pretty` mode joins
+    /// on `error.UnexpectedEndOfInput`, which `std.json` gives when a
+    /// value is cut off at the end: a definite signal, and the only
+    /// failure that means "the rest is on the next line". Backwards there
+    /// is no mirror of it. `std.json` has no notion of a valid *tail* of
+    /// a value, so a lone `}` is a syntax error exactly as `not json` is,
+    /// and a backwards join would have to treat every failure as "not the
+    /// beginning yet" and keep prepending lines.
+    ///
+    /// That is sound on a file this package wrote — no line-aligned
+    /// proper suffix of an indented record is itself a complete value,
+    /// because such a suffix starts inside a container and so carries
+    /// unmatched closing brackets — and it is unbounded on anything else.
+    /// One damaged line would prepend until `max_line_bytes`: with the
+    /// default megabyte over thirty-byte lines, tens of thousands of
+    /// parse attempts over ever longer slices, ending in one malformed
+    /// record that has swallowed every good record inside it. Forwards, a
+    /// syntax error costs exactly one line. `Tail` exists to be cheap and
+    /// to survive a log damaged at its end, and a `.pretty` mode would
+    /// give up both.
+    ///
+    /// The cheap way out would be counting brackets backwards instead of
+    /// parsing, and it needs to know whether a `"` opens a string or
+    /// closes one — a fact about everything to the left of it. Which is
+    /// to say: finding where a multi-line record begins means parsing
+    /// forwards.
+    pub const Options = struct {
+        /// See `ParseOptions.ignore_unknown_fields`.
+        ignore_unknown_fields: bool = true,
+        /// See `ParseOptions.duplicate_fields`.
+        duplicate_fields: strand.DuplicateFields = .@"error",
+        /// See `ParseOptions.max_depth`.
+        max_depth: usize = codec_module.parser.default_max_depth,
+        /// The longest line accepted, in bytes. A longer one is
+        /// `error.LineTooLong`, and is discarded whole: `prev` continues
+        /// with the line before it. The terminator and a leading
+        /// byte-order mark are excluded. In separator mode only the JSON
+        /// payload counts: the separator and discarded torn prefix do not.
+        max_line_bytes: usize = 1 << 20,
+        /// When true, a line that is empty or all spaces and tabs is
+        /// passed over. Its number is still counted.
+        skip_blank: bool = true,
+        /// See `Reader.Options.reject_control_bytes`.
+        reject_control_bytes: bool = true,
+        /// See `Reader.Options.record_separator`. A backwards read
+        /// treats a line the same way a forwards one does: the record is
+        /// what follows the first separator on it, and a line with none
+        /// is `error.MissingSeparator`. The discarded prefix can be any
+        /// length without growing the retained payload buffer.
+        record_separator: bool = false,
+        /// When true, a UTF-8 byte-order mark at the very start of the
+        /// file is not part of the first line — which a backwards read
+        /// only ever meets last.
+        skip_bom: bool = true,
+        /// See `Reader.Options.on_malformed`.
+        on_malformed: enum { fail, skip } = .fail,
+        /// See `LineReader.Options.crlf`.
+        crlf: bool = true,
+        /// Where the file ends for this reader: its length when `null`.
+        /// A log that reserves space ahead of its records — zeros a
+        /// writer has not filled yet — reads back from where its
+        /// records end. Past the file's length is `error.Truncated`.
+        end: ?u64 = null,
+        /// How many bytes one read asks the file for. The buffer holds
+        /// one of these plus the line being assembled, so this trades a
+        /// syscall per block against the memory a `Tail` costs while it
+        /// is open. Zero means the smallest supported block, one byte.
+        block_bytes: usize = 64 * 1024,
+    };
+
+    /// What `init` can report: the file could not be measured. A stream
+    /// with no size — a pipe, a socket — is `error.Streaming`, which is
+    /// this package saying "there is no end to start from".
+    pub const InitError = std.Io.File.Reader.SizeError;
+
+    /// What `prev` can report.
+    ///
+    /// The first three are about a line, and none of them loses the
+    /// reader its place: the offending line has been passed over whole
+    /// and `prev` can be called again for the one before it. The rest are
+    /// about the file or the allocator.
+    ///
+    /// | Error | Meaning |
+    /// |---|---|
+    /// | `MalformedLine` | This line is not a `T`; see `fault.err`. |
+    /// | `ControlByte` | This line holds a raw control byte; see `fault.offset`. |
+    /// | `MissingSeparator` | This line has no record on it; see `Options.record_separator`. |
+    /// | `LineTooLong` | This line ran past `max_line_bytes`. |
+    /// | `ReadFailed` | The file refused a read; ask `source` for diagnostics. |
+    /// | `SeekFailed` | The file refused a seek; ask `source.seek_err`. |
+    /// | `Truncated` | The file is shorter than when `init` measured it. |
+    /// | `OutOfMemory` | The allocator failed. |
+    pub const NextError = error{
+        MalformedLine,
+        ControlByte,
+        MissingSeparator,
+        LineTooLong,
+        ReadFailed,
+        SeekFailed,
+        Truncated,
+        OutOfMemory,
+    };
+};
+
 /// A stream of `T` read from the end of a seekable file towards its start.
 ///
 /// The reverse of `Reader`, and its mirror image in every way that matters:
@@ -92,118 +209,11 @@ pub fn Tail(comptime T: type) type {
 
         const Self = @This();
 
-        /// Reading and parsing policy, fixed at `init`.
-        ///
-        /// The same policy as `Reader.Options`, minus the two settings a
-        /// backwards read cannot honour.
-        ///
-        /// **`require_terminator`** is absent because a file being appended
-        /// to is `Follower`'s job, not this one's.
-        ///
-        /// **`format`** is absent because joining lines needs an answer to
-        /// "is this the whole of a value, or only part of one", and there is
-        /// one answer only going forwards. `Reader` in `.pretty` mode joins
-        /// on `error.UnexpectedEndOfInput`, which `std.json` gives when a
-        /// value is cut off at the end: a definite signal, and the only
-        /// failure that means "the rest is on the next line". Backwards there
-        /// is no mirror of it. `std.json` has no notion of a valid *tail* of
-        /// a value, so a lone `}` is a syntax error exactly as `not json` is,
-        /// and a backwards join would have to treat every failure as "not the
-        /// beginning yet" and keep prepending lines.
-        ///
-        /// That is sound on a file this package wrote — no line-aligned
-        /// proper suffix of an indented record is itself a complete value,
-        /// because such a suffix starts inside a container and so carries
-        /// unmatched closing brackets — and it is unbounded on anything else.
-        /// One damaged line would prepend until `max_line_bytes`: with the
-        /// default megabyte over thirty-byte lines, tens of thousands of
-        /// parse attempts over ever longer slices, ending in one malformed
-        /// record that has swallowed every good record inside it. Forwards, a
-        /// syntax error costs exactly one line. `Tail` exists to be cheap and
-        /// to survive a log damaged at its end, and a `.pretty` mode would
-        /// give up both.
-        ///
-        /// The cheap way out would be counting brackets backwards instead of
-        /// parsing, and it needs to know whether a `"` opens a string or
-        /// closes one — a fact about everything to the left of it. Which is
-        /// to say: finding where a multi-line record begins means parsing
-        /// forwards.
-        pub const Options = struct {
-            /// See `ParseOptions.ignore_unknown_fields`.
-            ignore_unknown_fields: bool = true,
-            /// See `ParseOptions.duplicate_fields`.
-            duplicate_fields: strand.DuplicateFields = .@"error",
-            /// See `ParseOptions.max_depth`.
-            max_depth: usize = codec_module.parser.default_max_depth,
-            /// The longest line accepted, in bytes. A longer one is
-            /// `error.LineTooLong`, and is discarded whole: `prev` continues
-            /// with the line before it. The terminator and a leading
-            /// byte-order mark are excluded. In separator mode only the JSON
-            /// payload counts: the separator and discarded torn prefix do not.
-            max_line_bytes: usize = 1 << 20,
-            /// When true, a line that is empty or all spaces and tabs is
-            /// passed over. Its number is still counted.
-            skip_blank: bool = true,
-            /// See `Reader.Options.reject_control_bytes`.
-            reject_control_bytes: bool = true,
-            /// See `Reader.Options.record_separator`. A backwards read
-            /// treats a line the same way a forwards one does: the record is
-            /// what follows the first separator on it, and a line with none
-            /// is `error.MissingSeparator`. The discarded prefix can be any
-            /// length without growing the retained payload buffer.
-            record_separator: bool = false,
-            /// When true, a UTF-8 byte-order mark at the very start of the
-            /// file is not part of the first line — which a backwards read
-            /// only ever meets last.
-            skip_bom: bool = true,
-            /// See `Reader.Options.on_malformed`.
-            on_malformed: enum { fail, skip } = .fail,
-            /// See `LineReader.Options.crlf`.
-            crlf: bool = true,
-            /// Where the file ends for this reader: its length when `null`.
-            /// A log that reserves space ahead of its records — zeros a
-            /// writer has not filled yet — reads back from where its
-            /// records end. Past the file's length is `error.Truncated`.
-            end: ?u64 = null,
-            /// How many bytes one read asks the file for. The buffer holds
-            /// one of these plus the line being assembled, so this trades a
-            /// syscall per block against the memory a `Tail` costs while it
-            /// is open. Zero means the smallest supported block, one byte.
-            block_bytes: usize = 64 * 1024,
-        };
+        pub const Options = shared.Options;
 
-        /// What `init` can report: the file could not be measured. A stream
-        /// with no size — a pipe, a socket — is `error.Streaming`, which is
-        /// this package saying "there is no end to start from".
-        pub const InitError = std.Io.File.Reader.SizeError;
+        pub const InitError = shared.InitError;
 
-        /// What `prev` can report.
-        ///
-        /// The first three are about a line, and none of them loses the
-        /// reader its place: the offending line has been passed over whole
-        /// and `prev` can be called again for the one before it. The rest are
-        /// about the file or the allocator.
-        ///
-        /// | Error | Meaning |
-        /// |---|---|
-        /// | `MalformedLine` | This line is not a `T`; see `fault.err`. |
-        /// | `ControlByte` | This line holds a raw control byte; see `fault.offset`. |
-        /// | `MissingSeparator` | This line has no record on it; see `Options.record_separator`. |
-        /// | `LineTooLong` | This line ran past `max_line_bytes`. |
-        /// | `ReadFailed` | The file refused a read; ask `source` for diagnostics. |
-        /// | `SeekFailed` | The file refused a seek; ask `source.seek_err`. |
-        /// | `Truncated` | The file is shorter than when `init` measured it. |
-        /// | `OutOfMemory` | The allocator failed. |
-        pub const NextError = error{
-            MalformedLine,
-            ControlByte,
-            MissingSeparator,
-            LineTooLong,
-            ReadFailed,
-            SeekFailed,
-            Truncated,
-            OutOfMemory,
-        };
+        pub const NextError = shared.NextError;
 
         /// A backwards reader over `source`, positioned at its end.
         ///

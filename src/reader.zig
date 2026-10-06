@@ -21,6 +21,95 @@ const Format = line_mod.Format;
 const LineReader = reader_module.LineReader;
 const Scanner = @import("Scanner.zig");
 
+/// The policy types of every `Reader`, whatever its record type: shared,
+/// so that options and errors mean the same thing across instantiations.
+const shared = struct {
+    /// Reading and parsing policy, fixed at `init`. The framing fields
+    /// are `LineReader.Options`', under the same names, and are handed to
+    /// `lines`; the rest say how a line becomes a `T`.
+    pub const Options = struct {
+        /// See `ParseOptions.ignore_unknown_fields`.
+        ignore_unknown_fields: bool = true,
+        /// See `ParseOptions.duplicate_fields`.
+        duplicate_fields: DuplicateFields = .@"error",
+        /// See `ParseOptions.max_depth`. A line nested deeper is
+        /// `error.MalformedLine`, with `error.NestingTooDeep` in
+        /// `lines.fault.err`.
+        max_depth: usize = parse_line.default_max_depth,
+        /// The longest JSON payload accepted, in bytes, excluding the
+        /// terminator, separator and discarded torn prefix; in `.pretty` mode this bounds the joined record
+        /// rather than one physical line. A longer one is
+        /// `error.LineTooLong`; the rest of it is discarded, so `next`
+        /// can be called again to continue with the line after it. This
+        /// bound is the reader's memory bound, and it is independent of
+        /// the size of `input`'s buffer.
+        max_line_bytes: usize = 1 << 20,
+        /// When true, a line that is empty or all spaces and tabs is
+        /// consumed and not returned. Its number is still counted.
+        skip_blank: bool = true,
+        /// See `Format`. A `.pretty` reader also reads minified lines,
+        /// since a minified record simply parses on its first line; the
+        /// cost of the tolerance is that a truncated line joins with the
+        /// one after it instead of failing on the spot.
+        format: Format = .minified,
+        /// See `LineReader.Options.record_separator`.
+        record_separator: bool = false,
+        /// See `LineReader.Options.reject_control_bytes`. A line refused
+        /// for one is `error.ControlByte` rather than whatever
+        /// `std.json` would have made of it.
+        reject_control_bytes: bool = true,
+        /// See `LineReader.Options.require_terminator`. `Follower` sets
+        /// it, and rewinds and reads a half-written line again once the
+        /// writer has finished it.
+        require_terminator: bool = false,
+        /// See `LineReader.Options.skip_bom`.
+        skip_bom: bool = true,
+        /// See `LineReader.Options.crlf`.
+        crlf: bool = true,
+        /// See `LineReader.Options.oversized_member`; the member is
+        /// `lines.oversizedMember()`. A `.pretty` record refused while
+        /// it was being joined is looked at as far as the physical line
+        /// that took it past the bound.
+        oversized_member: ?[]const u8 = null,
+        /// What a line that is not a `T` does, and a damaged one.
+        on_malformed: @FieldType(LineReader.Options, "on_malformed") = .fail,
+
+        /// The framing half, as the line reader takes it.
+        fn framing(options: Options) LineReader.Options {
+            return .{
+                .max_line_bytes = options.max_line_bytes,
+                .skip_blank = options.skip_blank,
+                .record_separator = options.record_separator,
+                .reject_control_bytes = options.reject_control_bytes,
+                .require_terminator = options.require_terminator,
+                .skip_bom = options.skip_bom,
+                .crlf = options.crlf,
+                .oversized_member = options.oversized_member,
+                .on_malformed = options.on_malformed,
+            };
+        }
+    };
+
+    /// What `next` can report: everything `LineReader.next` can, and
+    /// `MalformedLine`.
+    ///
+    /// The parse errors of `std.json` collapse into `MalformedLine`,
+    /// which says "this line, the one at `lines.fault.line`, is not a
+    /// `T`"; `lines.fault.err` holds which parse error it was.
+    /// `ControlByte` is the same claim about a line `std.json` was not
+    /// shown, made before parsing because a control byte in a line means
+    /// the line is damaged rather than merely wrong. `MissingSeparator` is
+    /// a line with no record on it at all, which only a reader in
+    /// `Options.record_separator` mode can tell. The other three are not
+    /// about the content of a line: `OutOfMemory` is the allocator's,
+    /// `ReadFailed` is the stream's (ask it for diagnostics), and
+    /// `LineTooLong` is this reader's own bound.
+    pub const NextError = LineReader.NextError || error{MalformedLine};
+
+    /// Where a resumed reader begins. See `resumeAt`.
+    pub const Start = LineReader.Start;
+};
+
 /// A stream of `T`, one per line, over a `*std.Io.Reader`.
 ///
 /// A `LineReader` frames the lines, and this parses them: `lines` is that
@@ -51,90 +140,11 @@ pub fn Reader(comptime T: type) type {
 
         const Self = @This();
 
-        /// Reading and parsing policy, fixed at `init`. The framing fields
-        /// are `LineReader.Options`', under the same names, and are handed to
-        /// `lines`; the rest say how a line becomes a `T`.
-        pub const Options = struct {
-            /// See `ParseOptions.ignore_unknown_fields`.
-            ignore_unknown_fields: bool = true,
-            /// See `ParseOptions.duplicate_fields`.
-            duplicate_fields: DuplicateFields = .@"error",
-            /// See `ParseOptions.max_depth`. A line nested deeper is
-            /// `error.MalformedLine`, with `error.NestingTooDeep` in
-            /// `lines.fault.err`.
-            max_depth: usize = parse_line.default_max_depth,
-            /// The longest JSON payload accepted, in bytes, excluding the
-            /// terminator, separator and discarded torn prefix; in `.pretty` mode this bounds the joined record
-            /// rather than one physical line. A longer one is
-            /// `error.LineTooLong`; the rest of it is discarded, so `next`
-            /// can be called again to continue with the line after it. This
-            /// bound is the reader's memory bound, and it is independent of
-            /// the size of `input`'s buffer.
-            max_line_bytes: usize = 1 << 20,
-            /// When true, a line that is empty or all spaces and tabs is
-            /// consumed and not returned. Its number is still counted.
-            skip_blank: bool = true,
-            /// See `Format`. A `.pretty` reader also reads minified lines,
-            /// since a minified record simply parses on its first line; the
-            /// cost of the tolerance is that a truncated line joins with the
-            /// one after it instead of failing on the spot.
-            format: Format = .minified,
-            /// See `LineReader.Options.record_separator`.
-            record_separator: bool = false,
-            /// See `LineReader.Options.reject_control_bytes`. A line refused
-            /// for one is `error.ControlByte` rather than whatever
-            /// `std.json` would have made of it.
-            reject_control_bytes: bool = true,
-            /// See `LineReader.Options.require_terminator`. `Follower` sets
-            /// it, and rewinds and reads a half-written line again once the
-            /// writer has finished it.
-            require_terminator: bool = false,
-            /// See `LineReader.Options.skip_bom`.
-            skip_bom: bool = true,
-            /// See `LineReader.Options.crlf`.
-            crlf: bool = true,
-            /// See `LineReader.Options.oversized_member`; the member is
-            /// `lines.oversizedMember()`. A `.pretty` record refused while
-            /// it was being joined is looked at as far as the physical line
-            /// that took it past the bound.
-            oversized_member: ?[]const u8 = null,
-            /// What a line that is not a `T` does, and a damaged one.
-            on_malformed: @FieldType(LineReader.Options, "on_malformed") = .fail,
+        pub const Options = shared.Options;
 
-            /// The framing half, as the line reader takes it.
-            fn framing(options: Options) LineReader.Options {
-                return .{
-                    .max_line_bytes = options.max_line_bytes,
-                    .skip_blank = options.skip_blank,
-                    .record_separator = options.record_separator,
-                    .reject_control_bytes = options.reject_control_bytes,
-                    .require_terminator = options.require_terminator,
-                    .skip_bom = options.skip_bom,
-                    .crlf = options.crlf,
-                    .oversized_member = options.oversized_member,
-                    .on_malformed = options.on_malformed,
-                };
-            }
-        };
+        pub const NextError = shared.NextError;
 
-        /// What `next` can report: everything `LineReader.next` can, and
-        /// `MalformedLine`.
-        ///
-        /// The parse errors of `std.json` collapse into `MalformedLine`,
-        /// which says "this line, the one at `lines.fault.line`, is not a
-        /// `T`"; `lines.fault.err` holds which parse error it was.
-        /// `ControlByte` is the same claim about a line `std.json` was not
-        /// shown, made before parsing because a control byte in a line means
-        /// the line is damaged rather than merely wrong. `MissingSeparator` is
-        /// a line with no record on it at all, which only a reader in
-        /// `Options.record_separator` mode can tell. The other three are not
-        /// about the content of a line: `OutOfMemory` is the allocator's,
-        /// `ReadFailed` is the stream's (ask it for diagnostics), and
-        /// `LineTooLong` is this reader's own bound.
-        pub const NextError = LineReader.NextError || error{MalformedLine};
-
-        /// Where a resumed reader begins. See `resumeAt`.
-        pub const Start = LineReader.Start;
+        pub const Start = shared.Start;
 
         /// A reader over `input`, with `allocator` backing the line buffer and
         /// the per-line arena. Does not read from `input`.

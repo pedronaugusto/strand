@@ -15,6 +15,137 @@ const separator = line_mod.separator;
 
 const syncFile = sync_module.syncFile;
 
+/// The policy types of every `Writer`, whatever its record type: shared,
+/// so that options and errors mean the same thing across instantiations.
+const shared = struct {
+    /// Encoding policy, fixed at `init`.
+    pub const Options = struct {
+        /// When false, an optional field that is `null` is left out of
+        /// the line rather than written as `null` — which is what a
+        /// reader that defaults its missing fields wants, and what keeps
+        /// a log small.
+        emit_null_optional_fields: bool = false,
+        /// When true, non-ASCII characters are written as `\uXXXX`
+        /// escapes, so every line is pure ASCII.
+        escape_unicode: bool = false,
+        /// See `Format`. `.pretty` writes a record over several lines,
+        /// which only a reader in `.pretty` mode reads back.
+        format: Format = .minified,
+        /// When true, every record is written with a `separator` byte in
+        /// front of it, which only a reader in the matching mode reads
+        /// back. One byte per record, and what it buys is on
+        /// `Reader.Options.record_separator`.
+        record_separator: bool = false,
+        /// When the destination is asked to drain what it is holding.
+        ///
+        /// The default is never, because this writer does not own the
+        /// stream and a flush is a decision about durability that belongs
+        /// to whoever does. A log that another process tails, or that has
+        /// to survive a crash between two records, is the case where the
+        /// decision is "after every one", and saying so here is shorter
+        /// than wrapping every `write`. `.per_records` is the one for a
+        /// stream that is neither: one drain per `n` records, however
+        /// they arrive.
+        flush: Flush = .never,
+        /// When the file is asked to put what it has been given onto the
+        /// disk under it.
+        ///
+        /// A flush moves a record out of this program's buffer and into
+        /// the operating system's. That is enough to survive the process
+        /// dying — another process reading the file sees the record — and
+        /// it is not enough to survive the machine losing power, because
+        /// the operating system is free to hold those bytes in memory for
+        /// as long as it likes. A sync is the call that says otherwise.
+        ///
+        /// What each level buys and costs:
+        ///
+        /// | | Survives the process | Survives the machine | Costs |
+        /// |---|---|---|---|
+        /// | `.never` | only what the caller drains | no | nothing |
+        /// | `.per_record` | yes | yes, to the last record | one sync per record, which is a disk write and a wait: on a spinning disk single-digit milliseconds, on an SSD tens to hundreds of microseconds, and on either it is the slowest thing a log does |
+        /// | `.per_batch` | yes | yes, to the last batch | one sync per `writeAll`, so a batch of a thousand records pays once and risks losing the batch |
+        /// | `.per_records` | yes | yes, to the last `n` | one sync per `n` records, whether they came one at a time or in batches: the cost divided by `n`, against losing up to `n` |
+        ///
+        /// A sync drains first, whatever `flush` says: bytes still in
+        /// this program's buffer have not reached the file at all, so
+        /// there would be nothing on it to sync.
+        ///
+        /// What the call is, platform by platform:
+        ///
+        /// | | |
+        /// |---|---|
+        /// | Linux | `fdatasync`, by syscall: the record and the length that finds it, without the timestamp writeback `fsync` adds, which is a second metadata write per record for a time no reader of this log consults. A file that declines the call gets `fsync` |
+        /// | macOS | `fcntl(F_FULLFSYNC)`, because `fsync` there hands the bytes to the drive without making it write them down. A filesystem with no such call gets `fsync`, which is then the strongest thing on it |
+        /// | Windows | the system's own flush of the file's buffers |
+        ///
+        /// A sync that fails is `error.SyncFailed`, and that writer
+        /// refuses every record after it. A failed sync is not a thing to
+        /// try again — the kernel may drop the error along with the data,
+        /// so a second call can come back clean over a log that lost a
+        /// record — and it is not a thing to write past either. Deal with
+        /// the file, then build a writer over it.
+        ///
+        /// There is no setting that drains on a timer. A writer is only
+        /// ever called when there is a record, so a timer would need a
+        /// task of its own, and this package does not own one — a caller
+        /// that has a task has `flush` and `sync` to call from it.
+        ///
+        /// Only `initFile` and `initFileBounded` have a file to sync.
+        /// `init` and `initBounded` require `.never`, and a writer built by
+        /// hand without a file reports `error.SyncFailed` rather than
+        /// pretending.
+        ///
+        /// What this does not cover is the directory entry: a file that
+        /// is synced but whose directory is not may not be there under
+        /// its name after a crash. Creating and syncing the directory is
+        /// the caller's, as opening the file is.
+        sync: Sync = .never,
+    };
+
+    /// How often the destination is asked to drain. See `Options.flush`.
+    pub const Flush = union(enum) {
+        /// Nothing is flushed. The caller drains its own writer.
+        never,
+        /// `write` flushes the destination after each record.
+        per_record,
+        /// `writeAll` flushes once, after the last record of the batch.
+        /// A plain `write` flushes nothing.
+        per_batch,
+        /// Every `n`th record, counted across `write` and `writeAll`
+        /// alike. This is the one a stream of records can use: it costs
+        /// one drain per `n` rather than one per record, and it bounds
+        /// what a crash loses at `n` records rather than at whatever the
+        /// caller happened to batch. `n` must not be 0.
+        per_records: u64,
+    };
+
+    /// How often the file is asked to sync. See `Options.sync`.
+    pub const Sync = union(enum) {
+        /// Nothing is synced. A crash of the machine may lose records a
+        /// reader of the file had already seen.
+        never,
+        /// `write` syncs the file after each record, having drained it.
+        per_record,
+        /// `writeAll` syncs once, after the last record of the batch,
+        /// having drained it. A plain `write` syncs nothing.
+        per_batch,
+        /// Every `n`th record, having drained it: one sync for the `n`
+        /// records that arrived since the last one, which is the trade a
+        /// log that is written to continuously has to make. The slowest
+        /// thing a log does, divided by `n`, against losing up to `n`
+        /// records. `n` must not be 0.
+        per_records: u64,
+    };
+
+    /// What `write` can report. `WriteFailed` is a custom stringify hook
+    /// or the destination refusing the bytes, `SyncFailed` is the file
+    /// refusing to put them on the disk — ask the destination or the
+    /// file for diagnostics — and
+    /// `LineTooLong` is this writer's own bound, if it was given one.
+    /// `OutOfMemory` is bounded record storage refusing to grow.
+    pub const Error = std.Io.Writer.Error || std.mem.Allocator.Error || error{ SyncFailed, LineTooLong };
+};
+
 /// Writes values as JSON Lines to a `*std.Io.Writer`, and counts them.
 pub fn Writer(comptime T: type) type {
     return struct {
@@ -51,124 +182,11 @@ pub fn Writer(comptime T: type) type {
 
         const Self = @This();
 
-        /// Encoding policy, fixed at `init`.
-        pub const Options = struct {
-            /// When false, an optional field that is `null` is left out of
-            /// the line rather than written as `null` — which is what a
-            /// reader that defaults its missing fields wants, and what keeps
-            /// a log small.
-            emit_null_optional_fields: bool = false,
-            /// When true, non-ASCII characters are written as `\uXXXX`
-            /// escapes, so every line is pure ASCII.
-            escape_unicode: bool = false,
-            /// See `Format`. `.pretty` writes a record over several lines,
-            /// which only a reader in `.pretty` mode reads back.
-            format: Format = .minified,
-            /// When true, every record is written with a `separator` byte in
-            /// front of it, which only a reader in the matching mode reads
-            /// back. One byte per record, and what it buys is on
-            /// `Reader.Options.record_separator`.
-            record_separator: bool = false,
-            /// When the destination is asked to drain what it is holding.
-            ///
-            /// The default is never, because this writer does not own the
-            /// stream and a flush is a decision about durability that belongs
-            /// to whoever does. A log that another process tails, or that has
-            /// to survive a crash between two records, is the case where the
-            /// decision is "after every one", and saying so here is shorter
-            /// than wrapping every `write`. `.per_records` is the one for a
-            /// stream that is neither: one drain per `n` records, however
-            /// they arrive.
-            flush: Flush = .never,
-            /// When the file is asked to put what it has been given onto the
-            /// disk under it.
-            ///
-            /// A flush moves a record out of this program's buffer and into
-            /// the operating system's. That is enough to survive the process
-            /// dying — another process reading the file sees the record — and
-            /// it is not enough to survive the machine losing power, because
-            /// the operating system is free to hold those bytes in memory for
-            /// as long as it likes. A sync is the call that says otherwise.
-            ///
-            /// What each level buys and costs:
-            ///
-            /// | | Survives the process | Survives the machine | Costs |
-            /// |---|---|---|---|
-            /// | `.never` | only what the caller drains | no | nothing |
-            /// | `.per_record` | yes | yes, to the last record | one sync per record, which is a disk write and a wait: on a spinning disk single-digit milliseconds, on an SSD tens to hundreds of microseconds, and on either it is the slowest thing a log does |
-            /// | `.per_batch` | yes | yes, to the last batch | one sync per `writeAll`, so a batch of a thousand records pays once and risks losing the batch |
-            /// | `.per_records` | yes | yes, to the last `n` | one sync per `n` records, whether they came one at a time or in batches: the cost divided by `n`, against losing up to `n` |
-            ///
-            /// A sync drains first, whatever `flush` says: bytes still in
-            /// this program's buffer have not reached the file at all, so
-            /// there would be nothing on it to sync.
-            ///
-            /// What the call is, platform by platform:
-            ///
-            /// | | |
-            /// |---|---|
-            /// | Linux | `fdatasync`, by syscall: the record and the length that finds it, without the timestamp writeback `fsync` adds, which is a second metadata write per record for a time no reader of this log consults. A file that declines the call gets `fsync` |
-            /// | macOS | `fcntl(F_FULLFSYNC)`, because `fsync` there hands the bytes to the drive without making it write them down. A filesystem with no such call gets `fsync`, which is then the strongest thing on it |
-            /// | Windows | the system's own flush of the file's buffers |
-            ///
-            /// A sync that fails is `error.SyncFailed`, and that writer
-            /// refuses every record after it. A failed sync is not a thing to
-            /// try again — the kernel may drop the error along with the data,
-            /// so a second call can come back clean over a log that lost a
-            /// record — and it is not a thing to write past either. Deal with
-            /// the file, then build a writer over it.
-            ///
-            /// There is no setting that drains on a timer. A writer is only
-            /// ever called when there is a record, so a timer would need a
-            /// task of its own, and this package does not own one — a caller
-            /// that has a task has `flush` and `sync` to call from it.
-            ///
-            /// Only `initFile` and `initFileBounded` have a file to sync.
-            /// `init` and `initBounded` require `.never`, and a writer built by
-            /// hand without a file reports `error.SyncFailed` rather than
-            /// pretending.
-            ///
-            /// What this does not cover is the directory entry: a file that
-            /// is synced but whose directory is not may not be there under
-            /// its name after a crash. Creating and syncing the directory is
-            /// the caller's, as opening the file is.
-            sync: Sync = .never,
-        };
+        pub const Options = shared.Options;
 
-        /// How often the destination is asked to drain. See `Options.flush`.
-        pub const Flush = union(enum) {
-            /// Nothing is flushed. The caller drains its own writer.
-            never,
-            /// `write` flushes the destination after each record.
-            per_record,
-            /// `writeAll` flushes once, after the last record of the batch.
-            /// A plain `write` flushes nothing.
-            per_batch,
-            /// Every `n`th record, counted across `write` and `writeAll`
-            /// alike. This is the one a stream of records can use: it costs
-            /// one drain per `n` rather than one per record, and it bounds
-            /// what a crash loses at `n` records rather than at whatever the
-            /// caller happened to batch. `n` must not be 0.
-            per_records: u64,
-        };
+        pub const Flush = shared.Flush;
 
-        /// How often the file is asked to sync. See `Options.sync`.
-        pub const Sync = union(enum) {
-            /// Nothing is synced. A crash of the machine may lose records a
-            /// reader of the file had already seen.
-            never,
-            /// `write` syncs the file after each record, having drained it.
-            per_record,
-            /// `writeAll` syncs once, after the last record of the batch,
-            /// having drained it. A plain `write` syncs nothing.
-            per_batch,
-            /// Every `n`th record, having drained it: one sync for the `n`
-            /// records that arrived since the last one, which is the trade a
-            /// log that is written to continuously has to make. The slowest
-            /// thing a log does, divided by `n`, against losing up to `n`
-            /// records. `n` must not be 0.
-            per_records: u64,
-        };
+        pub const Sync = shared.Sync;
 
         /// Whether `policy` falls due on the record just written.
         fn due(self: *const Self, policy: anytype) bool {
@@ -204,13 +222,7 @@ pub fn Writer(comptime T: type) type {
             }
         }
 
-        /// What `write` can report. `WriteFailed` is a custom stringify hook
-        /// or the destination refusing the bytes, `SyncFailed` is the file
-        /// refusing to put them on the disk — ask the destination or the
-        /// file for diagnostics — and
-        /// `LineTooLong` is this writer's own bound, if it was given one.
-        /// `OutOfMemory` is bounded record storage refusing to grow.
-        pub const Error = std.Io.Writer.Error || std.mem.Allocator.Error || error{ SyncFailed, LineTooLong };
+        pub const Error = shared.Error;
 
         /// A writer over `output`. Writes nothing.
         ///

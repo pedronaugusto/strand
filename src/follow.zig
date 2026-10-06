@@ -203,6 +203,114 @@ fn fingerprintOf(io: std.Io, file: std.Io.File, offset: u64, length: usize) !?u6
     return hash.final();
 }
 
+/// The policy types of every `Follower`, whatever its record type: shared,
+/// so that options and errors mean the same thing across instantiations.
+const shared = struct {
+    /// Following policy, fixed at `init`.
+    pub const Options = struct {
+        /// Passed to the `Reader` underneath, except for
+        /// `require_terminator`, which a follower always sets: a final
+        /// line with no newline on it is a line the writer has not
+        /// finished, and this is the whole difference between following a
+        /// file and reading one.
+        reader: strand.Reader(void).Options = .{},
+        /// How to wait when the file has nothing more on it yet.
+        wait: Wait = .{ .poll = .fromMilliseconds(20) },
+        /// How to get the file the path names now, or `null` to follow
+        /// the open handle and nothing else — which is the default, and
+        /// what every earlier version did.
+        ///
+        /// With one set, a follower that finds its file has stopped
+        /// growing asks the opener what the path holds. If that is a
+        /// different file, the follower moves to it and reads it from
+        /// the start; if it is the same file made shorter, the follower
+        /// begins again at the top of it. `error.Truncated` is therefore
+        /// never returned when this is set: a truncation is something to
+        /// act on rather than something to report.
+        ///
+        /// The order is the part worth stating: **the old file is read to
+        /// its end first, and only then is the new one started.** A
+        /// rename leaves the old handle readable, so a rotation that
+        /// happens while the follower is behind loses nothing — the
+        /// follower finishes the old file, then moves. The one thing it
+        /// does not carry over is a final line the old file never
+        /// finished, which was never a line.
+        ///
+        /// A path that names nothing (`error.FileNotFound` from the
+        /// opener) is a rotation half done: the follower stays on the
+        /// file it holds and looks again after its next wait, for as
+        /// long as the path stays empty. Only `error.OpenFailed` ends
+        /// `next`, as `error.ReopenFailed`.
+        reopen: ?Opener = null,
+        /// What makes the file the path holds now the file this follower
+        /// is reading. Only looked at when `reopen` is set, since it is
+        /// the answer to a question only a reopen asks.
+        identity: Identity = .file_id,
+    };
+
+    /// How a follower waits for the file to grow.
+    pub const Wait = union(enum) {
+        /// Sleep for this long and look again. What `tail -f` itself
+        /// does, and what works on every platform without help.
+        poll: std.Io.Duration,
+        /// Wait until `event` is set — by a filesystem watch, or by the
+        /// writer when it is in the same program — or until `timeout`
+        /// passes, whichever is first. The event is reset before each
+        /// read, so a set that lands while the follower is reading is not
+        /// lost; the timeout is there so that a set that is lost anyway
+        /// costs one late line rather than a hung task.
+        wake: struct {
+            event: *std.Io.Event,
+            timeout: std.Io.Duration = .fromSeconds(1),
+        },
+    };
+
+    /// What `next` can report.
+    ///
+    /// Everything `Reader.next` can report, and three more. `Canceled` is
+    /// the `std.Io` saying stop, and it is the ordinary way a follower
+    /// ends. `SeekFailed` means the file refused the rewind over a
+    /// half-written line; ask `source.seek_err`. `Truncated` means the
+    /// file got shorter than what has already been read from it, which is
+    /// rotation seen from the inside: see `restart`. It is not reported
+    /// at all when `Options.reopen` is set, because then a truncation is
+    /// acted on rather than reported. `ReopenFailed` is that opener
+    /// failing with `error.OpenFailed`, or the system refusing to say which file a handle is;
+    /// ask your own opener for diagnostics.
+    pub const NextError = strand.Reader(void).NextError || error{
+        SeekFailed,
+        Truncated,
+        ReopenFailed,
+    } || std.Io.Cancelable;
+
+    /// Where a follower stands, and enough to build another one there.
+    ///
+    /// The thing that crashes is the follower, and the point of
+    /// `Line.offset` is to be able to start again where the last one
+    /// stopped. This keeps the file identity, the offset, the line count
+    /// and how many files the follower has been through to get here.
+    ///
+    /// It is an ordinary struct of integers, so a caller keeping one
+    /// between runs can write it with this package and read it back with
+    /// it — a registry of checkpoints is a JSON Lines file like any
+    /// other. A checkpoint in the old inode/volume shape is refused by
+    /// `parseLine` with `error.MissingField`. Start a new follower from
+    /// the beginning, or seek to a position the caller chooses.
+    pub const Checkpoint = struct {
+        /// What the file being read is, under `Options.identity`. A
+        /// checkpoint taken under one identity and resumed under another
+        /// means nothing; keep the setting with it.
+        file: Identity.Taken,
+        /// The byte offset in that file at which the next line begins.
+        /// Everything before it has been read.
+        offset: u64 = 0,
+        /// How many lines have come off this file.
+        number: u64 = 0,
+        /// What `rotations` stood at.
+        rotations: u64 = 0,
+    };
+};
+
 /// A stream of `T` over a file that is still being appended to.
 ///
 /// Wraps a `Reader` and the file handle under it, because following a file
@@ -247,109 +355,13 @@ pub fn Follower(comptime T: type) type {
 
         const Self = @This();
 
-        /// Following policy, fixed at `init`.
-        pub const Options = struct {
-            /// Passed to the `Reader` underneath, except for
-            /// `require_terminator`, which a follower always sets: a final
-            /// line with no newline on it is a line the writer has not
-            /// finished, and this is the whole difference between following a
-            /// file and reading one.
-            reader: strand.Reader(T).Options = .{},
-            /// How to wait when the file has nothing more on it yet.
-            wait: Wait = .{ .poll = .fromMilliseconds(20) },
-            /// How to get the file the path names now, or `null` to follow
-            /// the open handle and nothing else — which is the default, and
-            /// what every earlier version did.
-            ///
-            /// With one set, a follower that finds its file has stopped
-            /// growing asks the opener what the path holds. If that is a
-            /// different file, the follower moves to it and reads it from
-            /// the start; if it is the same file made shorter, the follower
-            /// begins again at the top of it. `error.Truncated` is therefore
-            /// never returned when this is set: a truncation is something to
-            /// act on rather than something to report.
-            ///
-            /// The order is the part worth stating: **the old file is read to
-            /// its end first, and only then is the new one started.** A
-            /// rename leaves the old handle readable, so a rotation that
-            /// happens while the follower is behind loses nothing — the
-            /// follower finishes the old file, then moves. The one thing it
-            /// does not carry over is a final line the old file never
-            /// finished, which was never a line.
-            ///
-            /// A path that names nothing (`error.FileNotFound` from the
-            /// opener) is a rotation half done: the follower stays on the
-            /// file it holds and looks again after its next wait, for as
-            /// long as the path stays empty. Only `error.OpenFailed` ends
-            /// `next`, as `error.ReopenFailed`.
-            reopen: ?Opener = null,
-            /// What makes the file the path holds now the file this follower
-            /// is reading. Only looked at when `reopen` is set, since it is
-            /// the answer to a question only a reopen asks.
-            identity: Identity = .file_id,
-        };
+        pub const Options = shared.Options;
 
-        /// How a follower waits for the file to grow.
-        pub const Wait = union(enum) {
-            /// Sleep for this long and look again. What `tail -f` itself
-            /// does, and what works on every platform without help.
-            poll: std.Io.Duration,
-            /// Wait until `event` is set — by a filesystem watch, or by the
-            /// writer when it is in the same program — or until `timeout`
-            /// passes, whichever is first. The event is reset before each
-            /// read, so a set that lands while the follower is reading is not
-            /// lost; the timeout is there so that a set that is lost anyway
-            /// costs one late line rather than a hung task.
-            wake: struct {
-                event: *std.Io.Event,
-                timeout: std.Io.Duration = .fromSeconds(1),
-            },
-        };
+        pub const Wait = shared.Wait;
 
-        /// What `next` can report.
-        ///
-        /// Everything `Reader.next` can report, and three more. `Canceled` is
-        /// the `std.Io` saying stop, and it is the ordinary way a follower
-        /// ends. `SeekFailed` means the file refused the rewind over a
-        /// half-written line; ask `source.seek_err`. `Truncated` means the
-        /// file got shorter than what has already been read from it, which is
-        /// rotation seen from the inside: see `restart`. It is not reported
-        /// at all when `Options.reopen` is set, because then a truncation is
-        /// acted on rather than reported. `ReopenFailed` is that opener
-        /// failing with `error.OpenFailed`, or the system refusing to say which file a handle is;
-        /// ask your own opener for diagnostics.
-        pub const NextError = strand.Reader(T).NextError || error{
-            SeekFailed,
-            Truncated,
-            ReopenFailed,
-        } || std.Io.Cancelable;
+        pub const NextError = shared.NextError;
 
-        /// Where a follower stands, and enough to build another one there.
-        ///
-        /// The thing that crashes is the follower, and the point of
-        /// `Line.offset` is to be able to start again where the last one
-        /// stopped. This keeps the file identity, the offset, the line count
-        /// and how many files the follower has been through to get here.
-        ///
-        /// It is an ordinary struct of integers, so a caller keeping one
-        /// between runs can write it with this package and read it back with
-        /// it — a registry of checkpoints is a JSON Lines file like any
-        /// other. A checkpoint in the old inode/volume shape is refused by
-        /// `parseLine` with `error.MissingField`. Start a new follower from
-        /// the beginning, or seek to a position the caller chooses.
-        pub const Checkpoint = struct {
-            /// What the file being read is, under `Options.identity`. A
-            /// checkpoint taken under one identity and resumed under another
-            /// means nothing; keep the setting with it.
-            file: Identity.Taken,
-            /// The byte offset in that file at which the next line begins.
-            /// Everything before it has been read.
-            offset: u64 = 0,
-            /// How many lines have come off this file.
-            number: u64 = 0,
-            /// What `rotations` stood at.
-            rotations: u64 = 0,
-        };
+        pub const Checkpoint = shared.Checkpoint;
 
         /// Where this follower stands right now.
         ///

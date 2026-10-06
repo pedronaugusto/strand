@@ -3316,3 +3316,17 @@ test "a backward read holds a recursive schema to max_depth" {
     try testing.expectError(error.MalformedLine, tail.prev());
     try testing.expectEqual(@as(?strand.ParseLineError, error.NestingTooDeep), tail.fault.err);
 }
+
+test "policy types are the same for every record type" {
+    const A = struct { a: u8 };
+    const B = struct { b: []const u8 };
+    comptime {
+        std.debug.assert(strand.Reader(A).Options == strand.Reader(B).Options);
+        std.debug.assert(strand.Reader(A).NextError == strand.Reader(B).NextError);
+        std.debug.assert(strand.Writer(A).Options == strand.Writer(B).Options);
+        std.debug.assert(strand.Writer(A).Error == strand.Writer(B).Error);
+        std.debug.assert(strand.Tail(A).Options == strand.Tail(B).Options);
+        std.debug.assert(strand.Follower(A).Options == strand.Follower(B).Options);
+        std.debug.assert(strand.Follower(A).Checkpoint == strand.Follower(B).Checkpoint);
+    }
+}

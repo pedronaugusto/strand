@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- `Reader`, `Writer`, `Tail` and `Follower` share their policy types across record types: `Reader(A).Options` is `Reader(B).Options`, and likewise `NextError`, `Start`, `Flush`, `Sync`, `Error`, `InitError`, `Wait` and `Checkpoint`. Methods keep their typed signatures and doc comments.
+
 - A recursive schema, one that reaches itself, is held to `ParseOptions.max_depth` (and `Reader.Options.max_depth`, `Tail.Options.max_depth`), 512 levels of arrays and objects by default: a line nested deeper is `error.NestingTooDeep`, which a reader reports as `MalformedLine`. One deeply nested line inside the default line bound overflowed the stack. `ParseLineError` gains `NestingTooDeep`.
 
 - `Writer.write` publishes a record whole: one that fails partway leaves nothing in the destination, where the next record was appended to its bytes and lost with them. A record that fails after outgrowing the destination's buffer sets `torn`, and the next record starts on a line of its own.

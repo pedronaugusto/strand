@@ -27,7 +27,7 @@ try log.write(.{ .kind = "retry", .at = 2, .level = .warn });
 try log.write(.{ .kind = "close", .at = 3 });
 
 var source: std.Io.Reader = .fixed(out.written());
-var events: strand.Reader(Event) = .init(std.heap.page_allocator, &source, .{
+var events: strand.Reader(Event) = .init(arena, &source, .{
     .ignore_unknown_fields = true,
     .max_line_bytes = 64 * 1024,
     .on_malformed = .fail,
@@ -96,6 +96,15 @@ Pretty records span physical lines; ASCII record separators provide optional RFC
 framing when enabled at both ends. [examples/logbook.zig](examples/logbook.zig)
 exercises file following, tailing and a line protocol.
 
+For a caller that frames its own lines, `writeValue` and `writeObjectOpen` write one
+value's JSON without a terminator, `lines` walks the lines of a buffer already in
+memory, `indexOfControl` finds a raw control byte, and `memberOf`, `kindOf` and
+`leadingIntMembers` read members of a line without parsing it. `FileId` names a file by
+its volume and number, as `Follower` uses it to notice a rotation. `syncFile` is the
+sync a `Writer` sync policy makes, the strongest the platform offers; `syncDir` makes a
+directory entry durable, which a log that creates or renames files needs and leaves to
+its caller.
+
 ## Scope
 
 - It does not lock or own the supplied stream.
@@ -104,11 +113,7 @@ exercises file following, tailing and a line protocol.
 - It does not read pretty records backwards or decompress a stream.
 - It does not watch the filesystem or flush on a timer.
 
-<!-- performance: quiet pass -->
-
 ## Testing
-
-Local build scripts clear `.zig-cache/{o,h,z,tmp}` above the measured cap through preflight; run `zig build cache` before direct Zig builds (only a rebuild is lost).
 
 `zig build test` runs the unit suite, scratch tests and examples in Debug by default.
 The suite covers framing, codec agreement with `std.json`, owned copies, rotation,

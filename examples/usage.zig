@@ -33,7 +33,7 @@ pub fn main() !void {
     try log.write(.{ .kind = "close", .at = 3 });
 
     var source: std.Io.Reader = .fixed(out.written());
-    var events: strand.Reader(Event) = .init(std.heap.page_allocator, &source, .{
+    var events: strand.Reader(Event) = .init(arena, &source, .{
         .ignore_unknown_fields = true,
         .max_line_bytes = 64 * 1024,
         .on_malformed = .fail,

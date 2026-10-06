@@ -49,7 +49,8 @@ const ParseLineError = strand.ParseLineError;
 /// which file it is, and asking for a file's attributes is read access —
 /// Windows refuses it on a handle opened only for writing. `close` is called on
 /// every file this interface opened, and on none that it did not: the handle a
-/// `Follower` was built on stays the caller's.
+/// `Follower` was built on stays the caller's, and a rotation moves the
+/// caller's `File.Reader` off it; see `Follower.source`.
 pub const Opener = struct {
     /// Whatever the implementation needs. Not touched here.
     context: *anyopaque,
@@ -171,9 +172,13 @@ pub const Identity = union(enum) {
         }
     };
 
+    /// What `take` can report: the file's attributes refused, or, for a
+    /// fingerprint, its first bytes.
+    pub const TakeError = FileId.Error || std.Io.File.ReadPositionalError;
+
     /// What `file` is, now. The handle must be open for reading: asking a
     /// file's attributes is read access, and so is reading its first bytes.
-    pub fn take(self: Identity, io: std.Io, file: std.Io.File) !Identity.Taken {
+    pub fn take(self: Identity, io: std.Io, file: std.Io.File) Identity.TakeError!Identity.Taken {
         const id = try FileId.of(file.handle);
         switch (self) {
             .file_id => return .{ .id = id },
@@ -188,7 +193,7 @@ pub const Identity = union(enum) {
 /// The hash of `length` bytes of `file` at `offset`, or `null` when the file
 /// does not reach that far yet. Read positionally, so nothing that is reading
 /// the file moves.
-fn fingerprintOf(io: std.Io, file: std.Io.File, offset: u64, length: usize) !?u64 {
+fn fingerprintOf(io: std.Io, file: std.Io.File, offset: u64, length: usize) std.Io.File.ReadPositionalError!?u64 {
     if (length == 0) return null;
     var hash: std.hash.Wyhash = .init(0);
     var buffer: [512]u8 = undefined;
@@ -309,6 +314,19 @@ const shared = struct {
         /// What `rotations` stood at.
         rotations: u64 = 0,
     };
+
+    /// What `checkpoint` can report: the file's identity could not be taken.
+    pub const CheckpointError = error{ReopenFailed} || std.Io.Cancelable;
+
+    /// What `resumeFrom` can report: the file's identity could not be taken,
+    /// or the handle could not be put at the checkpoint.
+    pub const ResumeError = error{ SeekFailed, ReopenFailed } || std.Io.Cancelable;
+
+    /// What `truncated` can report: the file's length could not be read.
+    pub const TruncatedError = error{ ReadFailed, SeekFailed } || std.Io.Cancelable;
+
+    /// What `restart` can report: the handle could not be put back at 0.
+    pub const RestartError = error{SeekFailed} || std.Io.Cancelable;
 };
 
 /// A stream of `T` over a file that is still being appended to.
@@ -325,9 +343,13 @@ pub fn Follower(comptime T: type) type {
     return struct {
         /// Where the waiting happens, and where cancellation comes from.
         io: std.Io,
-        /// The file being read. The handle this follower was built on is not
-        /// owned and is never closed; a handle the follower opened for itself
-        /// across a rotation is, and this points at whichever it is reading.
+        /// The caller's `File.Reader`, which this follower reads through.
+        /// The handle this follower was built on is not owned and is never
+        /// closed. With `Options.reopen`, a rotation rewrites the struct this
+        /// points at into a reader over a handle the follower opened for
+        /// itself, keeping its buffer; that handle is closed by `deinit`. So a
+        /// caller with an opener keeps its own copy of the original `File` to
+        /// close, and does not use the `File.Reader` after `deinit`.
         source: *std.Io.File.Reader,
         /// The line layer. Public so that `reader.lines.number` and
         /// `reader.lines.fault` are readable, and read-only otherwise.
@@ -362,13 +384,17 @@ pub fn Follower(comptime T: type) type {
         pub const NextError = shared.NextError;
 
         pub const Checkpoint = shared.Checkpoint;
+        pub const CheckpointError = shared.CheckpointError;
+        pub const ResumeError = shared.ResumeError;
+        pub const TruncatedError = shared.TruncatedError;
+        pub const RestartError = shared.RestartError;
 
         /// Where this follower stands right now.
         ///
         /// Take it after `next` has returned a line and before the next call:
         /// that is when the file position is a line boundary, which is what
         /// makes the offset in it one a reader can be started at.
-        pub fn checkpoint(self: *Self) (error{ReopenFailed} || std.Io.Cancelable)!Checkpoint {
+        pub fn checkpoint(self: *Self) CheckpointError!Checkpoint {
             return .{
                 .file = self.heldIdentity() catch |err| switch (err) {
                     error.Canceled => return error.Canceled,
@@ -410,7 +436,7 @@ pub fn Follower(comptime T: type) type {
             source: *std.Io.File.Reader,
             options: Options,
             point: Checkpoint,
-        ) (error{ SeekFailed, ReopenFailed } || std.Io.Cancelable)!Self {
+        ) ResumeError!Self {
             const now = options.identity.take(io, source.file) catch |err| switch (err) {
                 error.Canceled => return error.Canceled,
                 else => return error.ReopenFailed,
@@ -433,6 +459,9 @@ pub fn Follower(comptime T: type) type {
         /// Start it at 0 to read a log from the beginning and then keep up
         /// with it; seek `source` to its end first to read only what arrives
         /// from now on, which is what `tail -f` does by default.
+        ///
+        /// `source` must outlive the follower, and with `Options.reopen` it
+        /// is rewritten on a rotation; see `source`.
         pub fn init(
             allocator: Allocator,
             io: std.Io,
@@ -523,7 +552,7 @@ pub fn Follower(comptime T: type) type {
         /// `Options.reopen`, `next` finishes that file and uses the opener
         /// to follow the replacement. Without it, the caller reopens the
         /// path and builds a new follower over the new handle.
-        pub fn truncated(self: *Self) (error{ ReadFailed, SeekFailed } || std.Io.Cancelable)!bool {
+        pub fn truncated(self: *Self) TruncatedError!bool {
             const size = self.currentSize() catch |err| switch (err) {
                 error.Canceled => return error.Canceled,
                 else => return error.ReadFailed,
@@ -537,7 +566,7 @@ pub fn Follower(comptime T: type) type {
         /// This is what to do about a `error.Truncated` or a `truncated` of
         /// true: the file was emptied and is being written again from the
         /// top, so what is on it now has never been read.
-        pub fn restart(self: *Self) (error{SeekFailed} || std.Io.Cancelable)!void {
+        pub fn restart(self: *Self) RestartError!void {
             self.source.seekTo(0) catch |err| switch (err) {
                 error.Canceled => return error.Canceled,
                 else => return error.SeekFailed,
@@ -646,7 +675,7 @@ pub fn Follower(comptime T: type) type {
         /// file, and reading its first bytes again would only find what it
         /// says about itself now. A file still too short to fingerprint is
         /// asked again, since its first bytes have not all been written yet.
-        fn heldIdentity(self: *Self) !Identity.Taken {
+        fn heldIdentity(self: *Self) Identity.TakeError!Identity.Taken {
             if (self.held) |taken| {
                 if (taken.fingerprint != null or self.options.identity == .file_id) return taken;
             }

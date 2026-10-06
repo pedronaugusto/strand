@@ -1,4 +1,5 @@
 //! tail scenarios through the public API.
+const builtin = @import("builtin");
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const strand = @import("strand.zig");
@@ -507,4 +508,18 @@ test "separated forward and backward framing agree at every payload boundary" {
             }
         }
     }
+}
+
+test "a pipe has no end to start a backward read from" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    const fds = try std.Io.Threaded.pipe2(.{});
+    const read_end: std.Io.File = .{ .handle = fds[0], .flags = .{ .nonblocking = false } };
+    const write_end: std.Io.File = .{ .handle = fds[1], .flags = .{ .nonblocking = false } };
+    defer read_end.close(testing.io);
+    defer write_end.close(testing.io);
+    // Something is buffered in it, which is what a size of the pipe reports
+    // on some systems.
+    try write_end.writeStreamingAll(testing.io, "{\"kind\":\"a\"}\n");
+    var source = read_end.reader(testing.io, &.{});
+    try testing.expectError(error.Streaming, Tail(Event).init(testing.allocator, &source, .{}));
 }

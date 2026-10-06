@@ -227,7 +227,14 @@ pub fn Tail(comptime T: type) type {
             var normalized = options;
             if (normalized.block_bytes == 0) normalized.block_bytes = 1;
             if (source.size_err) |err| return err;
-            const length = try source.file.length(source.io);
+            const stat = try source.file.stat(source.io);
+            // A pipe or a socket has no end to start from, whatever size the
+            // system reports for it: on some, what is buffered; on others, 0.
+            switch (stat.kind) {
+                .file, .block_device => {},
+                else => return error.Streaming,
+            }
+            const length = stat.size;
             source.size = length;
             const size = normalized.end orelse length;
             return .{

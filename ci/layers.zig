@@ -79,11 +79,6 @@ pub const required = blk: {
 /// Tokens only their owners may spell: how a file is made durable and how
 /// one is identified each have one file.
 pub const owned: []const gantry.rules.TokenRule = &.{
-    .{ .name = "sync owner", .token = "fsync", .owners = &.{"src/sync.zig"} },
-    .{ .name = "sync owner", .token = "fdatasync", .owners = &.{"src/sync.zig"} },
-    .{ .name = "sync owner", .token = "F_FULLFSYNC", .owners = &.{"src/sync.zig"} },
-    .{ .name = "sync owner", .token = "FlushFileBuffers", .owners = &.{"src/sync.zig"} },
-    .{ .name = "file identity owner", .token = "statx", .owners = &.{"src/file_id.zig"} },
-    .{ .name = "file identity owner", .token = "fstat", .owners = &.{"src/file_id.zig"} },
-    .{ .name = "file identity owner", .token = "FILE_ID_INFO", .owners = &.{"src/file_id.zig"} },
+    .{ .name = "sync owner", .tokens = &.{ "fsync", "fdatasync", "F_FULLFSYNC", "FlushFileBuffers" }, .owners = &.{"src/sync.zig"} },
+    .{ .name = "file identity owner", .tokens = &.{ "statx", "fstat", "FILE_ID_INFO" }, .owners = &.{"src/file_id.zig"} },
 };

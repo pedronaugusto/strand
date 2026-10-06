@@ -24,10 +24,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Name the scanner token and allocation error sets as public error sets, and name integer conversion failures as public `int.Error`. Qualify file identity results as public `Identity.Taken`. Expose custom JSON hook fixture types to match their public signatures.
 
-- Share the Zig CI gate through preflight, with requested fast runs and full merge checks.
-
-- Keep the Raw codec in `src/raw.zig` and its tests in `src/raw_test.zig`, and test support in `src/testing/`; name adjacent test files `_test.zig`.
-
 - A `.pretty` reader of a type the direct decoder reads parses a record where it lies in the input's buffer, across its line breaks, in one pass; it joins lines only for a record that straddles a refill, or one with a blank line, a `\r` or a fault in it, as before.
 
 - A union that declares `jsonl_tag` is read and written tagged inside its object, `{"type":"assistant",...}`, as serde's `#[serde(tag)]` reads and writes it, by every decoder and by `Writer` in both formats; `jsonl_other` names an arm for a tag naming no arm, and `tagOf` reads the arm from the tag member.
@@ -46,13 +42,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Keep the framing scan in its own call and find a control lane only in a vector that holds one.
 
-- Reject undeclared dependencies, duplicate layer membership and imports of source executables.
-
 - Assemble codecs around one raw value type and keep integration tests above the public module.
-
-- Check named source layers, cycles, entry files and dependency owners during source CI.
-
-- Bound local Zig build caches before builds, retaining downloaded packages and tools.
 
 ### Changed
 

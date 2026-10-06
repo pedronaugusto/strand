@@ -1,0 +1,12 @@
+// A program that depends on strand and nothing else, built by
+// `zig build check-consumer` with an empty package directory: strand's
+// build.zig must compile and run without any of strand's own CI
+// dependencies.
+.{
+    .name = .consumer,
+    .version = "0.0.0",
+    .fingerprint = 0x705b37272f017aed,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{ .strand = .{ .path = "../.." } },
+    .paths = .{""},
+}

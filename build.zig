@@ -1,5 +1,4 @@
 const std = @import("std");
-const preflight = @import("preflight");
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
@@ -143,7 +142,30 @@ pub fn build(b: *std.Build) void {
         check_step.dependOn(&example.step);
     }
     test_step.dependOn(examples_step);
-    preflight.addCi(b, .{ .tests = test_step, .portable_tests = true });
+
+    //=====================================================================
+    // CI wiring
+    //
+    // Only in strand's own tree. preflight is a lazy dependency, and a lazy
+    // package's build.zig can only be reached through `lazyImport`: a plain
+    // `@import` of it fails to compile in any project that depends on strand
+    // and has not fetched preflight, which is every such project.
+    //=====================================================================
+
+    if (b.pkg_hash.len != 0) return;
+    if (b.lazyImport(@This(), "preflight")) |preflight| {
+        preflight.addCi(b, .{ .tests = test_step, .portable_tests = true });
+    }
+
+    // A project that depends on strand by path, built with an empty package
+    // directory, so nothing strand fetches for itself can be reached. It is
+    // the build a consumer gets.
+    const consumer = b.addSystemCommand(&.{ b.graph.zig_exe, "build", "--system" });
+    consumer.addDirectoryArg(b.addWriteFiles().add("README", "No packages.\n").dirname());
+    consumer.setCwd(b.path("ci/consumer"));
+    consumer.has_side_effects = true;
+    consumer.expectExitCode(0);
+    b.step("check-consumer", "Build a project that depends on strand, with no packages fetched").dependOn(&consumer.step);
 }
 
 /// Every example, listed rather than globbed: a build graph that scans a

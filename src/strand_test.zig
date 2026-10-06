@@ -1182,6 +1182,68 @@ test "writeAll writes the batch and counts it" {
     try testing.expectEqual(@as(u64, 3), batch.count);
 }
 
+/// A field whose `jsonStringify` gives up partway: after `pad` bytes of
+/// string when `fail` is set.
+pub const Partial = struct {
+    fail: bool,
+    pad: usize = 0,
+
+    pub fn jsonStringify(self: Partial, jw: *std.json.Stringify) !void {
+        try jw.beginObject();
+        if (self.pad != 0) {
+            try jw.objectField("pad");
+            try jw.beginWriteRaw();
+            try jw.writer.writeByte('"');
+            try jw.writer.splatByteAll('x', self.pad);
+            try jw.writer.writeByte('"');
+            jw.endWriteRaw();
+        }
+        try jw.objectField("ok");
+        if (self.fail) return error.WriteFailed;
+        try jw.write(true);
+        try jw.endObject();
+    }
+};
+pub const WithPartial = struct { kind: []const u8, p: Partial };
+
+test "a record that fails partway leaves nothing behind" {
+    var out: std.Io.Writer.Allocating = try .initCapacity(testing.allocator, 256);
+    defer out.deinit();
+    for ([_]strand.Format{ .minified, .pretty }) |format| {
+        out.clearRetainingCapacity();
+        var log: strand.Writer(WithPartial) = .init(&out.writer, .{ .format = format });
+        try testing.expectError(error.WriteFailed, log.write(.{ .kind = "a", .p = .{ .fail = true } }));
+        try testing.expectEqual(@as(usize, 0), out.written().len);
+        try log.write(.{ .kind = "b", .p = .{ .fail = false } });
+        try testing.expectEqual(@as(u64, 1), log.count);
+        if (format == .minified)
+            try testing.expectEqualStrings("{\"kind\":\"b\",\"p\":{\"ok\":true}}\n", out.written());
+    }
+}
+
+test "a record torn in the destination does not take the next one with it" {
+    for ([_]bool{ false, true }) |separated| {
+        var out: std.Io.Writer.Allocating = try .initCapacity(testing.allocator, 16);
+        defer out.deinit();
+        var log: strand.Writer(WithPartial) = .init(&out.writer, .{ .record_separator = separated });
+        // Longer than the destination's buffer, so its head is handed over
+        // before it fails.
+        try testing.expectError(error.WriteFailed, log.write(.{ .kind = "a", .p = .{ .fail = true, .pad = 4096 } }));
+        try testing.expect(out.written().len > 0);
+        try log.write(.{ .kind = "b", .p = .{ .fail = false } });
+
+        var source: std.Io.Reader = .fixed(out.written());
+        var reader: strand.Reader(struct { kind: []const u8 }) = .init(testing.allocator, &source, .{
+            .record_separator = separated,
+            .on_malformed = .skip,
+        });
+        defer reader.deinit();
+        try testing.expectEqualStrings("b", (try reader.next()).?.value.kind);
+        try testing.expect(try reader.next() == null);
+        try testing.expectEqual(@as(u64, 1), reader.lines.skipped);
+    }
+}
+
 test "write escapes every terminator that could break the framing" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();

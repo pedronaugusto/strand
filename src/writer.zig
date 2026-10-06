@@ -41,6 +41,13 @@ pub fn Writer(comptime T: type) type {
         /// would be a log claiming a durability it does not have. Deal with
         /// the file, then build a writer over it.
         sync_failed: bool = false,
+        /// Set when a record failed after part of it had already reached the
+        /// destination, which only a record longer than the destination's
+        /// unused buffer can do. The next record then begins with a `\n`, so
+        /// the part is a line of its own that a reader refuses, rather than
+        /// the front of the next record's line. A separated stream needs no
+        /// `\n`: the next record's separator already starts a record.
+        torn: bool = false,
 
         const Self = @This();
 
@@ -267,6 +274,12 @@ pub fn Writer(comptime T: type) type {
         /// Nothing is flushed or synced unless `Options.flush` or
         /// `Options.sync` says so; otherwise draining is the caller's to do,
         /// on the writer it owns.
+        ///
+        /// A record is built in the destination's unused buffer and published
+        /// whole, so one that fails partway — a hook that gives up, an
+        /// encoding error — leaves nothing behind and `count` does not move.
+        /// Only a record longer than that buffer can fail after its head has
+        /// been handed on; see `torn` for what the next record does then.
         pub fn write(self: *Self, value: T) Error!void {
             const before = self.count;
             defer {
@@ -274,21 +287,40 @@ pub fn Writer(comptime T: type) type {
                 assert(self.count - before <= 1);
             }
             if (self.sync_failed) return error.SyncFailed;
+            var staged: Staged = .init(self.output);
+            const out = &staged.interface;
             if (self.scratch) |*scratch| {
                 scratch.buffer.reset();
                 self.encodeValue(value, &scratch.buffer.writer) catch |err|
                     return scratch.buffer.diagnose(err);
                 const bytes = scratch.buffer.writer.buffered();
                 if (bytes.len > scratch.max_line_bytes) return error.LineTooLong;
-                if (self.options.record_separator) try self.output.writeByte(separator);
-                try self.output.writeAll(bytes);
-                try self.output.writeByte('\n');
+                self.stage(&staged, bytes) catch |err| return self.failed(&staged, err);
             } else {
-                try self.writeRecord(value);
+                if (self.torn) out.writeByte('\n') catch |err| return self.failed(&staged, err);
+                self.writeRecord(value, out) catch |err| return self.failed(&staged, err);
             }
+            staged.commit();
+            self.torn = false;
             self.count += 1;
             if (self.due(self.options.sync)) return self.drainAndSync();
             if (self.due(self.options.flush)) try self.flushOutput();
+        }
+
+        /// Stages a bounded writer's encoded record, framed.
+        fn stage(self: *const Self, staged: *Staged, bytes: []const u8) std.Io.Writer.Error!void {
+            const out = &staged.interface;
+            if (self.torn) try out.writeByte('\n');
+            if (self.options.record_separator) try out.writeByte(separator);
+            try out.writeAll(bytes);
+            try out.writeByte('\n');
+        }
+
+        /// What a record that failed leaves behind: nothing, unless part of
+        /// it had to be handed to the destination before it was whole.
+        fn failed(self: *Self, staged: *const Staged, err: std.Io.Writer.Error) std.Io.Writer.Error {
+            if (staged.spilled and !self.options.record_separator) self.torn = true;
+            return err;
         }
 
         /// Writes every value in `values`, in order.
@@ -330,30 +362,30 @@ pub fn Writer(comptime T: type) type {
             return std.json.Stringify.value(value, self.encoding(), output);
         }
 
-        /// Encode a common record wholly inside the destination's unused
-        /// buffer, then publish its length in one step. If the record does
-        /// not fit, the ordinary writer path drains and carries on.
-        fn writeRecord(self: *const Self, value: T) std.Io.Writer.Error!void {
+        /// Encode a common record wholly inside `out`'s unused buffer,
+        /// then publish its length in one step. If the record does not fit,
+        /// the ordinary writer path drains and carries on.
+        fn writeRecord(self: *const Self, value: T, out: *std.Io.Writer) std.Io.Writer.Error!void {
             if (comptime encode.supports(T)) {
-                if (self.options.format == .minified and self.output.end < self.output.buffer.len) {
-                    var fixed: std.Io.Writer = .fixed(self.output.buffer[self.output.end..]);
+                if (self.options.format == .minified and out.end < out.buffer.len) {
+                    var fixed: std.Io.Writer = .fixed(out.buffer[out.end..]);
                     if (self.options.record_separator) fixed.writeByte(separator) catch
-                        return self.writeRecordSlow(value);
+                        return self.writeRecordSlow(value, out);
                     const encoded = encode.valueBuffer(value, self.encoding(), fixed.buffer[fixed.end..]) catch
-                        return self.writeRecordSlow(value);
+                        return self.writeRecordSlow(value, out);
                     fixed.end += encoded;
-                    fixed.writeByte('\n') catch return self.writeRecordSlow(value);
-                    self.output.end += fixed.end;
+                    fixed.writeByte('\n') catch return self.writeRecordSlow(value, out);
+                    out.end += fixed.end;
                     return;
                 }
             }
-            return self.writeRecordSlow(value);
+            return self.writeRecordSlow(value, out);
         }
 
-        fn writeRecordSlow(self: *const Self, value: T) std.Io.Writer.Error!void {
-            if (self.options.record_separator) try self.output.writeByte(separator);
-            try self.encodeValue(value, self.output);
-            try self.output.writeByte('\n');
+        fn writeRecordSlow(self: *const Self, value: T, out: *std.Io.Writer) std.Io.Writer.Error!void {
+            if (self.options.record_separator) try out.writeByte(separator);
+            try self.encodeValue(value, out);
+            try out.writeByte('\n');
         }
 
         /// Drains the destination now, whatever `Options.flush` says.
@@ -411,6 +443,55 @@ pub fn Writer(comptime T: type) type {
         }
     };
 }
+
+/// A record on its way into `output`, staged in `output`'s own unused buffer
+/// and published whole by `commit`, so a record that fails partway leaves
+/// nothing in the destination. A record that outgrows that buffer cannot be
+/// held back: what is staged is handed to `output` to make room, and
+/// `spilled` says that part of the record may be out of reach.
+const Staged = struct {
+    output: *std.Io.Writer,
+    spilled: bool = false,
+    interface: std.Io.Writer,
+
+    fn init(output: *std.Io.Writer) Staged {
+        return .{ .output = output, .interface = .{
+            .vtable = &vtable,
+            .buffer = output.unusedCapacitySlice(),
+        } };
+    }
+
+    const vtable: std.Io.Writer.VTable = .{ .drain = drain, .rebase = rebase };
+
+    /// Publishes what is staged as `output`'s own buffered bytes.
+    fn commit(self: *Staged) void {
+        assert(self.interface.end <= self.output.buffer.len - self.output.end);
+        self.output.end += self.interface.end;
+        self.interface.buffer = self.output.unusedCapacitySlice();
+        self.interface.end = 0;
+    }
+
+    fn drain(w: *std.Io.Writer, data: []const []const u8, splat: usize) std.Io.Writer.Error!usize {
+        const self: *Staged = @fieldParentPtr("interface", w);
+        self.spilled = true;
+        self.commit();
+        const n = try self.output.writeSplat(data, splat);
+        w.buffer = self.output.unusedCapacitySlice();
+        return n;
+    }
+
+    fn rebase(w: *std.Io.Writer, preserve: usize, capacity: usize) std.Io.Writer.Error!void {
+        const self: *Staged = @fieldParentPtr("interface", w);
+        assert(preserve <= w.end);
+        self.spilled = true;
+        self.commit();
+        try self.output.rebase(preserve, capacity);
+        // The preserved bytes stay staged, at the end of what `output` holds.
+        self.output.end -= preserve;
+        w.buffer = self.output.unusedCapacitySlice();
+        w.end = preserve;
+    }
+};
 
 // A bounded record keeps its bound beside the storage used to measure it.
 const RecordScratch = struct {

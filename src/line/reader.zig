@@ -61,8 +61,9 @@ pub const LineReader = struct {
     offset: u64 = 0,
     /// How many records were passed over under `on_malformed = .skip` — the
     /// count a stream that tolerates damage is judged by, since under
-    /// `.skip` nothing else says a line was lost. Blank lines are not damage
-    /// and are not counted. A `Reader` counts the lines it could not parse
+    /// `.skip` nothing else says a line was lost — and, in separated mode,
+    /// how many torn records were dropped in either mode. Blank lines are not
+    /// damage and are not counted. A `Reader` counts the lines it could not parse
     /// here too, so there is one count for the stream.
     skipped: u64 = 0,
     /// What was last refused, and why: the line number, the offset in the
@@ -130,10 +131,13 @@ pub const LineReader = struct {
         /// and not returned. Its number is still counted.
         skip_blank: bool = true,
         /// When true, every record on the stream begins with a `separator`
-        /// byte, and what comes before the first one on a line is the tail of
-        /// a record that was torn — it is discarded, and the reader carries on
-        /// with the record the separator marks. A line with no separator on it
-        /// at all is `error.MissingSeparator`.
+        /// byte, and every separator begins a record. The record on a line is
+        /// what follows its last separator; anything before that is a record
+        /// a writer did not finish, or the tail of one (RFC 7464 §2.3). Each
+        /// such torn record is discarded, counted in `skipped` and named in
+        /// `fault` whatever `on_malformed` says, since there is no record left
+        /// to report, and the reader carries on with the record after it. A
+        /// line with no separator on it at all is `error.MissingSeparator`.
         ///
         /// This is what JSON Lines cannot do on its own: a line that does not
         /// parse is either damage or a record from a writer that knows
@@ -337,11 +341,18 @@ pub const LineReader = struct {
         const discarded: u64 = if (rest == .discard) try self.discardLine(&scan) else 0;
         // A line the stream ended inside is scanned as far as it goes: the
         // error is reported now, and what arrives later is only discarded.
-        if (scan.finish()) |value| {
-            @memcpy(self.oversized[0..value.len], value);
-            self.oversized_len = @intCast(value.len);
-        } else self.oversized_len = null;
+        self.noteOversized(&scan);
         return discarded;
+    }
+
+    /// Keeps what `scan` found of `oversized_member` in a refused line.
+    fn noteOversized(self: *LineReader, scan: ?*MemberScan) void {
+        const value = (if (scan) |member| member.finish() else null) orelse {
+            self.oversized_len = null;
+            return;
+        };
+        @memcpy(self.oversized[0..value.len], value);
+        self.oversized_len = @intCast(value.len);
     }
 
     /// What `input` holds from the start of `record` on — its bytes, its
@@ -548,8 +559,14 @@ pub const LineReader = struct {
         ended,
     };
 
-    /// Discards a torn prefix without storing it, then frames only the
-    /// record following the first separator on the physical line.
+    /// Frames the next physical line in separated mode.
+    ///
+    /// Every separator starts a record, so the record on a line is what
+    /// follows the last separator on it. Whatever comes before that is a
+    /// record a writer did not finish, or the tail of one: it is passed over
+    /// without being stored, counted in `skipped` and named in `fault`, and
+    /// only the record itself is held to `max_line_bytes`. A record that is
+    /// already whole in `input`'s buffer is handed back as a slice of it.
     fn readSeparatedPhysical(self: *LineReader) NextError!SeparatedPhysical {
         var prefix: BomPrefix = .{};
         const before_bom = self.consumed;
@@ -560,9 +577,12 @@ pub const LineReader = struct {
 
         self.record_offset = if (prefix.len == 0) self.consumed else before_bom;
         self.record_number = self.number;
-        var discarded = false;
-        var blank = true;
-        var pending_cr = false;
+        self.borrowed = false;
+        self.cleared = false;
+        var line: SeparatedLine = .{ .scan = if (self.options.oversized_member) |name| .init(name) else null };
+        // A record of exactly the bound may still carry the `\r` half of
+        // its terminator.
+        const room = self.options.max_line_bytes +| 1;
         var pending = prefix.slice();
         while (true) {
             const from_prefix = pending.len != 0;
@@ -570,99 +590,164 @@ pub const LineReader = struct {
             if (contents.len == 0) {
                 _ = self.input.peekByte() catch |err| switch (err) {
                     error.ReadFailed => return error.ReadFailed,
-                    error.EndOfStream => {
-                        if (!discarded) return .ended;
-                        if (self.options.require_terminator) {
-                            self.unfinished = true;
-                            return .ended;
-                        }
-                        self.number += 1;
-                        if (pending_cr and !self.options.crlf) blank = false;
-                        return .{ .missing = blank };
-                    },
+                    error.EndOfStream => return self.separatedEnd(&line),
                 };
                 continue;
             }
-
-            const separator_at = std.mem.findScalar(u8, contents, separator);
+            // Where `contents` begins in the stream. A prefix kept from the
+            // look for a byte-order mark has been counted already.
+            const position = self.consumed - if (from_prefix) pending.len else 0;
             const newline_at = std.mem.findScalar(u8, contents, '\n');
-            const at = if (separator_at) |sep|
-                if (newline_at) |newline| @min(sep, newline) else sep
-            else
-                newline_at orelse contents.len;
+            const line_end = newline_at orelse contents.len;
+            const at = std.mem.findScalar(u8, contents[0..line_end], separator) orelse line_end;
+            const segment = contents[0..at];
 
-            if (at == contents.len) {
-                for (contents) |byte| {
-                    discarded = true;
-                    if (byte == '\r') {
-                        if (pending_cr) blank = false;
-                        pending_cr = true;
-                    } else {
-                        if (pending_cr) blank = false;
-                        pending_cr = false;
-                        if (byte != ' ' and byte != '\t') blank = false;
-                    }
-                }
-                if (from_prefix) {
-                    pending = pending[contents.len..];
-                } else {
-                    self.input.toss(contents.len);
-                    self.consumed += contents.len;
-                }
-                continue;
-            }
-
-            const byte = contents[at];
-            if (byte == '\n') {
-                for (contents[0..at]) |prefix_byte| {
-                    discarded = true;
-                    if (prefix_byte == '\r') {
-                        if (pending_cr) blank = false;
-                        pending_cr = true;
-                    } else {
-                        if (pending_cr) blank = false;
-                        pending_cr = false;
-                        if (prefix_byte != ' ' and prefix_byte != '\t') blank = false;
-                    }
-                }
-                if (!from_prefix) {
+            if (line.record_at == null) {
+                line.passOver(segment);
+            } else {
+                if (line.scan) |*scan| scan.feed(segment);
+                if (!line.over and at == line_end and newline_at != null and
+                    !from_prefix and self.line_buf.writer.end == 0 and segment.len <= room)
+                {
+                    // The whole record is in `input`'s buffer: it is handed
+                    // back from there, and copied nowhere.
                     self.input.toss(at + 1);
                     self.consumed += at + 1;
+                    self.number += 1;
+                    self.borrowed = true;
+                    return self.separatedRecord(segment, &line);
                 }
-                self.number += 1;
-                if (pending_cr and !self.options.crlf) blank = false;
-                return .{ .missing = blank };
+                if (!line.over) {
+                    if (self.line_buf.writer.end + segment.len > room) {
+                        line.over = true;
+                        self.line_buf.writer.end = 0;
+                    } else self.line_buf.writer.writeAll(segment) catch return error.OutOfMemory;
+                }
             }
 
-            const offset = if (from_prefix)
-                self.record_offset + at
-            else
-                self.consumed + at;
-            if (!from_prefix) {
-                self.input.toss(at + 1);
-                self.consumed += at + 1;
+            const taken = if (at == contents.len) at else at + 1;
+            if (from_prefix) {
+                pending = pending[taken..];
+            } else {
+                self.input.toss(taken);
+                self.consumed += taken;
             }
-            const after_separator = self.consumed;
-            const lines_before = self.number;
-            // Physical framing starts after the separator. The record starts
-            // at it, even when framing refuses the line or cannot finish it.
-            defer {
-                self.record_offset = offset;
-                self.record_number = lines_before;
+            if (at == contents.len) continue;
+
+            if (contents[at] == separator) {
+                if (line.record_at != null or line.torn_prefix) {
+                    self.tornRecord();
+                }
+                line.startRecord(position + at, self.options.oversized_member);
+                self.line_buf.writer.end = 0;
+                continue;
             }
-            const framed = self.readPhysical() catch |err| {
-                if (err == error.LineTooLong) self.offset = offset;
-                return err;
-            };
-            if (framed) |bytes| return .{ .record = .{ .bytes = bytes, .offset = offset } };
-            if (!self.options.require_terminator and self.consumed == after_separator) {
-                self.number += 1;
-                return .{ .record = .{ .bytes = "", .offset = offset } };
+            self.number += 1;
+            if (line.record_at == null) return .{ .missing = line.isBlank(self.options.crlf) };
+            return self.separatedRecord(self.line_buf.written(), &line);
+        }
+    }
+
+    /// What `readSeparatedPhysical` knows about the physical line it is in.
+    const SeparatedLine = struct {
+        /// Where the separator of the record being framed is; `null` before
+        /// the first separator on the line.
+        record_at: ?u64 = null,
+        /// Whether any byte before the first separator was passed over.
+        discarded: bool = false,
+        /// Whether everything passed over so far was space, tab or a `\r`.
+        blank: bool = true,
+        /// Whether the last byte passed over was a `\r`.
+        pending_cr: bool = false,
+        /// Whether anything but space, tab or `\r` was passed over: the
+        /// tail of a torn record.
+        torn_prefix: bool = false,
+        /// Whether the record has outgrown the bound; its bytes are then
+        /// no longer kept, only looked at for a separator or the end.
+        over: bool = false,
+        /// The look for `oversized_member` in the current record.
+        scan: ?MemberScan,
+
+        /// Notes bytes before the first separator, which are not kept.
+        fn passOver(self: *SeparatedLine, bytes: []const u8) void {
+            for (bytes) |byte| {
+                self.discarded = true;
+                if (byte != ' ' and byte != '\t' and byte != '\r') self.torn_prefix = true;
+                if (byte == '\r') {
+                    if (self.pending_cr) self.blank = false;
+                    self.pending_cr = true;
+                } else {
+                    if (self.pending_cr) self.blank = false;
+                    self.pending_cr = false;
+                    if (byte != ' ' and byte != '\t') self.blank = false;
+                }
             }
-            // The separator was read, so the stream ended inside a record.
-            self.unfinished = true;
+        }
+
+        /// Whether what was passed over is blank, a final `\r` counting as
+        /// the terminator's only under `crlf`.
+        fn isBlank(self: *const SeparatedLine, crlf: bool) bool {
+            return self.blank and !(self.pending_cr and !crlf);
+        }
+
+        /// Begins the record whose separator is at `offset`.
+        fn startRecord(self: *SeparatedLine, offset: u64, member: ?[]const u8) void {
+            self.record_at = offset;
+            self.over = false;
+            if (member) |name| self.scan = .init(name);
+        }
+    };
+
+    /// A record cut short by a separator on its own line: one record lost.
+    fn tornRecord(self: *LineReader) void {
+        self.skipped += 1;
+        self.fault.framing(self.number + 1);
+    }
+
+    /// Hands back the record `line` was framing, whose line has just been
+    /// counted, or refuses it for its length.
+    fn separatedRecord(self: *LineReader, bytes: []const u8, line: *SeparatedLine) NextError!SeparatedPhysical {
+        const offset = line.record_at.?;
+        self.record_offset = offset;
+        self.record_number = self.number - 1;
+        const record = if (self.options.crlf) trimCr(bytes) else bytes;
+        if (line.over or record.len > self.options.max_line_bytes) {
+            self.fault.framing(self.number);
+            self.offset = offset;
+            self.noteOversized(if (line.scan) |*scan| scan else null);
+            return error.LineTooLong;
+        }
+        return .{ .record = .{ .bytes = record, .offset = offset } };
+    }
+
+    /// The end of the stream in the middle of a separated line.
+    fn separatedEnd(self: *LineReader, line: *SeparatedLine) NextError!SeparatedPhysical {
+        const offset = line.record_at orelse {
+            if (!line.discarded) return .ended;
+            if (self.options.require_terminator) {
+                self.unfinished = true;
+                return .ended;
+            }
+            self.number += 1;
+            return .{ .missing = line.isBlank(self.options.crlf) };
+        };
+        if (!self.options.require_terminator) {
+            self.number += 1;
+            self.unfinished = line.over;
+            return self.separatedRecord(self.line_buf.written(), line);
+        }
+        self.unfinished = true;
+        if (!line.over) {
+            // Read again from its separator once the writer has finished it.
+            self.record_offset = offset;
+            self.record_number = self.number;
             return .ended;
         }
+        // Already too long, and the writer has not finished it: refused now,
+        // and the rest is discarded as it arrives.
+        self.discarding = true;
+        self.number += 1;
+        return self.separatedRecord("", line);
     }
 
     /// Reads one physical line and returns the record so far: a slice of
@@ -953,8 +1038,35 @@ pub const LineReader = struct {
     /// Discards what is left of a refused line the stream ended inside.
     /// False when the stream ends again first; the reader then stands where
     /// the discard stopped, which is what `recordStart` says.
+    ///
+    /// In separated mode a separator ends the refused record as well as a
+    /// `\n` does, since it starts the next one: the record was torn, and
+    /// the line it was counted on goes on with the record after it.
     fn finishDiscard(self: *LineReader) error{ReadFailed}!bool {
-        self.consumed += try self.discardLine(null);
+        if (!self.options.record_separator) {
+            self.consumed += try self.discardLine(null);
+        } else while (true) {
+            const available = self.input.peekGreedy(1) catch |err| switch (err) {
+                error.ReadFailed => return error.ReadFailed,
+                error.EndOfStream => break,
+            };
+            const newline_at = std.mem.findScalar(u8, available, '\n');
+            const line_end = newline_at orelse available.len;
+            if (std.mem.findScalar(u8, available[0..line_end], separator)) |at| {
+                self.input.toss(at);
+                self.consumed += at;
+                self.number -= 1;
+                self.discarding = false;
+                break;
+            }
+            const taken = if (newline_at) |at| at + 1 else available.len;
+            self.input.toss(taken);
+            self.consumed += taken;
+            if (newline_at != null) {
+                self.discarding = false;
+                break;
+            }
+        }
         if (!self.discarding) return true;
         self.record_offset = self.consumed;
         self.record_number = self.number;

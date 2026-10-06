@@ -435,11 +435,34 @@ test "a separated tail accepts the exact payload bound and refuses the next byte
     }
 }
 
+test "a backward read takes the record after a torn one on its line" {
+    const input = "\x1e{\"kind\":\"a\"}\n\x1e{\"kind\":\"to\x1e{\"kind\":\"b\"}\n";
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "log", .data = input });
+    const file = try tmp.dir.openFile(testing.io, "log", .{});
+    defer file.close(testing.io);
+    for ([_]usize{ 1, 3, 4096 }) |block_bytes| {
+        var source = file.reader(testing.io, &.{});
+        var tail = try Tail(Event).init(testing.allocator, &source, .{
+            .record_separator = true,
+            .block_bytes = block_bytes,
+        });
+        defer tail.deinit();
+        const b = (try tail.prev()).?;
+        try testing.expectEqualStrings("b", b.value.kind);
+        try testing.expectEqual(@as(u64, std.mem.lastIndexOfScalar(u8, input, 0x1e).?), b.offset);
+        try testing.expectEqual(@as(u64, 1), tail.skipped);
+        try testing.expectEqualStrings("a", (try tail.prev()).?.value.kind);
+        try testing.expectEqual(@as(?strand.Line(Event), null), try tail.prev());
+    }
+}
+
 test "separated forward and backward framing agree at every payload boundary" {
     for ([_][]const u8{
-        "",                      "\n",                               " \t\r\n", line_mod.bom ++ " \t\n", "\xef\xbb \n",
-        "no separator at all\n", "torn\x1e{}\r\n",                   "\x1e{}",  "\x1e\n",                "torn\x1e \r\n",
-        "\x1e{}\x1e{}\n",        "\x1e" ++ "x" ** 512 ++ "\x1e{}\n",
+        "",                      "\n",                               " \t\r\n",                 line_mod.bom ++ " \t\n",   "\xef\xbb \n",
+        "no separator at all\n", "torn\x1e{}\r\n",                   "\x1e{}",                  "\x1e\n",                  "torn\x1e \r\n",
+        "\x1e{}\x1e{}\n",        "\x1e" ++ "x" ** 512 ++ "\x1e{}\n", "\x1e{\"k\":\"to\x1e{}\n", "torn\x1e{\x1e\x1e{}\r\n",
     }) |input| {
         var tmp = testing.tmpDir(.{});
         defer tmp.cleanup();

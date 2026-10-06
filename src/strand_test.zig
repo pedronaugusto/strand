@@ -1644,6 +1644,59 @@ test "a torn record is what a separator makes visible" {
     try testing.expectEqual(@as(?strand.Line(Event), null), try reader.next());
 }
 
+test "a torn record followed by a whole one on its line loses only itself" {
+    // A writer died inside its record, and the next writer's record follows
+    // on the same physical line: every separator starts a record.
+    const input =
+        "\x1e{\"kind\":\"a\"}\n" ++
+        "\x1e{\"kind\":\"to\x1e{\"kind\":\"b\"}\n" ++
+        "\x1e{\"kind\":\"c\"}\n";
+    for ([_]@FieldType(strand.LineReader.Options, "on_malformed"){ .skip, .fail }) |policy| {
+        for ([_]bool{ false, true }) |streamed| {
+            var buffer: [5]u8 = undefined;
+            var chunked: fixtures.Chunked = .init(input, &buffer, 2);
+            var fixed: std.Io.Reader = .fixed(input);
+            var reader: strand.Reader(Event) = .init(testing.allocator, if (streamed) &chunked.interface else &fixed, .{
+                .record_separator = true,
+                .on_malformed = policy,
+                .max_line_bytes = 16,
+            });
+            defer reader.deinit();
+
+            try testing.expectEqualStrings("a", (try reader.next()).?.value.kind);
+            const b = (try reader.next()).?;
+            try testing.expectEqualStrings("b", b.value.kind);
+            try testing.expectEqual(@as(u64, 2), b.number);
+            try testing.expectEqual(@as(u64, std.mem.lastIndexOfScalar(u8, input[0..40], strand.separator).?), b.offset);
+            try testing.expectEqual(@as(u64, 1), reader.lines.skipped);
+            try testing.expectEqual(@as(u64, 2), reader.lines.fault.line);
+            try testing.expectEqualStrings("c", (try reader.next()).?.value.kind);
+            try testing.expectEqual(@as(?strand.Line(Event), null), try reader.next());
+        }
+    }
+}
+
+test "a torn record longer than the bound does not refuse the record after it" {
+    const input = "\x1e{\"kind\":\"" ++ "x" ** 100 ++ "\x1e\x1e{\"kind\":\"b\"}\n";
+    for ([_]bool{ false, true }) |streamed| {
+        var buffer: [7]u8 = undefined;
+        var chunked: fixtures.Chunked = .init(input, &buffer, 3);
+        var fixed: std.Io.Reader = .fixed(input);
+        var lines: strand.LineReader = .init(testing.allocator, if (streamed) &chunked.interface else &fixed, .{
+            .record_separator = true,
+            .max_line_bytes = 16,
+        });
+        defer lines.deinit();
+        const b = (try lines.next()).?;
+        try testing.expectEqualStrings("{\"kind\":\"b\"}", b.line);
+        try testing.expectEqual(@as(u64, 1), b.number);
+        try testing.expectEqual(@as(u64, input.len - "\x1e{\"kind\":\"b\"}\n".len), b.offset);
+        // The long record and the empty one between the two separators.
+        try testing.expectEqual(@as(u64, 2), lines.skipped);
+        try testing.expectEqual(@as(?strand.RawLine, null), try lines.next());
+    }
+}
+
 test "a torn prefix does not count against a separated record's bound" {
     var input: std.Io.Writer.Allocating = .init(testing.allocator);
     defer input.deinit();

@@ -382,6 +382,11 @@ pub fn Tail(comptime T: type) type {
                 var blank = true;
                 var marked_bytes: u2 = 0;
                 var trailing_cr = false;
+                // Every separator starts a record, so each one before the
+                // last on the line starts a torn record, and so does anything
+                // but whitespace in front of the first.
+                var torn: u64 = 0;
+                var prefix_torn = false;
                 while (true) {
                     if (self.end == 0 and self.lo > 0) try self.fillBefore();
                     const newline = lastNewline(self.buf.items[0..self.end]);
@@ -391,10 +396,18 @@ pub fn Tail(comptime T: type) type {
                     if (suffix_bytes == 0 and chunk.len != 0)
                         trailing_cr = self.options.crlf and chunk[chunk.len - 1] == '\r';
 
-                    if (std.mem.indexOfScalar(u8, chunk, strand.separator)) |at| {
-                        payload_bytes = suffix_bytes + chunk.len - at - 1 - @intFromBool(trailing_cr);
-                        separator_offset = chunk_offset + at;
-                    }
+                    if (payload_bytes == null) {
+                        if (std.mem.lastIndexOfScalar(u8, chunk, strand.separator)) |at| {
+                            payload_bytes = suffix_bytes + chunk.len - at - 1 - @intFromBool(trailing_cr);
+                            separator_offset = chunk_offset + at;
+                            torn += std.mem.countScalar(u8, chunk[0..at], strand.separator);
+                            const first = std.mem.indexOfScalar(u8, chunk, strand.separator).?;
+                            prefix_torn = hasContent(chunk[0..first]);
+                        }
+                    } else if (std.mem.indexOfScalar(u8, chunk, strand.separator)) |first| {
+                        torn += std.mem.countScalar(u8, chunk, strand.separator);
+                        prefix_torn = hasContent(chunk[0..first]);
+                    } else prefix_torn = prefix_torn or hasContent(chunk);
                     if (blank) for (chunk, 0..) |byte, at| {
                         const position = chunk_offset + at;
                         if (byte == ' ' or byte == '\t') continue;
@@ -437,6 +450,11 @@ pub fn Tail(comptime T: type) type {
                     self.fault.framing(self.number);
                     return error.MissingSeparator;
                 };
+                torn += @intFromBool(prefix_torn);
+                if (torn != 0) {
+                    self.skipped += torn;
+                    self.fault.framing(self.number);
+                }
                 if (length > self.options.max_line_bytes) {
                     self.fault.framing(self.number);
                     return error.LineTooLong;
@@ -598,3 +616,13 @@ test lastNewline {
 // Tests. A file has to exist for any of this, so each one writes its bytes
 // into a temporary directory and reads them back.
 //=========================================================================
+
+/// Whether `bytes`, passed over in front of a line's first separator, hold
+/// anything but whitespace: the tail of a record that was torn.
+fn hasContent(bytes: []const u8) bool {
+    for (bytes) |byte| switch (byte) {
+        ' ', '\t', '\r' => {},
+        else => return true,
+    };
+    return false;
+}

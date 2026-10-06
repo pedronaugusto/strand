@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A line refused as too long that the stream ended inside is discarded to its end when the rest arrives. A `Follower` read its tail as a malformed line, misplaced the next record and read the refused line again.
+
+- In `record_separator` mode every separator starts a record: the record on a line is what follows its last separator, and each torn record before it is dropped, counted in `skipped` and named in `fault`. A torn record followed by a whole one on the same line lost the whole one, forwards and in `Tail`.
+
 - Opener callbacks take `io` before `context`. `syncFile` and `syncDir` take `io` before the file or directory. Internal parse helpers put comptime selectors and allocators before data.
 
 - Name the scanner token and allocation error sets as public error sets, and name integer conversion failures as public `int.Error`. Qualify file identity results as public `Identity.Taken`. Expose custom JSON hook fixture types to match their public signatures.

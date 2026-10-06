@@ -60,9 +60,11 @@ readers have independent state; one reader is not shared between threads.
 `LineReader` frames and checks bytes without parsing. `Reader(T)` decodes them into `T`,
 following `std.json`'s typed rules and custom hooks. `max_line_bytes` bounds the JSON
 payload, excluding its terminator, optional separator and discarded torn prefix.
-Oversized records are consumed before the next read. `lines.fault` records the last
-refusal's line, byte offset and parse cause; `on_malformed = .skip` counts skipped
-lines. Unknown fields are ignored by default and duplicate fields are errors by default.
+An oversized record is consumed to its end before the next record is framed, also
+when its end arrives later in a growing file. With `record_separator`, every separator
+starts a record: a torn record is dropped and counted, and the record after it on the
+same line is read. `lines.fault` records the last refusal's line, byte offset and parse
+cause; `on_malformed = .skip` counts skipped lines. Unknown fields are ignored by default and duplicate fields are errors by default.
 
 `Writer(T)` writes to a caller-owned `*std.Io.Writer`. `init` and `initFile` stream
 records without owned scratch. `initBounded` and `initFileBounded` take an allocator and

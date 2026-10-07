@@ -1520,10 +1520,10 @@ test "a reader resumed at an offset carries the line number with it" {
     // its own offset, and every line after it under the next ones.
     for (index.items) |mark| {
         var source: std.Io.Reader = .fixed(input.written()[@intCast(mark.offset)..]);
-        var reader: strand.Reader(Event) = .resumeAt(testing.allocator, &source, .{}, .{
+        var reader: strand.Reader(Event) = .resumeAt(testing.allocator, &source, .{
             .offset = mark.offset,
             .lines_before = mark.number - 1,
-        });
+        }, .{});
         defer reader.deinit();
 
         const first = (try reader.next()).?;
@@ -1545,10 +1545,10 @@ test "a reader resumed at an offset carries the line number with it" {
 
     // Resumed at the end, there is nothing left and the count still holds.
     var empty: std.Io.Reader = .fixed("");
-    var done: strand.Reader(Event) = .resumeAt(testing.allocator, &empty, .{}, .{
+    var done: strand.Reader(Event) = .resumeAt(testing.allocator, &empty, .{
         .offset = input.written().len,
         .lines_before = 500,
-    });
+    }, .{});
     defer done.deinit();
     try testing.expectEqual(@as(?strand.Line(Event), null), try done.next());
     try testing.expectEqual(@as(u64, 500), done.lines.number);
@@ -1561,10 +1561,10 @@ test "a resumed reader does not eat three bytes looking for a mark" {
     const offset = std.mem.findScalar(u8, input, '\n').? + 1;
 
     var source: std.Io.Reader = .fixed(input[offset..]);
-    var reader: strand.Reader(Event) = .resumeAt(testing.allocator, &source, .{}, .{
+    var reader: strand.Reader(Event) = .resumeAt(testing.allocator, &source, .{
         .offset = offset,
         .lines_before = 1,
-    });
+    }, .{});
     defer reader.deinit();
 
     const line = (try reader.next()).?;

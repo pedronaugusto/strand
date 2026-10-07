@@ -135,7 +135,7 @@ pub fn Reader(comptime T: type) type {
         lines: LineReader,
         /// Read-only after `init`.
         options: Options,
-        /// Internal. What parsing the current line allocated, reset per line.
+        /// Private: What parsing the current line allocated, reset per line.
         arena: std.heap.ArenaAllocator,
 
         const Self = @This();
@@ -146,25 +146,25 @@ pub fn Reader(comptime T: type) type {
 
         pub const Start = shared.Start;
 
-        /// A reader over `input`, with `allocator` backing the line buffer and
+        /// A reader over `input`, with `gpa` backing the line buffer and
         /// the per-line arena. Does not read from `input`.
-        pub fn init(allocator: Allocator, input: *std.Io.Reader, options: Options) Self {
-            return .resumeAt(allocator, input, options, .{});
+        pub fn init(gpa: Allocator, input: *std.Io.Reader, options: Options) Self {
+            return .resumeAt(gpa, input, .{}, options);
         }
 
         /// A reader over an `input` already positioned part-way into a file,
         /// numbering and placing its lines as if it had read the rest. See
         /// `LineReader.resumeAt`, which this is over.
         pub fn resumeAt(
-            allocator: Allocator,
+            gpa: Allocator,
             input: *std.Io.Reader,
-            options: Options,
             start: Start,
+            options: Options,
         ) Self {
             return .{
-                .lines = .resumeAt(allocator, input, options.framing(), start),
+                .lines = .resumeAt(gpa, input, start, options.framing()),
                 .options = options,
-                .arena = .init(allocator),
+                .arena = .init(gpa),
             };
         }
 
@@ -427,7 +427,7 @@ pub fn Reader(comptime T: type) type {
             }
         }
 
-        /// A copy of `line.value` and all its storage on `allocator`.
+        /// A copy of `line.value` and all its storage on `gpa`.
         ///
         /// The result outlives the line and the reader. This calls `copyOwned`
         /// on the value already returned, preserving edits and migrations;
@@ -445,9 +445,9 @@ pub fn Reader(comptime T: type) type {
         /// The copy recurses once per level of the value. A recursive schema
         /// read by this reader is no deeper than `Options.max_depth`, which
         /// is what bounds that recursion too.
-        pub fn keep(self: *Self, allocator: Allocator, line: Line(T)) Allocator.Error!T {
+        pub fn keep(self: *Self, gpa: Allocator, line: Line(T)) Allocator.Error!T {
             _ = self;
-            return owned_module.copyOwned(allocator, line.value);
+            return owned_module.copyOwned(gpa, line.value);
         }
     };
 }
@@ -472,8 +472,8 @@ const PrettyEnd = struct {
     },
     scanner: Scanner,
 
-    noinline fn init(self: *PrettyEnd, allocator: Allocator, line: []const u8) void {
-        self.scanner = .initCompleteInput(allocator, line);
+    noinline fn init(self: *PrettyEnd, gpa: Allocator, line: []const u8) void {
+        self.scanner = .initCompleteInput(gpa, line);
         self.state = .open;
         self.follow(line);
     }

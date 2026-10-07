@@ -145,6 +145,48 @@ pub fn build(b: *std.Build) void {
     //=====================================================================
 
     if (b.pkg_hash.len != 0) return;
+
+    //=====================================================================
+    // Benchmarks
+    //
+    // Only in strand's own tree, and never part of `zig build test`: a
+    // number that varies with the machine is not a thing to fail a build
+    // over. `check` compiles them so they keep up with the API; `bench`
+    // runs them. Numbers worth reading come from -Doptimize=ReleaseFast.
+    //=====================================================================
+
+    const bench_options = b.addOptions();
+    bench_options.addOption(bool, "smoke", b.option(
+        bool,
+        "bench-smoke",
+        "Run the benchmarks once over tiny inputs, without reading a clock",
+    ) orelse false);
+    const bench = b.addExecutable(.{
+        .name = "strand-bench",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("bench/bench.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "strand", .module = module }},
+        }),
+    });
+    bench.root_module.addOptions("bench_options", bench_options);
+    const bench_run = b.addRunArtifact(bench);
+    bench_run.setCwd(b.path("."));
+    b.step("bench", "Run the benchmarks").dependOn(&bench_run.step);
+    check_step.dependOn(&bench.step);
+    const bench_tests = b.addTest(.{
+        .name = "strand-bench-tests",
+        .filters = if (test_filter) |filter| &.{filter} else &.{},
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("bench/bench_scratch.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(bench_tests).step);
+    check_step.dependOn(&bench_tests.step);
+
     if (b.lazyImport(@This(), "preflight")) |preflight| {
         preflight.addCi(b, .{ .tests = test_step, .portable_tests = true });
         // A project that depends on strand by path, with no packages to

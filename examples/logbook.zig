@@ -45,7 +45,7 @@ pub fn main() !void {
         pub const jsonl_version: u32 = 2;
 
         pub fn jsonlMigrate(
-            allocator: std.mem.Allocator,
+            payload_arena: std.mem.Allocator,
             from: u32,
             data: std.json.Value,
         ) std.json.ParseFromValueError!Self {
@@ -53,7 +53,7 @@ pub fn main() !void {
             const old = try strand.payloadOf(struct {
                 kind: []const u8,
                 at: []const u8 = "0",
-            }, allocator, data);
+            }, payload_arena, data);
             return .{
                 .scope = "app",
                 .kind = old.kind,
@@ -163,13 +163,13 @@ fn follow(comptime Entry: type, gpa: std.mem.Allocator, io: std.Io, dir: std.Io.
     // Following: read to the end of the file, wait for it to grow, carry on.
     // There is no end to a file being appended to, so a follower stops when
     // the `std.Io` cancels it — or, as here, when the caller stops asking.
-    var follower: strand.Follower(strand.Versioned(Entry)) = .init(gpa, io, &file_reader, .{
+    var follower: strand.Follower(strand.Versioned(Entry)) = .init(gpa, &file_reader, .{
         .wait = .{ .poll = .fromMilliseconds(5) },
     });
-    defer follower.deinit();
+    defer follower.deinit(io);
 
     for (0..appended) |_| {
-        const line = try follower.next();
+        const line = try follower.next(io);
         std.log.info("followed: {s} at {d}", .{ line.value.value.kind, line.value.value.at });
     }
     // --- README:follow ---
@@ -181,7 +181,7 @@ fn follow(comptime Entry: type, gpa: std.mem.Allocator, io: std.Io, dir: std.Io.
     // `next` has returned a line and before the next call, which is when the
     // offset in it is a line boundary. It is a struct of integers, so a
     // registry of them is a JSON Lines file like any other.
-    const point = try follower.checkpoint();
+    const point = try follower.checkpoint(io);
 
     // The process ends here, and the log goes on growing without it.
     try log.write(.{ .value = .{ .kind = "tick", .at = 12 } });
@@ -197,12 +197,12 @@ fn follow(comptime Entry: type, gpa: std.mem.Allocator, io: std.Io, dir: std.Io.
     var reopened_buffer: [4096]u8 = undefined;
     var reopened_reader = reopened.reader(io, &reopened_buffer);
 
-    var resumed: strand.Follower(strand.Versioned(Entry)) = try .resumeFrom(gpa, io, &reopened_reader, .{
+    var resumed: strand.Follower(strand.Versioned(Entry)) = try .resumeFrom(gpa, io, &reopened_reader, point, .{
         .wait = .{ .poll = .fromMilliseconds(5) },
-    }, point);
-    defer resumed.deinit();
+    });
+    defer resumed.deinit(io);
 
-    const line = try resumed.next();
+    const line = try resumed.next(io);
     std.log.info("resumed at line {d} of {d} rotation(s): {s} at {d}", .{
         line.number,
         resumed.rotations,

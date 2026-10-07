@@ -36,7 +36,7 @@ const State = enum {
     string_escape,
 };
 
-allocator: Allocator,
+gpa: Allocator,
 input: []const u8,
 cursor: usize = 0,
 value_start: usize = 0,
@@ -47,12 +47,12 @@ extra_stack: std.ArrayList(Mode) = .empty,
 depth: usize = 0,
 diagnostics: ?*std.json.Diagnostics = null,
 
-pub fn initCompleteInput(allocator: Allocator, input: []const u8) Self {
-    return .{ .allocator = allocator, .input = input };
+pub fn initCompleteInput(gpa: Allocator, input: []const u8) Self {
+    return .{ .gpa = gpa, .input = input };
 }
 
 pub fn deinit(self: *Self) void {
-    self.extra_stack.deinit(self.allocator);
+    self.extra_stack.deinit(self.gpa);
     self.* = undefined;
 }
 
@@ -67,7 +67,7 @@ pub fn stackHeight(self: *const Self) usize {
 
 pub fn ensureTotalStackCapacity(self: *Self, height: usize) Allocator.Error!void {
     if (height > self.inline_stack.len)
-        try self.extra_stack.ensureTotalCapacity(self.allocator, height - self.inline_stack.len);
+        try self.extra_stack.ensureTotalCapacity(self.gpa, height - self.inline_stack.len);
 }
 
 fn assertStack(self: *const Self) void {
@@ -80,7 +80,7 @@ fn push(self: *Self, mode: Mode) Allocator.Error!void {
     if (self.depth < self.inline_stack.len) {
         self.inline_stack[self.depth] = mode;
     } else {
-        try self.extra_stack.append(self.allocator, mode);
+        try self.extra_stack.append(self.gpa, mode);
     }
     self.depth += 1;
 }
@@ -480,18 +480,18 @@ fn codepointToken(cp: u21) Token {
     };
 }
 
-pub fn nextAlloc(self: *Self, allocator: Allocator, when: AllocWhen) AllocError!Token {
-    return self.nextAllocMax(allocator, when, std.json.default_max_value_len);
+pub fn nextAlloc(self: *Self, gpa: Allocator, when: AllocWhen) AllocError!Token {
+    return self.nextAllocMax(gpa, when, std.json.default_max_value_len);
 }
 
-pub fn nextAllocMax(self: *Self, allocator: Allocator, when: AllocWhen, max: usize) AllocError!Token {
+pub fn nextAllocMax(self: *Self, gpa: Allocator, when: AllocWhen, max: usize) AllocError!Token {
     const kind = self.peekNextTokenType() catch |err| switch (err) {
         error.BufferUnderrun => unreachable,
         else => |e| return e,
     };
     switch (kind) {
         .number, .string => {
-            var list: ValueList = .init(allocator);
+            var list: ValueList = .init(gpa);
             errdefer list.deinit();
             const borrowed = self.allocNextIntoArrayListMax(&list, when, max) catch |err| switch (err) {
                 error.BufferUnderrun => unreachable,

@@ -48,13 +48,13 @@ fn keepParsed(comptime direction: Direction) !void {
             var reader = switch (direction) {
                 .reader => strand.Reader(T).init(testing.allocator, &fixture.reader.interface, .{}),
                 .tail => try strand.Tail(T).init(testing.allocator, &fixture.reader, .{ .block_bytes = 4 }),
-                .follower => strand.Follower(T).init(testing.allocator, testing.io, &fixture.reader, .{}),
+                .follower => strand.Follower(T).init(testing.allocator, &fixture.reader, .{}),
             };
-            defer reader.deinit();
+            defer if (direction == .follower) reader.deinit(testing.io) else reader.deinit();
             var line = switch (direction) {
                 .reader => (try reader.next()).?,
                 .tail => (try reader.prev()).?,
-                .follower => try reader.next(),
+                .follower => try reader.next(testing.io),
             };
             try testing.expectEqual(@as(u32, 10), line.value.value.count);
             try testing.expectEqual(@as(usize, 1), Stateful.calls);

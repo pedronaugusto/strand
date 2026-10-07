@@ -7,19 +7,19 @@ const std = @import("std");
 
 const Self = @This();
 
-allocator: std.mem.Allocator,
+gpa: std.mem.Allocator,
 writer: std.Io.Writer,
 allocation_failed: bool = false,
 
-pub fn init(allocator: std.mem.Allocator) Self {
+pub fn init(gpa: std.mem.Allocator) Self {
     return .{
-        .allocator = allocator,
+        .gpa = gpa,
         .writer = .{ .buffer = &.{}, .vtable = &.{ .drain = drain, .flush = flush, .rebase = rebase } },
     };
 }
 
 pub fn deinit(self: *Self) void {
-    self.allocator.free(self.writer.buffer);
+    self.gpa.free(self.writer.buffer);
     self.* = undefined;
 }
 
@@ -41,7 +41,7 @@ pub fn toOwnedSlice(self: *Self) std.mem.Allocator.Error![]u8 {
         .capacity = self.writer.buffer.len,
         .pointer_stability = .{},
     };
-    const bytes = try storage.toOwnedSlice(self.allocator);
+    const bytes = try storage.toOwnedSlice(self.gpa);
     self.writer.buffer = &.{};
     self.writer.end = 0;
     std.debug.assert(self.writer.buffer.len == 0);
@@ -56,7 +56,7 @@ fn grow(self: *Self, additional: usize) std.Io.Writer.Error!void {
         .capacity = self.writer.buffer.len,
         .pointer_stability = .{},
     };
-    storage.ensureUnusedCapacity(self.allocator, additional) catch {
+    storage.ensureUnusedCapacity(self.gpa, additional) catch {
         self.allocation_failed = true;
         return error.WriteFailed;
     };

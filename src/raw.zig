@@ -53,20 +53,20 @@ pub fn RawType(comptime strand: type) type {
             pub const @"null": Raw = .{ .bytes = "null" };
 
             /// `value`, encoded as `Writer` encodes it with its default options, as
-            /// a `Raw` on `allocator`. The bytes are one allocation of exactly their
-            /// length, so `allocator.free(raw.bytes)` returns it.
+            /// a `Raw` on `gpa`. The bytes are one allocation of exactly their
+            /// length, so `gpa.free(raw.bytes)` returns it.
             /// `OutOfMemory` means the allocation failed; `WriteFailed` means a
             /// custom `jsonStringify` hook refused to encode the value.
-            pub fn encode(allocator: Allocator, value: anytype) (Allocator.Error || std.Io.Writer.Error)!Raw {
-                var out: EncodeBuffer = .init(allocator);
+            pub fn encode(gpa: Allocator, value: anytype) (Allocator.Error || std.Io.Writer.Error)!Raw {
+                var out: EncodeBuffer = .init(gpa);
                 defer out.deinit();
                 strand.writeValue(&out.writer, value, .{}) catch |err| return out.diagnose(err);
                 return .{ .bytes = try out.toOwnedSlice() };
             }
 
             // A parsed JSON tree has no custom hooks; only its storage can fail.
-            fn fromValue(allocator: Allocator, value: std.json.Value) Allocator.Error!Raw {
-                return encode(allocator, value) catch |err| switch (err) {
+            fn fromValue(arena: Allocator, value: std.json.Value) Allocator.Error!Raw {
+                return encode(arena, value) catch |err| switch (err) {
                     error.OutOfMemory => error.OutOfMemory,
                     error.WriteFailed => unreachable,
                 };
@@ -78,10 +78,10 @@ pub fn RawType(comptime strand: type) type {
             pub fn parse(
                 raw: Raw,
                 comptime T: type,
-                allocator: Allocator,
+                arena: Allocator,
                 options: strand.ParseOptions,
             ) strand.ParseLineError!T {
-                return strand.parseLine(T, allocator, raw.bytes, options);
+                return strand.parseLine(T, arena, raw.bytes, options);
             }
 
             /// Reads the value. Called by `std.json`, and by this package on the
@@ -94,7 +94,7 @@ pub fn RawType(comptime strand: type) type {
             /// value is parsed and encoded, which keeps what it means and not how it
             /// was spaced.
             pub fn jsonParse(
-                allocator: Allocator,
+                arena: Allocator,
                 source: anytype,
                 options: std.json.ParseOptions,
             ) std.json.ParseError(@TypeOf(source.*))!Raw {
@@ -117,21 +117,21 @@ pub fn RawType(comptime strand: type) type {
                     }
                     const start = source.cursor;
                     try source.skipValue();
-                    return keep(allocator, source.input[start..source.cursor], options);
+                    return keep(arena, source.input[start..source.cursor], options);
                 }
-                const value = try std.json.innerParse(std.json.Value, allocator, source, options);
-                return fromValue(allocator, value);
+                const value = try std.json.innerParse(std.json.Value, arena, source, options);
+                return fromValue(arena, value);
             }
 
             /// A value `std.json` has already parsed into a `std.json.Value`: kept
             /// as that value encoded.
             pub fn jsonParseFromValue(
-                allocator: Allocator,
+                arena: Allocator,
                 source: std.json.Value,
                 options: std.json.ParseOptions,
             ) std.json.ParseFromValueError!Raw {
                 _ = options;
-                return fromValue(allocator, source);
+                return fromValue(arena, source);
             }
 
             /// Writes the value. Called by `std.json`; `Writer` writes a `Raw`
@@ -145,9 +145,9 @@ pub fn RawType(comptime strand: type) type {
 
             /// The bytes as a decoded value would hold them: borrowed unless every
             /// string is to be copied.
-            fn keep(allocator: Allocator, bytes: []const u8, options: std.json.ParseOptions) Allocator.Error!Raw {
+            fn keep(arena: Allocator, bytes: []const u8, options: std.json.ParseOptions) Allocator.Error!Raw {
                 if ((options.allocate orelse .alloc_always) == .alloc_always)
-                    return .{ .bytes = try allocator.dupe(u8, bytes) };
+                    return .{ .bytes = try arena.dupe(u8, bytes) };
                 return .{ .bytes = bytes };
             }
         };

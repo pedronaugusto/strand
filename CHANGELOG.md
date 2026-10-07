@@ -6,76 +6,29 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-- Breaking: strand requires Zig 0.17.0.
+### Breaking
 
-- `writeValue` and a bounded `Writer` write a non-exhaustive enum: a named value by name, any other by number, as `writeLine` does. Such an enum failed to compile on the buffered path.
-
-- `Tail.init` refuses a pipe or socket as `error.Streaming`, as documented; it read whatever the system reported as the stream's size.
-
-- `Follower` names its error sets: `CheckpointError`, `ResumeError`, `TruncatedError` and `RestartError`; `Identity.take` returns `Identity.TakeError`. `Follower.source` documents that a rotation under an opener rewrites the caller's `File.Reader`.
-
-- `Reader`, `Writer`, `Tail` and `Follower` share their policy types across record types: `Reader(A).Options` is `Reader(B).Options`, and likewise `NextError`, `Start`, `Flush`, `Sync`, `Error`, `InitError`, `Wait` and `Checkpoint`. Methods keep their typed signatures and doc comments.
-
+- strand requires Zig 0.17.0.
+- `Follower` keeps no `std.Io`: `init(gpa, source, options)` takes none, and `next`, `checkpoint`, `truncated` and `deinit` take the `io` they block on. `resumeFrom(gpa, io, source, point, options)` takes `point` before `options`.
+- `Reader.resumeAt` and `LineReader.resumeAt` take `start` before `options`.
 - A recursive schema, one that reaches itself, is held to `ParseOptions.max_depth` (and `Reader.Options.max_depth`, `Tail.Options.max_depth`), 512 levels of arrays and objects by default: a line nested deeper is `error.NestingTooDeep`, which a reader reports as `MalformedLine`. One deeply nested line inside the default line bound overflowed the stack. `ParseLineError` gains `NestingTooDeep`.
-
-- `Writer.write` publishes a record whole: one that fails partway leaves nothing in the destination, where the next record was appended to its bytes and lost with them. A record that fails after outgrowing the destination's buffer sets `torn`, and the next record starts on a line of its own.
-
-- A line refused as too long that the stream ended inside is discarded to its end when the rest arrives. A `Follower` read its tail as a malformed line, misplaced the next record and read the refused line again.
-
-- In `record_separator` mode every separator starts a record: the record on a line is what follows its last separator, and each torn record before it is dropped, counted in `skipped` and named in `fault`. A torn record followed by a whole one on the same line lost the whole one, forwards and in `Tail`.
-
 - Opener callbacks take `io` before `context`. `syncFile` and `syncDir` take `io` before the file or directory. Internal parse helpers put comptime selectors and allocators before data.
-
-- Name the scanner token and allocation error sets as public error sets, and name integer conversion failures as public `int.Error`. Qualify file identity results as public `Identity.Taken`. Expose custom JSON hook fixture types to match their public signatures.
-
-- A `.pretty` reader of a type the direct decoder reads parses a record where it lies in the input's buffer, across its line breaks, in one pass; it joins lines only for a record that straddles a refill, or one with a blank line, a `\r` or a fault in it, as before.
-
-- A union that declares `jsonl_tag` is read and written tagged inside its object, `{"type":"assistant",...}`, as serde's `#[serde(tag)]` reads and writes it, by every decoder and by `Writer` in both formats; `jsonl_other` names an arm for a tag naming no arm, and `tagOf` reads the arm from the tag member.
-
-- `memberOf` and `memberStringOf` read one top-level member of a line by name, wherever it is, without parsing the line; the first of a repeated member is the answer.
-
-- A `Follower` with an opener waits while the path names nothing, as it does between a rotation's rename and its create, where it ended with `error.ReopenFailed`; an opener reports that moment as `error.FileNotFound`, and `PathOpener` does.
-
-- A `.pretty` reader follows a record to where its JSON value ends and parses it there, once; it parsed the record again after every line joined to it, so a record of n lines cost n parses. A record that is JSON but not a `T` is refused as the lines its value takes, where it was refused at the line it went wrong on and the lines after that were read as records of their own.
-
-- A `Raw` read where no value starts, as in `[1}` read through `std.json` or the token path, is an error rather than a panic in `skipValue`.
-
-- A line that ends inside a character is `UnexpectedEndOfInput`, as `std.json` reads it, rather than `SyntaxError`.
-
-- Check a string's high bytes in the vector that found its closing quote or escape.
-
-- Keep the framing scan in its own call and find a control lane only in a vector that holds one.
-
-- Assemble codecs around one raw value type and keep integration tests above the public module.
-
-### Changed
-
-- The README usage excerpt keeps the example calls without the surrounding commentary.
-
-- Breaking: `Raw.encode` adds `WriteFailed` for a custom stringify hook's refusal and reports `OutOfMemory` only when its owned encoding buffer cannot allocate.
-- Breaking: bounded writers use `initBounded(allocator, output, max_line_bytes, options)` or `initFileBounded(allocator, file_writer, max_line_bytes, options)` instead of `Options.max_line_bytes`, require `deinit`, encode once into reusable owned scratch and emit the bytes measured; `Writer.Error` adds `OutOfMemory`, while unbounded `init` and `initFile` keep streaming without scratch.
-- Breaking: benchmark harnesses and their scratch tests live only on the `bench` branch in `bench/own`; `zig build bench` and the benchmark examples are removed from the library, while unit tests retain deterministic framing, parse, allocation and borrowing checks.
-- Breaking: owned schemas refuse pointer-bearing vector sentinels, including empty arrays and slices and fields in null optionals or inactive union arms.
-- A follower retains the identity measured when it adopts or restarts a file, so later rewrites cannot change a checkpoint of records already read.
-- Direct decoding propagates allocator failure immediately instead of reparsing the line and potentially hiding `OutOfMemory`.
-- Value conversion handles empty arrays through the reflected walker, avoiding std.json's nonexistent-element indexing in nested payloads and migrations.
-- Breaking: byte vectors accept both JSON strings of the exact UTF-8 byte length and arrays on every decoder path, replacing string refusal; encoding stays byte-for-byte std.json, including empty vectors.
-- Breaking: `Tail.last` parses each line normally and copies through `copyOwned`, requires the same owned-data contract as `keep`, returns only `NextError`, and releases partial batches on failure; its internal `batch_allocator` field is removed.
-- The logbook example owns a separate scratch directory per invocation so concurrent builds cannot overwrite or remove each other's files.
-- Vector decoding converts array elements as values, supporting booleans and narrow integers on every parse path including array input for byte vectors.
-- Owned copies give pointer-vector elements independent storage and release them on failure or `freeOwned`.
-- Breaking: `Identity.inode` is now `Identity.file_id`, including serialized policy tags; the old `inode` tag is refused with `error.UnknownField`, with no compatibility path, and followers start fresh.
-- Breaking: `Reader.keep`, `Tail.keep` and `Follower.keep` copy `line.value` through `copyOwned` and return `Allocator.Error!T`, preserving edits and migrations without calling parsers again; schemas must meet the owned-copy data contract.
-- Owned-copy type checking accepts full protocol schemas without exhausting the compiler's default evaluation budget.
-- Value conversion reads checked integers and vectors through their reflected containers, preserving the first conversion error and supporting nested vectors in migrations.
-- Breaking: `Identity.Taken.id` holds the full `FileId` instead of `inode` and optional `volume`; old checkpoints are refused with `error.MissingField`, with no conversion or fallback, and callers choose where to restart.
-- Breaking: `max_line_bytes` counts JSON payload bytes everywhere, excluding the separator, terminator and discarded torn prefix; writer and tail boundary acceptance changes.
-- Breaking: `Reader(T)` is a `LineReader` with a parse on top, and keeps it as `Reader.lines`. The reader's place in the stream is kept there: `reader.number`, `reader.offset`, `reader.skipped`, `reader.fault` and `reader.input` are now `reader.lines.number`, `reader.lines.offset`, `reader.lines.skipped`, `reader.lines.fault` and `reader.lines.input`. `Reader.Options` is unchanged. `Reader.Joined` is `LineReader.Joined`. The framing is one piece of code, no longer compiled once for every `T`.
-- `Follower` rewinds a half-written record and begins again after a truncation through `LineReader.reset`, rather than by setting the reader's fields.
-- Faster where chronicle's own codec was faster, and the same bytes. A string with something to escape in it is scanned a vector at a time and written in runs, each escape `std.json`'s own spelling, where it used to go to `std.json` whole, a byte at a time; a member's key, with its comma where the comma is certain, and an enum's name are one constant each; an integer past 64 bits is written nineteen digits a division and read nineteen digits at a time. The decoder matches the key it expects next as the constant it is before reading one. The same property over every shape, under every option that changes bytes, and a fuzz target hold the writer to `std.json`'s bytes.
+- `Raw.encode` adds `WriteFailed` for a custom stringify hook's refusal and reports `OutOfMemory` only when its owned encoding buffer cannot allocate.
+- Bounded writers use `initBounded(gpa, output, max_line_bytes, options)` or `initFileBounded(gpa, file_writer, max_line_bytes, options)` instead of `Options.max_line_bytes`, require `deinit`, encode once into reusable owned scratch and emit the bytes measured; `Writer.Error` adds `OutOfMemory`, while unbounded `init` and `initFile` keep streaming without scratch.
+- The benchmark moved from `examples/bench.zig` to `bench/`; `zig build bench` runs it in strand's own tree and is not there in a project that depends on strand. Unit tests retain deterministic framing, parse, allocation and borrowing checks.
+- Owned schemas refuse pointer-bearing vector sentinels, including empty arrays and slices and fields in null optionals or inactive union arms.
+- Byte vectors accept both JSON strings of the exact UTF-8 byte length and arrays on every decoder path, replacing string refusal; encoding stays byte-for-byte std.json, including empty vectors.
+- `Tail.last` parses each line normally and copies through `copyOwned`, requires the same owned-data contract as `keep`, returns only `NextError`, and releases partial batches on failure; its internal `batch_allocator` field is removed.
+- `Identity.inode` is now `Identity.file_id`, including serialized policy tags; the old `inode` tag is refused with `error.UnknownField`, with no compatibility path, and followers start fresh.
+- `Reader.keep`, `Tail.keep` and `Follower.keep` copy `line.value` through `copyOwned` and return `Allocator.Error!T`, preserving edits and migrations without calling parsers again; schemas must meet the owned-copy data contract.
+- `Identity.Taken.id` holds the full `FileId` instead of `inode` and optional `volume`; old checkpoints are refused with `error.MissingField`, with no conversion or fallback, and callers choose where to restart.
+- `max_line_bytes` counts JSON payload bytes everywhere, excluding the separator, terminator and discarded torn prefix; writer and tail boundary acceptance changes.
+- `Reader(T)` is a `LineReader` with a parse on top, and keeps it as `Reader.lines`. The reader's place in the stream is kept there: `reader.number`, `reader.offset`, `reader.skipped`, `reader.fault` and `reader.input` are now `reader.lines.number`, `reader.lines.offset`, `reader.lines.skipped`, `reader.lines.fault` and `reader.lines.input`. `Reader.Options` is unchanged. `Reader.Joined` is `LineReader.Joined`. The framing is one piece of code, no longer compiled once for every `T`.
 
 ### Added
 
+- A union that declares `jsonl_tag` is read and written tagged inside its object, `{"type":"assistant",...}`, as serde's `#[serde(tag)]` reads and writes it, by every decoder and by `Writer` in both formats; `jsonl_other` names an arm for a tag naming no arm, and `tagOf` reads the arm from the tag member.
+- `memberOf` and `memberStringOf` read one top-level member of a line by name, wherever it is, without parsing the line; the first of a repeated member is the answer.
 - `innerParse` exposes the checked token-source decoder so custom `jsonParse` hooks can delegate fields with strand's integer and vector rules.
 - `copyOwned` and `freeOwned` copy a parsed value and all its storage without a JSON round-trip, including `Raw` bytes and `std.json.Value`, and clean up a failed copy.
 - `LineReader`, the line layer on its own: a `*std.Io.Reader` as a stream of lines, framed at the terminator, held to `max_line_bytes`, checked for raw control bytes and missing separators, numbered and placed, and not parsed. It is for bytes whose meaning is somebody else's — a line protocol with its own decoder, a child process's output — which until now had to name a type for a `Reader` they never parsed into. A line past the bound is `error.LineTooLong` with the line consumed to its end, so the caller answers it and reads on; the stream's own buffer can be much smaller than the longest line. `LineReader.recordStart` and `LineReader.reset` are how a file still being written is read: where the record the reader was last on began, and carrying on from a place the stream has been put back to. `LineReader.join` appends the next physical line to a record, for a reader that knows when a record spread over several lines is finished.
@@ -93,8 +46,40 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `Tail.prevRaw`, a line read backwards as its bytes, framed and checked and not parsed; and `Tail.Options.end`, where the file ends for the reader, for a log that reserves space ahead of its records.
 - A line-protocol recipe in `examples/logbook.zig`: requests read with a `LineReader`, one past the bound answered, and the replies written a record at a time.
 
+### Changed
+
+- `Follower` names its error sets: `CheckpointError`, `ResumeError`, `TruncatedError` and `RestartError`; `Identity.take` returns `Identity.TakeError`. `Follower.source` documents that a rotation under an opener rewrites the caller's `File.Reader`.
+- `Reader`, `Writer`, `Tail` and `Follower` share their policy types across record types: `Reader(A).Options` is `Reader(B).Options`, and likewise `NextError`, `Start`, `Flush`, `Sync`, `Error`, `InitError`, `Wait` and `Checkpoint`. Methods keep their typed signatures and doc comments.
+- Name the scanner token and allocation error sets as public error sets, and name integer conversion failures as public `int.Error`. Qualify file identity results as public `Identity.Taken`. Expose custom JSON hook fixture types to match their public signatures.
+- A `.pretty` reader of a type the direct decoder reads parses a record where it lies in the input's buffer, across its line breaks, in one pass; it joins lines only for a record that straddles a refill, or one with a blank line, a `\r` or a fault in it, as before.
+- A follower retains the identity measured when it adopts or restarts a file, so later rewrites cannot change a checkpoint of records already read.
+- Direct decoding propagates allocator failure immediately instead of reparsing the line and potentially hiding `OutOfMemory`.
+- Value conversion handles empty arrays through the reflected walker, avoiding std.json's nonexistent-element indexing in nested payloads and migrations.
+- The logbook example owns a separate scratch directory per invocation so concurrent builds cannot overwrite or remove each other's files.
+- Vector decoding converts array elements as values, supporting booleans and narrow integers on every parse path including array input for byte vectors.
+- Owned copies give pointer-vector elements independent storage and release them on failure or `freeOwned`.
+- Owned-copy type checking accepts full protocol schemas without exhausting the compiler's default evaluation budget.
+- Value conversion reads checked integers and vectors through their reflected containers, preserving the first conversion error and supporting nested vectors in migrations.
+- `Follower` rewinds a half-written record and begins again after a truncation through `LineReader.reset`, rather than by setting the reader's fields.
+- Faster where chronicle's own codec was faster, and the same bytes. A string with something to escape in it is scanned a vector at a time and written in runs, each escape `std.json`'s own spelling, where it used to go to `std.json` whole, a byte at a time; a member's key, with its comma where the comma is certain, and an enum's name are one constant each; an integer past 64 bits is written nineteen digits a division and read nineteen digits at a time. The decoder matches the key it expects next as the constant it is before reading one. The same property over every shape, under every option that changes bytes, and a fuzz target hold the writer to `std.json`'s bytes.
+- Check a string's high bytes in the vector that found its closing quote or escape.
+- Keep the framing scan in its own call and find a control lane only in a vector that holds one.
+- Assemble codecs around one raw value type and keep integration tests above the public module.
+- The README usage excerpt keeps the example calls without the surrounding commentary.
+- Allocator parameters are named `gpa`, and `arena` where nothing is freed piecewise: `parseLine`, `innerParse`, `Raw.parse` and the `jsonlMigrate` hook.
+- Every declaration the root module re-exports has a doc comment, and fields outside the API say `Private:`.
+
 ### Fixed
 
+- `writeValue` and a bounded `Writer` write a non-exhaustive enum: a named value by name, any other by number, as `writeLine` does. Such an enum failed to compile on the buffered path.
+- `Tail.init` refuses a pipe or socket as `error.Streaming`, as documented; it read whatever the system reported as the stream's size.
+- `Writer.write` publishes a record whole: one that fails partway leaves nothing in the destination, where the next record was appended to its bytes and lost with them. A record that fails after outgrowing the destination's buffer sets `torn`, and the next record starts on a line of its own.
+- A line refused as too long that the stream ended inside is discarded to its end when the rest arrives. A `Follower` read its tail as a malformed line, misplaced the next record and read the refused line again.
+- In `record_separator` mode every separator starts a record: the record on a line is what follows its last separator, and each torn record before it is dropped, counted in `skipped` and named in `fault`. A torn record followed by a whole one on the same line lost the whole one, forwards and in `Tail`.
+- A `Follower` with an opener waits while the path names nothing, as it does between a rotation's rename and its create, where it ended with `error.ReopenFailed`; an opener reports that moment as `error.FileNotFound`, and `PathOpener` does.
+- A `.pretty` reader follows a record to where its JSON value ends and parses it there, once; it parsed the record again after every line joined to it, so a record of n lines cost n parses. A record that is JSON but not a `T` is refused as the lines its value takes, where it was refused at the line it went wrong on and the lines after that were read as records of their own.
+- A `Raw` read where no value starts, as in `[1}` read through `std.json` or the token path, is an error rather than a panic in `skipValue`.
+- A line that ends inside a character is `UnexpectedEndOfInput`, as `std.json` reads it, rather than `SyntaxError`.
 - `parseLine` fills diagnostics when it refuses a trailing terminator before parsing, replacing stale coordinates from an earlier call.
 - Bounded record scratch treats an empty repeated write pattern as no bytes, so a custom stringify hook can finish that write regardless of its repetition count.
 - Pretty-record joins count and bound only physical lines that exist, preserve subsequent line numbers after refusal, and retain an unfinished record's rewind point.
@@ -681,6 +666,7 @@ First release: the line layer over `std.json`, and nothing else.
   awkward inputs, with the line numbering checked against an index scan that
   shares no code with the package.
 
+[Unreleased]: https://github.com/pedronaugusto/strand/compare/v0.7.0...HEAD
 [0.7.0]: https://github.com/pedronaugusto/strand/releases/tag/v0.7.0
 [0.6.1]: https://github.com/pedronaugusto/strand/releases/tag/v0.6.1
 [0.6.0]: https://github.com/pedronaugusto/strand/releases/tag/v0.6.0

@@ -36,14 +36,14 @@ fn produce(io: std.Io, file: std.Io.File, buffer: []u8, count: u64) !void {
 /// end; a producer on the caller's own thread reports its failure as a failed
 /// test.
 fn consume(io: std.Io, source: *std.Io.File.Reader, count: u64) !void {
-    var follower: Follower(Event) = .init(testing.allocator, io, source, .{
+    var follower: Follower(Event) = .init(testing.allocator, source, .{
         .wait = .{ .poll = .fromMicroseconds(100) },
     });
-    defer follower.deinit();
+    defer follower.deinit(io);
 
     var seen: u64 = 0;
     while (seen < count) : (seen += 1) {
-        const line = try follower.next();
+        const line = try follower.next(io);
         try testing.expectEqual(seen, line.value.at);
         try testing.expectEqualStrings("tick", line.value.kind);
         try testing.expectEqual(seen + 1, line.number);
@@ -79,11 +79,11 @@ test "a producer task and a follower task over one growing file" {
 
 /// Follows `source` until it is cancelled, which is the only way it ends.
 fn followUntilCanceled(io: std.Io, source: *std.Io.File.Reader) Follower(Event).NextError!void {
-    var follower: Follower(Event) = .init(testing.allocator, io, source, .{
+    var follower: Follower(Event) = .init(testing.allocator, source, .{
         .wait = .{ .poll = .fromMilliseconds(1) },
     });
-    defer follower.deinit();
-    while (true) _ = try follower.next();
+    defer follower.deinit(io);
+    while (true) _ = try follower.next(io);
 }
 
 test "a follower checks cancellation before handing over a buffered record" {
@@ -99,9 +99,9 @@ test "a follower checks cancellation before handing over a buffered record" {
     var vtable = testing.io.vtable.*;
     vtable.checkCancel = Canceled.check;
     const io: std.Io = .{ .userdata = testing.io.userdata, .vtable = &vtable };
-    var follower: Follower(Event) = .init(testing.allocator, io, &fixture.reader, .{});
-    defer follower.deinit();
-    try testing.expectError(error.Canceled, follower.next());
+    var follower: Follower(Event) = .init(testing.allocator, &fixture.reader, .{});
+    defer follower.deinit(io);
+    try testing.expectError(error.Canceled, follower.next(io));
     try testing.expectEqual(@as(u64, 0), follower.reader.lines.number);
     try testing.expectEqualStrings("ready", (try follower.reader.next()).?.value.kind);
 }
@@ -124,14 +124,14 @@ test "a half-written line is not a line until it is finished" {
     defer fixture.deinit();
     try fixture.write_file.writeStreamingAll(testing.io, "{\"kind\":\"whole\"}\n{\"kind\":\"hal");
 
-    var follower: Follower(Event) = .init(testing.allocator, testing.io, &fixture.reader, .{});
-    defer follower.deinit();
+    var follower: Follower(Event) = .init(testing.allocator, &fixture.reader, .{});
+    defer follower.deinit(testing.io);
 
-    try testing.expectEqualStrings("whole", (try follower.next()).value.kind);
+    try testing.expectEqualStrings("whole", (try follower.next(testing.io)).value.kind);
 
     // The rest of line two arrives, and only then is it a line.
     try fixture.write_file.writeStreamingAll(testing.io, "f\"}\n");
-    const second = try follower.next();
+    const second = try follower.next(testing.io);
     try testing.expectEqualStrings("half", second.value.kind);
     try testing.expectEqual(@as(u64, 2), second.number);
 }
@@ -145,16 +145,16 @@ test "an over-long line finished after it was refused is not read twice" {
     var fixture = try Fixture.init(torn_long_head, 512);
     defer fixture.deinit();
 
-    var follower: Follower(Event) = .init(testing.allocator, testing.io, &fixture.reader, .{
+    var follower: Follower(Event) = .init(testing.allocator, &fixture.reader, .{
         .reader = .{ .max_line_bytes = 16 },
         .wait = .{ .poll = .fromMicroseconds(100) },
     });
-    defer follower.deinit();
+    defer follower.deinit(testing.io);
 
-    try testing.expectError(error.LineTooLong, follower.next());
+    try testing.expectError(error.LineTooLong, follower.next(testing.io));
     try fixture.write_file.writePositionalAll(testing.io, torn_long_tail, torn_long_head.len);
 
-    const line = try follower.next();
+    const line = try follower.next(testing.io);
     try testing.expectEqualStrings("b", line.value.kind);
     try testing.expectEqual(@as(u64, 2), line.number);
     try testing.expectEqual(@as(u64, torn_long_head.len + "aaa\"}\n".len), line.offset);
@@ -167,16 +167,16 @@ test "an over-long line finished while the follower waits is not read twice" {
     var fixture = try Fixture.init(torn_long_head, 512);
     defer fixture.deinit();
 
-    var follower: Follower(Event) = .init(testing.allocator, testing.io, &fixture.reader, .{
+    var follower: Follower(Event) = .init(testing.allocator, &fixture.reader, .{
         .reader = .{ .max_line_bytes = 16 },
         .wait = .{ .poll = .fromMicroseconds(100) },
     });
-    defer follower.deinit();
-    try testing.expectError(error.LineTooLong, follower.next());
+    defer follower.deinit(testing.io);
+    try testing.expectError(error.LineTooLong, follower.next(testing.io));
 
     const Next = struct {
         fn run(active: *Follower(Event)) !void {
-            const line = try active.next();
+            const line = try active.next(testing.io);
             try testing.expectEqualStrings("b", line.value.kind);
             try testing.expectEqual(@as(u64, 2), line.number);
             try testing.expectEqual(@as(u64, torn_long_head.len + "aaa\"}\n".len), line.offset);
@@ -197,31 +197,31 @@ test "a follower still recognizes a byte-order mark after starting empty" {
     var fixture = try Fixture.init("", 512);
     defer fixture.deinit();
 
-    var follower: Follower(Event) = .init(testing.allocator, testing.io, &fixture.reader, .{
+    var follower: Follower(Event) = .init(testing.allocator, &fixture.reader, .{
         .wait = .{ .poll = .fromMicroseconds(100) },
     });
-    defer follower.deinit();
+    defer follower.deinit(testing.io);
 
     // Reach the empty file once, as `Follower.next` does before it waits.
     try testing.expectEqual(@as(?strand.Line(Event), null), try follower.reader.next());
     try fixture.write_file.writeStreamingAll(testing.io, "\xEF\xBB\xBF{\"kind\":\"first\"}\n");
 
-    try testing.expectEqualStrings("first", (try follower.next()).value.kind);
+    try testing.expectEqualStrings("first", (try follower.next(testing.io)).value.kind);
 }
 
 test "a follower does not revisit a skipped complete line while waiting" {
     var fixture = try Fixture.init("not json\n", 512);
     defer fixture.deinit();
 
-    var follower: Follower(Event) = .init(testing.allocator, testing.io, &fixture.reader, .{
+    var follower: Follower(Event) = .init(testing.allocator, &fixture.reader, .{
         .reader = .{ .on_malformed = .skip },
         .wait = .{ .poll = .fromMicroseconds(100) },
     });
-    defer follower.deinit();
+    defer follower.deinit(testing.io);
 
     const Next = struct {
         fn run(active: *Follower(Event)) !void {
-            const line = try active.next();
+            const line = try active.next(testing.io);
             try testing.expectEqualStrings("after", line.value.kind);
             try testing.expectEqual(@as(u64, 2), line.number);
         }
@@ -242,15 +242,15 @@ test "a wake is a way to wait that is not a sleep" {
     try fixture.write_file.writeStreamingAll(testing.io, "{\"kind\":\"first\"}\n");
 
     var event: std.Io.Event = .unset;
-    var follower: Follower(Event) = .init(testing.allocator, testing.io, &fixture.reader, .{
+    var follower: Follower(Event) = .init(testing.allocator, &fixture.reader, .{
         .wait = .{ .wake = .{ .event = &event, .timeout = .fromMilliseconds(50) } },
     });
-    defer follower.deinit();
+    defer follower.deinit(testing.io);
 
-    try testing.expectEqualStrings("first", (try follower.next()).value.kind);
+    try testing.expectEqualStrings("first", (try follower.next(testing.io)).value.kind);
     try fixture.write_file.writeStreamingAll(testing.io, "{\"kind\":\"second\"}\n");
     event.set(testing.io);
-    try testing.expectEqualStrings("second", (try follower.next()).value.kind);
+    try testing.expectEqualStrings("second", (try follower.next(testing.io)).value.kind);
 }
 
 test "a truncated file is reported rather than spliced onto the old one" {
@@ -258,23 +258,23 @@ test "a truncated file is reported rather than spliced onto the old one" {
     defer fixture.deinit();
     try fixture.write_file.writeStreamingAll(testing.io, "{\"kind\":\"before\"}\n");
 
-    var follower: Follower(Event) = .init(testing.allocator, testing.io, &fixture.reader, .{
+    var follower: Follower(Event) = .init(testing.allocator, &fixture.reader, .{
         .wait = .{ .poll = .fromMicroseconds(100) },
     });
-    defer follower.deinit();
+    defer follower.deinit(testing.io);
 
-    try testing.expectEqualStrings("before", (try follower.next()).value.kind);
-    try testing.expect(!try follower.truncated());
+    try testing.expectEqualStrings("before", (try follower.next(testing.io)).value.kind);
+    try testing.expect(!try follower.truncated(testing.io));
 
     // Rotation, of the kind that empties the file in place.
     try fixture.write_file.setLength(testing.io, 0);
-    try testing.expect(try follower.truncated());
-    try testing.expectError(error.Truncated, follower.next());
+    try testing.expect(try follower.truncated(testing.io));
+    try testing.expectError(error.Truncated, follower.next(testing.io));
 
     // Starting again is what there is to do about it.
     try fixture.write_file.writePositionalAll(testing.io, "{\"kind\":\"after\"}\n", 0);
     try follower.restart();
-    const after = try follower.next();
+    const after = try follower.next(testing.io);
     try testing.expectEqualStrings("after", after.value.kind);
     try testing.expectEqual(@as(u64, 1), after.number);
 }
@@ -329,19 +329,19 @@ test "a follower resumed from a checkpoint reads every line exactly once" {
     // a checkpoint taken at the line it had reached.
     var point: Follower(Event).Checkpoint = undefined;
     {
-        var follower: Follower(Event) = .init(testing.allocator, testing.io, &fixture.reader, .{
+        var follower: Follower(Event) = .init(testing.allocator, &fixture.reader, .{
             .wait = .{ .poll = .fromMicroseconds(100) },
             .identity = .{ .fingerprint = .{ .length = 32 } },
         });
-        defer follower.deinit();
+        defer follower.deinit(testing.io);
         for (0..17) |_| {
-            const line = try follower.next();
+            const line = try follower.next(testing.io);
             try got.append(testing.allocator, try testing.allocator.print(
                 "{d}:{s}",
                 .{ line.number, line.line },
             ));
         }
-        point = try follower.checkpoint();
+        point = try follower.checkpoint(testing.io);
     }
 
     // A second follower, built from the checkpoint over a handle of its own
@@ -351,18 +351,18 @@ test "a follower resumed from a checkpoint reads every line exactly once" {
         testing.allocator,
         testing.io,
         &again,
+        point,
         .{
             .wait = .{ .poll = .fromMicroseconds(100) },
             .identity = .{ .fingerprint = .{ .length = 32 } },
         },
-        point,
     );
-    defer second.deinit();
+    defer second.deinit(testing.io);
 
     // The same file, so the numbering carries on rather than starting over.
     try testing.expectEqual(point.rotations, second.rotations);
     for (0..lines - 17) |_| {
-        const line = try second.next();
+        const line = try second.next(testing.io);
         try got.append(testing.allocator, try testing.allocator.print(
             "{d}:{s}",
             .{ line.number, line.line },
@@ -395,10 +395,10 @@ test "a checkpoint of a log that rotated while nothing read it begins the new fi
         var buffer: [128]u8 = undefined;
         var source = file.reader(testing.io, &buffer);
 
-        var follower: Follower(Event) = .init(testing.allocator, testing.io, &source, options);
-        defer follower.deinit();
-        try testing.expectEqualStrings("old", (try follower.next()).value.kind);
-        point = try follower.checkpoint();
+        var follower: Follower(Event) = .init(testing.allocator, &source, options);
+        defer follower.deinit(testing.io);
+        try testing.expectEqualStrings("old", (try follower.next(testing.io)).value.kind);
+        point = try follower.checkpoint(testing.io);
     }
 
     // The log is rotated with nothing following it, which is the case a
@@ -415,13 +415,13 @@ test "a checkpoint of a log that rotated while nothing read it begins the new fi
     var buffer: [128]u8 = undefined;
     var source = file.reader(testing.io, &buffer);
 
-    var follower: Follower(Event) = try .resumeFrom(testing.allocator, testing.io, &source, options, point);
-    defer follower.deinit();
+    var follower: Follower(Event) = try .resumeFrom(testing.allocator, testing.io, &source, point, options);
+    defer follower.deinit(testing.io);
 
     // Not the file the checkpoint named, so it is read from its start and
     // numbered from 1, and the change is counted.
     try testing.expectEqual(point.rotations + 1, follower.rotations);
-    const line = try follower.next();
+    const line = try follower.next(testing.io);
     try testing.expectEqualStrings("new", line.value.kind);
     try testing.expectEqual(@as(u64, 1), line.number);
     try testing.expectEqual(@as(u64, 0), line.offset);
@@ -431,12 +431,12 @@ test "a checkpoint is a line like any other" {
     var fixture = try fixtures.Fixture.init("{\"kind\":\"one\"}\n{\"kind\":\"two\"}\n", 64);
     defer fixture.deinit();
 
-    var follower: Follower(Event) = .init(testing.allocator, testing.io, &fixture.reader, .{
+    var follower: Follower(Event) = .init(testing.allocator, &fixture.reader, .{
         .wait = .{ .poll = .fromMicroseconds(100) },
     });
-    defer follower.deinit();
-    _ = try follower.next();
-    const point = try follower.checkpoint();
+    defer follower.deinit(testing.io);
+    _ = try follower.next(testing.io);
+    const point = try follower.checkpoint(testing.io);
 
     // A registry of these is a JSON Lines file, so this package writes and
     // reads one without being asked to do anything special about it.
@@ -507,19 +507,19 @@ test "the opener is an interface, and a test hands over the files itself" {
     var buffer: [256]u8 = undefined;
     var source = first.reader(testing.io, &buffer);
     {
-        var follower: Follower(Event) = .init(testing.allocator, testing.io, &source, .{
+        var follower: Follower(Event) = .init(testing.allocator, &source, .{
             .wait = .{ .poll = .fromMicroseconds(100) },
             .reopen = staged.opener(),
         });
-        defer follower.deinit();
+        defer follower.deinit(testing.io);
 
-        try testing.expectEqualStrings("one", (try follower.next()).value.kind);
+        try testing.expectEqualStrings("one", (try follower.next(testing.io)).value.kind);
         try testing.expectEqual(@as(u64, 0), follower.rotations);
 
         // What the path holds, changed by the test rather than by the
         // filesystem, is the whole of a rotation as the follower sees it.
         staged.now = 1;
-        const line = try follower.next();
+        const line = try follower.next(testing.io);
         try testing.expectEqualStrings("two", line.value.kind);
         try testing.expectEqual(@as(u64, 1), line.number);
         try testing.expectEqual(@as(u64, 1), follower.rotations);
@@ -628,14 +628,14 @@ test "a rotation that keeps the file's number is followed by its content" {
     var source = file.reader(testing.io, &buffer);
 
     var path: PathOpener = .{ .dir = tmp.dir, .sub_path = "log.jsonl" };
-    var follower: Follower(Event) = .init(testing.allocator, testing.io, &source, .{
+    var follower: Follower(Event) = .init(testing.allocator, &source, .{
         .wait = .{ .poll = .fromMicroseconds(100) },
         .reopen = path.opener(),
         .identity = .{ .fingerprint = .{} },
     });
-    defer follower.deinit();
+    defer follower.deinit(testing.io);
 
-    for (0..60) |_| try testing.expectEqualStrings("old", (try follower.next()).value.kind);
+    for (0..60) |_| try testing.expectEqualStrings("old", (try follower.next(testing.io)).value.kind);
 
     // The log is rotated by being rewritten where it stands, which is what
     // a copy-and-truncate rotation looks like from here.
@@ -643,7 +643,7 @@ test "a rotation that keeps the file's number is followed by its content" {
     defer writer.close(testing.io);
     try writer.writePositionalAll(testing.io, after, 0);
 
-    const line = try follower.next();
+    const line = try follower.next(testing.io);
     try testing.expectEqualStrings("new", line.value.kind);
     // A different file is a different file: the numbering starts again.
     try testing.expectEqual(@as(u64, 1), line.number);
@@ -661,13 +661,13 @@ test "a follower given an opener follows the path across a rename" {
     var source = file.reader(testing.io, &buffer);
 
     var path: PathOpener = .{ .dir = tmp.dir, .sub_path = "log.jsonl" };
-    var follower: Follower(Event) = .init(testing.allocator, testing.io, &source, .{
+    var follower: Follower(Event) = .init(testing.allocator, &source, .{
         .wait = .{ .poll = .fromMicroseconds(100) },
         .reopen = path.opener(),
     });
-    defer follower.deinit();
+    defer follower.deinit(testing.io);
 
-    try testing.expectEqualStrings("old", (try follower.next()).value.kind);
+    try testing.expectEqualStrings("old", (try follower.next(testing.io)).value.kind);
 
     // Rotation of the kind that leaves the old file intact: the name moves,
     // and a new file takes it.
@@ -681,7 +681,7 @@ test "a follower given an opener follows the path across a rename" {
     defer replaced.close(testing.io);
     try testing.expect((try replaced.stat(testing.io)).inode != (try file.stat(testing.io)).inode);
 
-    const line = try follower.next();
+    const line = try follower.next(testing.io);
     try testing.expectEqualStrings("new", line.value.kind);
     // A different file is a different file: the numbering starts again.
     try testing.expectEqual(@as(u64, 1), line.number);
@@ -753,16 +753,16 @@ test "a path that names nothing between a rotation's rename and its create is wa
     const io: std.Io = .{ .userdata = testing.io.userdata, .vtable = &vtable };
 
     var path: PathOpener = .{ .dir = tmp.dir, .sub_path = "log.jsonl" };
-    var follower: Follower(Event) = .init(testing.allocator, io, &source, .{
+    var follower: Follower(Event) = .init(testing.allocator, &source, .{
         .wait = .{ .poll = .fromMicroseconds(100) },
         .reopen = Gap.opener(&path),
     });
-    defer follower.deinit();
+    defer follower.deinit(io);
 
-    try testing.expectEqualStrings("old", (try follower.next()).value.kind);
+    try testing.expectEqualStrings("old", (try follower.next(io)).value.kind);
     try tmp.dir.rename("log.jsonl", tmp.dir, "log.1", testing.io);
 
-    const line = try follower.next();
+    const line = try follower.next(io);
     try testing.expectEqualStrings("new", line.value.kind);
     try testing.expectEqual(@as(u64, 1), line.number);
     try testing.expectEqual(@as(u64, 1), follower.rotations);
@@ -785,13 +785,13 @@ test "an opener that fails for any other reason ends the follow" {
         }
     };
     var context: u8 = 0;
-    var follower: Follower(Event) = .init(testing.allocator, testing.io, &fixture.reader, .{
+    var follower: Follower(Event) = .init(testing.allocator, &fixture.reader, .{
         .wait = .{ .poll = .fromMicroseconds(100) },
         .reopen = .{ .context = &context, .openFn = Refusing.open, .closeFn = Refusing.close },
     });
-    defer follower.deinit();
-    try testing.expectEqualStrings("only", (try follower.next()).value.kind);
-    try testing.expectError(error.ReopenFailed, follower.next());
+    defer follower.deinit(testing.io);
+    try testing.expectEqualStrings("only", (try follower.next(testing.io)).value.kind);
+    try testing.expectError(error.ReopenFailed, follower.next(testing.io));
 }
 
 test "the old file is read to its end before the new one is started" {
@@ -808,11 +808,11 @@ test "the old file is read to its end before the new one is started" {
     var source = file.reader(testing.io, &buffer);
 
     var path: PathOpener = .{ .dir = tmp.dir, .sub_path = "log.jsonl" };
-    var follower: Follower(Event) = .init(testing.allocator, testing.io, &source, .{
+    var follower: Follower(Event) = .init(testing.allocator, &source, .{
         .wait = .{ .poll = .fromMicroseconds(100) },
         .reopen = path.opener(),
     });
-    defer follower.deinit();
+    defer follower.deinit(testing.io);
 
     // The rotation happens before a single line has been read, which is the
     // case the ordering rule is about: the old file is behind, and nothing
@@ -833,7 +833,7 @@ test "the old file is read to its end before the new one is started" {
         .{ "b", 1, 1 },
         .{ "b", 2, 2 },
     }) |want| {
-        const line = try follower.next();
+        const line = try follower.next(testing.io);
         try testing.expectEqualStrings(want[0], line.value.kind);
         try testing.expectEqual(want[1], line.value.at);
         try testing.expectEqual(want[2], line.number);
@@ -852,13 +852,13 @@ test "a truncation is begun again rather than reported when there is an opener" 
     var source = file.reader(testing.io, &buffer);
 
     var path: PathOpener = .{ .dir = tmp.dir, .sub_path = "log.jsonl" };
-    var follower: Follower(Event) = .init(testing.allocator, testing.io, &source, .{
+    var follower: Follower(Event) = .init(testing.allocator, &source, .{
         .wait = .{ .poll = .fromMicroseconds(100) },
         .reopen = path.opener(),
     });
-    defer follower.deinit();
+    defer follower.deinit(testing.io);
 
-    try testing.expectEqualStrings("before", (try follower.next()).value.kind);
+    try testing.expectEqualStrings("before", (try follower.next(testing.io)).value.kind);
 
     // Rotation of the kind that empties the file in place. Without an opener
     // this is `error.Truncated`; with one it is a file to begin again on.
@@ -867,7 +867,7 @@ test "a truncation is begun again rather than reported when there is an opener" 
     try writer.setLength(testing.io, 0);
     try writer.writePositionalAll(testing.io, "{\"kind\":\"after\"}\n", 0);
 
-    const line = try follower.next();
+    const line = try follower.next(testing.io);
     try testing.expectEqualStrings("after", line.value.kind);
     try testing.expectEqual(@as(u64, 1), line.number);
     try testing.expectEqual(@as(u64, 1), follower.rotations);

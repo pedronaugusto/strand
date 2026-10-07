@@ -251,19 +251,19 @@ pub fn Writer(comptime T: type) type {
         /// nothing to the destination and does not advance `count`.
         ///
         /// Scratch grows as needed and is reused until `deinit`. The caller
-        /// keeps `allocator` alive until then. Construction allocates nothing.
+        /// keeps `gpa` alive until then. Construction allocates nothing.
         /// Like `init`, this requires `options.sync = .never`.
-        pub fn initBounded(allocator: std.mem.Allocator, output: *std.Io.Writer, max_line_bytes: usize, options: Options) Self {
+        pub fn initBounded(gpa: std.mem.Allocator, output: *std.Io.Writer, max_line_bytes: usize, options: Options) Self {
             var self = init(output, options);
-            self.scratch = .init(allocator, max_line_bytes);
+            self.scratch = .init(gpa, max_line_bytes);
             return self;
         }
 
         /// A bounded writer over a file, with the same record storage and
         /// lifetime as `initBounded`, and the sync policies of `initFile`.
-        pub fn initFileBounded(allocator: std.mem.Allocator, dest: *std.Io.File.Writer, max_line_bytes: usize, options: Options) Self {
+        pub fn initFileBounded(gpa: std.mem.Allocator, dest: *std.Io.File.Writer, max_line_bytes: usize, options: Options) Self {
             var self = initFile(dest, options);
-            self.scratch = .init(allocator, max_line_bytes);
+            self.scratch = .init(gpa, max_line_bytes);
             return self;
         }
 
@@ -510,8 +510,8 @@ const RecordScratch = struct {
     buffer: EncodeBuffer,
     max_line_bytes: usize,
 
-    fn init(allocator: std.mem.Allocator, max_line_bytes: usize) RecordScratch {
-        return .{ .buffer = .init(allocator), .max_line_bytes = max_line_bytes };
+    fn init(gpa: std.mem.Allocator, max_line_bytes: usize) RecordScratch {
+        return .{ .buffer = .init(gpa), .max_line_bytes = max_line_bytes };
     }
 
     fn deinit(self: *RecordScratch) void {

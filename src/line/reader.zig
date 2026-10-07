@@ -80,38 +80,38 @@ pub const LineReader = struct {
     /// `recordStart` is where the record began.
     unfinished: bool = false,
 
-    /// Internal. The current record's bytes when they are not a slice of
+    /// Private: The current record's bytes when they are not a slice of
     /// `input`'s buffer; `RawLine.line` is then a view of it.
     line_buf: std.Io.Writer.Allocating,
-    /// Internal. Set while the current record is a slice of `input`'s own
+    /// Private: Set while the current record is a slice of `input`'s own
     /// buffer rather than a copy in `line_buf`. It says what a record about
     /// to be joined to has to do first, and it is the whole of the
     /// bookkeeping the zero-copy frame costs.
     borrowed: bool = false,
-    /// Internal. Set when the scan that framed the current record also
+    /// Private: Set when the scan that framed the current record also
     /// cleared it of control bytes, which is what the one scan in
     /// `frameBuffered` does. It says that `next` has nothing left to look
     /// for.
     cleared: bool = false,
-    /// Internal. Whether the stream has been looked at for a byte-order mark,
+    /// Private: Whether the stream has been looked at for a byte-order mark,
     /// which happens once and before anything else is read.
     bom_checked: bool = false,
-    /// Internal. Bytes taken from `input` so far, terminators and a
+    /// Private: Bytes taken from `input` so far, terminators and a
     /// byte-order mark included. `offset` is a snapshot of this.
     consumed: u64 = 0,
-    /// Internal. What `consumed` was when the current record began.
+    /// Private: What `consumed` was when the current record began.
     record_offset: u64 = 0,
-    /// Internal. How many physical lines preceded the current record.
+    /// Private: How many physical lines preceded the current record.
     record_number: u64 = 0,
-    /// Internal. Set while the rest of a line refused as too long has yet to
+    /// Private: Set while the rest of a line refused as too long has yet to
     /// arrive: the stream ended inside it. The next read discards up to its
     /// `\n` before it frames anything, so the tail of the refused line is
     /// never read as a line of its own.
     discarding: bool = false,
-    /// Internal. The `oversized_member` of the line last refused as too
+    /// Private: The `oversized_member` of the line last refused as too
     /// long; see `oversizedMember`.
     oversized: [max_oversized_member_bytes]u8 = undefined,
-    /// Internal. How many bytes of `oversized` are the member, or `null`
+    /// Private: How many bytes of `oversized` are the member, or `null`
     /// when there is none.
     oversized_len: ?u8 = null,
 
@@ -236,10 +236,10 @@ pub const LineReader = struct {
         lines_before: u64 = 0,
     };
 
-    /// A reader over `input`, with `allocator` backing the line buffer. Does
+    /// A reader over `input`, with `gpa` backing the line buffer. Does
     /// not read from `input`.
-    pub fn init(allocator: Allocator, input: *std.Io.Reader, options: Options) LineReader {
-        return .resumeAt(allocator, input, options, .{});
+    pub fn init(gpa: Allocator, input: *std.Io.Reader, options: Options) LineReader {
+        return .resumeAt(gpa, input, .{}, options);
     }
 
     /// A reader over an `input` already positioned part-way into a file,
@@ -262,15 +262,15 @@ pub const LineReader = struct {
     /// reads as a line beginning there, which is the same answer a caller
     /// would get by seeking a file and reading it.
     pub fn resumeAt(
-        allocator: Allocator,
+        gpa: Allocator,
         input: *std.Io.Reader,
-        options: Options,
         start: Start,
+        options: Options,
     ) LineReader {
         var self: LineReader = .{
             .input = input,
             .options = options,
-            .line_buf = .init(allocator),
+            .line_buf = .init(gpa),
         };
         self.reset(start);
         return self;

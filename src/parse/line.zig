@@ -95,20 +95,20 @@ pub fn Parser(comptime decode: type) type {
         /// Byte vectors accept strings of exactly their byte length as well as
         /// arrays, matching the forms std.json writes. Other vectors accept arrays.
         ///
-        /// Ownership: allocations are made on `allocator` and are not individually
-        /// tracked, so `allocator` should be an arena you can drop as a whole (this
+        /// Ownership: allocations are made on `arena` and are not individually
+        /// tracked, so `arena` should be an arena you can drop as a whole (this
         /// is `std.json.parseFromSliceLeaky`'s contract). With the default
         /// `copy_strings = false`, string fields that need no unescaping point into
         /// `line` and are valid exactly as long as it is; with `copy_strings = true`
         /// the returned value borrows nothing from `line`.
         pub fn parseLine(
             comptime T: type,
-            allocator: Allocator,
+            arena: Allocator,
             line: []const u8,
             options: ParseOptions,
         ) ParseLineError!T {
             var value: T = undefined;
-            try parseLineInto(T, allocator, line, options, &value);
+            try parseLineInto(T, arena, line, options, &value);
             return value;
         }
 
@@ -124,7 +124,7 @@ pub fn Parser(comptime decode: type) type {
         /// there. Decoded in place, a field is stored once, where it is read from.
         pub fn parseLineInto(
             comptime T: type,
-            allocator: Allocator,
+            arena: Allocator,
             line: []const u8,
             options: ParseOptions,
             out: *T,
@@ -150,23 +150,23 @@ pub fn Parser(comptime decode: type) type {
                 }
             }
             if (options.diagnostics) |where| {
-                out.* = try parseDiagnosed(T, allocator, line, options, where);
+                out.* = try parseDiagnosed(T, arena, line, options, where);
                 return;
             }
             if (comptime decode.supports(T)) {
-                return decode.parseInto(T, allocator, line, jsonOptions(options, line.len), out) catch |err| {
+                return decode.parseInto(T, arena, line, jsonOptions(options, line.len), out) catch |err| {
                     if (err == error.OutOfMemory) return error.OutOfMemory;
                     // The direct path is for good lines. On a refusal, the token
                     // source remains the oracle for the precise public error.
-                    var oracle: Scanner = .initCompleteInput(allocator, line);
+                    var oracle: Scanner = .initCompleteInput(arena, line);
                     defer oracle.deinit();
-                    out.* = try typed_parse.parse(T, allocator, &oracle, jsonOptions(options, line.len));
+                    out.* = try typed_parse.parse(T, arena, &oracle, jsonOptions(options, line.len));
                 };
             }
 
-            var scanner: Scanner = .initCompleteInput(allocator, line);
+            var scanner: Scanner = .initCompleteInput(arena, line);
             defer scanner.deinit();
-            out.* = try typed_parse.parse(T, allocator, &scanner, jsonOptions(options, line.len));
+            out.* = try typed_parse.parse(T, arena, &scanner, jsonOptions(options, line.len));
         }
 
         /// Whether `T` is read by the direct decoder, which `parsePrefixInto`
@@ -182,7 +182,7 @@ pub fn Parser(comptime decode: type) type {
         /// what names the error.
         pub fn parsePrefixInto(
             comptime T: type,
-            allocator: Allocator,
+            arena: Allocator,
             bytes: []const u8,
             options: ParseOptions,
             out: *T,
@@ -191,7 +191,7 @@ pub fn Parser(comptime decode: type) type {
             if (comptime recursive(T)) {
                 if (!nestsWithin(bytes, options.max_depth)) return error.NestingTooDeep;
             }
-            return decode.parsePrefixInto(T, allocator, bytes, jsonOptions(options, bytes.len), out);
+            return decode.parsePrefixInto(T, arena, bytes, jsonOptions(options, bytes.len), out);
         }
 
         /// `parseLine` for the caller who asked where a line gave up.
@@ -203,18 +203,18 @@ pub fn Parser(comptime decode: type) type {
         /// line takes, and the counting lives only on the path that asked for it.
         fn parseDiagnosed(
             comptime T: type,
-            allocator: Allocator,
+            arena: Allocator,
             line: []const u8,
             options: ParseOptions,
             out: *Diagnostics,
         ) ParseLineError!T {
-            var scanner: Scanner = .initCompleteInput(allocator, line);
+            var scanner: Scanner = .initCompleteInput(arena, line);
             defer scanner.deinit();
 
             var where: std.json.Diagnostics = .{};
             scanner.enableDiagnostics(&where);
 
-            const parsed = typed_parse.parse(T, allocator, &scanner, jsonOptions(options, line.len));
+            const parsed = typed_parse.parse(T, arena, &scanner, jsonOptions(options, line.len));
             // Read out before the scanner goes: what the diagnostics point at is the
             // scanner's own cursor.
             out.* = .{

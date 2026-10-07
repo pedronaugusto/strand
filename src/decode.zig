@@ -57,13 +57,13 @@ pub fn Decoder(comptime Raw: type) type {
         /// had been decoded before it, and nothing about that is promised.
         pub fn parseInto(
             comptime T: type,
-            allocator: Allocator,
+            arena: Allocator,
             input: []const u8,
             options: std.json.ParseOptions,
             out: *T,
         ) std.json.ParseError(std.json.Scanner)!void {
             work_module.parse();
-            var p: Parser = .{ .allocator = allocator, .input = input, .options = options };
+            var p: Parser = .{ .arena = arena, .input = input, .options = options };
             try p.valueInto(T, out);
             p.space();
             if (p.cursor != input.len) return error.SyntaxError;
@@ -75,20 +75,20 @@ pub fn Decoder(comptime Raw: type) type {
         /// the bytes buffered behind it, across the line breaks inside it.
         pub fn parsePrefixInto(
             comptime T: type,
-            allocator: Allocator,
+            arena: Allocator,
             input: []const u8,
             options: std.json.ParseOptions,
             out: *T,
         ) std.json.ParseError(std.json.Scanner)!usize {
             work_module.parse();
-            var p: Parser = .{ .allocator = allocator, .input = input, .options = options };
+            var p: Parser = .{ .arena = arena, .input = input, .options = options };
             try p.valueInto(T, out);
             std.debug.assert(p.cursor <= input.len);
             return p.cursor;
         }
 
         const Parser = struct {
-            allocator: Allocator,
+            arena: Allocator,
             input: []const u8,
             options: std.json.ParseOptions,
             cursor: usize = 0,
@@ -191,7 +191,7 @@ pub fn Decoder(comptime Raw: type) type {
                     },
                     .pointer => |i| switch (i.size) {
                         .one => {
-                            const result = try self.allocator.create(i.child);
+                            const result = try self.arena.create(i.child);
                             result.* = try self.value(i.child);
                             return result;
                         },
@@ -201,7 +201,7 @@ pub fn Decoder(comptime Raw: type) type {
                                 const always = !i.attrs.@"const" or self.options.allocate.? == .alloc_always;
                                 const result = try self.string(always);
                                 if (i.sentinel()) |sentinel| {
-                                    const copy = try self.allocator.allocSentinel(u8, result.len, sentinel);
+                                    const copy = try self.arena.allocSentinel(u8, result.len, sentinel);
                                     @memcpy(copy, result);
                                     return copy;
                                 }
@@ -215,7 +215,7 @@ pub fn Decoder(comptime Raw: type) type {
                                 self.cursor += 1;
                             } else {
                                 while (true) {
-                                    try list.append(self.allocator, try self.value(i.child));
+                                    try list.append(self.arena, try self.value(i.child));
                                     self.space();
                                     if (self.cursor == self.input.len) return error.UnexpectedEndOfInput;
                                     if (self.input[self.cursor] == ']') {
@@ -226,8 +226,8 @@ pub fn Decoder(comptime Raw: type) type {
                                     self.cursor += 1;
                                 }
                             }
-                            if (i.sentinel()) |sentinel| return try list.toOwnedSliceSentinel(self.allocator, sentinel);
-                            return try list.toOwnedSlice(self.allocator);
+                            if (i.sentinel()) |sentinel| return try list.toOwnedSliceSentinel(self.arena, sentinel);
+                            return try list.toOwnedSlice(self.arena);
                         },
                         else => @compileError("Unable to parse into type '" ++ @typeName(T) ++ "'"),
                     },
@@ -411,7 +411,7 @@ pub fn Decoder(comptime Raw: type) type {
                     if (payload_type == void) return @unionInit(T, @tagName(other), {});
                     const bytes = self.input[start..self.cursor];
                     return @unionInit(T, @tagName(other), .{
-                        .bytes = if (self.options.allocate.? == .alloc_always) try self.allocator.dupe(u8, bytes) else bytes,
+                        .bytes = if (self.options.allocate.? == .alloc_always) try self.arena.dupe(u8, bytes) else bytes,
                     });
                 }
                 return error.InvalidEnumTag;
@@ -554,21 +554,21 @@ pub fn Decoder(comptime Raw: type) type {
                             self.cursor = at + 1;
                             return self.input[start..at];
                         }
-                        try list.appendSlice(self.allocator, self.input[self.cursor..at]);
+                        try list.appendSlice(self.arena, self.input[self.cursor..at]);
                         self.cursor = at + 1;
-                        return try list.toOwnedSlice(self.allocator);
+                        return try list.toOwnedSlice(self.arena);
                     }
                     if (!allocated) allocated = true;
-                    try list.appendSlice(self.allocator, self.input[self.cursor..at]);
+                    try list.appendSlice(self.arena, self.input[self.cursor..at]);
                     self.cursor = at + 1;
                     if (self.cursor == self.input.len) return error.UnexpectedEndOfInput;
                     switch (self.input[self.cursor]) {
                         '"', '\\', '/' => |c| {
-                            try list.append(self.allocator, c);
+                            try list.append(self.arena, c);
                             self.cursor += 1;
                         },
                         'b', 'f', 'n', 'r', 't' => |c| {
-                            try list.append(self.allocator, switch (c) {
+                            try list.append(self.arena, switch (c) {
                                 'b' => 0x08,
                                 'f' => 0x0c,
                                 'n' => '\n',
@@ -586,7 +586,7 @@ pub fn Decoder(comptime Raw: type) type {
                             std.debug.assert(cp < 0xD800 or cp > 0xDFFF);
                             // unreachable: unicodeEscape rejects lone surrogates and combines valid pairs into scalars at most U+10FFFF; four bytes suffice.
                             const len = std.unicode.utf8Encode(cp, &encoded) catch unreachable;
-                            try list.appendSlice(self.allocator, encoded[0..len]);
+                            try list.appendSlice(self.arena, encoded[0..len]);
                         },
                         else => return error.SyntaxError,
                     }
@@ -638,7 +638,7 @@ pub fn Decoder(comptime Raw: type) type {
                 const start = self.cursor;
                 try self.skipValue();
                 const bytes = self.input[start..self.cursor];
-                if (self.options.allocate.? == .alloc_always) return .{ .bytes = try self.allocator.dupe(u8, bytes) };
+                if (self.options.allocate.? == .alloc_always) return .{ .bytes = try self.arena.dupe(u8, bytes) };
                 return .{ .bytes = bytes };
             }
 
@@ -739,7 +739,7 @@ pub fn Decoder(comptime Raw: type) type {
 
             /// `skipValue` past the depth it tracks itself.
             fn skipDeep(self: *Parser) !void {
-                var scanner: Scanner = .initCompleteInput(self.allocator, self.input[self.cursor..]);
+                var scanner: Scanner = .initCompleteInput(self.arena, self.input[self.cursor..]);
                 defer scanner.deinit();
                 try scanner.skipValue();
                 self.cursor += scanner.cursor;

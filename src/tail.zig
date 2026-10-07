@@ -185,26 +185,26 @@ pub fn Tail(comptime T: type) type {
         /// backwards numbering. See `Fault`.
         fault: Fault = .{},
 
-        /// Internal. The allocator behind `buf` and `arena`.
-        allocator: Allocator,
-        /// Internal. File bytes `[lo, lo + buf.items.len)`. The lines not yet
+        /// Private: The allocator behind `buf` and `arena`.
+        gpa: Allocator,
+        /// Private: File bytes `[lo, lo + buf.items.len)`. The lines not yet
         /// returned end at `lo + end`; what is past `end` has been handed out
         /// already and is what the next `prev` overwrites.
         buf: std.ArrayList(u8) = .empty,
-        /// Internal. The bounded suffix of a separated physical line. The
+        /// Private: The bounded suffix of a separated physical line. The
         /// block buffer is reused while its torn prefix is scanned and dropped.
         record: std.ArrayList(u8) = .empty,
-        /// Internal. See `buf`.
+        /// Private: See `buf`.
         lo: u64 = 0,
-        /// Internal. See `buf`.
+        /// Private: See `buf`.
         end: usize = 0,
-        /// Internal. Set when the line beginning at offset 0 has been
+        /// Private: Set when the line beginning at offset 0 has been
         /// returned: there is nothing before it.
         exhausted: bool = false,
-        /// Internal. Set once the file's own last byte has been looked at,
+        /// Private: Set once the file's own last byte has been looked at,
         /// which is where a final newline is dropped.
         trimmed: bool = false,
-        /// Internal. What parsing the current line allocated, reset per line.
+        /// Private: What parsing the current line allocated, reset per line.
         arena: std.heap.ArenaAllocator,
 
         const Self = @This();
@@ -223,7 +223,7 @@ pub fn Tail(comptime T: type) type {
         /// `error.Truncated`. That is the contract that makes a backwards
         /// read meaningful at all — it is a view of the file as it was when
         /// the tail opened.
-        pub fn init(allocator: Allocator, source: *std.Io.File.Reader, options: Options) InitError!Self {
+        pub fn init(gpa: Allocator, source: *std.Io.File.Reader, options: Options) InitError!Self {
             var normalized = options;
             if (normalized.block_bytes == 0) normalized.block_bytes = 1;
             if (source.size_err) |err| return err;
@@ -240,8 +240,8 @@ pub fn Tail(comptime T: type) type {
             return .{
                 .source = source,
                 .options = normalized,
-                .allocator = allocator,
-                .arena = .init(allocator),
+                .gpa = gpa,
+                .arena = .init(gpa),
                 .lo = size,
                 .end = 0,
                 // A file ending in a newline does not end in an empty line:
@@ -254,8 +254,8 @@ pub fn Tail(comptime T: type) type {
         /// Releases the block buffer and the arena. Every `Line` this reader
         /// returned, and every string borrowed from one, dangles afterwards.
         pub fn deinit(self: *Self) void {
-            self.buf.deinit(self.allocator);
-            self.record.deinit(self.allocator);
+            self.buf.deinit(self.gpa);
+            self.record.deinit(self.gpa);
             self.arena.deinit();
             self.* = undefined;
         }
@@ -352,16 +352,16 @@ pub fn Tail(comptime T: type) type {
         }
 
         /// A copy of `line.value` that outlives the reader, allocated on
-        /// `allocator`. See `Reader.keep`, whose contract this is.
-        pub fn keep(self: *Self, allocator: Allocator, line: Line(T)) Allocator.Error!T {
+        /// `gpa`. See `Reader.keep`, whose contract this is.
+        pub fn keep(self: *Self, gpa: Allocator, line: Line(T)) Allocator.Error!T {
             _ = self;
-            return owned_module.copyOwned(allocator, line.value);
+            return owned_module.copyOwned(gpa, line.value);
         }
 
         /// The last `n` values of the file, in file order, allocated on
-        /// `allocator`.
+        /// `gpa`.
         ///
-        /// Ownership: everything the result points at is on `allocator`, and
+        /// Ownership: everything the result points at is on `gpa`, and
         /// none of it borrows the reader. Each line is parsed normally and
         /// copied through `copyOwned`, under the same data contract as `keep`.
         /// With an arena, drop it whole; otherwise `freeOwned` each value and
@@ -372,20 +372,20 @@ pub fn Tail(comptime T: type) type {
         /// This is the whole reason to read a file backwards, so it is worth
         /// saying what it costs: one block read per block the last `n` lines
         /// span, and nothing at all for the rest of the file.
-        pub fn last(self: *Self, allocator: Allocator, n: usize) NextError![]T {
+        pub fn last(self: *Self, gpa: Allocator, n: usize) NextError![]T {
             var out: std.ArrayList(T) = .empty;
             errdefer {
-                for (out.items) |value| owned_module.freeOwned(allocator, value);
-                out.deinit(allocator);
+                for (out.items) |value| owned_module.freeOwned(gpa, value);
+                out.deinit(gpa);
             }
-            try out.ensureTotalCapacity(allocator, @min(n, 1024));
+            try out.ensureTotalCapacity(gpa, @min(n, 1024));
             while (out.items.len < n) {
                 const line = (try self.prev()) orelse break;
-                try out.ensureUnusedCapacity(allocator, 1);
-                out.appendAssumeCapacity(try self.keep(allocator, line));
+                try out.ensureUnusedCapacity(gpa, 1);
+                out.appendAssumeCapacity(try self.keep(gpa, line));
             }
             std.mem.reverse(T, out.items);
-            return out.toOwnedSlice(allocator);
+            return out.toOwnedSlice(gpa);
         }
 
         /// Frames a separated line while scanning back to its beginning.
@@ -450,7 +450,7 @@ pub fn Tail(comptime T: type) type {
                     if (take != 0) {
                         const kept = self.record.items.len;
                         const capacity = @min(self.options.max_line_bytes +| 1, @max(kept + take, self.record.capacity *| 2));
-                        try self.record.ensureTotalCapacityPrecise(self.allocator, capacity);
+                        try self.record.ensureTotalCapacityPrecise(self.gpa, capacity);
                         self.record.items.len = kept + take;
                         @memmove(self.record.items[take..], self.record.items[0..kept]);
                         @memcpy(self.record.items[0..take], chunk[chunk.len - take ..]);
@@ -548,9 +548,9 @@ pub fn Tail(comptime T: type) type {
 
             self.buf.items.len = kept;
             if (self.options.record_separator) {
-                try self.buf.ensureTotalCapacityPrecise(self.allocator, kept + take);
+                try self.buf.ensureTotalCapacityPrecise(self.gpa, kept + take);
             } else {
-                try self.buf.ensureTotalCapacity(self.allocator, kept + take);
+                try self.buf.ensureTotalCapacity(self.gpa, kept + take);
             }
             self.buf.items.len = kept + take;
             // The two regions overlap, and the destination is the later one.

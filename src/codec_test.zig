@@ -657,9 +657,9 @@ fn expectVectorPaths(expected: anytype, bytes: []const u8) !void {
     }
     try testing.expectEqualDeep(expected, batch[0]);
     try fixture.reader.seekTo(0);
-    var follower = strand.Follower(T).init(testing.allocator, testing.io, &fixture.reader, .{});
-    defer follower.deinit();
-    try testing.expectEqualDeep(expected, (try follower.next()).value);
+    var follower = strand.Follower(T).init(testing.allocator, &fixture.reader, .{});
+    defer follower.deinit(testing.io);
+    try testing.expectEqualDeep(expected, (try follower.next(testing.io)).value);
 }
 
 fn expectVectorRoundTrip(expected: anytype) !void {

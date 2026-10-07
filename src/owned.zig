@@ -5,7 +5,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-/// Copies `value` and all the storage it reaches onto `allocator`.
+/// Copies `value` and all the storage it reaches onto `gpa`.
 ///
 /// Structs (including tuples), arrays, vectors, slices, single-item pointers,
 /// optionals and tagged unions are walked; numbers, booleans, enums and
@@ -29,42 +29,42 @@ const Allocator = std.mem.Allocator;
 /// release the destination arena as a whole. Until then, keep the owning
 /// pointers and container lengths intact. Ordinary Zig assignment aliases
 /// this ownership; it does not make another owned copy.
-pub fn copyOwned(allocator: Allocator, value: anytype) Allocator.Error!@TypeOf(value) {
+pub fn copyOwned(gpa: Allocator, value: anytype) Allocator.Error!@TypeOf(value) {
     const T = @TypeOf(value);
     comptime check(T);
-    if (T == std.json.Value) return copyValue(allocator, value);
+    if (T == std.json.Value) return copyValue(gpa, value);
     switch (@typeInfo(T)) {
         .pointer => |info| switch (info.size) {
             .one => {
-                const storage = try allocator.alignedAlloc(info.child, .fromByteUnits(info.attrs.@"align" orelse @alignOf(info.child)), 1);
-                errdefer allocator.free(storage);
-                storage[0] = try copyOwned(allocator, value.*);
+                const storage = try gpa.alignedAlloc(info.child, .fromByteUnits(info.attrs.@"align" orelse @alignOf(info.child)), 1);
+                errdefer gpa.free(storage);
+                storage[0] = try copyOwned(gpa, value.*);
                 return &storage[0];
             },
             .slice => {
-                const storage = try allocator.allocWithOptions(info.child, value.len, .fromByteUnits(info.attrs.@"align" orelse @alignOf(info.child)), info.sentinel());
-                errdefer allocator.free(storage);
+                const storage = try gpa.allocWithOptions(info.child, value.len, .fromByteUnits(info.attrs.@"align" orelse @alignOf(info.child)), info.sentinel());
+                errdefer gpa.free(storage);
                 var initialized: usize = 0;
-                errdefer for (storage[0..initialized]) |item| freeOwned(allocator, item);
+                errdefer for (storage[0..initialized]) |item| freeOwned(gpa, item);
                 for (value, storage) |from, *to| {
-                    to.* = try copyOwned(allocator, from);
+                    to.* = try copyOwned(gpa, from);
                     initialized += 1;
                 }
                 return storage;
             },
             else => unreachable,
         },
-        .optional => return if (value) |item| try copyOwned(allocator, item) else null,
+        .optional => return if (value) |item| try copyOwned(gpa, item) else null,
         .@"struct" => |info| {
             var result = value;
             var initialized: usize = 0;
             errdefer inline for (info.field_names, info.field_attrs, 0..) |name, attrs, i| {
                 if (!attrs.@"comptime" and i < initialized)
-                    freeOwned(allocator, @field(result, name));
+                    freeOwned(gpa, @field(result, name));
             };
             inline for (info.field_names, info.field_attrs, 0..) |name, attrs, i| {
                 if (!attrs.@"comptime")
-                    @field(result, name) = try copyOwned(allocator, @field(value, name));
+                    @field(result, name) = try copyOwned(gpa, @field(value, name));
                 initialized = i + 1;
             }
             return result;
@@ -72,19 +72,19 @@ pub fn copyOwned(allocator: Allocator, value: anytype) Allocator.Error!@TypeOf(v
         .array => {
             var result = value;
             var initialized: usize = 0;
-            errdefer for (result[0..initialized]) |item| freeOwned(allocator, item);
+            errdefer for (result[0..initialized]) |item| freeOwned(gpa, item);
             for (value, &result) |from, *to| {
-                to.* = try copyOwned(allocator, from);
+                to.* = try copyOwned(gpa, from);
                 initialized += 1;
             }
             return result;
         },
         .vector => |info| {
             const items: [info.len]info.child = value;
-            return try copyOwned(allocator, items);
+            return try copyOwned(gpa, items);
         },
         .@"union" => return switch (value) {
-            inline else => |item, tag| @unionInit(T, @tagName(tag), try copyOwned(allocator, item)),
+            inline else => |item, tag| @unionInit(T, @tagName(tag), try copyOwned(gpa, item)),
         },
         else => return value,
     }
@@ -95,57 +95,57 @@ pub fn copyOwned(allocator: Allocator, value: anytype) Allocator.Error!@TypeOf(v
 /// returned by `Reader.keep`, `Tail.keep`, `Follower.keep` and each element
 /// of `Tail.last` (free its outer slice separately). Do not pass a
 /// borrowed or directly parsed value here, or free the same owned copy twice.
-pub fn freeOwned(allocator: Allocator, value: anytype) void {
+pub fn freeOwned(gpa: Allocator, value: anytype) void {
     const T = @TypeOf(value);
     comptime check(T);
-    if (T == std.json.Value) return freeValue(allocator, value);
+    if (T == std.json.Value) return freeValue(gpa, value);
     switch (@typeInfo(T)) {
         .pointer => |info| switch (info.size) {
             .one => {
-                freeOwned(allocator, value.*);
-                allocator.destroy(value);
+                freeOwned(gpa, value.*);
+                gpa.destroy(value);
             },
             .slice => {
-                for (value) |item| freeOwned(allocator, item);
-                allocator.free(value);
+                for (value) |item| freeOwned(gpa, item);
+                gpa.free(value);
             },
             else => unreachable,
         },
-        .optional => if (value) |item| freeOwned(allocator, item),
+        .optional => if (value) |item| freeOwned(gpa, item),
         .@"struct" => |info| inline for (info.field_names, info.field_attrs) |name, attrs| {
-            if (!attrs.@"comptime") freeOwned(allocator, @field(value, name));
+            if (!attrs.@"comptime") freeOwned(gpa, @field(value, name));
         },
-        .array => for (value) |item| freeOwned(allocator, item),
+        .array => for (value) |item| freeOwned(gpa, item),
         .vector => |info| {
             const items: [info.len]info.child = value;
-            freeOwned(allocator, items);
+            freeOwned(gpa, items);
         },
         .@"union" => switch (value) {
-            inline else => |item| freeOwned(allocator, item),
+            inline else => |item| freeOwned(gpa, item),
         },
         else => {},
     }
 }
 
-fn copyValue(allocator: Allocator, value: std.json.Value) Allocator.Error!std.json.Value {
+fn copyValue(gpa: Allocator, value: std.json.Value) Allocator.Error!std.json.Value {
     switch (value) {
-        .string => |bytes| return .{ .string = try allocator.dupe(u8, bytes) },
-        .number_string => |bytes| return .{ .number_string = try allocator.dupe(u8, bytes) },
+        .string => |bytes| return .{ .string = try gpa.dupe(u8, bytes) },
+        .number_string => |bytes| return .{ .number_string = try gpa.dupe(u8, bytes) },
         .array => |array| {
-            var result: std.json.Array = .init(allocator);
-            errdefer freeValue(allocator, .{ .array = result });
+            var result: std.json.Array = .init(gpa);
+            errdefer freeValue(gpa, .{ .array = result });
             try result.ensureTotalCapacity(array.items.len);
-            for (array.items) |item| result.appendAssumeCapacity(try copyValue(allocator, item));
+            for (array.items) |item| result.appendAssumeCapacity(try copyValue(gpa, item));
             return .{ .array = result };
         },
         .object => |object| {
             var result: std.json.ObjectMap = .empty;
-            errdefer freeValue(allocator, .{ .object = result });
-            try result.ensureTotalCapacity(allocator, object.count());
+            errdefer freeValue(gpa, .{ .object = result });
+            try result.ensureTotalCapacity(gpa, object.count());
             for (object.keys(), object.values()) |key, item| {
-                const copied_key = try allocator.dupe(u8, key);
-                errdefer allocator.free(copied_key);
-                const copied_item = try copyValue(allocator, item);
+                const copied_key = try gpa.dupe(u8, key);
+                errdefer gpa.free(copied_key);
+                const copied_item = try copyValue(gpa, item);
                 result.putAssumeCapacityNoClobber(copied_key, copied_item);
             }
             return .{ .object = result };
@@ -154,21 +154,21 @@ fn copyValue(allocator: Allocator, value: std.json.Value) Allocator.Error!std.js
     }
 }
 
-fn freeValue(allocator: Allocator, value: std.json.Value) void {
+fn freeValue(gpa: Allocator, value: std.json.Value) void {
     switch (value) {
-        .string, .number_string => |bytes| allocator.free(bytes),
+        .string, .number_string => |bytes| gpa.free(bytes),
         .array => |array| {
-            for (array.items) |item| freeValue(allocator, item);
+            for (array.items) |item| freeValue(gpa, item);
             var storage = array;
             storage.deinit();
         },
         .object => |object| {
             for (object.keys(), object.values()) |key, item| {
-                allocator.free(key);
-                freeValue(allocator, item);
+                gpa.free(key);
+                freeValue(gpa, item);
             }
             var storage = object;
-            storage.deinit(allocator);
+            storage.deinit(gpa);
         },
         else => {},
     }

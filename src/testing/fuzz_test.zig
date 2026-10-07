@@ -343,10 +343,10 @@ fn checkResume(input: []const u8) !void {
         if (isBlank(physical.line)) continue;
 
         var source: std.Io.Reader = .fixed(input[@intCast(physical.offset)..]);
-        var reader: strand.Reader(Event) = .resumeAt(testing.allocator, &source, options, .{
+        var reader: strand.Reader(Event) = .resumeAt(testing.allocator, &source, .{
             .offset = physical.offset,
             .lines_before = physical.number - 1,
-        });
+        }, options);
         defer reader.deinit();
 
         if (reader.next()) |maybe_line| {
@@ -1153,12 +1153,12 @@ fn checkRotation(a: []const u8, b: []const u8) !void {
     var buffer: [64]u8 = undefined;
     var source = file.reader(testing.io, &buffer);
     var path: strand.PathOpener = .{ .dir = tmp.dir, .sub_path = "log.jsonl" };
-    var follower: strand.Follower(Event) = .init(testing.allocator, testing.io, &source, .{
+    var follower: strand.Follower(Event) = .init(testing.allocator, &source, .{
         .reader = .{ .on_malformed = .skip },
         .wait = .{ .poll = .fromMicroseconds(50) },
         .reopen = path.opener(),
     });
-    defer follower.deinit();
+    defer follower.deinit(testing.io);
 
     // The name moves and a new file takes it, all before the first read.
     try tmp.dir.rename("log.jsonl", tmp.dir, "log.1", testing.io);
@@ -1171,7 +1171,7 @@ fn checkRotation(a: []const u8, b: []const u8) !void {
     try testing.expect((try replaced.stat(testing.io)).inode != (try file.stat(testing.io)).inode);
 
     for (want.items) |expected| {
-        const line = try follower.next();
+        const line = try follower.next(testing.io);
         try testing.expectEqualStrings(expected.line, line.line);
         try testing.expectEqual(expected.number, line.number);
     }

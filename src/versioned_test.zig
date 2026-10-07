@@ -364,17 +364,16 @@ test "a versioned log followed as it grows is migrated the same way" {
 
     var follower: strand.Follower(Versioned(Event)) = .init(
         testing.allocator,
-        testing.io,
         &fixture.reader,
         .{ .wait = .{ .poll = .fromMicroseconds(100) } },
     );
-    defer follower.deinit();
+    defer follower.deinit(testing.io);
 
-    const first = try follower.next();
+    const first = try follower.next(testing.io);
     try testing.expect(first.value.migrated());
     try testing.expectEqual(@as(u32, 1), first.value.value.count);
-    try testing.expectEqualStrings("retry", (try follower.next()).value.value.kind);
-    try testing.expectEqualStrings("close", (try follower.next()).value.value.kind);
+    try testing.expectEqualStrings("retry", (try follower.next(testing.io)).value.value.kind);
+    try testing.expectEqualStrings("close", (try follower.next(testing.io)).value.value.kind);
 
     // And a line of the old shape appended while the follower is running
     // goes through the hook like any other.
@@ -383,7 +382,7 @@ test "a versioned log followed as it grows is migrated the same way" {
         "{\"v\":1,\"data\":{\"kind\":\"late\",\"count\":\"4\"}}\n",
         mixed_log.len,
     );
-    const late = try follower.next();
+    const late = try follower.next(testing.io);
     try testing.expect(late.value.migrated());
     try testing.expectEqualStrings("late", late.value.value.kind);
     try testing.expectEqual(@as(u32, 4), late.value.value.count);

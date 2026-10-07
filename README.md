@@ -75,7 +75,9 @@ file writer, drains it first and latches a failure so later records are refused.
 Directory durability remains the caller's responsibility.
 
 `Tail(T)` reads a seekable file backwards. `Follower(T)` waits for complete terminated
-records and stops with `error.Canceled` when its `std.Io` is cancelled. A supplied
+records on the `std.Io` each blocking call is given (`next`, `checkpoint`, `truncated`
+and `deinit`; it keeps none), and stops with `error.Canceled` when that `std.Io` is
+cancelled. A supplied
 `Opener` lets it follow replacement files after draining the old one, waiting while the
 path names nothing between a rotation's rename and its create. File identity can
 use the platform's file identifier or an opening-byte fingerprint; checkpoints retain
@@ -122,11 +124,16 @@ rounds by default; `-Dcampaign=N` and `-Dseed=N` select a generated-input run. `
 build test --fuzz` runs the coverage-guided targets until stopped. CI also runs
 `zig build lint`.
 
-[CI](.github/workflows/ci.yml) runs tests and examples in Debug and ReleaseSafe on
-`ubuntu-latest`, `macos-latest` and `windows-latest`, plus ReleaseFast on Ubuntu.
-ReleaseSmall is compile-only on Ubuntu. Separate Ubuntu jobs run ThreadSanitizer in
-Debug and a 20,000-round property campaign in ReleaseSafe, and check formatting and cast
-reasons.
+[CI](.github/workflows/ci.yml) has three tiers. The fast tier runs the source checks and
+the Debug suite with the examples on `ubuntu-latest`, and compiles the macOS and Windows
+test binaries. The merge tier also runs those binaries on `macos-latest` and
+`windows-latest`. The release tier runs Debug and ReleaseSafe on all three hosts,
+ReleaseFast on Ubuntu, ReleaseSmall compile-only, every cross target and
+ThreadSanitizer. The merge and release tiers add a 20,000-round property campaign in
+ReleaseSafe on Ubuntu.
+
+`zig build bench` runs the benchmarks in [bench/](bench/) in ReleaseFast; CI only
+compiles them.
 
 `zig build check` compiles without running. CI uses it for `x86_64-linux-gnu`,
 `aarch64-linux-gnu`, `x86_64-linux-musl`, `x86_64-windows-gnu`, `aarch64-windows-gnu`,

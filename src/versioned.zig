@@ -41,7 +41,7 @@ const data_key = "data";
 ///
 /// `T` may declare:
 ///
-/// * `pub fn jsonlMigrate(allocator: Allocator, from: u32, data: std.json.Value)
+/// * `pub fn jsonlMigrate(arena: Allocator, from: u32, data: std.json.Value)
 ///   std.json.ParseFromValueError!T` — how to read a version that is not this
 ///   one. `payloadOf` is the usual first line of it: parse `data` as the old
 ///   shape, then build today's out of it. A version the hook does not know is
@@ -106,7 +106,7 @@ pub fn Versioned(comptime T: type) type {
         /// `ignore_unknown_fields = false`. Through a `Reader` that is
         /// `error.MalformedLine`, with the line number on the reader.
         pub fn jsonParse(
-            allocator: Allocator,
+            arena: Allocator,
             source: anytype,
             options: std.json.ParseOptions,
         ) std.json.ParseError(@TypeOf(source.*))!Self {
@@ -118,7 +118,7 @@ pub fn Versioned(comptime T: type) type {
 
             while (true) {
                 const key = switch (try source.nextAllocMax(
-                    allocator,
+                    arena,
                     .alloc_if_needed,
                     options.max_value_len.?,
                 )) {
@@ -136,7 +136,7 @@ pub fn Versioned(comptime T: type) type {
                         },
                         .use_last => {},
                     };
-                    from = try typed_parse.inner(u32, allocator, source, options);
+                    from = try typed_parse.inner(u32, arena, source, options);
                 } else if (std.mem.eql(u8, key, data_key)) {
                     if (parsed != null or stashed != null) switch (options.duplicate_field_behavior) {
                         .@"error" => return error.DuplicateField,
@@ -148,11 +148,11 @@ pub fn Versioned(comptime T: type) type {
                     };
                     if (options.duplicate_field_behavior == .use_last) {
                         parsed = null;
-                        stashed = try std.json.innerParse(std.json.Value, allocator, source, options);
+                        stashed = try std.json.innerParse(std.json.Value, arena, source, options);
                     } else if (from != null and from.? == current) {
-                        parsed = try typed_parse.inner(T, allocator, source, options);
+                        parsed = try typed_parse.inner(T, arena, source, options);
                     } else {
-                        stashed = try std.json.innerParse(std.json.Value, allocator, source, options);
+                        stashed = try std.json.innerParse(std.json.Value, arena, source, options);
                     }
                 } else if (options.ignore_unknown_fields) {
                     try source.skipValue();
@@ -166,12 +166,12 @@ pub fn Versioned(comptime T: type) type {
             const data = stashed orelse return error.MissingField;
             if (version == current) {
                 return .{
-                    .value = try from_value.parseFromValue(T, allocator, data, options),
+                    .value = try from_value.parseFromValue(T, arena, data, options),
                     .from = version,
                 };
             }
             if (!@hasDecl(T, "jsonlMigrate")) return error.UnknownField;
-            return .{ .value = try T.jsonlMigrate(allocator, version, data), .from = version };
+            return .{ .value = try T.jsonlMigrate(arena, version, data), .from = version };
         }
 
         /// Writes the envelope. Called by `std.json`; see `Writer`.
@@ -199,15 +199,15 @@ pub fn Versioned(comptime T: type) type {
 /// Arrays and vectors compose with the reflected shapes, and an earlier
 /// field's conversion error is returned before any later integer overflow.
 ///
-/// Ownership: `std.json`'s leaky contract — allocations land on `allocator`,
+/// Ownership: `std.json`'s leaky contract — allocations land on `arena`,
 /// which in a hook is the arena the line is being parsed on, and the result
 /// lives exactly as long as the rest of the line's value does.
 pub fn payloadOf(
     comptime Old: type,
-    allocator: Allocator,
+    arena: Allocator,
     data: std.json.Value,
 ) std.json.ParseFromValueError!Old {
-    return from_value.parseFromValue(Old, allocator, data, .{ .ignore_unknown_fields = true });
+    return from_value.parseFromValue(Old, arena, data, .{ .ignore_unknown_fields = true });
 }
 
 /// What `Versioned` requires of `T`, checked where the mistake is made.

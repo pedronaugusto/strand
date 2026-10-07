@@ -48,12 +48,12 @@ pub fn isBlank(line: []const u8) bool {
 /// a `jsonParse` of its own can arrange.
 pub fn whereItFailed(
     comptime T: type,
-    allocator: Allocator,
+    arena: Allocator,
     line: []const u8,
     options: anytype,
 ) ?usize {
     var where: parse_line.Diagnostics = .{};
-    _ = parse_line.parseLine(T, allocator, line, .{
+    _ = parse_line.parseLine(T, arena, line, .{
         .ignore_unknown_fields = options.ignore_unknown_fields,
         .duplicate_fields = options.duplicate_fields,
         .copy_strings = false,

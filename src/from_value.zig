@@ -29,7 +29,7 @@ const tagging = @import("tagging.zig");
 /// accept the string form written by std.json, as byte arrays do.
 pub fn parseFromValue(
     comptime T: type,
-    allocator: Allocator,
+    arena: Allocator,
     value: std.json.Value,
     options: std.json.ParseOptions,
 ) std.json.ParseFromValueError!T {
@@ -41,9 +41,9 @@ pub fn parseFromValue(
             else => {},
         };
     } else if (comptime needsConversion(T, &.{})) {
-        return collections(T, allocator, value, options);
+        return collections(T, arena, value, options);
     }
-    return std.json.parseFromValueLeaky(T, allocator, value, options);
+    return std.json.parseFromValueLeaky(T, arena, value, options);
 }
 
 /// Whether `innerParseFromValue` given `float` for a `T` would reach a cast
@@ -100,10 +100,10 @@ fn needsConversion(comptime T: type, comptime seen: []const type) bool {
 // Only containers whose descendants need checked integers, vectors or empty arrays arrive
 // here. Each child goes through the entry point, so custom hooks retain
 // control of their data and integers retain their checked conversions.
-fn collections(comptime T: type, allocator: Allocator, value: std.json.Value, options: std.json.ParseOptions) std.json.ParseFromValueError!T {
+fn collections(comptime T: type, arena: Allocator, value: std.json.Value, options: std.json.ParseOptions) std.json.ParseFromValueError!T {
     switch (@typeInfo(T)) {
         .vector => |info| {
-            const array = try collections([info.len]info.child, allocator, value, options);
+            const array = try collections([info.len]info.child, arena, value, options);
             return array;
         },
         .array => |info| {
@@ -117,21 +117,21 @@ fn collections(comptime T: type, allocator: Allocator, value: std.json.Value, op
             if (value.array.items.len != info.len) return error.LengthMismatch;
             var result: T = undefined;
             for (value.array.items, &result) |item, *dest|
-                dest.* = try parseFromValue(info.child, allocator, item, options);
+                dest.* = try parseFromValue(info.child, arena, item, options);
             return result;
         },
-        .optional => |info| return if (value == .null) null else try parseFromValue(info.child, allocator, value, options),
+        .optional => |info| return if (value == .null) null else try parseFromValue(info.child, arena, value, options),
         .pointer => |info| switch (info.size) {
             .one => {
-                const result = try allocator.create(info.child);
-                result.* = try parseFromValue(info.child, allocator, value, options);
+                const result = try arena.create(info.child);
+                result.* = try parseFromValue(info.child, arena, value, options);
                 return result;
             },
             .slice => {
                 if (value != .array) return error.UnexpectedToken;
-                const result = try allocator.allocWithOptions(info.child, value.array.items.len, null, info.sentinel());
+                const result = try arena.allocWithOptions(info.child, value.array.items.len, null, info.sentinel());
                 for (value.array.items, result) |item, *dest|
-                    dest.* = try parseFromValue(info.child, allocator, item, options);
+                    dest.* = try parseFromValue(info.child, arena, item, options);
                 return result;
             },
             else => unreachable,
@@ -141,15 +141,15 @@ fn collections(comptime T: type, allocator: Allocator, value: std.json.Value, op
             if (info.is_tuple) {
                 if (value != .array or value.array.items.len != info.field_types.len) return error.UnexpectedToken;
                 inline for (info.field_types, 0..) |field_type, i|
-                    result[i] = try parseFromValue(field_type, allocator, value.array.items[i], options);
+                    result[i] = try parseFromValue(field_type, arena, value.array.items[i], options);
                 return result;
             }
             if (value != .object) return error.UnexpectedToken;
-            try fields(T, null, allocator, &result, value.object, options);
+            try fields(T, null, arena, &result, value.object, options);
             return result;
         },
         .@"union" => |info| {
-            if (comptime tagging.internal(T)) |inside| return tagged(T, allocator, inside, value, options);
+            if (comptime tagging.internal(T)) |inside| return tagged(T, arena, inside, value, options);
             if (info.tag_type == null) @compileError("Unable to parse into untagged union '" ++ @typeName(T) ++ "'");
             if (value != .object or value.object.count() != 1) return error.UnexpectedToken;
             const key = value.object.keys()[0];
@@ -160,7 +160,7 @@ fn collections(comptime T: type, allocator: Allocator, value: std.json.Value, op
                         if (item != .object or item.object.count() != 0) return error.UnexpectedToken;
                         return @unionInit(T, field_name, {});
                     }
-                    return @unionInit(T, field_name, try parseFromValue(field_type, allocator, item, options));
+                    return @unionInit(T, field_name, try parseFromValue(field_type, arena, item, options));
                 }
             }
             return error.UnknownField;
@@ -171,7 +171,7 @@ fn collections(comptime T: type, allocator: Allocator, value: std.json.Value, op
 
 /// An object's members into the struct `result`, a member named `skip`
 /// passed over: the tag of a union tagged inside its object.
-fn fields(comptime T: type, comptime skip: ?[]const u8, allocator: Allocator, result: *T, object: std.json.ObjectMap, options: std.json.ParseOptions) std.json.ParseFromValueError!void {
+fn fields(comptime T: type, comptime skip: ?[]const u8, arena: Allocator, result: *T, object: std.json.ObjectMap, options: std.json.ParseOptions) std.json.ParseFromValueError!void {
     const info = @typeInfo(T).@"struct";
     var seen: [info.field_names.len]bool = @splat(false);
     _ = &seen;
@@ -180,7 +180,7 @@ fn fields(comptime T: type, comptime skip: ?[]const u8, allocator: Allocator, re
         inline for (info.field_names, info.field_types, info.field_attrs, 0..) |field_name, field_type, field_attrs, i| {
             if (field_attrs.@"comptime") @compileError("comptime fields are not supported: " ++ @typeName(T) ++ "." ++ field_name);
             if (std.mem.eql(u8, key, field_name)) {
-                @field(result, field_name) = try parseFromValue(field_type, allocator, item, options);
+                @field(result, field_name) = try parseFromValue(field_type, arena, item, options);
                 seen[i] = true;
                 break;
             }
@@ -193,7 +193,7 @@ fn fields(comptime T: type, comptime skip: ?[]const u8, allocator: Allocator, re
 
 /// A union tagged inside its object, from the object: the arm its tag
 /// member names, and the arm's fields from the members around it.
-fn tagged(comptime T: type, allocator: Allocator, comptime inside: anytype, value: std.json.Value, options: std.json.ParseOptions) std.json.ParseFromValueError!T {
+fn tagged(comptime T: type, arena: Allocator, comptime inside: anytype, value: std.json.Value, options: std.json.ParseOptions) std.json.ParseFromValueError!T {
     if (value != .object) return error.UnexpectedToken;
     const name = switch (value.object.get(inside.tag) orelse return error.MissingField) {
         .string => |text| text,
@@ -205,18 +205,18 @@ fn tagged(comptime T: type, allocator: Allocator, comptime inside: anytype, valu
         if (!is_other and std.mem.eql(u8, field_name, name)) {
             if (field_type == void) {
                 var none: struct {} = .{};
-                try fields(@TypeOf(none), inside.tag, allocator, &none, value.object, options);
+                try fields(@TypeOf(none), inside.tag, arena, &none, value.object, options);
                 return @unionInit(T, field_name, {});
             }
             var result: T = @unionInit(T, field_name, undefined);
-            try fields(field_type, inside.tag, allocator, &@field(result, field_name), value.object, options);
+            try fields(field_type, inside.tag, arena, &@field(result, field_name), value.object, options);
             return result;
         }
     }
     if (comptime inside.other) |other| {
         const payload_type = @FieldType(T, @tagName(other));
         if (payload_type == void) return @unionInit(T, @tagName(other), {});
-        return @unionInit(T, @tagName(other), try std.json.parseFromValueLeaky(payload_type, allocator, value, options));
+        return @unionInit(T, @tagName(other), try std.json.parseFromValueLeaky(payload_type, arena, value, options));
     }
     return error.InvalidEnumTag;
 }

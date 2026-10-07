@@ -341,8 +341,6 @@ const shared = struct {
 /// and `truncated` and `restart` for what a rotation looks like without one.
 pub fn Follower(comptime T: type) type {
     return struct {
-        /// Where the waiting happens, and where cancellation comes from.
-        io: std.Io,
         /// The caller's `File.Reader`, which this follower reads through.
         /// The handle this follower was built on is not owned and is never
         /// closed. With `Options.reopen`, a rotation rewrites the struct this
@@ -362,15 +360,15 @@ pub fn Follower(comptime T: type) type {
         /// they start at 1 again after each.
         rotations: u64 = 0,
 
-        /// Internal. The handle this follower opened for itself, which is the
+        /// Private: The handle this follower opened for itself, which is the
         /// only one it may close. `null` while it is still reading the one it
         /// was given.
         opened: ?std.Io.File = null,
-        /// Internal. What the file this follower is reading was, when it
+        /// Private: What the file this follower is reading was, when it
         /// started reading it. Taken at the first read rather than at `init`,
         /// which cannot fail, and taken again for every file adopted since.
         held: ?Identity.Taken = null,
-        /// Internal. What the file measured the last time this follower
+        /// Private: What the file measured the last time this follower
         /// waited. A file that has not grown between two waits has stopped,
         /// and that is when the path is worth looking at again.
         size_seen: ?u64 = null,
@@ -394,9 +392,9 @@ pub fn Follower(comptime T: type) type {
         /// Take it after `next` has returned a line and before the next call:
         /// that is when the file position is a line boundary, which is what
         /// makes the offset in it one a reader can be started at.
-        pub fn checkpoint(self: *Self) CheckpointError!Checkpoint {
+        pub fn checkpoint(self: *Self, io: std.Io) CheckpointError!Checkpoint {
             return .{
-                .file = self.heldIdentity() catch |err| switch (err) {
+                .file = self.heldIdentity(io) catch |err| switch (err) {
                     error.Canceled => return error.Canceled,
                     else => return error.ReopenFailed,
                 },
@@ -407,9 +405,9 @@ pub fn Follower(comptime T: type) type {
         }
 
         /// A copy of `line.value` that outlives the follower, allocated on
-        /// `allocator`. See `Reader.keep`, whose contract this is.
-        pub fn keep(self: *Self, allocator: Allocator, line: Line(T)) Allocator.Error!T {
-            return self.reader.keep(allocator, line);
+        /// `gpa`. See `Reader.keep`, whose contract this is.
+        pub fn keep(self: *Self, gpa: Allocator, line: Line(T)) Allocator.Error!T {
+            return self.reader.keep(gpa, line);
         }
 
         /// A follower that carries on from `point`.
@@ -431,11 +429,11 @@ pub fn Follower(comptime T: type) type {
         /// at an offset it was not positioned at would read from the wrong
         /// place, and there is no answer it could give instead.
         pub fn resumeFrom(
-            allocator: Allocator,
+            gpa: Allocator,
             io: std.Io,
             source: *std.Io.File.Reader,
-            options: Options,
             point: Checkpoint,
+            options: Options,
         ) ResumeError!Self {
             const now = options.identity.take(io, source.file) catch |err| switch (err) {
                 error.Canceled => return error.Canceled,
@@ -447,7 +445,7 @@ pub fn Follower(comptime T: type) type {
                 else => return error.SeekFailed,
             };
 
-            var self = Self.init(allocator, io, source, options);
+            var self = Self.init(gpa, source, options);
             self.held = now;
             self.rotations = point.rotations + @intFromBool(!same);
             if (same) self.reader.lines.reset(.{ .offset = point.offset, .lines_before = point.number });
@@ -463,23 +461,21 @@ pub fn Follower(comptime T: type) type {
         /// `source` must outlive the follower, and with `Options.reopen` it
         /// is rewritten on a rotation; see `source`.
         pub fn init(
-            allocator: Allocator,
-            io: std.Io,
+            gpa: Allocator,
             source: *std.Io.File.Reader,
             options: Options,
         ) Self {
             var reader_options = options.reader;
             reader_options.require_terminator = true;
             return .{
-                .io = io,
                 .source = source,
                 // The reader places its lines from where it started; a
                 // follower starts somewhere in a file, so resuming it there
                 // is what makes `Line.offset` an offset in that file rather
                 // than in what has been read from it.
-                .reader = .resumeAt(allocator, &source.interface, reader_options, .{
+                .reader = .resumeAt(gpa, &source.interface, .{
                     .offset = source.logicalPos(),
-                }),
+                }, reader_options),
                 .options = options,
             };
         }
@@ -488,10 +484,10 @@ pub fn Follower(comptime T: type) type {
         /// opened for itself if it opened one. The handle it was given is the
         /// caller's and is left alone. Every `Line` this follower returned
         /// dangles afterwards.
-        pub fn deinit(self: *Self) void {
+        pub fn deinit(self: *Self, io: std.Io) void {
             std.debug.assert(self.opened == null or self.options.reopen != null);
             if (self.opened) |file| {
-                if (self.options.reopen) |opener| opener.close(self.io, file);
+                if (self.options.reopen) |opener| opener.close(io, file);
             }
             self.reader.deinit();
             self.* = undefined;
@@ -508,13 +504,13 @@ pub fn Follower(comptime T: type) type {
         ///
         /// Ownership: exactly `Reader.next`'s. The returned `Line` borrows the
         /// reader's line buffer and arena, and the next call takes both back.
-        pub fn next(self: *Self) NextError!Line(T) {
-            try self.io.checkCancel();
+        pub fn next(self: *Self, io: std.Io) NextError!Line(T) {
+            try io.checkCancel();
             // What the file is has to be taken before it is read, not when
             // the question is asked: a file rewritten where it stands would
             // otherwise be measured after the rewrite and match itself.
             if (self.held == null and self.options.reopen != null) {
-                _ = self.heldIdentity() catch |err| switch (err) {
+                _ = self.heldIdentity(io) catch |err| switch (err) {
                     error.Canceled => return error.Canceled,
                     else => return error.ReopenFailed,
                 };
@@ -539,7 +535,7 @@ pub fn Follower(comptime T: type) type {
                     else => return error.SeekFailed,
                 };
                 self.reader.lines.reset(unfinished);
-                try self.waitForGrowth(unfinished.offset);
+                try self.waitForGrowth(io, unfinished.offset);
             }
         }
 
@@ -552,8 +548,8 @@ pub fn Follower(comptime T: type) type {
         /// `Options.reopen`, `next` finishes that file and uses the opener
         /// to follow the replacement. Without it, the caller reopens the
         /// path and builds a new follower over the new handle.
-        pub fn truncated(self: *Self) TruncatedError!bool {
-            const size = self.currentSize() catch |err| switch (err) {
+        pub fn truncated(self: *Self, io: std.Io) TruncatedError!bool {
+            const size = self.currentSize(io) catch |err| switch (err) {
                 error.Canceled => return error.Canceled,
                 else => return error.ReadFailed,
             };
@@ -578,11 +574,11 @@ pub fn Follower(comptime T: type) type {
         /// Waits for the file to grow, or for the wait itself to time out,
         /// whichever comes first — and decides what a file that did not grow
         /// means.
-        fn waitForGrowth(self: *Self, position: u64) NextError!void {
+        fn waitForGrowth(self: *Self, io: std.Io, position: u64) NextError!void {
             switch (self.options.wait) {
-                .poll => |duration| try self.io.sleep(duration, .awake),
+                .poll => |duration| try io.sleep(duration, .awake),
                 .wake => |wake| {
-                    wake.event.waitTimeout(self.io, .{ .duration = .{
+                    wake.event.waitTimeout(io, .{ .duration = .{
                         .raw = wake.timeout,
                         .clock = .awake,
                     } }) catch |err| switch (err) {
@@ -593,7 +589,7 @@ pub fn Follower(comptime T: type) type {
                 },
             }
 
-            const size = self.currentSize() catch |err| switch (err) {
+            const size = self.currentSize(io) catch |err| switch (err) {
                 error.Canceled => return error.Canceled,
                 else => return error.ReadFailed,
             };
@@ -614,7 +610,7 @@ pub fn Follower(comptime T: type) type {
             // With somewhere to reopen from, a truncation is not news to
             // report but a rotation to follow, and it is worth looking at at
             // once rather than after a second wait.
-            if (size < position or stalled) try self.rotate(opener, size < position);
+            if (size < position or stalled) try self.rotate(io, opener, size < position);
         }
 
         /// Looks at what the path holds now, and moves to it if it is not
@@ -623,8 +619,8 @@ pub fn Follower(comptime T: type) type {
         /// `emptied` says the file the follower holds has become shorter than
         /// what has been read from it, which is a reason to begin again on it
         /// even when the path still names it.
-        fn rotate(self: *Self, opener: Opener, emptied: bool) NextError!void {
-            const fresh = opener.open(self.io) catch |err| switch (err) {
+        fn rotate(self: *Self, io: std.Io, opener: Opener, emptied: bool) NextError!void {
+            const fresh = opener.open(io) catch |err| switch (err) {
                 error.Canceled => return error.Canceled,
                 // Renamed away and not yet created again. The file held is
                 // the only one there is, so it is the one to read on — from
@@ -639,13 +635,13 @@ pub fn Follower(comptime T: type) type {
                 error.OpenFailed => return error.ReopenFailed,
             };
             var adopted = false;
-            defer if (!adopted) opener.close(self.io, fresh);
+            defer if (!adopted) opener.close(io, fresh);
 
-            const held = self.heldIdentity() catch |err| switch (err) {
+            const held = self.heldIdentity(io) catch |err| switch (err) {
                 error.Canceled => return error.Canceled,
                 else => return error.ReopenFailed,
             };
-            const there = self.options.identity.take(self.io, fresh) catch |err| switch (err) {
+            const there = self.options.identity.take(io, fresh) catch |err| switch (err) {
                 error.Canceled => return error.Canceled,
                 else => return error.ReopenFailed,
             };
@@ -653,9 +649,9 @@ pub fn Follower(comptime T: type) type {
                 // The old file has been read to its end — that is what
                 // brought us here — so the new one starts from its own.
                 adopted = true;
-                if (self.opened) |old| opener.close(self.io, old);
+                if (self.opened) |old| opener.close(io, old);
                 self.opened = fresh;
-                self.source.* = fresh.reader(self.io, self.source.interface.buffer);
+                self.source.* = fresh.reader(io, self.source.interface.buffer);
                 self.atStart();
                 self.held = there;
                 self.rotations += 1;
@@ -675,11 +671,11 @@ pub fn Follower(comptime T: type) type {
         /// file, and reading its first bytes again would only find what it
         /// says about itself now. A file still too short to fingerprint is
         /// asked again, since its first bytes have not all been written yet.
-        fn heldIdentity(self: *Self) Identity.TakeError!Identity.Taken {
+        fn heldIdentity(self: *Self, io: std.Io) Identity.TakeError!Identity.Taken {
             if (self.held) |taken| {
                 if (taken.fingerprint != null or self.options.identity == .file_id) return taken;
             }
-            const taken = try self.options.identity.take(self.io, self.source.file);
+            const taken = try self.options.identity.take(io, self.source.file);
             self.held = taken;
             return taken;
         }
@@ -710,8 +706,8 @@ pub fn Follower(comptime T: type) type {
         /// The length of the file right now, rather than the length it had
         /// when it was last looked at. A follower must ask again every time:
         /// the whole point is that the answer changes.
-        fn currentSize(self: *Self) std.Io.File.LengthError!u64 {
-            const size = try self.source.file.length(self.io);
+        fn currentSize(self: *Self, io: std.Io) std.Io.File.LengthError!u64 {
+            const size = try self.source.file.length(io);
             self.source.size = size;
             return size;
         }
@@ -737,14 +733,14 @@ test "a rotated follower checkpoints the identity it adopted before reading" {
     var source = file.reader(testing.io, &buffer);
     var path: PathOpener = .{ .dir = tmp.dir, .sub_path = "new.jsonl" };
     const identity: Identity = .{ .fingerprint = .{ .length = 14 } };
-    var follower = Follower(Event).init(testing.allocator, testing.io, &source, .{
+    var follower = Follower(Event).init(testing.allocator, &source, .{
         .reopen = path.opener(),
         .identity = identity,
     });
-    defer follower.deinit();
+    defer follower.deinit(testing.io);
     // Exercise the two operations inside one next call after its wait,
     // without a second next entry capturing the identity again.
-    try follower.rotate(path.opener(), false);
+    try follower.rotate(testing.io, path.opener(), false);
     const adopted = try identity.take(testing.io, source.file);
     try testing.expectEqualStrings("new", (try follower.reader.next()).?.value.kind);
     // An in-place rewrite after that read cannot change what the follower
@@ -752,7 +748,7 @@ test "a rotated follower checkpoints the identity it adopted before reading" {
     try tmp.dir.writeFile(testing.io, .{ .sub_path = "new.jsonl", .data = "{\"kind\":\"now\"}\n" });
     const rewritten = try identity.take(testing.io, source.file);
     try testing.expect(!adopted.eql(rewritten));
-    const point = try follower.checkpoint();
+    const point = try follower.checkpoint(testing.io);
     try testing.expect(adopted.eql(point.file));
     try testing.expectEqual(@as(u64, 1), point.rotations);
 }

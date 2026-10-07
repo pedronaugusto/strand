@@ -39,12 +39,12 @@ pub fn Encoder(comptime Raw: type) type {
                     else => false,
                 },
                 .@"struct" => |i| fields: {
-                    for (i.fields) |field| if (!supportsType(field.type, next)) break :fields false;
+                    for (i.field_types) |field_type| if (!supportsType(field_type, next)) break :fields false;
                     break :fields true;
                 },
                 .@"union" => |i| fields: {
                     if (i.tag_type == null) break :fields false;
-                    for (i.fields) |field| if (field.type != void and !supportsType(field.type, next)) break :fields false;
+                    for (i.field_types) |field_type| if (field_type != void and !supportsType(field_type, next)) break :fields false;
                     break :fields true;
                 },
                 else => false,
@@ -87,10 +87,10 @@ pub fn Encoder(comptime Raw: type) type {
                 },
                 .optional => if (v) |payload| try value(payload, options, writer) else try writer.writeAll("null"),
                 .@"enum" => |info| {
-                    if (!info.is_exhaustive) {
-                        inline for (info.fields) |field| {
-                            if (v == @field(T, field.name)) break;
-                        } else return value(@intFromEnum(v), options, writer);
+                    if (info.mode == .nonexhaustive) {
+                        inline for (info.field_names) |field_name| {
+                            if (v == @field(T, field_name)) break;
+                        } else return value(@backingInt(v), options, writer);
                     }
                     try string(@tagName(v), options, writer);
                 },
@@ -105,13 +105,13 @@ pub fn Encoder(comptime Raw: type) type {
                     if (comptime tagging.internal(T)) |inside| return tagged(v, inside, options, WriterSink{ .writer = writer });
                     const Tag = info.tag_type.?;
                     try writer.writeByte('{');
-                    inline for (info.fields) |field| {
-                        if (v == @field(Tag, field.name)) {
-                            try memberName(field.name, options, writer);
-                            if (field.type == void) {
+                    inline for (info.field_names, info.field_types) |field_name, field_type| {
+                        if (v == @field(Tag, field_name)) {
+                            try memberName(field_name, options, writer);
+                            if (field_type == void) {
                                 try writer.writeAll("{}");
                             } else {
-                                try value(@field(v, field.name), options, writer);
+                                try value(@field(v, field_name), options, writer);
                             }
                             break;
                         }
@@ -151,17 +151,17 @@ pub fn Encoder(comptime Raw: type) type {
         pub fn members(v: anytype, options: std.json.Stringify.Options, writer: *std.Io.Writer, first: bool) std.Io.Writer.Error!bool {
             const info = @typeInfo(@TypeOf(v)).@"struct";
             var none = first;
-            inline for (info.fields) |field| {
-                if (field.type == void) continue;
+            inline for (info.field_names, info.field_types) |field_name, field_type| {
+                if (field_type == void) continue;
                 var emit = true;
-                if (!info.is_tuple and @typeInfo(field.type) == .optional and !options.emit_null_optional_fields) {
-                    if (@field(v, field.name) == null) emit = false;
+                if (!info.is_tuple and @typeInfo(field_type) == .optional and !options.emit_null_optional_fields) {
+                    if (@field(v, field_name) == null) emit = false;
                 }
                 if (emit) {
                     if (!none) try writer.writeByte(',');
                     none = false;
-                    if (!info.is_tuple) try memberName(field.name, options, writer);
-                    try value(@field(v, field.name), options, writer);
+                    if (!info.is_tuple) try memberName(field_name, options, writer);
+                    try value(@field(v, field_name), options, writer);
                 }
             }
             return none;
@@ -253,11 +253,11 @@ pub fn Encoder(comptime Raw: type) type {
                 .float, .comptime_float => try out.stdValue(v, options),
                 .optional => if (v) |payload| try bufferValue(payload, options, out) else try out.write("null"),
                 // A value a non-exhaustive enum does not name is its number.
-                .@"enum" => |info| if (info.is_exhaustive) switch (v) {
+                .@"enum" => |info| if (info.mode == .exhaustive) switch (v) {
                     inline else => |tag| try bufferTagName(@tagName(tag), options, out),
                 } else switch (v) {
                     inline else => |tag| try bufferTagName(@tagName(tag), options, out),
-                    _ => try bufferValue(@intFromEnum(v), options, out),
+                    _ => try bufferValue(@backingInt(v), options, out),
                 },
                 .enum_literal => try bufferString(@tagName(v), options, out),
                 .error_set => try bufferString(@errorName(v), options, out),
@@ -270,18 +270,18 @@ pub fn Encoder(comptime Raw: type) type {
                     if (comptime tagging.internal(T)) |inside| return tagged(v, inside, options, out);
                     const Tag = info.tag_type.?;
                     try out.byte('{');
-                    inline for (info.fields) |field| {
-                        if (v == @field(Tag, field.name)) {
-                            if (comptime safeFieldName(field.name)) {
-                                try out.write(comptime "\"" ++ field.name ++ "\":");
+                    inline for (info.field_names, info.field_types) |field_name, field_type| {
+                        if (v == @field(Tag, field_name)) {
+                            if (comptime safeFieldName(field_name)) {
+                                try out.write(comptime "\"" ++ field_name ++ "\":");
                             } else {
-                                try bufferString(field.name, options, out);
+                                try bufferString(field_name, options, out);
                                 try out.byte(':');
                             }
-                            if (field.type == void) {
+                            if (field_type == void) {
                                 try out.write("{}");
                             } else {
-                                try bufferValue(@field(v, field.name), options, out);
+                                try bufferValue(@field(v, field_name), options, out);
                             }
                             break;
                         }
@@ -322,16 +322,16 @@ pub fn Encoder(comptime Raw: type) type {
             // Whether a member before this one is always written, which
             // makes the comma in front of this one a constant.
             comptime var written_before = lead;
-            inline for (info.fields) |field| {
-                if (field.type == void) continue;
-                const optional = !info.is_tuple and @typeInfo(field.type) == .optional;
+            inline for (info.field_names, info.field_types) |field_name, field_type| {
+                if (field_type == void) continue;
+                const optional = !info.is_tuple and @typeInfo(field_type) == .optional;
                 var emit = true;
                 if (optional and !options.emit_null_optional_fields) {
-                    if (@field(v, field.name) == null) emit = false;
+                    if (@field(v, field_name) == null) emit = false;
                 }
                 if (emit) {
-                    if (!info.is_tuple and comptime safeFieldName(field.name)) {
-                        const key = comptime "\"" ++ field.name ++ "\":";
+                    if (!info.is_tuple and comptime safeFieldName(field_name)) {
+                        const key = comptime "\"" ++ field_name ++ "\":";
                         if (written_before) {
                             try out.write("," ++ key);
                         } else {
@@ -341,12 +341,12 @@ pub fn Encoder(comptime Raw: type) type {
                     } else {
                         if (!first) try out.byte(',');
                         if (!info.is_tuple) {
-                            try bufferString(field.name, options, out);
+                            try bufferString(field_name, options, out);
                             try out.byte(':');
                         }
                     }
                     first = false;
-                    try bufferValue(@field(v, field.name), options, out);
+                    try bufferValue(@field(v, field_name), options, out);
                 }
                 if (!optional) written_before = true;
             }
@@ -640,7 +640,12 @@ pub fn Encoder(comptime Raw: type) type {
                         i += 1;
                         continue;
                     };
-                    const codepoint = if (bytes.len - i < len) null else std.unicode.utf8Decode(bytes[i..][0..len]) catch null;
+                    const codepoint: ?u21 = if (bytes.len - i < len) null else switch (len) {
+                        2 => std.unicode.utf8Decode2(bytes[i..][0..2].*) catch null,
+                        3 => std.unicode.utf8Decode3(bytes[i..][0..3].*) catch null,
+                        4 => std.unicode.utf8Decode4(bytes[i..][0..4].*) catch null,
+                        else => unreachable, // a byte from 0x80 up leads two to four bytes or is refused above
+                    };
                     if (codepoint) |c| {
                         try writer.writeAll(bytes[start..i]);
                         try unicodeEscape(c, writer);

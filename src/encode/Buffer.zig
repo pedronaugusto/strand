@@ -39,6 +39,7 @@ pub fn toOwnedSlice(self: *Self) std.mem.Allocator.Error![]u8 {
     var storage: std.ArrayList(u8) = .{
         .items = self.writer.buffered(),
         .capacity = self.writer.buffer.len,
+        .pointer_stability = .{},
     };
     const bytes = try storage.toOwnedSlice(self.allocator);
     self.writer.buffer = &.{};
@@ -53,6 +54,7 @@ fn grow(self: *Self, additional: usize) std.Io.Writer.Error!void {
     var storage: std.ArrayList(u8) = .{
         .items = self.writer.buffered(),
         .capacity = self.writer.buffer.len,
+        .pointer_stability = .{},
     };
     storage.ensureUnusedCapacity(self.allocator, additional) catch {
         self.allocation_failed = true;

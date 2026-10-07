@@ -264,7 +264,7 @@ test "FileId.ofPath" {
 
     // A socket cannot be opened as a file, and still has an identity.
     if (builtin.os.tag != .windows) {
-        const sock_path = try std.fmt.allocPrint(std.testing.allocator, "{s}.sock", .{absolute});
+        const sock_path = try std.testing.allocator.print("{s}.sock", .{absolute});
         defer std.testing.allocator.free(sock_path);
         const address = try std.Io.net.UnixAddress.init(sock_path);
         var server = try address.listen(io, .{});

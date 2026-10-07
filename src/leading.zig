@@ -26,22 +26,22 @@ pub fn IntMembers(comptime T: type) type {
 /// way are still JSON, and are the parser's to read; null says only that this
 /// is not the shape to take them off the bytes.
 pub fn leadingIntMembers(comptime T: type, line: []const u8) ?IntMembers(T) {
-    const fields = comptime fields: {
+    const layout = comptime layout: {
         const info = @typeInfo(T);
-        if (info != .@"struct" or info.@"struct".is_tuple or info.@"struct".fields.len == 0)
+        if (info != .@"struct" or info.@"struct".is_tuple or info.@"struct".field_names.len == 0)
             @compileError("leadingIntMembers takes a struct of integer fields, not '" ++ @typeName(T) ++ "'");
-        for (info.@"struct".fields) |field| {
-            if (@typeInfo(field.type) != .int)
-                @compileError("leadingIntMembers reads integers; '" ++ field.name ++ "' is a '" ++ @typeName(field.type) ++ "'");
-            for (field.name) |b| if (b < 0x20 or b == '"' or b == '\\' or b >= 0x7f)
-                @compileError("leadingIntMembers reads a name as written plain; '" ++ field.name ++ "' is not one");
+        for (info.@"struct".field_names, info.@"struct".field_types) |field_name, field_type| {
+            if (@typeInfo(field_type) != .int)
+                @compileError("leadingIntMembers reads integers; '" ++ field_name ++ "' is a '" ++ @typeName(field_type) ++ "'");
+            for (field_name) |b| if (b < 0x20 or b == '"' or b == '\\' or b >= 0x7f)
+                @compileError("leadingIntMembers reads a name as written plain; '" ++ field_name ++ "' is not one");
         }
-        break :fields info.@"struct".fields;
+        break :layout info.@"struct";
     };
     var result: T = undefined;
     var at: usize = 0;
-    inline for (fields, 0..) |field, i| {
-        const opening = comptime (if (i == 0) "{" else ",") ++ "\"" ++ field.name ++ "\":";
+    inline for (layout.field_names, layout.field_types, 0..) |field_name, field_type, i| {
+        const opening = comptime (if (i == 0) "{" else ",") ++ "\"" ++ field_name ++ "\":";
         if (!std.mem.startsWith(u8, line[at..], opening)) return null;
         at += opening.len;
         const from = at;
@@ -50,7 +50,7 @@ pub fn leadingIntMembers(comptime T: type, line: []const u8) ?IntMembers(T) {
         while (at < line.len and std.ascii.isDigit(line[at])) at += 1;
         // JSON's integer: at least one digit, and no zero in front of others.
         if (at == digits or (line[digits] == '0' and at - digits > 1)) return null;
-        @field(result, field.name) = std.fmt.parseInt(field.type, line[from..at], 10) catch return null;
+        @field(result, field_name) = std.fmt.parseInt(field_type, line[from..at], 10) catch return null;
     }
     if (at >= line.len or (line[at] != ',' and line[at] != '}')) return null;
     return .{ .value = result, .end = at };

@@ -278,14 +278,14 @@ fn mutate(a: std.mem.Allocator, random: std.Random, bytes: []const u8) ![]const 
 /// same number: `123` as `1.23e2`. What a person or another program writing
 /// a large integer may well write, and what `std.json` reads through a float.
 fn exponent(a: std.mem.Allocator, bytes: []const u8) ![]const u8 {
-    const from = std.mem.indexOfAny(u8, bytes, "0123456789") orelse return bytes;
+    const from = std.mem.findAny(u8, bytes, "0123456789") orelse return bytes;
     var to = from;
     while (to < bytes.len and std.ascii.isDigit(bytes[to])) to += 1;
     const digits = bytes[from..to];
     const number = if (digits.len == 1)
-        try std.fmt.allocPrint(a, "{s}e0", .{digits})
+        try a.print("{s}e0", .{digits})
     else
-        try std.fmt.allocPrint(a, "{c}.{s}e{d}", .{ digits[0], digits[1..], digits.len - 1 });
+        try a.print("{c}.{s}e{d}", .{ digits[0], digits[1..], digits.len - 1 });
     return std.mem.concat(a, u8, &.{ bytes[0..from], number, bytes[to..] });
 }
 
@@ -320,7 +320,7 @@ test "a line is read as std.json reads it, in the written shape and out of it" {
     inline for (.{ u0, u1, i1, u8, i8, u64, i64, u128, i128 }) |Int| {
         for ([_]Int{ std.math.minInt(Int), std.math.maxInt(Int) }) |edge| {
             var buffer: [48]u8 = undefined;
-            try expectSameParse(Int, a, try std.fmt.bufPrint(&buffer, "{d}", .{edge}));
+            try expectSameParse(Int, a, try std.mem.print(&buffer, "{d}", .{edge}));
         }
     }
     for ([_][]const u8{
@@ -627,9 +627,9 @@ fn expectVectorPaths(expected: anytype, bytes: []const u8) !void {
     // Streaming payload, stashed payload, migration, and duplicate policy's
     // stashed payload all reach the same value through different decoders.
     for ([_][]const u8{
-        try std.fmt.allocPrint(a, "{{\"v\":2,\"data\":{{\"item\":{s}}}}}", .{bytes}),
-        try std.fmt.allocPrint(a, "{{\"data\":{{\"item\":{s}}},\"v\":2}}", .{bytes}),
-        try std.fmt.allocPrint(a, "{{\"v\":1,\"data\":{{\"item\":{s}}}}}", .{bytes}),
+        try a.print("{{\"v\":2,\"data\":{{\"item\":{s}}}}}", .{bytes}),
+        try a.print("{{\"data\":{{\"item\":{s}}},\"v\":2}}", .{bytes}),
+        try a.print("{{\"v\":1,\"data\":{{\"item\":{s}}}}}", .{bytes}),
     }) |envelope| {
         for ([_]strand.DuplicateFields{ .@"error", .use_last }) |duplicates| {
             try testing.expectEqualDeep(expected, (try strand.parseLine(Envelope, a, envelope, .{ .duplicate_fields = duplicates })).value.item);
@@ -717,8 +717,14 @@ test "vector round trips preserve std.json bytes on every parse path" {
             tuple: struct { V, bool },
             arm: union(enum) { vector: V, empty },
         };
+        // Built from a runtime copy: Zig 0.17.0 miscompiles a comptime-known
+        // struct whose `?@Vector(n, u64)` member (32 bytes or more) comes
+        // before a pointer, and the pointer reads back as part of the
+        // vector. Six lines reproduce it without strand.
+        var runtime_vector = vector;
+        _ = &runtime_vector;
         try expectVectorRoundTrip(Containers{
-            .optional = vector,
+            .optional = runtime_vector,
             .pointer = &vector,
             .array = .{ vector, vector },
             .slice = &.{ vector, vector },

@@ -46,17 +46,17 @@ pub fn internal(comptime U: type) ?Internal(U) {
             @compileError(@typeName(U) ++ ".jsonl_tag must be written without an escape");
         const Tag = info.tag_type.?;
         const other: ?Tag = if (@hasDecl(U, "jsonl_other")) @as(Tag, U.jsonl_other) else null;
-        for (info.fields) |field| {
-            const is_other = other != null and std.mem.eql(u8, field.name, @tagName(other.?));
-            if (field.type == void or is_other) continue;
-            switch (@typeInfo(field.type)) {
+        for (info.field_names, info.field_types) |field_name, field_type| {
+            const is_other = other != null and std.mem.eql(u8, field_name, @tagName(other.?));
+            if (field_type == void or is_other) continue;
+            switch (@typeInfo(field_type)) {
                 .@"struct" => |s| {
                     if (s.is_tuple)
-                        @compileError(@typeName(U) ++ "." ++ field.name ++ " is a tuple; an arm tagged inside its object is a struct or void");
-                    for (s.fields) |member| if (std.mem.eql(u8, member.name, tag))
-                        @compileError(@typeName(U) ++ "." ++ field.name ++ " has a field named like the tag \"" ++ tag ++ "\"");
+                        @compileError(@typeName(U) ++ "." ++ field_name ++ " is a tuple; an arm tagged inside its object is a struct or void");
+                    for (s.field_names) |member_name| if (std.mem.eql(u8, member_name, tag))
+                        @compileError(@typeName(U) ++ "." ++ field_name ++ " has a field named like the tag \"" ++ tag ++ "\"");
                 },
-                else => @compileError(@typeName(U) ++ "." ++ field.name ++ " is a " ++ @typeName(field.type) ++ "; an arm tagged inside its object is a struct or void"),
+                else => @compileError(@typeName(U) ++ "." ++ field_name ++ " is a " ++ @typeName(field_type) ++ "; an arm tagged inside its object is a struct or void"),
             }
         }
         return .{ .tag = tag, .other = other };
@@ -97,12 +97,12 @@ fn reachesFrom(comptime T: type, comptime ancestors: anytype) bool {
         .vector => |i| reachesFrom(i.child, next),
         .pointer => |i| reachesFrom(i.child, next),
         .@"struct" => |i| fields: {
-            for (i.fields) |field| if (reachesFrom(field.type, next)) break :fields true;
+            for (i.field_types) |field_type| if (reachesFrom(field_type, next)) break :fields true;
             break :fields false;
         },
         .@"union" => |i| fields: {
             if (internal(T) != null) break :fields true;
-            for (i.fields) |field| if (reachesFrom(field.type, next)) break :fields true;
+            for (i.field_types) |field_type| if (reachesFrom(field_type, next)) break :fields true;
             break :fields false;
         },
         else => false,

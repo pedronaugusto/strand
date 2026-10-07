@@ -138,7 +138,7 @@ test "a half-written line is not a line until it is finished" {
 
 /// An over-long record the writer has written only part of: the follower
 /// meets the end of the file inside the line it refused.
-const torn_long_head = "{\"kind\":\"" ++ "a" ** 45;
+const torn_long_head = "{\"kind\":\"" ++ @as([45]u8, @splat('a'));
 const torn_long_tail = "aaa\"}\n{\"kind\":\"b\"}\n";
 
 test "an over-long line finished after it was refused is not read twice" {
@@ -295,8 +295,7 @@ fn readingOf(bytes: []const u8) !std.ArrayList([]const u8) {
         out.deinit(testing.allocator);
     }
     while (try reader.next()) |line| {
-        try out.append(testing.allocator, try std.fmt.allocPrint(
-            testing.allocator,
+        try out.append(testing.allocator, try testing.allocator.print(
             "{d}:{s}",
             .{ line.number, line.line },
         ));
@@ -337,8 +336,7 @@ test "a follower resumed from a checkpoint reads every line exactly once" {
         defer follower.deinit();
         for (0..17) |_| {
             const line = try follower.next();
-            try got.append(testing.allocator, try std.fmt.allocPrint(
-                testing.allocator,
+            try got.append(testing.allocator, try testing.allocator.print(
                 "{d}:{s}",
                 .{ line.number, line.line },
             ));
@@ -365,8 +363,7 @@ test "a follower resumed from a checkpoint reads every line exactly once" {
     try testing.expectEqual(point.rotations, second.rotations);
     for (0..lines - 17) |_| {
         const line = try second.next();
-        try got.append(testing.allocator, try std.fmt.allocPrint(
-            testing.allocator,
+        try got.append(testing.allocator, try testing.allocator.print(
             "{d}:{s}",
             .{ line.number, line.line },
         ));
@@ -537,7 +534,7 @@ test "what a file is, by its number or by what is on it" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const header = "{\"kind\":\"open\",\"at\":1}\n" ** 60;
+    const header = fixtures.repeat("{\"kind\":\"open\",\"at\":1}\n", 60);
     try tmp.dir.writeFile(testing.io, .{ .sub_path = "one", .data = header });
     try tmp.dir.writeFile(testing.io, .{ .sub_path = "copy", .data = header });
     try tmp.dir.writeFile(testing.io, .{ .sub_path = "short", .data = "{}\n" });
@@ -581,7 +578,7 @@ test "what a file is, by its number or by what is on it" {
     const before = try by_content.take(testing.io, one);
     const writer = try tmp.dir.openFile(testing.io, "one", .{ .mode = .read_write });
     defer writer.close(testing.io);
-    try writer.writePositionalAll(testing.io, "{\"kind\":\"else\",\"at\":9}\n" ** 60, 0);
+    try writer.writePositionalAll(testing.io, fixtures.repeat("{\"kind\":\"else\",\"at\":9}\n", 60), 0);
     const after = try by_content.take(testing.io, one);
     try testing.expect(before.id.eql(after.id));
     try testing.expect(!before.eql(after));
@@ -621,8 +618,8 @@ test "a rotation that keeps the file's number is followed by its content" {
     // Long enough to fingerprint, and the same length before and after, so
     // that nothing but the bytes themselves can tell the two apart: not the
     // number the system gives it, and not its length either.
-    const before = "{\"kind\":\"old\",\"at\":1}\n" ** 60;
-    const after = "{\"kind\":\"new\",\"at\":2}\n" ** 60;
+    const before = fixtures.repeat("{\"kind\":\"old\",\"at\":1}\n", 60);
+    const after = fixtures.repeat("{\"kind\":\"new\",\"at\":2}\n", 60);
     try tmp.dir.writeFile(testing.io, .{ .sub_path = "log.jsonl", .data = before });
 
     const file = try tmp.dir.openFile(testing.io, "log.jsonl", .{});

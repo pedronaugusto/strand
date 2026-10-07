@@ -357,7 +357,7 @@ fn expectFound(expected: ?[]const u8, name: []const u8, line: []const u8) !void 
 }
 
 test MemberScan {
-    const pad = "x" ** 200;
+    const pad = @as([200]u8, @splat('x'));
     // Wherever the member sits, and whatever is around it.
     try expectFound("1", "id", "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}");
     try expectFound("\"a\\\"b\"", "id", "{\"method\":\"tools/call\",\"params\":{\"id\":99,\"s\":\"" ++ pad ++ "\"},\"jsonrpc\":\"2.0\",\"id\":\"a\\\"b\"}");
@@ -376,8 +376,8 @@ test MemberScan {
     // Structured, too long, or not a value at all: nothing kept.
     try expectFound(null, "id", "{\"id\":{\"n\":1}}");
     try expectFound(null, "id", "{\"id\":[1]}");
-    try expectFound(null, "id", "{\"id\":\"" ++ "y" ** max_value_bytes ++ "\"}");
-    try expectFound("\"" ++ "y" ** (max_value_bytes - 2) ++ "\"", "id", "{\"id\":\"" ++ "y" ** (max_value_bytes - 2) ++ "\"}");
+    try expectFound(null, "id", "{\"id\":\"" ++ @as([max_value_bytes]u8, @splat('y')) ++ "\"}");
+    try expectFound("\"" ++ @as([(max_value_bytes - 2)]u8, @splat('y')) ++ "\"", "id", "{\"id\":\"" ++ @as([(max_value_bytes - 2)]u8, @splat('y')) ++ "\"}");
     try expectFound(null, "id", "{\"id\":abc}");
     try expectFound(null, "id", "{\"id\":01}");
     try expectFound(null, "id", "{\"id\":\"bad\x01\"}");
@@ -403,7 +403,7 @@ test "a member split across chunks is the same member" {
 test "a nested value is passed over to its own closing bracket, whatever is in its strings" {
     var prng: std.Random.DefaultPrng = .init(0x5eed);
     const random = prng.random();
-    const pieces = [_][]const u8{ "{", "}", "[", "]", "\"a{b\"", "\"]\\\"[\"", "\"\\\\\"", "1", ",", ":", " ", "\"x\"", "\"" ++ "y" ** 70 ++ "\"" };
+    const pieces = [_][]const u8{ "{", "}", "[", "]", "\"a{b\"", "\"]\\\"[\"", "\"\\\\\"", "1", ",", ":", " ", "\"x\"", "\"" ++ @as([70]u8, @splat('y')) ++ "\"" };
     var buffer: [2048]u8 = undefined;
     for (0..2000) |_| {
         var len: usize = 0;

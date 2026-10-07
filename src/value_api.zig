@@ -77,13 +77,13 @@ pub fn Values(comptime encode: type) type {
             // `std.json` writes a struct's, the field's value by `writeValue`.
             try output.writeByte('{');
             var object: OpenObject = .{ .output = output, .options = options, .empty = true };
-            inline for (info.fields) |field| {
-                if (comptime field.type != void) {
-                    const absent = if (comptime @typeInfo(field.type) == .optional)
-                        !options.emit_null_optional_fields and @field(value, field.name) == null
+            inline for (info.field_names, info.field_types) |field_name, field_type| {
+                if (comptime field_type != void) {
+                    const absent = if (comptime @typeInfo(field_type) == .optional)
+                        !options.emit_null_optional_fields and @field(value, field_name) == null
                     else
                         false;
-                    if (!absent) try object.member(field.name, @field(value, field.name));
+                    if (!absent) try object.member(field_name, @field(value, field_name));
                 }
             }
             return object;

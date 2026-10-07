@@ -204,7 +204,7 @@ pub const LineIterator = struct {
     /// The next line, or `null` when the buffer is spent.
     pub fn next(it: *LineIterator) ?RawLine {
         if (it.rest.len == 0) return null;
-        const end = std.mem.indexOfScalar(u8, it.rest, '\n') orelse it.rest.len;
+        const end = std.mem.findScalar(u8, it.rest, '\n') orelse it.rest.len;
         const line = trimCr(it.rest[0..end]);
         const offset = it.offset;
         const taken = @min(end + 1, it.rest.len);

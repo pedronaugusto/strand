@@ -39,12 +39,12 @@ pub fn Decoder(comptime Raw: type) type {
                     else => false,
                 },
                 .@"struct" => |i| fields: {
-                    for (i.fields) |field| if (!supportsType(field.type, next)) break :fields false;
+                    for (i.field_types) |field_type| if (!supportsType(field_type, next)) break :fields false;
                     break :fields true;
                 },
                 .@"union" => |i| fields: {
                     if (i.tag_type == null) break :fields false;
-                    for (i.fields) |field| if (field.type != void and !supportsType(field.type, next)) break :fields false;
+                    for (i.field_types) |field_type| if (field_type != void and !supportsType(field_type, next)) break :fields false;
                     break :fields true;
                 },
                 else => false,
@@ -154,9 +154,9 @@ pub fn Decoder(comptime Raw: type) type {
                         if (i.is_tuple) {
                             try self.take('[');
                             var result: T = undefined;
-                            inline for (i.fields, 0..) |field, n| {
+                            inline for (i.field_types, 0..) |field_type, n| {
                                 if (n != 0) try self.take(',');
-                                result[n] = try self.value(field.type);
+                                result[n] = try self.value(field_type);
                             }
                             try self.take(']');
                             return result;
@@ -198,14 +198,14 @@ pub fn Decoder(comptime Raw: type) type {
                         .slice => {
                             self.space();
                             if (i.child == u8 and self.cursor < self.input.len and self.input[self.cursor] == '"') {
-                                const always = !i.is_const or self.options.allocate.? == .alloc_always;
+                                const always = !i.attrs.@"const" or self.options.allocate.? == .alloc_always;
                                 const result = try self.string(always);
                                 if (i.sentinel()) |sentinel| {
                                     const copy = try self.allocator.allocSentinel(u8, result.len, sentinel);
                                     @memcpy(copy, result);
                                     return copy;
                                 }
-                                if (!i.is_const and !always) unreachable;
+                                if (!i.attrs.@"const" and !always) unreachable;
                                 return @constCast(result); // safe: a mutable slice is only asked for with `always`, so these bytes were allocated here and are the caller's to write
                             }
                             try self.take('[');
@@ -237,13 +237,13 @@ pub fn Decoder(comptime Raw: type) type {
                         const name = try self.string(false);
                         try self.take(':');
                         var result: ?T = null;
-                        inline for (i.fields) |field| {
-                            if (std.mem.eql(u8, field.name, name)) {
-                                result = if (field.type == void) payload: {
+                        inline for (i.field_names, i.field_types) |field_name, field_type| {
+                            if (std.mem.eql(u8, field_name, name)) {
+                                result = if (field_type == void) payload: {
                                     try self.take('{');
                                     try self.take('}');
-                                    break :payload @unionInit(T, field.name, {});
-                                } else @unionInit(T, field.name, try self.value(field.type));
+                                    break :payload @unionInit(T, field_name, {});
+                                } else @unionInit(T, field_name, try self.value(field_type));
                                 break;
                             }
                         } else return error.UnknownField;
@@ -273,8 +273,8 @@ pub fn Decoder(comptime Raw: type) type {
             /// second time: the tag of a union tagged inside its object, which
             /// is not one of the arm's fields.
             fn members(self: *Parser, comptime T: type, result: *T, comptime skip: ?[]const u8, comptime from: From) !void {
-                const fields = @typeInfo(T).@"struct".fields;
-                var seen = [_]bool{false} ** fields.len;
+                const info = @typeInfo(T).@"struct";
+                var seen: [info.field_names.len]bool = @splat(false);
                 _ = &seen;
                 var hint: usize = 0;
                 _ = &hint;
@@ -299,15 +299,15 @@ pub fn Decoder(comptime Raw: type) type {
                     // what a writer that keeps declaration order puts here, and
                     // then there is no string to read and compare.
                     self.space();
-                    inline for (fields, 0..) |field, i| {
-                        if (comptime literalKey(field.name)) |key| {
+                    inline for (info.field_names, 0..) |field_name, i| {
+                        if (comptime literalKey(field_name)) |key| {
                             if (i == hint and self.input.len - self.cursor >= key.len and
                                 std.mem.eql(u8, self.input[self.cursor..][0..key.len], key))
                             {
                                 self.cursor += key.len;
                                 try self.take(':');
-                                try self.putField(T, result, &seen, field, i);
-                                hint = (i + 1) % fields.len;
+                                try self.putField(T, result, &seen, field_name, i);
+                                hint = (i + 1) % info.field_names.len;
                                 try self.objectEnd();
                                 if (self.input[self.cursor - 1] == '}') break :fields_loop;
                                 continue :fields_loop;
@@ -325,21 +325,21 @@ pub fn Decoder(comptime Raw: type) type {
                         continue :fields_loop;
                     };
 
-                    inline for (fields, 0..) |field, i| {
-                        if (i == hint and std.mem.eql(u8, field.name, name)) {
-                            try self.putField(T, result, &seen, field, i);
-                            hint = (i + 1) % fields.len;
+                    inline for (info.field_names, 0..) |field_name, i| {
+                        if (i == hint and std.mem.eql(u8, field_name, name)) {
+                            try self.putField(T, result, &seen, field_name, i);
+                            hint = (i + 1) % info.field_names.len;
                             try self.objectEnd();
                             if (self.input[self.cursor - 1] == '}') break :fields_loop;
                             continue :fields_loop;
                         }
                     }
-                    inline for (fields, 0..) |field, i| {
-                        if (field.is_comptime)
-                            @compileError("comptime fields are not supported: " ++ @typeName(T) ++ "." ++ field.name);
-                        if (std.mem.eql(u8, field.name, name)) {
-                            try self.putField(T, result, &seen, field, i);
-                            hint = (i + 1) % fields.len;
+                    inline for (info.field_names, info.field_attrs, 0..) |field_name, field_attrs, i| {
+                        if (field_attrs.@"comptime")
+                            @compileError("comptime fields are not supported: " ++ @typeName(T) ++ "." ++ field_name);
+                        if (std.mem.eql(u8, field_name, name)) {
+                            try self.putField(T, result, &seen, field_name, i);
+                            hint = (i + 1) % info.field_names.len;
                             try self.objectEnd();
                             if (self.input[self.cursor - 1] == '}') break :fields_loop;
                             continue :fields_loop;
@@ -351,9 +351,9 @@ pub fn Decoder(comptime Raw: type) type {
                     if (self.input[self.cursor - 1] == '}') break;
                 }
 
-                inline for (fields, 0..) |field, i| if (!seen[i]) {
-                    if (field.defaultValue()) |default| {
-                        @field(result, field.name) = default;
+                inline for (info.field_names, info.field_types, info.field_attrs, 0..) |field_name, field_type, field_attrs, i| if (!seen[i]) {
+                    if (field_attrs.defaultValue(field_type)) |default| {
+                        @field(result, field_name) = default;
                         seen[i] = true;
                     } else return error.MissingField;
                 };
@@ -385,20 +385,20 @@ pub fn Decoder(comptime Raw: type) type {
                     break :elsewhere found;
                 };
                 const info = @typeInfo(T).@"union";
-                inline for (info.fields) |field| {
+                inline for (info.field_names, info.field_types) |field_name, field_type| {
                     const is_other = comptime inside.other != null and
-                        std.mem.eql(u8, field.name, @tagName(inside.other.?));
-                    if (!is_other and std.mem.eql(u8, field.name, name)) {
-                        if (field.type == void) {
+                        std.mem.eql(u8, field_name, @tagName(inside.other.?));
+                    if (!is_other and std.mem.eql(u8, field_name, name)) {
+                        if (field_type == void) {
                             var none: struct {} = .{};
                             switch (from) {
                                 inline else => |at| try self.members(@TypeOf(none), &none, inside.tag, at),
                             }
-                            return @unionInit(T, field.name, {});
+                            return @unionInit(T, field_name, {});
                         }
-                        var result: T = @unionInit(T, field.name, undefined);
+                        var result: T = @unionInit(T, field_name, undefined);
                         switch (from) {
-                            inline else => |at| try self.members(field.type, &@field(result, field.name), inside.tag, at),
+                            inline else => |at| try self.members(field_type, &@field(result, field_name), inside.tag, at),
                         }
                         return result;
                     }
@@ -471,10 +471,11 @@ pub fn Decoder(comptime Raw: type) type {
                 }
             }
 
-            fn putField(self: *Parser, comptime T: type, result: *T, seen: anytype, comptime field: std.builtin.Type.StructField, comptime i: usize) !void {
+            fn putField(self: *Parser, comptime T: type, result: *T, seen: anytype, comptime field_name: []const u8, comptime i: usize) !void {
+                const field_type = @FieldType(T, field_name);
                 if (seen[i]) switch (self.options.duplicate_field_behavior) {
                     .use_first => {
-                        _ = try self.value(field.type);
+                        _ = try self.value(field_type);
                         return;
                     },
                     .@"error" => return error.DuplicateField,
@@ -483,8 +484,8 @@ pub fn Decoder(comptime Raw: type) type {
                 // A field of a packed struct is bits inside an integer and has no
                 // address to decode into, so it is decoded and then stored.
                 if (@typeInfo(T).@"struct".layout == .@"packed") {
-                    @field(result, field.name) = try self.value(field.type);
-                } else try self.valueInto(field.type, &@field(result, field.name));
+                    @field(result, field_name) = try self.value(field_type);
+                } else try self.valueInto(field_type, &@field(result, field_name));
                 seen[i] = true;
             }
 

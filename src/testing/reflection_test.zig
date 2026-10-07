@@ -36,7 +36,7 @@ const shape: Shape = .{
     .id = std.math.maxInt(u64),
     .pair = .{ 7, "x" },
     .mode = .on,
-    .raw_mode = @enumFromInt(9),
+    .raw_mode = @fromBackingInt(@intCast(9)),
     .hue = .green,
     .flags = .{ .a = 5, .b = true, .c = 2 },
     .arm = .{ .count = 4 },
@@ -73,10 +73,10 @@ test "reflected shapes are written to the same bytes by every encoder" {
     noted.note = "n";
     fixed = .fixed(&buffer);
     try strand.writeValue(&fixed, noted, .{});
-    try testing.expect(std.mem.indexOf(u8, fixed.buffered(), "\"note\":\"n\"") != null);
+    try testing.expect(std.mem.find(u8, fixed.buffered(), "\"note\":\"n\"") != null);
     fixed = .fixed(&buffer);
     try strand.writeValue(&fixed, shape, .{ .emit_null_optional_fields = true });
-    try testing.expect(std.mem.indexOf(u8, fixed.buffered(), "\"note\":null") != null);
+    try testing.expect(std.mem.find(u8, fixed.buffered(), "\"note\":null") != null);
 }
 
 fn expectShape(actual: Shape) !void {
@@ -138,7 +138,7 @@ test "enum tags: an exhaustive enum refuses a number, a non-exhaustive one keeps
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    try testing.expectEqual(@as(Mode, @enumFromInt(200)), try strand.parseLine(Mode, a, "200", .{}));
+    try testing.expectEqual(@as(Mode, @fromBackingInt(@intCast(200))), try strand.parseLine(Mode, a, "200", .{}));
     try testing.expectEqual(Mode.off, try strand.parseLine(Mode, a, "0", .{}));
     try testing.expectEqual(Mode.on, try strand.parseLine(Mode, a, "\"on\"", .{}));
     try testing.expectError(error.InvalidEnumTag, strand.parseLine(Mode, a, "\"dim\"", .{}));
@@ -149,7 +149,7 @@ test "enum tags: an exhaustive enum refuses a number, a non-exhaustive one keeps
 
     var buffer: [16]u8 = undefined;
     var fixed: std.Io.Writer = .fixed(&buffer);
-    try strand.writeValue(&fixed, @as(Mode, @enumFromInt(200)), .{});
+    try strand.writeValue(&fixed, @as(Mode, @fromBackingInt(@intCast(200))), .{});
     try testing.expectEqualStrings("200", fixed.buffered());
     fixed = .fixed(&buffer);
     try strand.writeValue(&fixed, Mode.off, .{});

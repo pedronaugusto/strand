@@ -74,10 +74,10 @@ fn answer(comptime U: type, a: std.mem.Allocator, line: []const u8, path: Path) 
             break :value strand.payloadOf(U, a, value);
         },
     };
-    const v = parsed catch |err| return std.fmt.allocPrint(a, "err {s}", .{class(err)});
+    const v = parsed catch |err| return a.print("err {s}", .{class(err)});
     var out: std.Io.Writer.Allocating = .init(a);
     try strand.writeValue(&out.writer, v, .{});
-    return std.fmt.allocPrint(a, "ok {s}", .{out.written()});
+    return a.print("ok {s}", .{out.written()});
 }
 
 test "a union tagged inside its object reads as serde reads it" {
@@ -91,9 +91,9 @@ test "a union tagged inside its object reads as serde reads it" {
     while (lines.next()) |line| {
         number += 1;
         const expected = answers.next().?;
-        const tab = std.mem.indexOfScalar(u8, expected, '\t').?;
+        const tab = std.mem.findScalar(u8, expected, '\t').?;
         const want = [2][]const u8{ expected[0..tab], expected[tab + 1 ..] };
-        const array = std.mem.indexOfScalar(usize, &arrays, number) != null;
+        const array = std.mem.findScalar(usize, &arrays, number) != null;
         inline for (.{ Closed, Open }, 0..) |U, which| {
             for ([_]Path{ .direct, .tokens }) |path| {
                 const got = try answer(U, a, line, path);
@@ -252,11 +252,11 @@ test "memberOf peeks at a member wherever it is in the object" {
     try testing.expectEqualStrings("assistant", strand.memberStringOf(line, "type").?);
     try testing.expectEqualStrings("s-1", strand.memberStringOf(line, "session_id").?);
     // The value is a view into the line.
-    const at = std.mem.lastIndexOf(u8, line, "\"assistant\"").?;
+    const at = std.mem.findLast(u8, line, "\"assistant\"").?;
     try testing.expect(strand.memberOf(line, "type").?.ptr == line.ptr + at);
     // A structured member is not something to route on.
     try testing.expectEqual(@as(?[]const u8, null), strand.memberOf(line, "message"));
     // A long string value has no bound: the line is in hand.
-    const long = "{\"type\":\"" ++ "x" ** 300 ++ "\"}";
+    const long = "{\"type\":\"" ++ @as([300]u8, @splat('x')) ++ "\"}";
     try testing.expectEqual(@as(usize, 302), strand.memberOf(long, "type").?.len);
 }

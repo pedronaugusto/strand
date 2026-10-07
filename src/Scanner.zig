@@ -14,6 +14,10 @@ const work = @import("work.zig");
 pub const Token = std.json.Token;
 pub const TokenType = std.json.TokenType;
 pub const AllocWhen = std.json.AllocWhen;
+/// The list a value is read into by `allocNextIntoArrayList`: whatever
+/// `std.json.Scanner` takes there, since `std.json` hands the same list to
+/// any token source it reads from.
+pub const ValueList = std.meta.Child(@typeInfo(@TypeOf(std.json.Scanner.allocNextIntoArrayListMax)).@"fn".param_types[1].?);
 pub const Error = error{ SyntaxError, UnexpectedEndOfInput };
 pub const NextError = error{ SyntaxError, UnexpectedEndOfInput, OutOfMemory, BufferUnderrun };
 pub const AllocError = error{ SyntaxError, UnexpectedEndOfInput, OutOfMemory, ValueTooLong };
@@ -487,7 +491,7 @@ pub fn nextAllocMax(self: *Self, allocator: Allocator, when: AllocWhen, max: usi
     };
     switch (kind) {
         .number, .string => {
-            var list = std.array_list.Managed(u8).init(allocator);
+            var list: ValueList = .init(allocator);
             errdefer list.deinit();
             const borrowed = self.allocNextIntoArrayListMax(&list, when, max) catch |err| switch (err) {
                 error.BufferUnderrun => unreachable,
@@ -508,11 +512,11 @@ pub fn nextAllocMax(self: *Self, allocator: Allocator, when: AllocWhen, max: usi
     }
 }
 
-pub fn allocNextIntoArrayList(self: *Self, list: *std.array_list.Managed(u8), when: AllocWhen) AllocIntoArrayListError!?[]const u8 {
+pub fn allocNextIntoArrayList(self: *Self, list: *ValueList, when: AllocWhen) AllocIntoArrayListError!?[]const u8 {
     return self.allocNextIntoArrayListMax(list, when, std.json.default_max_value_len);
 }
 
-pub fn allocNextIntoArrayListMax(self: *Self, list: *std.array_list.Managed(u8), when: AllocWhen, max: usize) AllocIntoArrayListError!?[]const u8 {
+pub fn allocNextIntoArrayListMax(self: *Self, list: *ValueList, when: AllocWhen, max: usize) AllocIntoArrayListError!?[]const u8 {
     while (true) switch (try self.next()) {
         .partial_number, .partial_string => |slice| try append(list, slice, max),
         .partial_string_escaped_1 => |buf| try append(list, &buf, max),
@@ -528,7 +532,7 @@ pub fn allocNextIntoArrayListMax(self: *Self, list: *std.array_list.Managed(u8),
     };
 }
 
-fn append(list: *std.array_list.Managed(u8), slice: []const u8, max: usize) AllocError!void {
+fn append(list: *ValueList, slice: []const u8, max: usize) AllocError!void {
     if (max -| list.items.len < slice.len) return error.ValueTooLong;
     try list.appendSlice(slice);
 }

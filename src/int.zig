@@ -152,10 +152,10 @@ test "wherever std.json answers, the answer is the same" {
     };
     for (0..20_000) |i| {
         const text = if (i < fixed.len) fixed[i] else switch (random.uintLessThan(u8, 4)) {
-            0 => try std.fmt.bufPrint(&buffer, "{d}", .{random.int(i128) >> random.int(u7)}),
-            1 => try std.fmt.bufPrint(&buffer, "{d}", .{random.int(u128) >> random.int(u7)}),
-            2 => try std.fmt.bufPrint(&buffer, "{d}e{d}", .{ random.int(u32), random.uintLessThan(u8, 30) }),
-            else => try std.fmt.bufPrint(&buffer, "-{d}.{d}e{d}", .{ random.int(u8), random.int(u8), random.uintLessThan(u8, 40) }),
+            0 => try std.mem.print(&buffer, "{d}", .{random.int(i128) >> random.int(u7)}),
+            1 => try std.mem.print(&buffer, "{d}", .{random.int(u128) >> random.int(u7)}),
+            2 => try std.mem.print(&buffer, "{d}e{d}", .{ random.int(u32), random.uintLessThan(u8, 30) }),
+            else => try std.mem.print(&buffer, "-{d}.{d}e{d}", .{ random.int(u8), random.int(u8), random.uintLessThan(u8, 40) }),
         };
         inline for (.{ u0, u1, i1, u8, i8, u32, i32, u64, i64, u65, i65, u100, i100, u128, i128 }) |Int| {
             if (!stdPanics(Int, text)) {
@@ -176,7 +176,7 @@ fn stdSliceToInt(comptime T: type, slice: []const u8) !T {
     var buffer: [128]u8 = undefined;
     std.debug.assert(slice.len <= buffer.len - 8);
     // unreachable: the test bounds slice length below the fixed buffer capacity minus the eight envelope bytes.
-    const line = std.fmt.bufPrint(&buffer, "{{\"n\":\"{s}\"}}", .{slice}) catch unreachable;
+    const line = std.mem.print(&buffer, "{{\"n\":\"{s}\"}}", .{slice}) catch unreachable;
     var memory: [1024]u8 = undefined;
     var fixed: std.heap.FixedBufferAllocator = .init(&memory);
     const parsed = try std.json.parseFromSliceLeaky(Holder, fixed.allocator(), line, .{});

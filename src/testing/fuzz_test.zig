@@ -100,7 +100,7 @@ const PhysicalLines = struct {
 
     fn next(it: *PhysicalLines) ?Physical {
         if (it.rest.len == 0) return null;
-        const end = std.mem.indexOfScalar(u8, it.rest, '\n') orelse it.rest.len;
+        const end = std.mem.findScalar(u8, it.rest, '\n') orelse it.rest.len;
         const raw = it.rest[0..end];
         const offset = it.offset;
         it.offset += @min(end + 1, it.rest.len);
@@ -117,7 +117,7 @@ const PhysicalLines = struct {
 
 /// The reader's own rule for a blank line, restated rather than imported.
 fn isBlank(line: []const u8) bool {
-    return std.mem.indexOfNone(u8, line, " \t") == null;
+    return std.mem.findNone(u8, line, " \t") == null;
 }
 
 /// In `.fail` mode the reader and the oracle move in lockstep: every line the
@@ -403,7 +403,7 @@ fn checkKindOf(line: []const u8) !void {
         try testing.expect(start >= 1 and start + key.len < line.len);
         try testing.expectEqual(@as(u8, '"'), line[start - 1]);
         try testing.expectEqual(@as(u8, '"'), line[start + key.len]);
-        try testing.expect(std.mem.indexOfAny(u8, key, "\"\\") == null);
+        try testing.expect(std.mem.findAny(u8, key, "\"\\") == null);
     }
 
     if (!isShallow(line)) return;
@@ -420,7 +420,7 @@ fn checkKindOf(line: []const u8) !void {
                 try testing.expectEqualStrings(object.keys()[0], key);
             } else {
                 // The only reason to decline a valid object is an escape.
-                try testing.expect(std.mem.indexOfScalar(u8, line, '\\') != null);
+                try testing.expect(std.mem.findScalar(u8, line, '\\') != null);
             }
         },
         // Nothing but an object has a first key.
@@ -445,7 +445,7 @@ fn checkTagOf(line: []const u8) !void {
     if (tag) |t| {
         try testing.expectEqual(std.meta.activeTag(value), t);
     } else {
-        try testing.expect(std.mem.indexOfScalar(u8, line, '\\') != null);
+        try testing.expect(std.mem.findScalar(u8, line, '\\') != null);
     }
 }
 
@@ -479,7 +479,7 @@ fn checkMemberOf(line: []const u8) !void {
     defer arena.deinit();
     // Keys are matched as written, so a line with an escape anywhere is
     // read differently by the two on purpose.
-    if (std.mem.indexOfScalar(u8, line, '\\') != null) return;
+    if (std.mem.findScalar(u8, line, '\\') != null) return;
     const value = std.json.parseFromSliceLeaky(std.json.Value, arena.allocator(), line, .{
         .duplicate_field_behavior = .use_first,
     }) catch return;
@@ -523,7 +523,7 @@ fn checkTagged(line: []const u8) !void {
         try testing.expectEqual(std.meta.activeTag(value), arm);
     } else {
         // Declined only for a tag written with an escape.
-        try testing.expect(std.mem.indexOfScalar(u8, line, '\\') != null);
+        try testing.expect(std.mem.findScalar(u8, line, '\\') != null);
     }
 }
 
@@ -550,7 +550,7 @@ fn checkLines(input: []const u8) !void {
         try testing.expectEqual(physical.number, line.number);
         try testing.expectEqualStrings(physical.line, line.line);
         try testing.expectEqual(physical.offset, line.offset);
-        try testing.expect(std.mem.indexOfScalar(u8, line.line, '\n') == null);
+        try testing.expect(std.mem.findScalar(u8, line.line, '\n') == null);
         if (line.line.len != 0) {
             const start = @intFromPtr(line.line.ptr) - @intFromPtr(input.ptr); // safe: addresses compared as numbers, never read through
             try testing.expect(start + line.line.len <= input.len);

@@ -388,7 +388,7 @@ test "a line past the bound keeps the member it is answered under" {
     // A JSON-RPC host writes the id after the params, so neither the head of
     // a line past the bound nor a parse of it could give the id back: the
     // bytes are looked at as they are thrown away.
-    const pad = "x" ** 200;
+    const pad = @as([200]u8, @splat('x'));
     const input =
         "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}\n" ++
         // the SDK's order: params first, the id last, a decoy id inside
@@ -399,8 +399,8 @@ test "a line past the bound keeps the member it is answered under" {
         "{\"i\\\"d\":3,\"s\":\"" ++ pad ++ "\",\"id\" : -12 }\n" ++
         // over the bound by its terminator's `\r` alone is not over it; by
         // one byte, it is
-        "{\"id\":8,\"s\":\"" ++ "y" ** 113 ++ "\"}\r\n" ++
-        "{\"id\":9,\"s\":\"" ++ "y" ** 114 ++ "\"}\r\n" ++
+        "{\"id\":8,\"s\":\"" ++ @as([113]u8, @splat('y')) ++ "\"}\r\n" ++
+        "{\"id\":9,\"s\":\"" ++ @as([114]u8, @splat('y')) ++ "\"}\r\n" ++
         "{\"id\":7,\"method\":\"ping\"}\n";
     const Request = struct { id: ?strand.Raw = null, method: []const u8 = "" };
 
@@ -465,7 +465,7 @@ test "an object written open is the value's bytes, members added, then closed" {
                     try testing.expect(!object.empty);
                     try object.member("c", @as(u32, 4_000_000_000));
                     try object.close();
-                    const after = try std.fmt.allocPrint(testing.allocator, "{s},\"c\":4000000000}}", .{before});
+                    const after = try testing.allocator.print("{s},\"c\":4000000000}}", .{before});
                     defer testing.allocator.free(after);
                     try testing.expectEqualStrings(after, out.written());
                 }
@@ -970,7 +970,7 @@ test "pretty: a record written over several lines is read back as one" {
     // The record's number is the number of the line it started on.
     try testing.expectEqual(@as(u64, 1), first.number);
     // And its bytes are the whole record, newlines and all.
-    try testing.expect(std.mem.indexOfScalar(u8, first.line, '\n') != null);
+    try testing.expect(std.mem.findScalar(u8, first.line, '\n') != null);
 
     const second = (try reader.next()).?;
     try testing.expectEqualStrings("close", second.value.kind);
@@ -1450,7 +1450,7 @@ test "an offset names the line a reader refused" {
     );
 
     // And an over-long line, which never reaches `std.json` at all.
-    var long: std.Io.Reader = .fixed("{\"kind\":\"x\"}\n{\"kind\":\"" ++ "y" ** 200 ++ "\"}\n{\"kind\":\"z\"}\n");
+    var long: std.Io.Reader = .fixed("{\"kind\":\"x\"}\n{\"kind\":\"" ++ @as([200]u8, @splat('y')) ++ "\"}\n{\"kind\":\"z\"}\n");
     var bounded: strand.Reader(Event) = .init(testing.allocator, &long, .{ .max_line_bytes = 64 });
     defer bounded.deinit();
     _ = (try bounded.next()).?;
@@ -1558,7 +1558,7 @@ test "a resumed reader does not eat three bytes looking for a mark" {
     // These three bytes are a byte-order mark, and they are also the middle
     // of a line: only a reader that began at offset 0 may drop them.
     const input = "{\"kind\":\"a\"}\n{\"kind\":\"\xEF\xBB\xBF\"}\n";
-    const offset = std.mem.indexOfScalar(u8, input, '\n').? + 1;
+    const offset = std.mem.findScalar(u8, input, '\n').? + 1;
 
     var source: std.Io.Reader = .fixed(input[offset..]);
     var reader: strand.Reader(Event) = .resumeAt(testing.allocator, &source, .{}, .{
@@ -1729,7 +1729,7 @@ test "a torn record followed by a whole one on its line loses only itself" {
             const b = (try reader.next()).?;
             try testing.expectEqualStrings("b", b.value.kind);
             try testing.expectEqual(@as(u64, 2), b.number);
-            try testing.expectEqual(@as(u64, std.mem.lastIndexOfScalar(u8, input[0..40], strand.separator).?), b.offset);
+            try testing.expectEqual(@as(u64, std.mem.findScalarLast(u8, input[0..40], strand.separator).?), b.offset);
             try testing.expectEqual(@as(u64, 1), reader.lines.skipped);
             try testing.expectEqual(@as(u64, 2), reader.lines.fault.line);
             try testing.expectEqualStrings("c", (try reader.next()).?.value.kind);
@@ -1739,7 +1739,7 @@ test "a torn record followed by a whole one on its line loses only itself" {
 }
 
 test "a torn record longer than the bound does not refuse the record after it" {
-    const input = "\x1e{\"kind\":\"" ++ "x" ** 100 ++ "\x1e\x1e{\"kind\":\"b\"}\n";
+    const input = "\x1e{\"kind\":\"" ++ @as([100]u8, @splat('x')) ++ "\x1e\x1e{\"kind\":\"b\"}\n";
     for ([_]bool{ false, true }) |streamed| {
         var buffer: [7]u8 = undefined;
         var chunked: fixtures.Chunked = .init(input, &buffer, 3);
@@ -1840,7 +1840,7 @@ test "a separator is a decision both ends make" {
 test "a writer can be held to the bound its readers are held to" {
     const bound = 64;
     const small: Event = .{ .kind = "open", .at = 1 };
-    const large: Event = .{ .kind = "x" ** bound, .at = 2 };
+    const large: Event = .{ .kind = &@as([bound]u8, @splat('x')), .at = 2 };
 
     // With no bound, a writer will happily emit a record no reader with the
     // matching bound will read back.
@@ -2678,7 +2678,7 @@ test "a raw value is read and written back byte for byte" {
     }
     try testing.expectEqualStrings(expected.written(), out.written());
     // The first line has every field, so it is its own bytes exactly.
-    try testing.expectEqualStrings(input[0 .. std.mem.indexOfScalar(u8, input, '\n').? + 1], out.written()[0 .. std.mem.indexOfScalar(u8, out.written(), '\n').? + 1]);
+    try testing.expectEqualStrings(input[0 .. std.mem.findScalar(u8, input, '\n').? + 1], out.written()[0 .. std.mem.findScalar(u8, out.written(), '\n').? + 1]);
 }
 
 test "a raw value borrows from its line as a string does, and keep copies it" {
@@ -2868,7 +2868,7 @@ test "a buffered record is scanned once parsed once and borrowed without allocat
     defer out.deinit();
     var writer: strand.Writer(Row) = .init(&out.writer, .{});
     for (0..128) |i| try writer.write(.{
-        .text = "x" ** 512,
+        .text = &@as([512]u8, @splat('x')),
         .note = if (i % 7 == 0) "escaped\tnote" else null,
     });
     inline for (.{ Row, Hook }) |T| {
@@ -3089,7 +3089,7 @@ test "bounded writer scratch survives allocation failures and reuses capacity" {
                 return err;
             };
             const before = output.written().len;
-            writer.write("y" ** 2048) catch |err| {
+            writer.write(&@as([2048]u8, @splat('y'))) catch |err| {
                 try testing.expectEqual(before, output.written().len);
                 try testing.expectEqual(@as(u64, 1), writer.count);
                 return err;

@@ -36,13 +36,13 @@ pub fn copyOwned(allocator: Allocator, value: anytype) Allocator.Error!@TypeOf(v
     switch (@typeInfo(T)) {
         .pointer => |info| switch (info.size) {
             .one => {
-                const storage = try allocator.alignedAlloc(info.child, .fromByteUnits(info.alignment orelse @alignOf(info.child)), 1);
+                const storage = try allocator.alignedAlloc(info.child, .fromByteUnits(info.attrs.@"align" orelse @alignOf(info.child)), 1);
                 errdefer allocator.free(storage);
                 storage[0] = try copyOwned(allocator, value.*);
                 return &storage[0];
             },
             .slice => {
-                const storage = try allocator.allocWithOptions(info.child, value.len, .fromByteUnits(info.alignment orelse @alignOf(info.child)), info.sentinel());
+                const storage = try allocator.allocWithOptions(info.child, value.len, .fromByteUnits(info.attrs.@"align" orelse @alignOf(info.child)), info.sentinel());
                 errdefer allocator.free(storage);
                 var initialized: usize = 0;
                 errdefer for (storage[0..initialized]) |item| freeOwned(allocator, item);
@@ -58,13 +58,13 @@ pub fn copyOwned(allocator: Allocator, value: anytype) Allocator.Error!@TypeOf(v
         .@"struct" => |info| {
             var result = value;
             var initialized: usize = 0;
-            errdefer inline for (info.fields, 0..) |field, i| {
-                if (!field.is_comptime and i < initialized)
-                    freeOwned(allocator, @field(result, field.name));
+            errdefer inline for (info.field_names, info.field_attrs, 0..) |name, attrs, i| {
+                if (!attrs.@"comptime" and i < initialized)
+                    freeOwned(allocator, @field(result, name));
             };
-            inline for (info.fields, 0..) |field, i| {
-                if (!field.is_comptime)
-                    @field(result, field.name) = try copyOwned(allocator, @field(value, field.name));
+            inline for (info.field_names, info.field_attrs, 0..) |name, attrs, i| {
+                if (!attrs.@"comptime")
+                    @field(result, name) = try copyOwned(allocator, @field(value, name));
                 initialized = i + 1;
             }
             return result;
@@ -112,8 +112,8 @@ pub fn freeOwned(allocator: Allocator, value: anytype) void {
             else => unreachable,
         },
         .optional => if (value) |item| freeOwned(allocator, item),
-        .@"struct" => |info| inline for (info.fields) |field| {
-            if (!field.is_comptime) freeOwned(allocator, @field(value, field.name));
+        .@"struct" => |info| inline for (info.field_names, info.field_attrs) |name, attrs| {
+            if (!attrs.@"comptime") freeOwned(allocator, @field(value, name));
         },
         .array => for (value) |item| freeOwned(allocator, item),
         .vector => |info| {
@@ -190,20 +190,20 @@ fn canCopy(comptime T: type, comptime seen: []const type) bool {
     return switch (@typeInfo(T)) {
         .bool, .int, .float, .@"enum", .void, .null, .comptime_int, .comptime_float, .enum_literal => true,
         .pointer => |info| (info.size == .one or info.size == .slice) and
-            !info.is_volatile and !info.is_allowzero and info.address_space == .generic and
+            !info.attrs.@"volatile" and !info.attrs.@"allowzero" and (info.attrs.@"addrspace" orelse .generic) == .generic and
             safeSentinel(info) and canCopy(info.child, next),
         .optional => |info| canCopy(info.child, next),
         .array => |info| safeSentinel(info) and canCopy(info.child, next),
         .vector => |info| canCopy(info.child, next),
         .@"struct" => |info| result: {
-            for (info.fields) |field| {
-                if (!canCopy(field.type, next) or (field.is_comptime and hasPointers(field.type, &.{}))) break :result false;
+            for (info.field_types, info.field_attrs) |Field, attrs| {
+                if (!canCopy(Field, next) or (attrs.@"comptime" and hasPointers(Field, &.{}))) break :result false;
             }
             break :result true;
         },
         .@"union" => |info| result: {
             if (info.tag_type == null) break :result false;
-            for (info.fields) |field| if (!canCopy(field.type, next)) break :result false;
+            for (info.field_types) |Field| if (!canCopy(Field, next)) break :result false;
             break :result true;
         },
         else => false,
@@ -231,7 +231,7 @@ fn containsPointer(comptime value: anytype) bool {
             return containsPointer(items);
         },
         .@"struct" => |info| result: {
-            for (info.fields) |field| if (containsPointer(@field(value, field.name))) break :result true;
+            for (info.field_names) |name| if (containsPointer(@field(value, name))) break :result true;
             break :result false;
         },
         .@"union" => switch (value) {
@@ -248,7 +248,7 @@ fn hasPointers(comptime T: type, comptime seen: []const type) bool {
         .pointer => true,
         inline .optional, .array, .vector => |info| hasPointers(info.child, next),
         inline .@"struct", .@"union" => |info| result: {
-            for (info.fields) |field| if (hasPointers(field.type, next)) break :result true;
+            for (info.field_types) |Field| if (hasPointers(Field, next)) break :result true;
             break :result false;
         },
         else => false,

@@ -92,10 +92,21 @@ pub const Chunked = struct {
     fn stream(io_reader: *std.Io.Reader, w: *std.Io.Writer, limit: std.Io.Limit) std.Io.Reader.StreamError!usize {
         const self: *Chunked = @alignCast(@fieldParentPtr("interface", io_reader)); // safe: this vtable is installed only on a Chunked's own `interface` field
         if (self.rest.len == 0) return error.EndOfStream;
-        const room = @intFromEnum(limit.min(.limited(self.rest.len)));
+        const room = @backingInt(limit.min(.limited(self.rest.len)));
         const take = @max(@min(self.chunk, room), 1);
         const n = try w.write(self.rest[0..take]);
         self.rest = self.rest[n..];
         return n;
     }
 };
+
+/// `bytes`, `n` times over, built at compile time.
+pub fn repeat(comptime bytes: []const u8, comptime n: usize) *const [bytes.len * n]u8 {
+    const result = comptime result: {
+        @setEvalBranchQuota(n * 4 + 1000);
+        var out: [bytes.len * n]u8 = undefined;
+        for (0..n) |i| @memcpy(out[i * bytes.len ..][0..bytes.len], bytes);
+        break :result out;
+    };
+    return &result;
+}

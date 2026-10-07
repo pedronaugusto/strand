@@ -224,10 +224,10 @@ test "framing searches lanes only in a vector that holds a control byte" {
     var counts: work.Counts = .{};
     work.observe(&counts);
     defer work.observe(null);
-    const payload = "x" ** 4096;
+    const payload: *const [4096]u8 = &@splat('x');
     try std.testing.expectEqual(@as(?usize, null), firstControlOrTerminator(payload));
     try std.testing.expectEqual(@as(usize, 0), counts.lane_searches);
     counts = .{};
-    try std.testing.expectEqual(@as(?usize, payload.len), firstControlOrTerminator(payload ++ "\n" ++ "x" ** 64));
+    try std.testing.expectEqual(@as(?usize, payload.len), firstControlOrTerminator(payload ++ "\n" ++ &@as([64]u8, @splat('x'))));
     try std.testing.expectEqual(@as(usize, 1), counts.lane_searches);
 }

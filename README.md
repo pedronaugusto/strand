@@ -5,7 +5,7 @@ byte offset, and damaged lines can be refused or skipped while reading continues
 
 ## Install
 
-Requires Zig 0.16.0. Fetch with `zig fetch --save
+Requires Zig 0.17.0. Fetch with `zig fetch --save
 git+https://github.com/pedronaugusto/strand`, then obtain the `strand` module through
 `b.dependency` and add it to your executable's imports. Forward your target and optimize
 settings.

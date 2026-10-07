@@ -72,14 +72,14 @@ test "Raw.encode releases storage when encoding or transfer runs out of memory" 
     const Hook = struct {
         pub const Self = @This();
         pub fn jsonStringify(_: Self, json: *std.json.Stringify) !void {
-            try json.write("x" ** 2048);
+            try json.write(@as([2048]u8, @splat('x')));
         }
     };
     const Case = struct {
         fn run(allocator: Allocator, custom: bool) !void {
-            const raw = if (custom) try Raw.encode(allocator, Hook{}) else try Raw.encode(allocator, "x" ** 2048);
+            const raw = if (custom) try Raw.encode(allocator, Hook{}) else try Raw.encode(allocator, @as([2048]u8, @splat('x')));
             defer allocator.free(raw.bytes);
-            try testing.expectEqualStrings("\"" ++ "x" ** 2048 ++ "\"", raw.bytes);
+            try testing.expectEqualStrings("\"" ++ @as([2048]u8, @splat('x')) ++ "\"", raw.bytes);
         }
     };
     for ([_]bool{ false, true }) |custom|

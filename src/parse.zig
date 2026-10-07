@@ -59,8 +59,8 @@ pub fn inner(
             if (info.is_tuple) {
                 if (try source.next() != .array_begin) return error.UnexpectedToken;
                 var result: T = undefined;
-                inline for (info.fields, 0..) |field, i| {
-                    result[i] = try inner(field.type, allocator, source, options);
+                inline for (info.field_types, 0..) |field_type, i| {
+                    result[i] = try inner(field_type, allocator, source, options);
                 }
                 if (try source.next() != .array_end) return error.UnexpectedToken;
                 return result;
@@ -128,15 +128,15 @@ pub fn inner(
                 else => return error.UnexpectedToken,
             };
             var result: ?T = null;
-            inline for (info.fields) |field| {
-                if (std.mem.eql(u8, field.name, name)) {
+            inline for (info.field_names, info.field_types) |field_name, field_type| {
+                if (std.mem.eql(u8, field_name, name)) {
                     freeAllocated(allocator, name_token.?);
                     name_token = null;
-                    result = if (field.type == void) value: {
+                    result = if (field_type == void) value: {
                         if (try source.next() != .object_begin) return error.UnexpectedToken;
                         if (try source.next() != .object_end) return error.UnexpectedToken;
-                        break :value @unionInit(T, field.name, {});
-                    } else @unionInit(T, field.name, try inner(field.type, allocator, source, options));
+                        break :value @unionInit(T, field_name, {});
+                    } else @unionInit(T, field_name, try inner(field_type, allocator, source, options));
                     break;
                 }
             } else return error.UnknownField;
@@ -169,15 +169,15 @@ fn tagged(comptime T: type, allocator: Allocator, comptime inside: anytype, sour
 
         var again: Scanner = .initCompleteInput(allocator, bytes);
         defer again.deinit();
-        inline for (@typeInfo(T).@"union".fields) |field| {
+        inline for (@typeInfo(T).@"union".field_names, @typeInfo(T).@"union".field_types) |field_name, field_type| {
             const is_other = comptime inside.other != null and
-                std.mem.eql(u8, field.name, @tagName(inside.other.?));
-            if (!is_other and std.mem.eql(u8, field.name, name)) {
-                if (field.type == void) {
+                std.mem.eql(u8, field_name, @tagName(inside.other.?));
+            if (!is_other and std.mem.eql(u8, field_name, name)) {
+                if (field_type == void) {
                     _ = try parseStructSkipping(struct {}, inside.tag, allocator, &again, options);
-                    return @unionInit(T, field.name, {});
+                    return @unionInit(T, field_name, {});
                 }
-                return @unionInit(T, field.name, try parseStructSkipping(field.type, inside.tag, allocator, &again, options));
+                return @unionInit(T, field_name, try parseStructSkipping(field_type, inside.tag, allocator, &again, options));
             }
         }
         if (comptime inside.other) |other| {
@@ -234,12 +234,12 @@ fn parseStruct(
 /// `parseStruct`, with a member named `skip` passed over once and a
 /// duplicate the second time: the tag of a union tagged inside its object.
 fn parseStructSkipping(comptime T: type, comptime skip: ?[]const u8, allocator: Allocator, source: anytype, options: std.json.ParseOptions) std.json.ParseError(@TypeOf(source.*))!T {
-    const fields = @typeInfo(T).@"struct".fields;
+    const info = @typeInfo(T).@"struct";
     if (try source.next() != .object_begin) return error.UnexpectedToken;
     var result: T = undefined;
     var skipped = false;
     _ = &skipped;
-    var seen = [_]bool{false} ** fields.len;
+    var seen: [info.field_names.len]bool = @splat(false);
     _ = &seen;
     // Encoders overwhelmingly write declaration order. Remember the field
     // after the last match, but fall back to the full lookup for arbitrary
@@ -255,42 +255,42 @@ fn parseStructSkipping(comptime T: type, comptime skip: ?[]const u8, allocator: 
             else => return error.UnexpectedToken,
         };
 
-        inline for (fields, 0..) |field, i| {
-            if (i == hint and std.mem.eql(u8, field.name, name)) {
+        inline for (info.field_names, info.field_types, 0..) |field_name, field_type, i| {
+            if (i == hint and std.mem.eql(u8, field_name, name)) {
                 freeAllocated(allocator, name_token.?);
                 name_token = null;
                 if (seen[i]) switch (options.duplicate_field_behavior) {
                     .use_first => {
-                        _ = try inner(field.type, allocator, source, options);
-                        hint = (i + 1) % fields.len;
+                        _ = try inner(field_type, allocator, source, options);
+                        hint = (i + 1) % info.field_names.len;
                         continue :fields_loop;
                     },
                     .@"error" => return error.DuplicateField,
                     .use_last => {},
                 };
-                @field(result, field.name) = try inner(field.type, allocator, source, options);
+                @field(result, field_name) = try inner(field_type, allocator, source, options);
                 seen[i] = true;
-                hint = (i + 1) % fields.len;
+                hint = (i + 1) % info.field_names.len;
                 continue :fields_loop;
             }
         }
-        inline for (fields, 0..) |field, i| {
-            if (field.is_comptime)
-                @compileError("comptime fields are not supported: " ++ @typeName(T) ++ "." ++ field.name);
-            if (std.mem.eql(u8, field.name, name)) {
+        inline for (info.field_names, info.field_types, info.field_attrs, 0..) |field_name, field_type, field_attrs, i| {
+            if (field_attrs.@"comptime")
+                @compileError("comptime fields are not supported: " ++ @typeName(T) ++ "." ++ field_name);
+            if (std.mem.eql(u8, field_name, name)) {
                 freeAllocated(allocator, name_token.?);
                 name_token = null;
                 if (seen[i]) switch (options.duplicate_field_behavior) {
                     .use_first => {
-                        _ = try inner(field.type, allocator, source, options);
+                        _ = try inner(field_type, allocator, source, options);
                         break;
                     },
                     .@"error" => return error.DuplicateField,
                     .use_last => {},
                 };
-                @field(result, field.name) = try inner(field.type, allocator, source, options);
+                @field(result, field_name) = try inner(field_type, allocator, source, options);
                 seen[i] = true;
-                hint = (i + 1) % fields.len;
+                hint = (i + 1) % info.field_names.len;
                 continue :fields_loop;
             }
         } else {
@@ -307,10 +307,10 @@ fn parseStructSkipping(comptime T: type, comptime skip: ?[]const u8, allocator: 
         }
     }
 
-    inline for (fields, 0..) |field, i| {
+    inline for (info.field_types, info.field_attrs, info.field_names, 0..) |field_type, field_attrs, field_name, i| {
         if (!seen[i]) {
-            if (field.defaultValue()) |default| {
-                @field(result, field.name) = default;
+            if (field_attrs.defaultValue(field_type)) |default| {
+                @field(result, field_name) = default;
             } else return error.MissingField;
         }
     }

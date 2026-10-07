@@ -38,14 +38,6 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .sanitize_thread = if (thread_sanitizer) true else null,
-            // Off so that `zig build test --fuzz` compiles. The test runner
-            // the compiler links in fuzz mode hands `@errorReturnTrace()` to
-            // `std.debug.writeStackTrace`, and on 0.16.0 those are two
-            // different `StackTrace` types; with error return tracing off the
-            // branch is comptime-dead and the runner builds. The cost is the
-            // return trace on a test that fails with an error it did not
-            // expect — `std.testing`'s own reports are unaffected.
-            .error_tracing = false,
         }),
     });
 
@@ -89,7 +81,7 @@ pub fn build(b: *std.Build) void {
     // A null optional or inactive union arm must not hide an unsupported
     // field type. The same gate applies to copying and freeing. Run these
     // with the ownership tests, and in the full and compile-only suites.
-    if (test_filter == null or std.mem.indexOf(u8, "owned", test_filter.?) != null) {
+    if (test_filter == null or std.mem.find(u8, "owned", test_filter.?) != null) {
         for (0..17) |case| {
             for ([_]bool{ false, true }) |free_only| {
                 const rejection_options = b.addOptions();
@@ -130,7 +122,7 @@ pub fn build(b: *std.Build) void {
     const examples_step = b.step("examples", "Build and run the examples");
     for (example_sources) |source| {
         const example = b.addExecutable(.{
-            .name = std.fs.path.stem(source),
+            .name = std.Io.Dir.path.stem(source),
             .root_module = b.createModule(.{
                 .root_source_file = b.path(source),
                 .target = target,

@@ -244,11 +244,11 @@ pub fn Parser(comptime decode: type) type {
                 .vector => |i| reachesItself(i.child, next),
                 .pointer => |i| reachesItself(i.child, next),
                 .@"struct" => |i| fields: {
-                    for (i.fields) |field| if (reachesItself(field.type, next)) break :fields true;
+                    for (i.field_types) |field_type| if (reachesItself(field_type, next)) break :fields true;
                     break :fields false;
                 },
                 .@"union" => |i| fields: {
-                    for (i.fields) |field| if (reachesItself(field.type, next)) break :fields true;
+                    for (i.field_types) |field_type| if (reachesItself(field_type, next)) break :fields true;
                     break :fields false;
                 },
                 else => false,

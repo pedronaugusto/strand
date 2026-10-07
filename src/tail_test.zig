@@ -199,7 +199,7 @@ test "an over-long line is discarded whole and the one before it is still read" 
     defer input.deinit();
     var writer: strand.Writer(Event) = .init(&input.writer, .{});
     try writer.write(.{ .kind = "short", .at = 1 });
-    try writer.write(.{ .kind = "x" ** 300, .at = 2 });
+    try writer.write(.{ .kind = &@as([300]u8, @splat('x')), .at = 2 });
     try writer.write(.{ .kind = "last", .at = 3 });
 
     for ([_]usize{ 8, 64, 4096 }) |block| {
@@ -362,7 +362,7 @@ test "a file that shrinks under a tail is reported rather than misread" {
     defer tmp.cleanup();
     try tmp.dir.writeFile(testing.io, .{
         .sub_path = "log.jsonl",
-        .data = "{\"kind\":\"a\"}\n" ** 400,
+        .data = fixtures.repeat("{\"kind\":\"a\"}\n", 400),
     });
 
     const file = try tmp.dir.openFile(testing.io, "log.jsonl", .{});
@@ -388,7 +388,7 @@ test "a file that shrinks under a tail is reported rather than misread" {
 test "a separated tail bounds only its JSON payload" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
-    const data = line_mod.bom ++ "\x1e{}\r\n" ++ "torn" ** 512 ++ "\x1e{}\r\n";
+    const data = line_mod.bom ++ "\x1e{}\r\n" ++ fixtures.repeat("torn", 512) ++ "\x1e{}\r\n";
     try tmp.dir.writeFile(testing.io, .{ .sub_path = "log", .data = data });
     const file = try tmp.dir.openFile(testing.io, "log", .{});
     defer file.close(testing.io);
@@ -417,7 +417,7 @@ test "a separated tail bounds only its JSON payload" {
 test "a separated tail accepts the exact payload bound and refuses the next byte" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
-    try tmp.dir.writeFile(testing.io, .{ .sub_path = "log", .data = "\x1e{}\n" ++ "prefix" ** 24 ++ "\x1e{} \r\n" });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "log", .data = "\x1e{}\n" ++ fixtures.repeat("prefix", 24) ++ "\x1e{} \r\n" });
     const file = try tmp.dir.openFile(testing.io, "log", .{});
     defer file.close(testing.io);
     for ([_]usize{ 1, 2, 7, 4096 }) |block_bytes| {
@@ -452,7 +452,7 @@ test "a backward read takes the record after a torn one on its line" {
         defer tail.deinit();
         const b = (try tail.prev()).?;
         try testing.expectEqualStrings("b", b.value.kind);
-        try testing.expectEqual(@as(u64, std.mem.lastIndexOfScalar(u8, input, 0x1e).?), b.offset);
+        try testing.expectEqual(@as(u64, std.mem.findScalarLast(u8, input, 0x1e).?), b.offset);
         try testing.expectEqual(@as(u64, 1), tail.skipped);
         try testing.expectEqualStrings("a", (try tail.prev()).?.value.kind);
         try testing.expectEqual(@as(?strand.Line(Event), null), try tail.prev());
@@ -461,9 +461,9 @@ test "a backward read takes the record after a torn one on its line" {
 
 test "separated forward and backward framing agree at every payload boundary" {
     for ([_][]const u8{
-        "",                      "\n",                               " \t\r\n",                 line_mod.bom ++ " \t\n",   "\xef\xbb \n",
-        "no separator at all\n", "torn\x1e{}\r\n",                   "\x1e{}",                  "\x1e\n",                  "torn\x1e \r\n",
-        "\x1e{}\x1e{}\n",        "\x1e" ++ "x" ** 512 ++ "\x1e{}\n", "\x1e{\"k\":\"to\x1e{}\n", "torn\x1e{\x1e\x1e{}\r\n",
+        "",                      "\n",                                              " \t\r\n",                 line_mod.bom ++ " \t\n",   "\xef\xbb \n",
+        "no separator at all\n", "torn\x1e{}\r\n",                                  "\x1e{}",                  "\x1e\n",                  "torn\x1e \r\n",
+        "\x1e{}\x1e{}\n",        "\x1e" ++ @as([512]u8, @splat('x')) ++ "\x1e{}\n", "\x1e{\"k\":\"to\x1e{}\n", "torn\x1e{\x1e\x1e{}\r\n",
     }) |input| {
         var tmp = testing.tmpDir(.{});
         defer tmp.cleanup();

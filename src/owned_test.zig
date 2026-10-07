@@ -35,8 +35,8 @@ fn independent(source: anytype, copy: @TypeOf(source)) anyerror!void {
             },
             else => unreachable,
         },
-        .@"struct" => |info| inline for (info.fields) |field| {
-            try independent(@field(source, field.name), @field(copy, field.name));
+        .@"struct" => |info| inline for (info.field_names) |field_name| {
+            try independent(@field(source, field_name), @field(copy, field_name));
         },
         .array => for (source, copy) |from, to| try independent(from, to),
         .optional => {
@@ -224,7 +224,7 @@ test "owned copy walks recursive schemas and ignores JSON hooks" {
     try allocationFailures(Hooks{ .text = "unchanged" });
     try copyAndFree(testing.allocator, @as(?[]const u8, null));
     try copyAndFree(testing.allocator, @as(union(enum) { none, words: []const u8 }, .none));
-    try copyAndFree(testing.allocator, @as(enum(u8) { known = 1, _ }, @enumFromInt(42)));
+    try copyAndFree(testing.allocator, @as(enum(u8) { known = 1, _ }, @fromBackingInt(@intCast(42))));
     try copyAndFree(testing.allocator, @as([0][]const u8, .{}));
     const Constant = struct { text: []const u8, comptime number: u32 = 7 };
     try allocationFailures(Constant{ .text = "constant" });
@@ -244,7 +244,7 @@ test "owned copy preserves null sentinels around optional pointers" {
 
 test "owned copy accepts a full protocol schema" {
     const Leaf = struct { text: []const u8, rows: []const struct { text: []const u8 } };
-    const tuple_type = @Tuple(&([_]type{Leaf} ** 64));
+    const tuple_type = @Tuple(&@as([64]type, @splat(Leaf)));
     var source: tuple_type = undefined;
     inline for (0..64) |i| source[i] = .{ .text = "protocol", .rows = &.{.{ .text = "row" }} };
     try copyAndFree(testing.allocator, source);

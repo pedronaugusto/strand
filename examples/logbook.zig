@@ -15,9 +15,9 @@ const std = @import("std");
 const strand = @import("strand");
 
 pub fn main() !void {
-    var debug: std.heap.DebugAllocator(.{}) = .init;
-    defer _ = debug.deinit();
-    const gpa = debug.allocator();
+    var safe: std.heap.SafeAllocator = .init(std.heap.page_allocator, .{});
+    defer std.debug.assert(safe.deinit() == 0);
+    const gpa = safe.allocator();
 
     var arena_state: std.heap.ArenaAllocator = .init(gpa);
     defer arena_state.deinit();

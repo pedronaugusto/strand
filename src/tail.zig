@@ -417,14 +417,14 @@ pub fn Tail(comptime T: type) type {
                         trailing_cr = self.options.crlf and chunk[chunk.len - 1] == '\r';
 
                     if (payload_bytes == null) {
-                        if (std.mem.lastIndexOfScalar(u8, chunk, strand.separator)) |at| {
+                        if (std.mem.findScalarLast(u8, chunk, strand.separator)) |at| {
                             payload_bytes = suffix_bytes + chunk.len - at - 1 - @intFromBool(trailing_cr);
                             separator_offset = chunk_offset + at;
                             torn += std.mem.countScalar(u8, chunk[0..at], strand.separator);
-                            const first = std.mem.indexOfScalar(u8, chunk, strand.separator).?;
+                            const first = std.mem.findScalar(u8, chunk, strand.separator).?;
                             prefix_torn = hasContent(chunk[0..first]);
                         }
-                    } else if (std.mem.indexOfScalar(u8, chunk, strand.separator)) |first| {
+                    } else if (std.mem.findScalar(u8, chunk, strand.separator)) |first| {
                         torn += std.mem.countScalar(u8, chunk, strand.separator);
                         prefix_torn = hasContent(chunk[0..first]);
                     } else prefix_torn = prefix_torn or hasContent(chunk);
@@ -452,7 +452,7 @@ pub fn Tail(comptime T: type) type {
                         const capacity = @min(self.options.max_line_bytes +| 1, @max(kept + take, self.record.capacity *| 2));
                         try self.record.ensureTotalCapacityPrecise(self.allocator, capacity);
                         self.record.items.len = kept + take;
-                        std.mem.copyBackwards(u8, self.record.items[take..], self.record.items[0..kept]);
+                        @memmove(self.record.items[take..], self.record.items[0..kept]);
                         @memcpy(self.record.items[0..take], chunk[chunk.len - take ..]);
                     }
                     suffix_bytes += chunk.len;
@@ -554,7 +554,7 @@ pub fn Tail(comptime T: type) type {
             }
             self.buf.items.len = kept + take;
             // The two regions overlap, and the destination is the later one.
-            std.mem.copyBackwards(u8, self.buf.items[take..], self.buf.items[0..kept]);
+            @memmove(self.buf.items[take..], self.buf.items[0..kept]);
 
             self.source.seekTo(self.lo - take) catch return error.SeekFailed;
             self.source.interface.readSliceAll(self.buf.items[0..take]) catch |err| switch (err) {

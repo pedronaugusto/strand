@@ -90,7 +90,7 @@ fn needsConversion(comptime T: type, comptime seen: []const type) bool {
             if (comptime tagging.internal(T) != null) break :result true;
             if (std.meta.hasFn(T, "jsonParseFromValue") and
                 (@typeInfo(T) != .@"struct" or !@typeInfo(T).@"struct".is_tuple)) break :result false;
-            for (info.fields) |field| if (needsConversion(field.type, next)) break :result true;
+            for (info.field_types) |field_type| if (needsConversion(field_type, next)) break :result true;
             break :result false;
         },
         else => false,
@@ -139,9 +139,9 @@ fn collections(comptime T: type, allocator: Allocator, value: std.json.Value, op
         .@"struct" => |info| {
             var result: T = undefined;
             if (info.is_tuple) {
-                if (value != .array or value.array.items.len != info.fields.len) return error.UnexpectedToken;
-                inline for (info.fields, 0..) |field, i|
-                    result[i] = try parseFromValue(field.type, allocator, value.array.items[i], options);
+                if (value != .array or value.array.items.len != info.field_types.len) return error.UnexpectedToken;
+                inline for (info.field_types, 0..) |field_type, i|
+                    result[i] = try parseFromValue(field_type, allocator, value.array.items[i], options);
                 return result;
             }
             if (value != .object) return error.UnexpectedToken;
@@ -154,13 +154,13 @@ fn collections(comptime T: type, allocator: Allocator, value: std.json.Value, op
             if (value != .object or value.object.count() != 1) return error.UnexpectedToken;
             const key = value.object.keys()[0];
             const item = value.object.values()[0];
-            inline for (info.fields) |field| {
-                if (std.mem.eql(u8, key, field.name)) {
-                    if (field.type == void) {
+            inline for (info.field_names, info.field_types) |field_name, field_type| {
+                if (std.mem.eql(u8, key, field_name)) {
+                    if (field_type == void) {
                         if (item != .object or item.object.count() != 0) return error.UnexpectedToken;
-                        return @unionInit(T, field.name, {});
+                        return @unionInit(T, field_name, {});
                     }
-                    return @unionInit(T, field.name, try parseFromValue(field.type, allocator, item, options));
+                    return @unionInit(T, field_name, try parseFromValue(field_type, allocator, item, options));
                 }
             }
             return error.UnknownField;
@@ -173,21 +173,21 @@ fn collections(comptime T: type, allocator: Allocator, value: std.json.Value, op
 /// passed over: the tag of a union tagged inside its object.
 fn fields(comptime T: type, comptime skip: ?[]const u8, allocator: Allocator, result: *T, object: std.json.ObjectMap, options: std.json.ParseOptions) std.json.ParseFromValueError!void {
     const info = @typeInfo(T).@"struct";
-    var seen = [_]bool{false} ** info.fields.len;
+    var seen: [info.field_names.len]bool = @splat(false);
     _ = &seen;
     for (object.keys(), object.values()) |key, item| {
         if (skip) |tag| if (std.mem.eql(u8, key, tag)) continue;
-        inline for (info.fields, 0..) |field, i| {
-            if (field.is_comptime) @compileError("comptime fields are not supported: " ++ @typeName(T) ++ "." ++ field.name);
-            if (std.mem.eql(u8, key, field.name)) {
-                @field(result, field.name) = try parseFromValue(field.type, allocator, item, options);
+        inline for (info.field_names, info.field_types, info.field_attrs, 0..) |field_name, field_type, field_attrs, i| {
+            if (field_attrs.@"comptime") @compileError("comptime fields are not supported: " ++ @typeName(T) ++ "." ++ field_name);
+            if (std.mem.eql(u8, key, field_name)) {
+                @field(result, field_name) = try parseFromValue(field_type, allocator, item, options);
                 seen[i] = true;
                 break;
             }
         } else if (!options.ignore_unknown_fields) return error.UnknownField;
     }
-    inline for (info.fields, 0..) |field, i| if (!seen[i]) {
-        if (field.defaultValue()) |default| @field(result, field.name) = default else return error.MissingField;
+    inline for (info.field_names, info.field_types, info.field_attrs, 0..) |field_name, field_type, field_attrs, i| if (!seen[i]) {
+        if (field_attrs.defaultValue(field_type)) |default| @field(result, field_name) = default else return error.MissingField;
     };
 }
 
@@ -199,17 +199,17 @@ fn tagged(comptime T: type, allocator: Allocator, comptime inside: anytype, valu
         .string => |text| text,
         else => return error.UnexpectedToken,
     };
-    inline for (@typeInfo(T).@"union".fields) |field| {
+    inline for (@typeInfo(T).@"union".field_names, @typeInfo(T).@"union".field_types) |field_name, field_type| {
         const is_other = comptime inside.other != null and
-            std.mem.eql(u8, field.name, @tagName(inside.other.?));
-        if (!is_other and std.mem.eql(u8, field.name, name)) {
-            if (field.type == void) {
+            std.mem.eql(u8, field_name, @tagName(inside.other.?));
+        if (!is_other and std.mem.eql(u8, field_name, name)) {
+            if (field_type == void) {
                 var none: struct {} = .{};
                 try fields(@TypeOf(none), inside.tag, allocator, &none, value.object, options);
-                return @unionInit(T, field.name, {});
+                return @unionInit(T, field_name, {});
             }
-            var result: T = @unionInit(T, field.name, undefined);
-            try fields(field.type, inside.tag, allocator, &@field(result, field.name), value.object, options);
+            var result: T = @unionInit(T, field_name, undefined);
+            try fields(field_type, inside.tag, allocator, &@field(result, field_name), value.object, options);
             return result;
         }
     }

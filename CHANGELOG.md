@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Breaking: strand requires Zig 0.17.0.
+
 - `writeValue` and a bounded `Writer` write a non-exhaustive enum: a named value by name, any other by number, as `writeLine` does. Such an enum failed to compile on the buffered path.
 
 - `Tail.init` refuses a pipe or socket as `error.Streaming`, as documented; it read whatever the system reported as the stream's size.

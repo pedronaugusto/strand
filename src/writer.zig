@@ -1,9 +1,9 @@
 //! `Writer`: values as JSON Lines on a `*std.Io.Writer`, counted, drained and
 //! synced as often as it is told to.
 const codec_module = @import("codec.zig");
-const sync_module = @import("sync.zig");
 
 const std = @import("std");
+const airlock = @import("airlock");
 const assert = std.debug.assert;
 const encode = codec_module.encode;
 const tagging = @import("tagging.zig");
@@ -12,8 +12,6 @@ const EncodeBuffer = @import("encode/Buffer.zig");
 const line_mod = @import("line.zig");
 const Format = line_mod.Format;
 const separator = line_mod.separator;
-
-const syncFile = sync_module.syncFile;
 
 /// The policy types of every `Writer`, whatever its record type: shared,
 /// so that options and errors mean the same thing across instantiations.
@@ -70,13 +68,19 @@ const shared = struct {
         /// this program's buffer have not reached the file at all, so
         /// there would be nothing on it to sync.
         ///
-        /// What the call is, platform by platform:
+        /// A sync is airlock's `syncFile` at level `.data`: the record and
+        /// the length that finds it, without the timestamps no reader of a
+        /// log consults. What the call is, platform by platform:
         ///
         /// | | |
         /// |---|---|
-        /// | Linux | `fdatasync`, by syscall: the record and the length that finds it, without the timestamp writeback `fsync` adds, which is a second metadata write per record for a time no reader of this log consults. A file that declines the call gets `fsync` |
-        /// | macOS | `fcntl(F_FULLFSYNC)`, because `fsync` there hands the bytes to the drive without making it write them down. A filesystem with no such call gets `fsync`, which is then the strongest thing on it |
-        /// | Windows | the system's own flush of the file's buffers |
+        /// | Linux | `fdatasync`. A file that declines the call gets `fsync` |
+        /// | macOS | `fcntl(F_FULLFSYNC)`, because `fsync` there hands the bytes to the drive without making it write them down. A filesystem with no such call (SMB, exFAT) gets `fsync`, which is then the strongest thing on it |
+        /// | Windows | `NtFlushBuffersFileEx` with `DATA_SYNC_ONLY` on NTFS; a filesystem that declines it (FAT, ReFS, a network share) gets the full flush |
+        ///
+        /// A filesystem that declines the strong call makes the writer
+        /// degrade rather than fail, and `Writer.reached` says what the
+        /// last sync actually reached.
         ///
         /// A sync that fails is `error.SyncFailed`, and that writer
         /// refuses every record after it. A failed sync is not a thing to
@@ -172,6 +176,12 @@ pub fn Writer(comptime T: type) type {
         /// would be a log claiming a durability it does not have. Deal with
         /// the file, then build a writer over it.
         sync_failed: bool = false,
+        /// What the last sync reached: `.none` before the first, then
+        /// `airlock.Reached.expected(.data)` where the filesystem takes the
+        /// call, and less where it declines it — `.written` from a network
+        /// mount on macOS, which survives the system crashing and not the
+        /// power failing. `reached.atLeast(.data)` is the check.
+        reached: airlock.Reached = .none,
         /// Set when a record failed after part of it had already reached the
         /// destination, which only a record longer than the destination's
         /// unused buffer can do. The next record then begins with a `\n`, so
@@ -431,7 +441,7 @@ pub fn Writer(comptime T: type) type {
         fn drainAndSync(self: *Self) Error!void {
             try self.flushOutput();
             const dest = self.file orelse return self.syncFault();
-            _ = syncFile(dest.io, dest.file, .data) catch return self.syncFault();
+            self.reached = airlock.syncFile(dest.io, dest.file, .{ .level = .data }) catch return self.syncFault();
         }
 
         /// The file constructors know the concrete writer behind `output`.

@@ -99,14 +99,3 @@ pub const Chunked = struct {
         return n;
     }
 };
-
-/// `bytes`, `n` times over, built at compile time.
-pub fn repeat(comptime bytes: []const u8, comptime n: usize) *const [bytes.len * n]u8 {
-    const result = comptime result: {
-        @setEvalBranchQuota(n * 4 + 1000);
-        var out: [bytes.len * n]u8 = undefined;
-        for (0..n) |i| @memcpy(out[i * bytes.len ..][0..bytes.len], bytes);
-        break :result out;
-    };
-    return &result;
-}

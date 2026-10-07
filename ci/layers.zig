@@ -5,7 +5,6 @@ pub const layers: []const gantry.rules.Layer = &.{
     .{ .name = "primitives", .patterns = &.{
         "src/encode/Buffer.zig",
         "src/encode.zig",
-        "src/file_id.zig",
         "src/indent.zig",
         "src/int.zig",
         "src/leading.zig",
@@ -23,7 +22,6 @@ pub const layers: []const gantry.rules.Layer = &.{
         "src/from_value.zig",
         "src/parse.zig",
         "src/raw.zig",
-        "src/sync.zig",
     } },
     .{ .name = "parsing and schema", .patterns = &.{
         "src/parse/line.zig",
@@ -56,9 +54,11 @@ pub const entries: []const []const u8 = &.{};
 pub const modules: []const gantry.NamedModule = &.{.{ .name = "strand.owned", .path = "src/owned.zig" }};
 pub const references: []const gantry.rules.ReferenceRule = &.{
     .{ .name = "named dependencies", .unresolved_only = true, .except_targets = &.{
+        "airlock",
         "build_options",
         "builtin",
         "rejection_options",
+        "shakedown",
         "std",
     } },
     .{ .name = "source siblings", .suffix = ".zig", .relative = true, .except_targets = &.{"src/**"} },
@@ -76,9 +76,20 @@ pub const required = blk: {
     break :blk paths;
 };
 
-/// Tokens only their owners may spell: how a file is made durable and how
-/// one is identified each have one file.
+/// Tokens nothing here may spell: how a file is made durable and how one is
+/// identified belong to airlock, and strand calls it.
 pub const owned: []const gantry.rules.TokenRule = &.{
-    .{ .name = "sync owner", .tokens = &.{ "fsync", "fdatasync", "F_FULLFSYNC", "FlushFileBuffers" }, .owners = &.{"src/sync.zig"} },
-    .{ .name = "file identity owner", .tokens = &.{ "statx", "fstat", "FILE_ID_INFO" }, .owners = &.{"src/file_id.zig"} },
+    .{ .name = "durability belongs to airlock", .tokens = &.{
+        "fsync",
+        "fdatasync",
+        "F_FULLFSYNC",
+        "FULLFSYNC",
+        "F_BARRIERFSYNC",
+        "BARRIERFSYNC",
+        "FlushFileBuffers",
+        "NtFlushBuffersFile",
+        "NtFlushBuffersFileEx",
+        "createFileAtomic",
+    } },
+    .{ .name = "file identity belongs to airlock", .tokens = &.{ "statx", "fstat", "fstatat", "FILE_ID_INFO" } },
 };

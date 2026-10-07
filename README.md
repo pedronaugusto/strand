@@ -71,8 +71,12 @@ records without owned scratch. `initBounded` and `initFileBounded` take an alloc
 byte limit, encode into reusable owned storage and refuse an oversized record before
 emitting it; these writers require `deinit`. Flush and sync policies are set separately
 to never, per record, per batch or every specified number of records. Sync requires a
-file writer, drains it first and latches a failure so later records are refused.
-Directory durability remains the caller's responsibility.
+file writer, drains it first and latches a failure so later records are refused. A
+sync is [airlock](https://github.com/pedronaugusto/airlock)'s `syncFile` at level
+`.data`: `fdatasync` on Linux, `F_FULLFSYNC` on macOS, a data-only flush on Windows
+NTFS. A filesystem that declines it gets the strongest call it takes, and
+`Writer.reached` says what the last sync reached. Directory durability remains the
+caller's responsibility.
 
 `Tail(T)` reads a seekable file backwards. `Follower(T)` waits for complete terminated
 records on the `std.Io` each blocking call is given (`next`, `checkpoint`, `truncated`
@@ -101,11 +105,8 @@ exercises file following, tailing and a line protocol.
 For a caller that frames its own lines, `writeValue` and `writeObjectOpen` write one
 value's JSON without a terminator, `lines` walks the lines of a buffer already in
 memory, `indexOfControl` finds a raw control byte, and `memberOf`, `kindOf` and
-`leadingIntMembers` read members of a line without parsing it. `FileId` names a file by
-its volume and number, as `Follower` uses it to notice a rotation. `syncFile` is the
-sync a `Writer` sync policy makes, the strongest the platform offers; `syncDir` makes a
-directory entry durable, which a log that creates or renames files needs and leaves to
-its caller.
+`leadingIntMembers` read members of a line without parsing it. `FileId` is airlock's,
+a file named by its volume and number, as `Follower` uses it to notice a rotation.
 
 ## Scope
 
@@ -118,6 +119,11 @@ its caller.
 ## Built with
 
 - [Zig](https://ziglang.org) 0.17.0 and its standard library; nothing is linked.
+- [airlock](https://github.com/pedronaugusto/airlock) syncs the file under a `Writer`
+  and numbers files for a `Follower`.
+- [shakedown](https://github.com/pedronaugusto/shakedown) supplies the tests' doubles:
+  faulted and counted `Io` calls and allocators. Only the tests import it, so a
+  project depending on strand never fetches it.
 - [preflight](https://github.com/pedronaugusto/preflight) runs the source checks,
   the tests and CI.
 

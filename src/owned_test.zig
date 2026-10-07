@@ -1,6 +1,7 @@
 const std = @import("std");
 const strand = @import("strand.zig");
 const testing = std.testing;
+const shakedown = @import("shakedown");
 
 // Compare the data and every allocation, including dynamic object keys.
 fn independent(source: anytype, copy: @TypeOf(source)) anyerror!void {
@@ -257,7 +258,8 @@ fn allocationFailures(source: anytype) !void {
             try copyAndFree(allocator, value);
         }
     };
-    try testing.checkAllAllocationFailures(testing.allocator, Case.run, .{source});
+    var no_resize: shakedown.alloc.NoResize = .init(testing.allocator);
+    try testing.checkAllAllocationFailures(no_resize.allocator(), Case.run, .{source});
 }
 
 fn copyPointerVector(allocator: std.mem.Allocator) !void {
@@ -277,5 +279,6 @@ fn copyPointerVector(allocator: std.mem.Allocator) !void {
 }
 
 test "owned copy gives pointer vectors independent storage" {
-    try testing.checkAllAllocationFailures(testing.allocator, copyPointerVector, .{});
+    var no_resize: shakedown.alloc.NoResize = .init(testing.allocator);
+    try testing.checkAllAllocationFailures(no_resize.allocator(), copyPointerVector, .{});
 }

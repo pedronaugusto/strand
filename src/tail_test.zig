@@ -8,6 +8,7 @@ const line_mod = @import("line.zig");
 const Fault = line_mod.Fault;
 const Line = line_mod.Line;
 const testing = std.testing;
+const shakedown = @import("shakedown");
 
 const fixtures = @import("testing/fixtures.zig");
 const Fixture = fixtures.Fixture;
@@ -362,7 +363,7 @@ test "a file that shrinks under a tail is reported rather than misread" {
     defer tmp.cleanup();
     try tmp.dir.writeFile(testing.io, .{
         .sub_path = "log.jsonl",
-        .data = fixtures.repeat("{\"kind\":\"a\"}\n", 400),
+        .data = shakedown.corpus.repeat("{\"kind\":\"a\"}\n", 400),
     });
 
     const file = try tmp.dir.openFile(testing.io, "log.jsonl", .{});
@@ -388,7 +389,7 @@ test "a file that shrinks under a tail is reported rather than misread" {
 test "a separated tail bounds only its JSON payload" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
-    const data = line_mod.bom ++ "\x1e{}\r\n" ++ fixtures.repeat("torn", 512) ++ "\x1e{}\r\n";
+    const data = line_mod.bom ++ "\x1e{}\r\n" ++ shakedown.corpus.repeat("torn", 512) ++ "\x1e{}\r\n";
     try tmp.dir.writeFile(testing.io, .{ .sub_path = "log", .data = data });
     const file = try tmp.dir.openFile(testing.io, "log", .{});
     defer file.close(testing.io);
@@ -417,7 +418,7 @@ test "a separated tail bounds only its JSON payload" {
 test "a separated tail accepts the exact payload bound and refuses the next byte" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
-    try tmp.dir.writeFile(testing.io, .{ .sub_path = "log", .data = "\x1e{}\n" ++ fixtures.repeat("prefix", 24) ++ "\x1e{} \r\n" });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "log", .data = "\x1e{}\n" ++ shakedown.corpus.repeat("prefix", 24) ++ "\x1e{} \r\n" });
     const file = try tmp.dir.openFile(testing.io, "log", .{});
     defer file.close(testing.io);
     for ([_]usize{ 1, 2, 7, 4096 }) |block_bytes| {

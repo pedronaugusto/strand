@@ -6,6 +6,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const parseFromValue = from_value_module.parseFromValue;
 const testing = std.testing;
+const shakedown = @import("shakedown");
 
 test "payloadOf checks wide integers in arrays and vectors" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
@@ -69,7 +70,8 @@ test "payloadOf converts nested vectors with defaults and custom hooks" {
         \\{"tuple":[[1,2],"tuple"],"array":[[3,4]],"rows":[[5,6]],
         \\ "arm":{"vector":[11,12]},"raw":[1,2],"hook":"custom"}
     , .{});
-    try testing.checkAllAllocationFailures(testing.allocator, nestedVectors, .{source});
+    var no_resize: shakedown.alloc.NoResize = .init(testing.allocator);
+    try testing.checkAllAllocationFailures(no_resize.allocator(), nestedVectors, .{source});
     const vector_type = @Vector(2, u64);
     const short = try std.json.parseFromSliceLeaky(std.json.Value, a, "[1]", .{});
     try testing.expectError(error.LengthMismatch, parseFromValue(vector_type, a, short, .{}));

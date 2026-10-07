@@ -8,6 +8,7 @@ const PathOpener = strand.PathOpener;
 const Identity = strand.Identity;
 const FileId = strand.FileId;
 const testing = std.testing;
+const shakedown = @import("shakedown");
 
 const fixtures = @import("testing/fixtures.zig");
 const Fixture = fixtures.Fixture;
@@ -91,14 +92,14 @@ test "a follower checks cancellation before handing over a buffered record" {
     defer fixture.deinit();
     _ = try fixture.reader.interface.peek(1);
 
-    const Canceled = struct {
-        fn check(_: ?*anyopaque) std.Io.Cancelable!void {
-            return error.Canceled;
-        }
-    };
-    var vtable = testing.io.vtable.*;
-    vtable.checkCancel = Canceled.check;
-    const io: std.Io = .{ .userdata = testing.io.userdata, .vtable = &vtable };
+    // A cancel lands at every cancelation point the follower checks.
+    const fio = try shakedown.FaultIo.init(testing.allocator, testing.io, .{ .plan = &.{.{
+        .at = .{ .nth = .{ .call = .checkCancel, .n = 1 } },
+        .fault = .cancel,
+        .times = 0,
+    }} });
+    defer fio.deinit();
+    const io = fio.io();
     var follower: Follower(Event) = .init(testing.allocator, &fixture.reader, .{});
     defer follower.deinit(io);
     try testing.expectError(error.Canceled, follower.next(io));
@@ -534,7 +535,7 @@ test "what a file is, by its number or by what is on it" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const header = fixtures.repeat("{\"kind\":\"open\",\"at\":1}\n", 60);
+    const header = shakedown.corpus.repeat("{\"kind\":\"open\",\"at\":1}\n", 60);
     try tmp.dir.writeFile(testing.io, .{ .sub_path = "one", .data = header });
     try tmp.dir.writeFile(testing.io, .{ .sub_path = "copy", .data = header });
     try tmp.dir.writeFile(testing.io, .{ .sub_path = "short", .data = "{}\n" });
@@ -578,7 +579,7 @@ test "what a file is, by its number or by what is on it" {
     const before = try by_content.take(testing.io, one);
     const writer = try tmp.dir.openFile(testing.io, "one", .{ .mode = .read_write });
     defer writer.close(testing.io);
-    try writer.writePositionalAll(testing.io, fixtures.repeat("{\"kind\":\"else\",\"at\":9}\n", 60), 0);
+    try writer.writePositionalAll(testing.io, shakedown.corpus.repeat("{\"kind\":\"else\",\"at\":9}\n", 60), 0);
     const after = try by_content.take(testing.io, one);
     try testing.expect(before.id.eql(after.id));
     try testing.expect(!before.eql(after));
@@ -593,7 +594,7 @@ test "a file is its number on its volume, and one number on two volumes is two f
 
     // What the volume is, as the system numbers it.
     const taken = try Identity.take(.file_id, testing.io, file);
-    try testing.expect(taken.id.eql(try FileId.of(file.handle)));
+    try testing.expect(taken.id.eql(try FileId.of(testing.io, file)));
     try testing.expect(taken.eql(try Identity.take(.file_id, testing.io, file)));
 
     // The same number on another volume is another file. Two volumes to
@@ -618,8 +619,8 @@ test "a rotation that keeps the file's number is followed by its content" {
     // Long enough to fingerprint, and the same length before and after, so
     // that nothing but the bytes themselves can tell the two apart: not the
     // number the system gives it, and not its length either.
-    const before = fixtures.repeat("{\"kind\":\"old\",\"at\":1}\n", 60);
-    const after = fixtures.repeat("{\"kind\":\"new\",\"at\":2}\n", 60);
+    const before = shakedown.corpus.repeat("{\"kind\":\"old\",\"at\":1}\n", 60);
+    const after = shakedown.corpus.repeat("{\"kind\":\"new\",\"at\":2}\n", 60);
     try tmp.dir.writeFile(testing.io, .{ .sub_path = "log.jsonl", .data = before });
 
     const file = try tmp.dir.openFile(testing.io, "log.jsonl", .{});
@@ -691,42 +692,38 @@ test "a follower given an opener follows the path across a rename" {
 
 /// The second half of a rotation, landed inside a follower's own waits: the
 /// path is renamed away by the test before the follower waits, and the file
-/// that replaces it is written during the wait numbered `create_at`. Every
-/// wait in between finds the path naming nothing, which is what a rotation
-/// looks like from outside between its rename and its create — a window a
-/// writer may hold open for as long as it likes.
+/// that replaces it is written at one of those waits. Every wait before it
+/// finds the path naming nothing, which is what a rotation looks like from
+/// outside between its rename and its create — a window a writer may hold
+/// open for as long as it likes.
 const Gap = struct {
-    var dir: std.Io.Dir = undefined;
-    var waits: usize = 0;
-    var create_at: usize = 0;
-    var absent_looks: usize = 0;
+    path: PathOpener,
+    /// How many times the opener found nothing at the path.
+    absent_looks: usize = 0,
 
-    fn sleep(userdata: ?*anyopaque, timeout: std.Io.Timeout) std.Io.Cancelable!void {
-        _ = userdata;
-        _ = timeout;
-        waits += 1;
-        if (waits == create_at) {
-            dir.writeFile(testing.io, .{ .sub_path = "log.jsonl", .data = "{\"kind\":\"new\"}\n" }) catch
-                @panic("could not write the replacement file");
-        }
+    /// The writer's create, run by the `FaultIo` at the wait it is planned for.
+    fn create(io: std.Io, context: *anyopaque) void {
+        const gap: *Gap = @ptrCast(@alignCast(context)); // safe: the plan's callback is made with a *Gap as its context
+        gap.path.dir.writeFile(io, .{ .sub_path = gap.path.sub_path, .data = "{\"kind\":\"new\"}\n" }) catch
+            @panic("could not write the replacement file");
     }
 
-    /// A `PathOpener` that counts the times it found nothing at the path.
+    /// The `PathOpener`, counting the times it found nothing at the path.
     fn open(io: std.Io, context: *anyopaque) Opener.OpenError!std.Io.File {
-        const path: *PathOpener = @ptrCast(@alignCast(context)); // safe: `opener` below is the only maker of this interface, with a *PathOpener as its context
-        return path.opener().open(io) catch |err| {
-            if (err == error.FileNotFound) absent_looks += 1;
+        const gap: *Gap = @ptrCast(@alignCast(context)); // safe: `opener` below is the only maker of this interface, with a *Gap as its context
+        return gap.path.opener().open(io) catch |err| {
+            if (err == error.FileNotFound) gap.absent_looks += 1;
             return err;
         };
     }
 
     fn close(io: std.Io, context: *anyopaque, file: std.Io.File) void {
-        const path: *PathOpener = @ptrCast(@alignCast(context)); // safe: as in `open`
-        path.opener().close(io, file);
+        const gap: *Gap = @ptrCast(@alignCast(context)); // safe: as in `open`
+        gap.path.opener().close(io, file);
     }
 
-    fn opener(path: *PathOpener) Opener {
-        return .{ .context = path, .openFn = open, .closeFn = close };
+    fn opener(gap: *Gap) Opener {
+        return .{ .context = gap, .openFn = open, .closeFn = close };
     }
 };
 
@@ -740,22 +737,21 @@ test "a path that names nothing between a rotation's rename and its create is wa
     var buffer: [256]u8 = undefined;
     var source = file.reader(testing.io, &buffer);
 
-    // The waits are the test's: each one is a step of the writer's, run on
-    // this thread, so the interleaving is the same on every run.
-    Gap.dir = tmp.dir;
-    Gap.waits = 0;
-    Gap.absent_looks = 0;
-    // A follower looks at the path once its file has stood still for two
+    // The waits are the test's: the writer's create is run at one of them,
+    // on this thread, so the interleaving is the same on every run. A
+    // follower looks at the path once its file has stood still for two
     // waits; by the sixth it has looked at least twice and found nothing.
-    Gap.create_at = 6;
-    var vtable = testing.io.vtable.*;
-    vtable.sleep = Gap.sleep;
-    const io: std.Io = .{ .userdata = testing.io.userdata, .vtable = &vtable };
+    var gap: Gap = .{ .path = .{ .dir = tmp.dir, .sub_path = "log.jsonl" } };
+    const fio = try shakedown.FaultIo.init(testing.allocator, testing.io, .{ .plan = &.{.{
+        .at = .{ .nth = .{ .call = .sleep, .n = 6 } },
+        .fault = .{ .call = .{ .ctx = &gap, .f = Gap.create } },
+    }} });
+    defer fio.deinit();
+    const io = fio.io();
 
-    var path: PathOpener = .{ .dir = tmp.dir, .sub_path = "log.jsonl" };
     var follower: Follower(Event) = .init(testing.allocator, &source, .{
         .wait = .{ .poll = .fromMicroseconds(100) },
-        .reopen = Gap.opener(&path),
+        .reopen = gap.opener(),
     });
     defer follower.deinit(io);
 
@@ -766,7 +762,8 @@ test "a path that names nothing between a rotation's rename and its create is wa
     try testing.expectEqualStrings("new", line.value.kind);
     try testing.expectEqual(@as(u64, 1), line.number);
     try testing.expectEqual(@as(u64, 1), follower.rotations);
-    try testing.expect(Gap.absent_looks >= 2);
+    try testing.expect(gap.absent_looks >= 2);
+    try testing.expect(fio.count(.sleep) >= 6);
 }
 
 test "an opener that fails for any other reason ends the follow" {

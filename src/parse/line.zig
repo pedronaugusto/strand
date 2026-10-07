@@ -323,39 +323,6 @@ pub fn Parser(comptime decode: type) type {
             try std.testing.expect(event.kind.ptr == line.ptr + std.mem.find(u8, line, "open").?);
         }
 
-        test "a direct decoder allocation failure is not retried as a parse refusal" {
-            const FailOnce = struct {
-                pub const Self = @This();
-                backing: Allocator,
-                calls: usize = 0,
-
-                fn alloc(ctx: *anyopaque, len: usize, alignment: std.mem.Alignment, ra: usize) ?[*]u8 {
-                    const self: *Self = @ptrCast(@alignCast(ctx)); // safe: this vtable receives only a FailOnce installed by the test below
-                    self.calls += 1;
-                    if (self.calls == 1) return null;
-                    return self.backing.rawAlloc(len, alignment, ra);
-                }
-
-                fn allocator(self: *Self) Allocator {
-                    return .{
-                        .ptr = self,
-                        .vtable = &.{
-                            .alloc = alloc,
-                            .resize = Allocator.noResize,
-                            .remap = Allocator.noRemap,
-                            // All successful allocations live in the backing arena.
-                            .free = Allocator.noFree,
-                        },
-                    };
-                }
-            };
-            var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
-            defer arena.deinit();
-            var failure: FailOnce = .{ .backing = arena.allocator() };
-            try std.testing.expectError(error.OutOfMemory, parseLine([]const u8, failure.allocator(), "\"escaped\\ttext\"", .{}));
-            try std.testing.expectEqual(@as(usize, 1), failure.calls);
-        }
-
         test "parseLine diagnoses a trailing terminator before any parse" {
             const testing = std.testing;
             const Hook = struct {

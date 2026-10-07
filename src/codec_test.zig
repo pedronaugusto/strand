@@ -7,6 +7,7 @@ const fixtures_module = @import("testing/fixtures.zig");
 
 const std = @import("std");
 const testing = std.testing;
+const shakedown = @import("shakedown");
 const strand = @import("strand.zig");
 
 fn Delegating(comptime T: type) type {
@@ -772,4 +773,19 @@ test "vector strings require byte elements and the exact byte count" {
         const dynamic = try std.json.parseFromSliceLeaky(std.json.Value, a, case[1], .{});
         try testing.expectError(case[2], strand.payloadOf(case[0], a, dynamic));
     }
+}
+
+test "a direct decoder allocation failure is not retried as a parse refusal" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const fio = try shakedown.FaultIo.init(testing.allocator, testing.io, .{ .plan = &.{.{
+        .at = .{ .nth = .{ .call = .alloc, .n = 1 } },
+        .fault = .{ .fail = error.OutOfMemory },
+    }} });
+    defer fio.deinit();
+    const failing = try fio.allocator(arena.allocator());
+    // The escape needs the line's first allocation, which is refused; a
+    // parse that took that for a refusal of the line would ask again.
+    try testing.expectError(error.OutOfMemory, strand.parseLine([]const u8, failing, "\"escaped\\ttext\"", .{}));
+    try testing.expectEqual(@as(u64, 1), fio.count(.alloc));
 }

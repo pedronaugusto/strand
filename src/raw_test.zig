@@ -5,6 +5,7 @@ const strand = @import("strand.zig");
 const Raw = strand.Raw;
 
 const testing = std.testing;
+const shakedown = @import("shakedown");
 
 test Raw {
     const Mark = struct {
@@ -82,8 +83,9 @@ test "Raw.encode releases storage when encoding or transfer runs out of memory" 
             try testing.expectEqualStrings("\"" ++ @as([2048]u8, @splat('x')) ++ "\"", raw.bytes);
         }
     };
+    var no_resize: shakedown.alloc.NoResize = .init(testing.allocator);
     for ([_]bool{ false, true }) |custom|
-        try testing.checkAllAllocationFailures(testing.allocator, Case.run, .{custom});
+        try testing.checkAllAllocationFailures(no_resize.allocator(), Case.run, .{custom});
 
     // Refuse shrinking in place, then refuse the exact-length allocation.
     var failing: testing.FailingAllocator = .init(testing.allocator, .{ .fail_index = 1, .resize_fail_index = 0 });

@@ -5,15 +5,23 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     //=====================================================================
-    // The module. Pure Zig, `std` only: nothing to link, nothing to vendor,
-    // no build options, and so nothing a consumer has to match.
+    // The module. Pure Zig on `std` and airlock, which syncs the file under
+    // a writer and tells one file from another for a follower: nothing to
+    // link, nothing to vendor, no build options, and so nothing a consumer
+    // has to match.
     //=====================================================================
 
+    const airlock = b.dependency("airlock", .{ .target = target, .optimize = optimize }).module("airlock");
     const module = b.addModule("strand", .{
         .root_source_file = b.path("src/strand.zig"),
         .target = target,
         .optimize = optimize,
+        .imports = &.{.{ .name = "airlock", .module = airlock }},
     });
+
+    // Everything below is strand's own: a project depending on strand
+    // neither builds nor fetches its tests, benchmarks or CI.
+    if (b.pkg_hash.len != 0) return;
 
     //=====================================================================
     // Tests. Every one of them runs under `std.testing.allocator`, so a leak
@@ -38,8 +46,14 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .sanitize_thread = if (thread_sanitizer) true else null,
+            .imports = &.{.{ .name = "airlock", .module = airlock }},
         }),
     });
+    // shakedown is a lazy, test-only dependency: no module a consumer
+    // builds imports it.
+    if (b.lazyDependency("shakedown", .{ .target = target, .optimize = optimize })) |shakedown| {
+        tests.root_module.addImport("shakedown", shakedown.module("shakedown"));
+    }
 
     // How much generated input the properties are run over, and which. The
     // default is what a `zig build test` should cost; a campaign is what CI
@@ -136,20 +150,9 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(examples_step);
 
     //=====================================================================
-    // CI wiring
-    //
-    // Only in strand's own tree. preflight is a lazy dependency, and a lazy
-    // package's build.zig can only be reached through `lazyImport`: a plain
-    // `@import` of it fails to compile in any project that depends on strand
-    // and has not fetched preflight, which is every such project.
-    //=====================================================================
-
-    if (b.pkg_hash.len != 0) return;
-
-    //=====================================================================
     // Benchmarks
     //
-    // Only in strand's own tree, and never part of `zig build test`: a
+    // Never part of `zig build test`: a
     // number that varies with the machine is not a thing to fail a build
     // over. `check` compiles them so they keep up with the API; `bench`
     // runs them. Numbers worth reading come from -Doptimize=fast.
@@ -187,11 +190,24 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(bench_tests).step);
     check_step.dependOn(&bench_tests.step);
 
+    //=====================================================================
+    // CI wiring
+    //
+    // preflight is a lazy dependency, and a lazy package's build.zig can
+    // only be reached through `lazyImport`: a plain `@import` of it fails to
+    // compile in any project that depends on strand and has not fetched
+    // preflight, which is every such project.
+    //=====================================================================
+
     if (b.lazyImport(@This(), "preflight")) |preflight| {
         preflight.addCi(b, .{ .tests = test_step, .portable_tests = true });
-        // A project that depends on strand by path, with no packages to
-        // fetch: the build a consumer gets.
-        preflight.addConsumerCheck(b, .{ .package = "strand", .program = b.path("ci/consumer.zig") });
+        // A project that depends on strand by path, with airlock and
+        // nothing else to fetch: the build a consumer gets.
+        preflight.addConsumerCheck(b, .{
+            .package = "strand",
+            .program = b.path("ci/consumer.zig"),
+            .packages = &.{b.dependency("airlock", .{})},
+        });
     }
 }
 

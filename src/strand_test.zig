@@ -6,10 +6,14 @@ const work_module = @import("work.zig");
 const codec_module = @import("codec.zig");
 const parse_module = @import("parse.zig");
 
+const builtin = @import("builtin");
 const std = @import("std");
 const testing = std.testing;
+const shakedown = @import("shakedown");
 const strand = @import("strand.zig");
 const fixtures = @import("testing/fixtures.zig");
+const seam = @import("testing/seam.zig");
+const Seam = seam.Seam;
 
 /// A line of a log: an optional field, two defaults, an enum, a nested array
 /// and a nested struct.
@@ -1304,42 +1308,11 @@ test "require_terminator: an unfinished last line is not a line" {
     try testing.expectEqual(@as(u64, 2), plain.lines.number);
 }
 
-/// Counts what an allocator was asked to do, and passes the asking on.
-const Counting = struct {
-    child: std.mem.Allocator,
-    allocations: usize = 0,
-
-    fn allocator(self: *Counting) std.mem.Allocator {
-        return .{ .ptr = self, .vtable = &.{
-            .alloc = alloc,
-            .resize = resize,
-            .remap = remap,
-            .free = free,
-        } };
-    }
-
-    fn alloc(ctx: *anyopaque, len: usize, alignment: std.mem.Alignment, ra: usize) ?[*]u8 {
-        const self: *Counting = @ptrCast(@alignCast(ctx));
-        self.allocations += 1;
-        return self.child.rawAlloc(len, alignment, ra);
-    }
-
-    fn resize(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, ra: usize) bool {
-        const self: *Counting = @ptrCast(@alignCast(ctx));
-        return self.child.rawResize(memory, alignment, new_len, ra);
-    }
-
-    fn remap(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, ra: usize) ?[*]u8 {
-        const self: *Counting = @ptrCast(@alignCast(ctx));
-        self.allocations += 1;
-        return self.child.rawRemap(memory, alignment, new_len, ra);
-    }
-
-    fn free(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, ra: usize) void {
-        const self: *Counting = @ptrCast(@alignCast(ctx));
-        self.child.rawFree(memory, alignment, ra);
-    }
-};
+/// Every time an allocator was asked for memory it did not already hold:
+/// an allocation, a remap, or a resize in place.
+fn grown(counting: *const shakedown.alloc.Counting) u64 {
+    return counting.allocations + counting.remaps + counting.resizes;
+}
 
 test "a long stream stops allocating once its buffers have grown" {
     const line_count = 20_000;
@@ -1351,7 +1324,7 @@ test "a long stream stops allocating once its buffers have grown" {
         try writer.write(.{ .kind = "tick", .at = i, .tags = &.{ "generated", "here" } });
     }
 
-    var counting: Counting = .{ .child = testing.allocator };
+    var counting: shakedown.alloc.Counting = .init(testing.allocator);
     var source: std.Io.Reader = .fixed(input.written());
     var reader: strand.Reader(Event) = .init(counting.allocator(), &source, .{});
     defer reader.deinit();
@@ -1360,7 +1333,7 @@ test "a long stream stops allocating once its buffers have grown" {
     // the size the longest line needs.
     var seen: usize = 0;
     while (seen < 1000) : (seen += 1) _ = (try reader.next()).?;
-    const settled = counting.allocations;
+    const settled = grown(&counting);
 
     while (try reader.next()) |line| : (seen += 1) {
         try testing.expectEqual(seen, line.value.at);
@@ -1368,7 +1341,7 @@ test "a long stream stops allocating once its buffers have grown" {
     try testing.expectEqual(@as(usize, line_count), seen);
     // Not one allocation for the other nineteen thousand lines: the line
     // buffer is reused and the arena is reset rather than freed.
-    try testing.expectEqual(settled, counting.allocations);
+    try testing.expectEqual(settled, grown(&counting));
 }
 
 test "a very large line is read without copying its strings" {
@@ -2264,6 +2237,85 @@ test "a per-batch sync is once for the batch and not once for the record" {
     try testing.expectEqual(@as(usize, 3), seen);
 }
 
+test "a record synced per record costs one data sync, and a batch one for the batch" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const hooked = try Seam.create(testing.allocator, testing.io, &.{});
+    defer hooked.destroy();
+    const io = hooked.io();
+    const file = try tmp.dir.createFile(io, "log.jsonl", .{});
+    defer file.close(io);
+
+    // Every sync is the platform's data sync, made once: no barrier, no
+    // second call for the directory, nothing the level does not need.
+    var buffer: [4096]u8 = undefined;
+    var file_writer = file.writer(io, &buffer);
+    var log: strand.Writer(Event) = .initFile(&file_writer, .{ .sync = .per_record });
+    try log.write(.{ .kind = "one", .at = 1 });
+    try log.write(.{ .kind = "two", .at = 2 });
+    try log.write(.{ .kind = "three", .at = 3 });
+    try testing.expectEqual(@as(u32, 3), hooked.syncs());
+    try testing.expectEqual(@as(u32, 3), hooked.count(seam.data_sync));
+
+    var batched: strand.Writer(Event) = .initFile(&file_writer, .{ .sync = .per_batch });
+    try batched.writeAll(&.{ .{ .kind = "four", .at = 4 }, .{ .kind = "five", .at = 5 } });
+    try testing.expectEqual(@as(u32, 4), hooked.syncs());
+}
+
+test "a writer says what its syncs reached, and a filesystem that declines the call is not hidden" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    // The second sync's first call is declined, as a network mount declines
+    // `F_FULLFSYNC` or a filesystem `fdatasync`.
+    const hooked = try Seam.create(testing.allocator, testing.io, &.{seam.fail(seam.data_sync, 2, seam.refused)});
+    defer hooked.destroy();
+    const io = hooked.io();
+    const file = try tmp.dir.createFile(io, "log.jsonl", .{});
+    defer file.close(io);
+
+    var buffer: [4096]u8 = undefined;
+    var file_writer = file.writer(io, &buffer);
+    var log: strand.Writer(Event) = .initFile(&file_writer, .{ .sync = .per_record });
+    try testing.expectEqual(strand.Reached.none, log.reached);
+    try log.write(.{ .kind = "one", .at = 1 });
+    try testing.expectEqual(strand.Reached.expected(.data), log.reached);
+    try testing.expect(log.reached.atLeast(.data));
+
+    // Declined is not failed: the writer carries on, on the strongest call
+    // left, and says what that reached — on macOS the plain `fsync`, which
+    // the drive may still hold in its cache; elsewhere the full sync.
+    try log.write(.{ .kind = "two", .at = 2 });
+    const degraded: strand.Reached = if (builtin.target.os.tag.isDarwin()) .written else .full;
+    try testing.expectEqual(degraded, log.reached);
+    try testing.expect(!log.sync_failed);
+
+    try log.write(.{ .kind = "three", .at = 3 });
+    try testing.expectEqual(strand.Reached.expected(.data), log.reached);
+}
+
+test "a sync that fails stops the writer, and nothing is synced after it" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const hooked = try Seam.create(testing.allocator, testing.io, &.{seam.fail(seam.data_sync, 2, seam.io_error)});
+    defer hooked.destroy();
+    const io = hooked.io();
+    const file = try tmp.dir.createFile(io, "log.jsonl", .{});
+    defer file.close(io);
+
+    var buffer: [4096]u8 = undefined;
+    var file_writer = file.writer(io, &buffer);
+    var log: strand.Writer(Event) = .initFile(&file_writer, .{ .sync = .per_record });
+    try log.write(.{ .kind = "one", .at = 1 });
+    // The disk lost the second record: that is the writer's last word.
+    try testing.expectError(error.SyncFailed, log.write(.{ .kind = "two", .at = 2 }));
+    try testing.expect(log.sync_failed);
+    // A sync after a failed one could come back clean over the lost record,
+    // so there is none: not by policy, and not by hand.
+    try testing.expectError(error.SyncFailed, log.write(.{ .kind = "three", .at = 3 }));
+    try testing.expectError(error.SyncFailed, log.sync());
+    try testing.expectEqual(@as(u32, 2), hooked.syncs());
+}
+
 test "a sync policy with no file to sync says so rather than pretending" {
     var out: std.Io.Writer.Allocating = .init(testing.allocator);
     defer out.deinit();
@@ -2511,14 +2563,14 @@ test "a reader that routes its own lines parses only the ones it wants" {
 
     // And the same stream routed by the arm its first key names, parsing
     // the two lines that are worth parsing and nothing else.
-    var counting: Counting = .{ .child = testing.allocator };
+    var counting: shakedown.alloc.Counting = .init(testing.allocator);
     var source: std.Io.Reader = .fixed(input);
     var reader: strand.Reader(Message) = .init(counting.allocator(), &source, .{});
     defer reader.deinit();
 
     var seen: usize = 0;
     var greetings: usize = 0;
-    var after_first: ?usize = null;
+    var after_first: ?u64 = null;
     while (try reader.nextRaw()) |raw| : (seen += 1) {
         const want = all.items[seen];
         try testing.expectEqualStrings(want.line, raw.line);
@@ -2528,7 +2580,7 @@ test "a reader that routes its own lines parses only the ones it wants" {
         if (strand.tagOf(Message, raw.line) != .hello) {
             // A line that is only looked at costs nothing at all: the
             // allocator is not touched between one parse and the next.
-            if (after_first) |count| try testing.expectEqual(count, counting.allocations);
+            if (after_first) |count| try testing.expectEqual(count, grown(&counting));
             continue;
         }
         const line = (try reader.parse(raw)).?;
@@ -2536,13 +2588,13 @@ test "a reader that routes its own lines parses only the ones it wants" {
         try testing.expectEqual(want.offset, line.offset);
         try testing.expectEqual(([_]u8{ 1, 4 })[greetings], line.value.hello.version);
         greetings += 1;
-        after_first = counting.allocations;
+        after_first = grown(&counting);
     }
     try testing.expectEqual(@as(usize, 5), seen);
     try testing.expectEqual(@as(usize, 2), greetings);
     // Five lines framed, two parsed: the arena grew once, and the line
     // buffer was never written to at all.
-    try testing.expect(counting.allocations <= 2);
+    try testing.expect(grown(&counting) <= 2);
 }
 
 test "lines and nextRaw place a line in the same way" {
@@ -2872,14 +2924,14 @@ test "a buffered record is scanned once parsed once and borrowed without allocat
         .note = if (i % 7 == 0) "escaped\tnote" else null,
     });
     inline for (.{ Row, Hook }) |T| {
-        var counting: Counting = .{ .child = testing.allocator };
+        var counting: shakedown.alloc.Counting = .init(testing.allocator);
         var input: std.Io.Reader = .fixed(out.written());
         var reader: strand.Reader(T) = .init(counting.allocator(), &input, .{ .skip_bom = false });
         defer reader.deinit();
         var counts: work.Counts = .{};
         work.observe(&counts);
         defer work.observe(null);
-        var settled: usize = 0;
+        var settled: u64 = 0;
         for (0..128) |i| {
             counts = .{};
             const line = (try reader.next()).?;
@@ -2891,8 +2943,8 @@ test "a buffered record is scanned once parsed once and borrowed without allocat
             const read_ahead = (std.simd.suggestVectorLength(u8) orelse 1) - 1;
             try testing.expect(counts.scan_bytes >= line.line.len + 1);
             try testing.expect(counts.scan_bytes <= line.line.len + 1 + read_ahead);
-            if (i == 31) settled = counting.allocations;
-            if (i >= 32) try testing.expectEqual(settled, counting.allocations);
+            if (i == 31) settled = grown(&counting);
+            if (i >= 32) try testing.expectEqual(settled, grown(&counting));
         }
         try testing.expectEqual(@as(?strand.Line(T), null), try reader.next());
     }
@@ -3099,7 +3151,8 @@ test "bounded writer scratch survives allocation failures and reuses capacity" {
             try testing.expect(std.mem.endsWith(u8, output.written(), "\x1e\"z\"\n"));
         }
     };
-    try testing.checkAllAllocationFailures(testing.allocator, Case.run, .{});
+    var no_resize: shakedown.alloc.NoResize = .init(testing.allocator);
+    try testing.checkAllAllocationFailures(no_resize.allocator(), Case.run, .{});
 
     var failing: testing.FailingAllocator = .init(testing.allocator, .{ .fail_index = 0 });
     var output: std.Io.Writer.Allocating = .init(testing.allocator);

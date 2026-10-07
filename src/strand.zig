@@ -49,7 +49,9 @@
 //! `Opener` a caller hands it, does not lock or compress one, does not index
 //! a log or seek to line *n*, does not
 //! validate a line it is not asked to parse, and has no opinion about what a
-//! line means. There is no global state and no dependency beyond `std`.
+//! line means. There is no global state, and no dependency beyond `std`
+//! and airlock, which syncs the file under a `Writer` and numbers files for
+//! a `Follower`.
 const codec_module = @import("codec.zig");
 const parse_module = @import("parse.zig");
 const reader_module = @import("line/reader.zig");
@@ -58,11 +60,10 @@ const writer_module = @import("writer.zig");
 const leading_module = @import("leading.zig");
 const tail_module = @import("tail.zig");
 const follow_module = @import("follow.zig");
-const file_id_module = @import("file_id.zig");
 const versioned_module = @import("versioned.zig");
 const route_module = @import("route.zig");
 const control_module = @import("control.zig");
-const sync_module = @import("sync.zig");
+const airlock = @import("airlock");
 
 const parse_line = codec_module.parser;
 /// Parses one line, without its terminator, as a `T` on an arena.
@@ -128,8 +129,9 @@ pub const Opener = follow_module.Opener;
 pub const PathOpener = follow_module.PathOpener;
 /// How a `Follower` tells one file from another.
 pub const Identity = follow_module.Identity;
-/// Which file a handle is open on, as the filesystem numbers it.
-pub const FileId = file_id_module.FileId;
+/// Which file a handle is open on, as the filesystem numbers it: airlock's,
+/// and the shape a follower's checkpoint records.
+pub const FileId = airlock.FileId;
 /// A record with a schema version on it, migrated forward when older.
 pub const Versioned = versioned_module.Versioned;
 /// A `Versioned` payload parsed as an older shape, inside a migration hook.
@@ -153,13 +155,5 @@ pub const memberOf = route_module.memberOf;
 pub const memberStringOf = route_module.memberStringOf;
 /// Where the first C0 control byte other than a tab is, if there is one.
 pub const indexOfControl = control_module.indexOfControl;
-/// Puts a file's bytes on the disk under it, as `Writer` does.
-pub const syncFile = sync_module.syncFile;
-/// Puts a directory's entries on the disk under it.
-pub const syncDir = sync_module.syncDir;
-/// How much of what a file has been given `syncFile` puts down.
-pub const SyncLevel = sync_module.SyncLevel;
-/// Which call put the bytes down.
-pub const SyncKind = sync_module.SyncKind;
-/// How `syncFile` and `syncDir` fail.
-pub const SyncError = sync_module.SyncError;
+/// What a `Writer`'s last sync reached: airlock's, weakest first.
+pub const Reached = airlock.Reached;

@@ -19,13 +19,12 @@
 //! takes an `Opener` — one call that returns the file a path names right now —
 //! and the follower uses it only when the file it holds has stopped growing,
 //! so the old file is read to its end before the new one is started.
-const file_id_module = @import("file_id.zig");
 const line_module = @import("line.zig");
 const codec_module = @import("codec.zig");
 const reader_module = @import("reader.zig");
 
 const std = @import("std");
-const FileId = file_id_module.FileId;
+const FileId = @import("airlock").FileId;
 const Allocator = std.mem.Allocator;
 
 const strand = struct {
@@ -179,7 +178,7 @@ pub const Identity = union(enum) {
     /// What `file` is, now. The handle must be open for reading: asking a
     /// file's attributes is read access, and so is reading its first bytes.
     pub fn take(self: Identity, io: std.Io, file: std.Io.File) Identity.TakeError!Identity.Taken {
-        const id = try FileId.of(file.handle);
+        const id = try FileId.of(io, file);
         switch (self) {
             .file_id => return .{ .id = id },
             .fingerprint => |window| return .{

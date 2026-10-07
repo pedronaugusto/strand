@@ -1,6 +1,7 @@
 const fixtures_module = @import("fixtures.zig");
 const std = @import("std");
 const testing = std.testing;
+const shakedown = @import("shakedown");
 const strand = @import("../strand.zig");
 const Fixture = fixtures_module.Fixture;
 
@@ -144,7 +145,8 @@ test "Tail last owns hook references defaults Raw and dynamic values" {
 }
 
 test "Tail last releases every partial owned batch on allocation failure" {
-    try testing.checkAllAllocationFailures(testing.allocator, lastOwned, .{});
+    var no_resize: shakedown.alloc.NoResize = .init(testing.allocator);
+    try testing.checkAllAllocationFailures(no_resize.allocator(), lastOwned, .{});
 }
 
 test "Tail last reports only NextError" {

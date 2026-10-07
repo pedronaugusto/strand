@@ -5,7 +5,7 @@
 //! It is not part of `zig build test`: a number that varies with the machine is not a thing to fail a
 //! build over, and these numbers exist to be read.
 //!
-//! Seven measurements, each one a claim the README makes:
+//! Nine measurements:
 //!
 //! 1. A million small values written, minified, one line each.
 //! 2. The same million read back and parsed, with strings borrowing from the
@@ -21,6 +21,11 @@
 //!
 //! 7. Mixed lines against the same parse with framing removed, with a target
 //!    of at most 1.10 times the parse on a quiet machine.
+//! 8. Records written to a file synced after each one, which is what a
+//!    durable log pays per record: the sync dominates, and the row says by
+//!    how much.
+//! 9. A follower's question "is this still my file?", asked of a handle:
+//!    what each look at a quiet log costs before it waits again.
 //!
 //! Run it in ReleaseFast for numbers worth quoting:
 //!
@@ -64,6 +69,8 @@ pub fn main() !void {
     try benchBigLine(gpa, io, stdout);
     try benchCarried(gpa, io, stdout);
     try @import("read_cost.zig").run(gpa, io, stdout);
+    try benchSyncedWrite(io, stdout);
+    try benchIdentity(io, stdout);
 
     try stdout.flush();
 }
@@ -212,6 +219,44 @@ fn benchCarried(gpa: std.mem.Allocator, io: std.Io, stdout: *std.Io.Writer) !voi
         try report(stdout, name, elapsed, reader.lines.number, out.written().len);
         std.mem.doNotOptimizeAway(checksum);
     }
+}
+
+/// Records through a `Writer` that syncs the file after each one.
+fn benchSyncedWrite(io: std.Io, stdout: *std.Io.Writer) !void {
+    const records = if (smoke) 1 else 500;
+    var work = try Scratch.init(io, "");
+    defer work.deinit(io);
+    const file = try work.scratch.dir.openFile(io, "log.jsonl", .{ .mode = .write_only });
+    defer file.close(io);
+
+    var buffer: [4096]u8 = undefined;
+    var file_writer = file.writer(io, &buffer);
+    var log: strand.Writer(Event) = .initFile(&file_writer, .{ .sync = .per_record });
+    const started = benchmarkNow(io);
+    for (0..records) |i| try log.write(.{ .kind = "request", .at = i });
+    const elapsed = (if (smoke) std.Io.Duration.fromNanoseconds(1) else started.untilNow(io, .awake));
+
+    if (log.count != records) return error.WriteCountMismatch;
+    try report(stdout, "write, sync per record", elapsed, log.count, try file.length(io));
+}
+
+/// `Identity.take` under `.file_id`, asked of one handle again and again.
+fn benchIdentity(io: std.Io, stdout: *std.Io.Writer) !void {
+    const looks = if (smoke) 1 else 200_000;
+    var work = try Scratch.init(io, "{\"kind\":\"open\"}\n");
+    defer work.deinit(io);
+
+    const first = try strand.Identity.take(.file_id, io, work.file);
+    const started = benchmarkNow(io);
+    var same: usize = 0;
+    for (0..looks) |_| {
+        if ((try strand.Identity.take(.file_id, io, work.file)).eql(first)) same += 1;
+    }
+    const elapsed = (if (smoke) std.Io.Duration.fromNanoseconds(1) else started.untilNow(io, .awake));
+
+    if (same != looks) return error.IdentityMismatch;
+    try metric(stdout, "identity", "elapsed", elapsed.toNanoseconds(), "ns");
+    try metric(stdout, "identity", "per_look", @as(u64, @intCast(elapsed.toNanoseconds())) / looks, "ns/look");
 }
 
 const Scratch = @import("bench_scratch.zig").Scratch;

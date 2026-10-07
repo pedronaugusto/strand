@@ -252,20 +252,12 @@ pub fn Encoder(comptime Raw: type) type {
                 .comptime_int => try bufferValue(@as(std.math.IntFittingRange(v, v), v), options, out),
                 .float, .comptime_float => try out.stdValue(v, options),
                 .optional => if (v) |payload| try bufferValue(payload, options, out) else try out.write("null"),
-                .@"enum" => |info| {
-                    if (!info.is_exhaustive) {
-                        inline for (info.fields) |field| {
-                            if (v == @field(T, field.name)) break;
-                        } else return bufferValue(@intFromEnum(v), options, out);
-                    }
-                    // A name is known when this is compiled, and so is its JSON
-                    // when it needs no escaping.
-                    switch (v) {
-                        inline else => |tag| if (comptime safeFieldName(@tagName(tag)))
-                            try out.write(comptime "\"" ++ @tagName(tag) ++ "\"")
-                        else
-                            try bufferString(@tagName(tag), options, out),
-                    }
+                // A value a non-exhaustive enum does not name is its number.
+                .@"enum" => |info| if (info.is_exhaustive) switch (v) {
+                    inline else => |tag| try bufferTagName(@tagName(tag), options, out),
+                } else switch (v) {
+                    inline else => |tag| try bufferTagName(@tagName(tag), options, out),
+                    _ => try bufferValue(@intFromEnum(v), options, out),
                 },
                 .enum_literal => try bufferString(@tagName(v), options, out),
                 .error_set => try bufferString(@errorName(v), options, out),
@@ -402,6 +394,15 @@ pub fn Encoder(comptime Raw: type) type {
                 try bufferValue(item, options, out);
             }
             try out.byte(']');
+        }
+
+        /// An enum tag's name as a string. The name is known when this is
+        /// compiled, and so is its JSON when it needs no escaping.
+        inline fn bufferTagName(comptime name: []const u8, options: std.json.Stringify.Options, out: *Buffer) BufferError!void {
+            if (comptime safeFieldName(name))
+                try out.write(comptime "\"" ++ name ++ "\"")
+            else
+                try bufferString(name, options, out);
         }
 
         /// A name — a field's, a tag's, an error's — as `std.json` writes it,

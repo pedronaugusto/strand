@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- `writeValue` and a bounded `Writer` write a non-exhaustive enum: a named value by name, any other by number, as `writeLine` does. Such an enum failed to compile on the buffered path.
+
 - `Tail.init` refuses a pipe or socket as `error.Streaming`, as documented; it read whatever the system reported as the stream's size.
 
 - `Follower` names its error sets: `CheckpointError`, `ResumeError`, `TruncatedError` and `RestartError`; `Identity.take` returns `Identity.TakeError`. `Follower.source` documents that a rotation under an opener rewrites the caller's `File.Reader`.

@@ -8,6 +8,7 @@ const versioned_test_module = @import("versioned_test.zig");
 const from_value_test_module = @import("from_value_test.zig");
 const owned_test_module = @import("owned_test.zig");
 const keep_test_module = @import("testing/keep_test.zig");
+const reflection_test_module = @import("testing/reflection_test.zig");
 const codec_module = @import("codec.zig");
 const line_module = @import("parse/line.zig");
 const line_module_ = @import("line.zig");
@@ -43,6 +44,7 @@ test {
 
     _ = owned_test_module;
     _ = keep_test_module;
+    _ = reflection_test_module;
     _ = codec_module.parser;
     _ = line_module;
     _ = line_module_;

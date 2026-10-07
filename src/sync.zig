@@ -20,8 +20,8 @@ pub const SyncKind = enum {
     /// call — `F_FULLFSYNC` on a network mount, say — so a caller that
     /// promises a durability names this one and checks the answer.
     pub fn asked(level: SyncLevel) SyncKind {
-        if (comptime builtin.os.tag.isDarwin()) return .full;
-        if (comptime builtin.os.tag == .linux) return switch (level) {
+        if (comptime builtin.target.os.tag.isDarwin()) return .full;
+        if (comptime builtin.target.os.tag == .linux) return switch (level) {
             .data => .data,
             .all => .plain,
         };
@@ -71,7 +71,7 @@ pub const SyncError = std.Io.File.SyncError;
 /// holding, so asking a second time is how the loss gets lost rather than
 /// how it gets fixed.
 pub fn syncFile(io: std.Io, file: std.Io.File, level: SyncLevel) SyncError!SyncKind {
-    if (comptime builtin.os.tag.isDarwin()) {
+    if (comptime builtin.target.os.tag.isDarwin()) {
         while (true) {
             switch (std.posix.errno(std.c.fcntl(file.handle, std.c.F.FULLFSYNC, @as(c_int, 0)))) {
                 .SUCCESS => return .full,
@@ -83,7 +83,7 @@ pub fn syncFile(io: std.Io, file: std.Io.File, level: SyncLevel) SyncError!SyncK
             }
         }
     }
-    if (comptime builtin.os.tag == .linux) {
+    if (comptime builtin.target.os.tag == .linux) {
         if (level == .data) while (true) {
             switch (std.os.linux.errno(std.os.linux.fdatasync(file.handle))) {
                 .SUCCESS => return .data,
@@ -118,8 +118,8 @@ pub fn syncFile(io: std.Io, file: std.Io.File, level: SyncLevel) SyncError!SyncK
 /// Other platforms get `fsync`. An interrupted call is made again, and any
 /// other failure is reported rather than retried, as `syncFile`'s is.
 pub fn syncDir(io: std.Io, dir: std.Io.Dir) SyncError!?SyncKind {
-    if (comptime builtin.os.tag == .windows) return null;
-    if (comptime builtin.os.tag == .linux) {
+    if (comptime builtin.target.os.tag == .windows) return null;
+    if (comptime builtin.target.os.tag == .linux) {
         while (true) {
             switch (std.os.linux.errno(std.os.linux.fsync(dir.handle))) {
                 .SUCCESS => return .plain,
@@ -156,21 +156,21 @@ test syncFile {
     // where that is not what `std` calls a sync, this is the test that the
     // other one is what was asked for.
     const kind = try syncFile(std.testing.io, file, .data);
-    const expected: SyncKind = switch (builtin.os.tag) {
+    const expected: SyncKind = switch (builtin.target.os.tag) {
         .linux => .data,
-        else => if (builtin.os.tag.isDarwin()) .full else .plain,
+        else => if (builtin.target.os.tag.isDarwin()) .full else .plain,
     };
     try std.testing.expectEqual(expected, kind);
 
     // Everything, timestamps included, is the ordinary call where the
     // ordinary call is the whole of it, and still the strongest on Darwin.
     const all = try syncFile(std.testing.io, file, .all);
-    try std.testing.expectEqual(@as(SyncKind, if (builtin.os.tag.isDarwin()) .full else .plain), all);
+    try std.testing.expectEqual(@as(SyncKind, if (builtin.target.os.tag.isDarwin()) .full else .plain), all);
 
     // What was asked for is what a filesystem that takes it answers.
     try std.testing.expectEqual(SyncKind.asked(.data), kind);
     try std.testing.expectEqual(SyncKind.asked(.all), all);
-    comptime std.debug.assert(SyncKind.asked(.all) == if (builtin.os.tag.isDarwin()) .full else .plain);
+    comptime std.debug.assert(SyncKind.asked(.all) == if (builtin.target.os.tag.isDarwin()) .full else .plain);
 }
 
 test syncDir {
@@ -181,9 +181,9 @@ test syncDir {
     try tmp.dir.writeFile(io, .{ .sub_path = "record.tmp", .data = "{}\n" });
     try tmp.dir.rename("record.tmp", tmp.dir, "record", io);
 
-    const expected: ?SyncKind = switch (builtin.os.tag) {
+    const expected: ?SyncKind = switch (builtin.target.os.tag) {
         .windows => null,
-        else => if (builtin.os.tag.isDarwin()) .full else .plain,
+        else => if (builtin.target.os.tag.isDarwin()) .full else .plain,
     };
     try std.testing.expectEqual(expected, try syncDir(io, tmp.dir));
 
@@ -191,7 +191,7 @@ test syncDir {
     // on Linux, and that is an error rather than a crash.
     const path_only = try tmp.dir.openDir(io, ".", .{});
     defer path_only.close(io);
-    if (comptime builtin.os.tag == .linux) {
+    if (comptime builtin.target.os.tag == .linux) {
         try std.testing.expectError(error.AccessDenied, syncDir(io, path_only));
     } else {
         try std.testing.expectEqual(expected, try syncDir(io, path_only));

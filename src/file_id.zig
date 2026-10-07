@@ -27,7 +27,7 @@ pub const FileId = struct {
 
     /// What the file or directory `handle` is open on is.
     pub fn of(handle: Io.File.Handle) Error!FileId {
-        return switch (builtin.os.tag) {
+        return switch (builtin.target.os.tag) {
             .linux => linux(handle),
             .windows => windows(handle),
             else => posix(handle),
@@ -47,13 +47,13 @@ pub const FileId = struct {
     /// file nothing can open.
     pub fn ofPath(io: Io, dir: Io.Dir, sub_path: []const u8) PathError!FileId {
         try io.checkCancel();
-        if (builtin.os.tag == .windows) {
+        if (builtin.target.os.tag == .windows) {
             const file = try dir.openFile(io, sub_path, .{ .allow_directory = true });
             defer file.close(io);
             return of(file.handle);
         }
         const path = try std.posix.toPosixPath(sub_path);
-        return if (builtin.os.tag == .linux) linuxAt(io, dir.handle, &path) else posixAt(io, dir.handle, &path);
+        return if (builtin.target.os.tag == .linux) linuxAt(io, dir.handle, &path) else posixAt(io, dir.handle, &path);
     }
 
     pub fn eql(a: FileId, b: FileId) bool {
@@ -257,13 +257,13 @@ test "FileId.ofPath" {
     try std.testing.expect((try FileId.ofPath(io, tmp.dir, "one")).eql(try FileId.of(one.handle)));
     try std.testing.expect((try FileId.ofPath(io, tmp.dir, "sub")).eql(try FileId.of(sub.handle)));
     try std.testing.expect((try FileId.ofPath(io, tmp.dir, ".")).eql(try FileId.of(tmp.dir.handle)));
-    var buffer: [std.fs.max_path_bytes]u8 = undefined;
+    var buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const absolute = buffer[0..try tmp.dir.realPathFile(io, "one", &buffer)];
     try std.testing.expect((try FileId.ofPath(io, Io.Dir.cwd(), absolute)).eql(try FileId.of(one.handle)));
     try std.testing.expectError(error.FileNotFound, FileId.ofPath(io, tmp.dir, "gone"));
 
     // A socket cannot be opened as a file, and still has an identity.
-    if (builtin.os.tag != .windows) {
+    if (builtin.target.os.tag != .windows) {
         const sock_path = try std.testing.allocator.print("{s}.sock", .{absolute});
         defer std.testing.allocator.free(sock_path);
         const address = try std.Io.net.UnixAddress.init(sock_path);

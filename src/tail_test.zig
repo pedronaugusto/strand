@@ -511,7 +511,7 @@ test "separated forward and backward framing agree at every payload boundary" {
 }
 
 test "a pipe has no end to start a backward read from" {
-    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    if (builtin.target.os.tag == .windows) return error.SkipZigTest;
     const fds = try std.Io.Threaded.pipe2(.{});
     const read_end: std.Io.File = .{ .handle = fds[0], .flags = .{ .nonblocking = false } };
     const write_end: std.Io.File = .{ .handle = fds[1], .flags = .{ .nonblocking = false } };

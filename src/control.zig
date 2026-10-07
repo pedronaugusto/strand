@@ -84,11 +84,11 @@ pub noinline fn firstControlOrTerminator(bytes: []const u8) ?usize {
 inline fn firstHit(comptime n: usize, hits: @Vector(n, bool)) ?usize {
     if (!@reduce(.Or, hits)) return null;
     work.laneSearch();
-    if (comptime builtin.cpu.arch.isX86()) {
+    if (comptime builtin.target.cpu.arch.isX86()) {
         const mask: @Int(.unsigned, n) = @bitCast(hits);
         return @ctz(mask);
     }
-    if (comptime builtin.cpu.arch == .aarch64 or builtin.cpu.arch == .aarch64_be) {
+    if (comptime builtin.target.cpu.arch == .aarch64 or builtin.target.cpu.arch == .aarch64_be) {
         comptime std.debug.assert(n < 256);
         const indices = @select(u8, hits, std.simd.iota(u8, n), @as(@Vector(n, u8), @splat(255)));
         const first = @reduce(.Min, indices);

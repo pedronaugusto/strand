@@ -152,7 +152,7 @@ pub fn build(b: *std.Build) void {
     // Only in strand's own tree, and never part of `zig build test`: a
     // number that varies with the machine is not a thing to fail a build
     // over. `check` compiles them so they keep up with the API; `bench`
-    // runs them. Numbers worth reading come from -Doptimize=ReleaseFast.
+    // runs them. Numbers worth reading come from -Doptimize=fast.
     //=====================================================================
 
     const bench_options = b.addOptions();

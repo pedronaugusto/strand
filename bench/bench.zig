@@ -25,7 +25,7 @@
 //! Run it in ReleaseFast for numbers worth quoting:
 //!
 //! ```sh
-//! zig build bench -Doptimize=ReleaseFast
+//! zig build bench -Doptimize=fast
 //! ```
 
 const std = @import("std");

@@ -87,7 +87,7 @@ that identity, the byte offset and line numbering.
 `memberStringOf` read one top-level member's scalar value wherever it sits, the first of
 a repeated one, as a view into the line. A union that declares
 `pub const jsonl_tag = "type"` is read and written tagged inside its object
-(`{"type":"assistant",...}`), as serde's `#[serde(tag)]`; `jsonl_other` names the arm
+(`{"type":"assistant",...}`), the arm a member of the record; `jsonl_other` names the arm
 for a tag no arm has, holding nothing or the record as a `Raw`. A missing, repeated or
 non-string tag is refused, and `tagOf` reads the arm from the tag member.
 
@@ -115,6 +115,12 @@ its caller.
 - It does not read pretty records backwards or decompress a stream.
 - It does not watch the filesystem or flush on a timer.
 
+## Built with
+
+- [Zig](https://ziglang.org) 0.17.0 and its standard library; nothing is linked.
+- [preflight](https://github.com/pedronaugusto/preflight) runs the source checks,
+  the tests and CI.
+
 ## Testing
 
 `zig build test` runs the unit suite, scratch tests and examples in Debug by default.
@@ -130,9 +136,10 @@ test binaries. The merge tier also runs those binaries on `macos-latest` and
 `windows-latest`. The release tier runs Debug and ReleaseSafe on all three hosts,
 ReleaseFast on Ubuntu, ReleaseSmall compile-only, every cross target and
 ThreadSanitizer. The merge and release tiers add a 20,000-round property campaign in
-ReleaseSafe on Ubuntu.
+ReleaseSafe on Ubuntu, and run the Debug suite on Ubuntu with Zig master, a job that
+reports and never blocks.
 
-`zig build bench` runs the benchmarks in [bench/](bench/) in ReleaseFast; CI only
+`zig build bench -Doptimize=fast` runs the benchmarks in [bench/](bench/); CI only
 compiles them.
 
 `zig build check` compiles without running. CI uses it for `x86_64-linux-gnu`,

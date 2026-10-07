@@ -4,8 +4,8 @@
 //! `std.json` writes a tagged union as an object with one key, the arm:
 //! `{"assistant":{"text":"hi"}}`. Most producers of JSON Lines write the arm
 //! as a member of the record itself instead — `{"type":"assistant","text":"hi"}`
-//! — which is serde's `#[serde(tag = "type")]`. A union says it is written
-//! that way with two declarations:
+//! — the tag one member among the others. A union says it is written that
+//! way with two declarations:
 //!
 //! ```zig
 //! const Message = union(enum) {

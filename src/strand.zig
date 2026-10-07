@@ -28,7 +28,7 @@
 //!   key alone, without parsing the value; `memberOf` and `memberStringOf`
 //!   answer it from a member named for it, wherever it is in the object.
 //! * A union that declares `jsonl_tag` is read and written tagged inside its
-//!   object — `{"type":"assistant",...}` — as serde's `#[serde(tag)]` is,
+//!   object — `{"type":"assistant",...}`, the arm a member of the record —
 //!   and `jsonl_other` names the arm a tag naming no arm is read as.
 //! * `Writer` emits one value per line — minified, or indented for a human —
 //!   and counts them, draining the destination and syncing the file under it

@@ -52,12 +52,15 @@ pub fn RawType(comptime strand: type) type {
             /// JSON `null`, as a default: `data: strand.Raw = .null`.
             pub const @"null": Raw = .{ .bytes = "null" };
 
+            /// What `encode` can fail with.
+            pub const EncodeError = Allocator.Error || std.Io.Writer.Error;
+
             /// `value`, encoded as `Writer` encodes it with its default options, as
             /// a `Raw` on `gpa`. The bytes are one allocation of exactly their
             /// length, so `gpa.free(raw.bytes)` returns it.
             /// `OutOfMemory` means the allocation failed; `WriteFailed` means a
             /// custom `jsonStringify` hook refused to encode the value.
-            pub fn encode(gpa: Allocator, value: anytype) (Allocator.Error || std.Io.Writer.Error)!Raw {
+            pub fn encode(gpa: Allocator, value: anytype) EncodeError!Raw {
                 var out: EncodeBuffer = .init(gpa);
                 defer out.deinit();
                 strand.writeValue(&out.writer, value, .{}) catch |err| return out.diagnose(err);

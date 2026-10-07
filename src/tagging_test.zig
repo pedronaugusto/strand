@@ -1,13 +1,14 @@
 //! Unions tagged inside their object (`jsonl_tag`) and the member peek
 //! (`memberOf`), through the public API: every decoder agreeing with the
-//! others and with serde, and every encoder writing the one shape.
+//! others and with the recorded answers, and every encoder writing the one
+//! shape.
 
 const std = @import("std");
 const testing = std.testing;
 const strand = @import("strand.zig");
 
-/// serde's `#[serde(tag = "type")]` enum of `src/corpus/tagged`, with no
-/// catch-all.
+/// The union `src/corpus/tagged/answers.txt` was recorded against, tagged by
+/// `type`, with no catch-all.
 const Closed = union(enum) {
     assistant: struct { text: []const u8, n: u64 = 0 },
     ping,
@@ -15,7 +16,7 @@ const Closed = union(enum) {
     pub const jsonl_tag = "type";
 };
 
-/// The same, with `#[serde(other)]`.
+/// The same, with a catch-all arm.
 const Open = union(enum) {
     assistant: struct { text: []const u8, n: u64 = 0 },
     ping,
@@ -35,29 +36,28 @@ const Kept = union(enum) {
 };
 
 const cases = @embedFile("corpus/tagged/cases.jsonl");
-const serde = @embedFile("corpus/tagged/serde.txt");
+const recorded = @embedFile("corpus/tagged/answers.txt");
 
-/// The class serde's message is sorted into by `serde_tagged.rs`, from the
-/// error this package names.
+/// The class a recorded answer names, from the error this package names.
 fn class(err: anyerror) []const u8 {
     return switch (err) {
         error.MissingField => "MissingField",
         error.DuplicateField => "DuplicateField",
         error.InvalidEnumTag => "InvalidEnumTag",
-        // serde says "invalid type" and "invalid value" alike for a value
-        // of the wrong kind and for one out of its type's range.
+        // The recorded answers say "invalid type" and "invalid value" alike
+        // for a value of the wrong kind and for one out of its type's range.
         error.UnexpectedToken, error.Overflow, error.InvalidCharacter, error.InvalidNumber => "UnexpectedToken",
         else => "Syntax",
     };
 }
 
-/// Lines serde reads and this package refuses, by their place in the cases:
-/// serde reads an internally tagged enum from a JSON array as well, the tag
-/// first and the fields after it in order. No writer writes one; a record
-/// here is an object.
+/// Lines the recorded answers read and this package refuses, by their place in
+/// the cases: they read a union tagged inside its object from a JSON array as
+/// well, the tag first and the fields after it in order. No writer writes one;
+/// a record here is an object.
 const arrays = [_]usize{ 33, 39, 40 };
 
-/// What `U` makes of `line` by one path, as serde's line says it: `ok` and
+/// What `U` makes of `line` by one path, as a recorded answer says it: `ok` and
 /// the value written, or `err` and the class.
 const Path = enum { direct, tokens, value };
 
@@ -80,13 +80,13 @@ fn answer(comptime U: type, a: std.mem.Allocator, line: []const u8, path: Path) 
     return a.print("ok {s}", .{out.written()});
 }
 
-test "a union tagged inside its object reads as serde reads it" {
+test "a union tagged inside its object reads as the recorded answers say" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
 
     var lines = std.mem.splitScalar(u8, cases[0 .. cases.len - 1], '\n');
-    var answers = std.mem.splitScalar(u8, serde[0 .. serde.len - 1], '\n');
+    var answers = std.mem.splitScalar(u8, recorded[0 .. recorded.len - 1], '\n');
     var number: usize = 0;
     while (lines.next()) |line| {
         number += 1;

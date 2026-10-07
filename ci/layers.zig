@@ -55,6 +55,7 @@ pub const modules: []const gantry.NamedModule = &.{.{ .name = "strand.owned", .p
 pub const references: []const gantry.rules.ReferenceRule = &.{
     .{ .name = "named dependencies", .unresolved_only = true, .except_targets = &.{
         "airlock",
+        "airlock.testing",
         "build_options",
         "builtin",
         "rejection_options",

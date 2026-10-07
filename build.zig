@@ -1,6 +1,8 @@
 const std = @import("std");
+/// airlock's build, for its test seam.
+const airlock_build = @import("airlock");
 
-pub fn build(b: *std.Build) void {
+pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
@@ -11,7 +13,8 @@ pub fn build(b: *std.Build) void {
     // has to match.
     //=====================================================================
 
-    const airlock = b.dependency("airlock", .{ .target = target, .optimize = optimize }).module("airlock");
+    const airlock_dependency = b.dependency("airlock", .{ .target = target, .optimize = optimize });
+    const airlock = airlock_dependency.module("airlock");
     const module = b.addModule("strand", .{
         .root_source_file = b.path("src/strand.zig"),
         .target = target,
@@ -49,11 +52,16 @@ pub fn build(b: *std.Build) void {
             .imports = &.{.{ .name = "airlock", .module = airlock }},
         }),
     });
-    // shakedown is a lazy, test-only dependency: no module a consumer
-    // builds imports it.
-    if (b.lazyDependency("shakedown", .{ .target = target, .optimize = optimize })) |shakedown| {
+    // shakedown, and airlock's seam on it, are lazy and test-only: no
+    // module a consumer builds imports them. Their error is returned last,
+    // so one configure pass asks for them and for preflight together.
+    var needed: error{LazyDependencyNeeded}!void = {};
+    if (b.dependencyLazy("shakedown", .{ .target = target, .optimize = optimize })) |shakedown| {
         tests.root_module.addImport("shakedown", shakedown.module("shakedown"));
-    }
+    } else |err| needed = err;
+    if (airlock_build.testing(airlock_dependency)) |seam| {
+        tests.root_module.addImport("airlock.testing", seam);
+    } else |err| needed = err;
 
     // How much generated input the properties are run over, and which. The
     // default is what a `zig build test` should cost; a campaign is what CI
@@ -152,32 +160,12 @@ pub fn build(b: *std.Build) void {
     //=====================================================================
     // Benchmarks
     //
-    // Never part of `zig build test`: a
-    // number that varies with the machine is not a thing to fail a build
-    // over. `check` compiles them so they keep up with the API; `bench`
-    // runs them. Numbers worth reading come from -Doptimize=fast.
+    // Never timed by `zig build test`: a number that varies with the
+    // machine is not a thing to fail a build over. preflight's `bench` runs
+    // bench/bench.zig in ReleaseFast; the tests run it once with `--smoke`.
+    // bench_scratch.zig's own tests check the scratch files it writes.
     //=====================================================================
 
-    const bench_options = b.addOptions();
-    bench_options.addOption(bool, "smoke", b.option(
-        bool,
-        "bench-smoke",
-        "Run the benchmarks once over tiny inputs, without reading a clock",
-    ) orelse false);
-    const bench = b.addExecutable(.{
-        .name = "strand-bench",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("bench/bench.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{.{ .name = "strand", .module = module }},
-        }),
-    });
-    bench.root_module.addOptions("bench_options", bench_options);
-    const bench_run = b.addRunArtifact(bench);
-    bench_run.setCwd(b.path("."));
-    b.step("bench", "Run the benchmarks").dependOn(&bench_run.step);
-    check_step.dependOn(&bench.step);
     const bench_tests = b.addTest(.{
         .name = "strand-bench-tests",
         .filters = if (test_filter) |filter| &.{filter} else &.{},
@@ -200,7 +188,16 @@ pub fn build(b: *std.Build) void {
     //=====================================================================
 
     if (b.lazyImport(@This(), "preflight")) |preflight| {
-        preflight.addCi(b, .{ .tests = test_step, .portable_tests = true });
+        preflight.addCi(b, .{
+            .tests = test_step,
+            .portable_tests = true,
+            .bench = .{
+                .programs = &.{.{ .name = "strand-bench", .source = "bench/bench.zig" }},
+                .imports = benchImports,
+                .target = target,
+                .optimize = optimize,
+            },
+        });
         // A project that depends on strand by path, with airlock and
         // nothing else to fetch: the build a consumer gets.
         preflight.addConsumerCheck(b, .{
@@ -209,6 +206,21 @@ pub fn build(b: *std.Build) void {
             .packages = &.{b.dependency("airlock", .{})},
         });
     }
+    return needed;
+}
+
+/// strand and airlock again, in the mode a benchmark builds in: an
+/// imported module keeps its own mode, so a ReleaseFast benchmark over the
+/// Debug module would time the Debug module.
+fn benchImports(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize) []const std.Build.Module.Import {
+    const airlock = b.dependency("airlock", .{ .target = target, .optimize = optimize }).module("airlock");
+    const strand = b.createModule(.{
+        .root_source_file = b.path("src/strand.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "airlock", .module = airlock }},
+    });
+    return b.allocator.dupe(std.Build.Module.Import, &.{.{ .name = "strand", .module = strand }}) catch @panic("OOM");
 }
 
 /// Every example, listed rather than globbed: a build graph that scans a

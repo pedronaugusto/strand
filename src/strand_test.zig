@@ -12,7 +12,7 @@ const testing = std.testing;
 const shakedown = @import("shakedown");
 const strand = @import("strand.zig");
 const fixtures = @import("testing/fixtures.zig");
-const seam = @import("testing/seam.zig");
+const seam = @import("airlock.testing");
 const Seam = seam.Seam;
 
 /// A line of a log: an optional field, two defaults, an enum, a nested array
@@ -2240,7 +2240,7 @@ test "a per-batch sync is once for the batch and not once for the record" {
 test "a record synced per record costs one data sync, and a batch one for the batch" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
-    const hooked = try Seam.create(testing.allocator, testing.io, &.{});
+    const hooked = try Seam.create(testing.allocator, testing.io, .{});
     defer hooked.destroy();
     const io = hooked.io();
     const file = try tmp.dir.createFile(io, "log.jsonl", .{});
@@ -2267,7 +2267,7 @@ test "a writer says what its syncs reached, and a filesystem that declines the c
     defer tmp.cleanup();
     // The second sync's first call is declined, as a network mount declines
     // `F_FULLFSYNC` or a filesystem `fdatasync`.
-    const hooked = try Seam.create(testing.allocator, testing.io, &.{seam.fail(seam.data_sync, 2, seam.refused)});
+    const hooked = try Seam.create(testing.allocator, testing.io, .{ .plan = &.{seam.fail(seam.data_sync, 2, seam.refused)} });
     defer hooked.destroy();
     const io = hooked.io();
     const file = try tmp.dir.createFile(io, "log.jsonl", .{});
@@ -2296,7 +2296,7 @@ test "a writer says what its syncs reached, and a filesystem that declines the c
 test "a sync that fails stops the writer, and nothing is synced after it" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
-    const hooked = try Seam.create(testing.allocator, testing.io, &.{seam.fail(seam.data_sync, 2, seam.io_error)});
+    const hooked = try Seam.create(testing.allocator, testing.io, .{ .plan = &.{seam.fail(seam.data_sync, 2, seam.io_error)} });
     defer hooked.destroy();
     const io = hooked.io();
     const file = try tmp.dir.createFile(io, "log.jsonl", .{});

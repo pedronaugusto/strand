@@ -47,7 +47,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - strand depends on airlock, which makes a `Writer`'s sync and a `Follower`'s file identity. The sync is the same call at the same cost on Linux (`fdatasync`) and macOS (`F_FULLFSYNC`); on Windows NTFS it is now the data-only flush, `NtFlushBuffersFileEx(DATA_SYNC_ONLY)`, which covers a record and the length that finds it without the timestamps.
 - `Raw.encode` returns `Raw.EncodeError`, a named set a caller can put in its own.
-- The fetched package holds the build files, `src`, `examples` and the three documents; `ci/` and `.github/` stay in the repository.
+- The fetched package holds the build files, `src` and the three documents; the examples, benchmarks, `ci/` and `.github/` stay in the repository.
 - `Follower` names its error sets: `CheckpointError`, `ResumeError`, `TruncatedError` and `RestartError`; `Identity.take` returns `Identity.TakeError`. `Follower.source` documents that a rotation under an opener rewrites the caller's `File.Reader`.
 - `Reader`, `Writer`, `Tail` and `Follower` share their policy types across record types: `Reader(A).Options` is `Reader(B).Options`, and likewise `NextError`, `Start`, `Flush`, `Sync`, `Error`, `InitError`, `Wait` and `Checkpoint`. Methods keep their typed signatures and doc comments.
 - Name the scanner token and allocation error sets as public error sets, and name integer conversion failures as public `int.Error`. Qualify file identity results as public `Identity.Taken`. Expose custom JSON hook fixture types to match their public signatures.

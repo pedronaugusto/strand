@@ -122,8 +122,9 @@ a file named by its volume and number, as `Follower` uses it to notice a rotatio
 - [airlock](https://github.com/pedronaugusto/airlock) syncs the file under a `Writer`
   and numbers files for a `Follower`.
 - [shakedown](https://github.com/pedronaugusto/shakedown) supplies the tests' doubles:
-  faulted and counted `Io` calls and allocators. Only the tests import it, so a
-  project depending on strand never fetches it.
+  faulted and counted `Io` calls and allocators, and airlock's syncs through
+  `airlock.testing`, its test seam. Only the tests import them, so a project
+  depending on strand never fetches them.
 - [preflight](https://github.com/pedronaugusto/preflight) runs the source checks,
   the tests and CI.
 
@@ -145,8 +146,9 @@ ThreadSanitizer. The merge and release tiers add a 20,000-round property campaig
 ReleaseSafe on Ubuntu, and run the Debug suite on Ubuntu with Zig master, a job that
 reports and never blocks.
 
-`zig build bench -Doptimize=fast` runs the benchmarks in [bench/](bench/); CI only
-compiles them.
+`zig build bench` times the benchmarks in [bench/](bench/) in ReleaseFast. `zig build
+test` runs them once with `--smoke`, over tiny inputs and without reading a clock; CI
+times nothing.
 
 `zig build check` compiles without running. CI uses it for `x86_64-linux-gnu`,
 `aarch64-linux-gnu`, `x86_64-linux-musl`, `x86_64-windows-gnu`, `aarch64-windows-gnu`,

@@ -1,9 +1,9 @@
 //! What the line layer costs, measured rather than asserted.
 //!
-//! `zig build bench` builds and runs this; `-Dbench-smoke` runs it once over
-//! tiny inputs, without reading a clock.
-//! It is not part of `zig build test`: a number that varies with the machine is not a thing to fail a
-//! build over, and these numbers exist to be read.
+//! `zig build bench` builds it in ReleaseFast and runs it; `zig build test`
+//! runs it once with `--smoke`, over tiny inputs and without reading a
+//! clock, so it keeps working. A number that varies with the machine is not
+//! a thing to fail a build over, and these numbers exist to be read.
 //!
 //! Nine measurements:
 //!
@@ -27,11 +27,8 @@
 //! 9. A follower's question "is this still my file?", asked of a handle:
 //!    what each look at a quiet log costs before it waits again.
 //!
-//! Run it in ReleaseFast for numbers worth quoting:
-//!
-//! ```sh
-//! zig build bench -Doptimize=fast
-//! ```
+//! `zig build bench` builds it in ReleaseFast, the mode for numbers worth
+//! quoting.
 
 const std = @import("std");
 const strand = @import("strand");
@@ -45,101 +42,94 @@ const Event = struct {
     note: ?[]const u8 = null,
 };
 
-const smoke = @import("bench_options").smoke;
-const line_count = if (smoke) 1 else 1_000_000;
-const big_line_bytes = if (smoke) 64 else 100 << 20;
-
-pub fn main() !void {
-    var safe: std.heap.SafeAllocator = .init(std.heap.page_allocator, .{});
-    defer std.debug.assert(safe.deinit() == 0);
-    const gpa = safe.allocator();
-
-    var threaded: std.Io.Threaded = .init(gpa, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+pub fn main(init: std.process.Init) !void {
+    const gpa = init.gpa;
+    const io = init.io;
+    const args = try init.minimal.args.toSlice(init.arena.allocator());
+    const size: Size = try .of(args[1..]);
 
     var out = std.Io.File.stdout().writerStreaming(io, &.{});
     const stdout = &out.interface;
 
-    const written = try benchWrite(gpa, io, stdout);
+    const written = try benchWrite(gpa, io, stdout, size);
     defer gpa.free(written);
-    try benchRead(gpa, io, stdout, written);
-    try benchWriteAll(gpa, io, stdout);
-    try benchTail(gpa, io, stdout, written);
-    try benchBigLine(gpa, io, stdout);
-    try benchCarried(gpa, io, stdout);
-    try @import("read_cost.zig").run(gpa, io, stdout);
-    try benchSyncedWrite(io, stdout);
-    try benchIdentity(io, stdout);
+    try benchRead(gpa, io, stdout, size, written);
+    try benchWriteAll(gpa, io, stdout, size);
+    try benchTail(gpa, io, stdout, size, written);
+    try benchBigLine(gpa, io, stdout, size);
+    try benchCarried(gpa, io, stdout, size);
+    try @import("read_cost.zig").run(gpa, io, stdout, size);
+    try benchSyncedWrite(io, stdout, size);
+    try benchIdentity(io, stdout, size);
 
     try stdout.flush();
 }
 
 /// A million values through a `Writer`, into memory.
-fn benchWrite(gpa: std.mem.Allocator, io: std.Io, stdout: *std.Io.Writer) ![]u8 {
+fn benchWrite(gpa: std.mem.Allocator, io: std.Io, stdout: *std.Io.Writer, size: Size) ![]u8 {
     var out: std.Io.Writer.Allocating = .init(gpa);
     errdefer out.deinit();
     // The measurement is the encoding, not the growth of the destination.
-    try out.ensureUnusedCapacity(line_count * 64);
+    try out.ensureUnusedCapacity(size.lines * 64);
 
     var log: strand.Writer(Event) = .init(&out.writer, .{});
-    const started = benchmarkNow(io);
-    for (0..line_count) |i| {
+    const started = size.now(io);
+    for (0..size.lines) |i| {
         try log.write(.{
             .kind = "request",
             .at = i,
             .level = if (i % 1000 == 0) .warn else .info,
         });
     }
-    const elapsed = (if (@import("bench_options").smoke) std.Io.Duration.fromNanoseconds(1) else started.untilNow(io, .awake));
+    const elapsed = size.since(started, io);
 
-    try report(stdout, "write", elapsed, line_count, out.written().len);
+    try report(stdout, "write", elapsed, size.lines, out.written().len);
     var list = out.toArrayList();
     return list.toOwnedSlice(gpa);
 }
 
 /// The same million back through a `Reader`.
-fn benchRead(gpa: std.mem.Allocator, io: std.Io, stdout: *std.Io.Writer, input: []const u8) !void {
+fn benchRead(gpa: std.mem.Allocator, io: std.Io, stdout: *std.Io.Writer, size: Size, input: []const u8) !void {
     var source: std.Io.Reader = .fixed(input);
     var reader: strand.Reader(Event) = .init(gpa, &source, .{});
     defer reader.deinit();
 
     var checksum: u64 = 0;
     var borrowed: u64 = 0;
-    const started = benchmarkNow(io);
+    const started = size.now(io);
     while (try reader.next()) |line| {
         checksum +%= line.value.at +% line.value.kind.len;
         if (within(line.value.kind, line.line)) borrowed += 1;
     }
-    const elapsed = (if (@import("bench_options").smoke) std.Io.Duration.fromNanoseconds(1) else started.untilNow(io, .awake));
+    const elapsed = size.since(started, io);
 
     try report(stdout, "read", elapsed, reader.lines.number, input.len);
-    if (reader.lines.number != line_count or borrowed != line_count) return error.ReadMismatch;
-    if (checksum != line_count * (line_count - 1) / 2 + 7 * line_count) return error.ChecksumMismatch;
+    if (reader.lines.number != size.lines or borrowed != size.lines) return error.ReadMismatch;
+    if (checksum != size.lines * (size.lines - 1) / 2 + 7 * size.lines) return error.ChecksumMismatch;
     try metric(stdout, "read", "borrowed", borrowed, "records");
 }
 
 /// The same million as one `writeAll`.
-fn benchWriteAll(gpa: std.mem.Allocator, io: std.Io, stdout: *std.Io.Writer) !void {
-    const events = try gpa.alloc(Event, line_count);
+fn benchWriteAll(gpa: std.mem.Allocator, io: std.Io, stdout: *std.Io.Writer, size: Size) !void {
+    const events = try gpa.alloc(Event, size.lines);
     defer gpa.free(events);
     for (events, 0..) |*event, i| event.* = .{ .kind = "request", .at = i };
 
     var out: std.Io.Writer.Allocating = .init(gpa);
     defer out.deinit();
-    try out.ensureUnusedCapacity(line_count * 64);
+    try out.ensureUnusedCapacity(size.lines * 64);
 
     var log: strand.Writer(Event) = .init(&out.writer, .{});
-    const started = benchmarkNow(io);
+    const started = size.now(io);
     try log.writeAll(events);
-    const elapsed = (if (@import("bench_options").smoke) std.Io.Duration.fromNanoseconds(1) else started.untilNow(io, .awake));
+    const elapsed = size.since(started, io);
 
-    if (log.count != line_count) return error.WriteCountMismatch;
+    if (log.count != size.lines) return error.WriteCountMismatch;
     try report(stdout, "writeAll", elapsed, log.count, out.written().len);
 }
 
 /// The last hundred lines of the million, read backwards off a file.
-fn benchTail(gpa: std.mem.Allocator, io: std.Io, stdout: *std.Io.Writer, input: []const u8) !void {
+fn benchTail(gpa: std.mem.Allocator, io: std.Io, stdout: *std.Io.Writer, size: Size, input: []const u8) !void {
     var work = try Scratch.init(io, input);
     defer work.deinit(io);
 
@@ -152,11 +142,11 @@ fn benchTail(gpa: std.mem.Allocator, io: std.Io, stdout: *std.Io.Writer, input: 
     var tail: strand.Tail(Event) = try .init(gpa, &file_reader, .{});
     defer tail.deinit();
 
-    const started = benchmarkNow(io);
+    const started = size.now(io);
     const last = try tail.last(arena.allocator(), 100);
-    const elapsed = (if (@import("bench_options").smoke) std.Io.Duration.fromNanoseconds(1) else started.untilNow(io, .awake));
+    const elapsed = size.since(started, io);
 
-    if (last.len != @min(line_count, 100)) return error.TailCountMismatch;
+    if (last.len != @min(size.lines, 100)) return error.TailCountMismatch;
     try metric(stdout, "tail(100)", "elapsed", elapsed.toNanoseconds(), "ns");
     try metric(stdout, "tail(100)", "returned", last.len, "records");
     try metric(stdout, "tail(100)", "bytes_touched", input.len - tail.lo, "bytes");
@@ -164,23 +154,23 @@ fn benchTail(gpa: std.mem.Allocator, io: std.Io, stdout: *std.Io.Writer, input: 
 
 /// One line of a hundred megabytes, read off a file with a small buffer, so
 /// the only thing holding the line is the reader.
-fn benchBigLine(gpa: std.mem.Allocator, io: std.Io, stdout: *std.Io.Writer) !void {
-    var work = try Scratch.initBigLine(io, gpa, big_line_bytes);
+fn benchBigLine(gpa: std.mem.Allocator, io: std.Io, stdout: *std.Io.Writer, size: Size) !void {
+    var work = try Scratch.initBigLine(io, gpa, size.big_line_bytes);
     defer work.deinit(io);
 
     var buffer: [64 * 1024]u8 = undefined;
     var file_reader = work.file.reader(io, &buffer);
 
     var reader: strand.Reader(Event) = .init(gpa, &file_reader.interface, .{
-        .max_line_bytes = big_line_bytes + 1024,
+        .max_line_bytes = size.big_line_bytes + 1024,
     });
     defer reader.deinit();
 
-    const started = benchmarkNow(io);
+    const started = size.now(io);
     const line = (try reader.next()) orelse return error.NoLine;
-    const elapsed = (if (@import("bench_options").smoke) std.Io.Duration.fromNanoseconds(1) else started.untilNow(io, .awake));
+    const elapsed = size.since(started, io);
 
-    if (line.value.kind.len != big_line_bytes or !within(line.value.kind, line.line)) return error.BigLineMismatch;
+    if (line.value.kind.len != size.big_line_bytes or !within(line.value.kind, line.line)) return error.BigLineMismatch;
     try metric(stdout, "big_line", "elapsed", elapsed.toNanoseconds(), "ns");
     try metric(stdout, "big_line", "arena_capacity", reader.arena.queryCapacity(), "bytes");
 }
@@ -196,12 +186,12 @@ fn Carried(comptime Data: type) type {
 
 /// A million lines with a small object in each that nobody reads, typed as a
 /// `strand.Raw` and then as a `std.json.Value`.
-fn benchCarried(gpa: std.mem.Allocator, io: std.Io, stdout: *std.Io.Writer) !void {
+fn benchCarried(gpa: std.mem.Allocator, io: std.Io, stdout: *std.Io.Writer, size: Size) !void {
     var out: std.Io.Writer.Allocating = .init(gpa);
     defer out.deinit();
-    try out.ensureUnusedCapacity(line_count * 96);
+    try out.ensureUnusedCapacity(size.lines * 96);
     var log: strand.Writer(Carried(strand.Raw)) = .init(&out.writer, .{});
-    for (0..line_count) |i| try log.write(.{
+    for (0..size.lines) |i| try log.write(.{
         .kind = "mark",
         .at = i,
         .data = .{ .bytes = "{\"who\":\"ada\",\"beat\":3,\"tags\":[\"a\",\"b\"]}" },
@@ -212,18 +202,18 @@ fn benchCarried(gpa: std.mem.Allocator, io: std.Io, stdout: *std.Io.Writer) !voi
         var reader: strand.Reader(Carried(Data)) = .init(gpa, &source, .{});
         defer reader.deinit();
         var checksum: u64 = 0;
-        const started = benchmarkNow(io);
+        const started = size.now(io);
         while (try reader.next()) |line| checksum +%= line.value.at;
-        const elapsed = (if (@import("bench_options").smoke) std.Io.Duration.fromNanoseconds(1) else started.untilNow(io, .awake));
-        if (reader.lines.number != line_count or checksum != line_count * (line_count - 1) / 2) return error.CarriedMismatch;
+        const elapsed = size.since(started, io);
+        if (reader.lines.number != size.lines or checksum != size.lines * (size.lines - 1) / 2) return error.CarriedMismatch;
         try report(stdout, name, elapsed, reader.lines.number, out.written().len);
         std.mem.doNotOptimizeAway(checksum);
     }
 }
 
 /// Records through a `Writer` that syncs the file after each one.
-fn benchSyncedWrite(io: std.Io, stdout: *std.Io.Writer) !void {
-    const records = if (smoke) 1 else 500;
+fn benchSyncedWrite(io: std.Io, stdout: *std.Io.Writer, size: Size) !void {
+    const records = size.synced_records;
     var work = try Scratch.init(io, "");
     defer work.deinit(io);
     const file = try work.scratch.dir.openFile(io, "log.jsonl", .{ .mode = .write_only });
@@ -232,27 +222,27 @@ fn benchSyncedWrite(io: std.Io, stdout: *std.Io.Writer) !void {
     var buffer: [4096]u8 = undefined;
     var file_writer = file.writer(io, &buffer);
     var log: strand.Writer(Event) = .initFile(&file_writer, .{ .sync = .per_record });
-    const started = benchmarkNow(io);
+    const started = size.now(io);
     for (0..records) |i| try log.write(.{ .kind = "request", .at = i });
-    const elapsed = (if (smoke) std.Io.Duration.fromNanoseconds(1) else started.untilNow(io, .awake));
+    const elapsed = size.since(started, io);
 
     if (log.count != records) return error.WriteCountMismatch;
     try report(stdout, "write, sync per record", elapsed, log.count, try file.length(io));
 }
 
 /// `Identity.take` under `.file_id`, asked of one handle again and again.
-fn benchIdentity(io: std.Io, stdout: *std.Io.Writer) !void {
-    const looks = if (smoke) 1 else 200_000;
+fn benchIdentity(io: std.Io, stdout: *std.Io.Writer, size: Size) !void {
+    const looks = size.identity_looks;
     var work = try Scratch.init(io, "{\"kind\":\"open\"}\n");
     defer work.deinit(io);
 
     const first = try strand.Identity.take(.file_id, io, work.file);
-    const started = benchmarkNow(io);
+    const started = size.now(io);
     var same: usize = 0;
     for (0..looks) |_| {
         if ((try strand.Identity.take(.file_id, io, work.file)).eql(first)) same += 1;
     }
-    const elapsed = (if (smoke) std.Io.Duration.fromNanoseconds(1) else started.untilNow(io, .awake));
+    const elapsed = size.since(started, io);
 
     if (same != looks) return error.IdentityMismatch;
     try metric(stdout, "identity", "elapsed", elapsed.toNanoseconds(), "ns");
@@ -260,6 +250,7 @@ fn benchIdentity(io: std.Io, stdout: *std.Io.Writer) !void {
 }
 
 const Scratch = @import("bench_scratch.zig").Scratch;
+const Size = @import("size.zig").Size;
 
 /// One line of output: how long, how many lines a second, how many bytes a
 /// second, and how long one line took.
@@ -288,11 +279,4 @@ fn within(inner: []const u8, outer: []const u8) bool {
 
 fn metric(stdout: *std.Io.Writer, work: []const u8, name: []const u8, value: anytype, unit: []const u8) !void {
     try stdout.print("strand\t{s}\t{s}\t{}\t{s}\n", .{ work, name, value, unit });
-}
-
-// Smoke exercises correctness without sampling a benchmark clock.
-var smoke_ticks = std.atomic.Value(i64).init(0);
-fn benchmarkNow(io: std.Io) std.Io.Timestamp {
-    if (@import("bench_options").smoke) return .{ .nanoseconds = smoke_ticks.fetchAdd(1, .monotonic) };
-    return std.Io.Clock.awake.now(io);
 }

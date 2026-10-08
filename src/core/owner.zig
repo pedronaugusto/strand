@@ -2,6 +2,7 @@
 const std = @import("std");
 const context = @import("context.zig");
 const descriptor = @import("descriptor.zig");
+const mapping = @import("decode.zig");
 
 pub fn Parsed(comptime T: type) type {
     return struct {
@@ -10,6 +11,7 @@ pub fn Parsed(comptime T: type) type {
         state: ?std.heap.ArenaAllocator.State,
         requested_peak: usize,
         retained_bytes: usize,
+        allocator_resident_bytes: usize,
         const Self = @This();
         pub fn isLive(self: *const Self) bool {
             return self.state != null;
@@ -48,7 +50,7 @@ pub fn acquire(comptime T: type, comptime ownership: context.Ownership, gpa: std
     const value = decode(&c, bytes) catch |err| return if (backing.limited) error.AllocationLimit else err;
     // Only the linked arena state survives. No pointer into stack-local backing
     // or arena/context survives publication; deinit promotes with the original gpa.
-    return .{ .value = value, .gpa = gpa, .state = arena.state, .requested_peak = backing.peak, .retained_bytes = backing.live };
+    return .{ .value = value, .gpa = gpa, .state = arena.state, .requested_peak = c.allocation_requested, .retained_bytes = c.allocation_requested, .allocator_resident_bytes = backing.live };
 }
 
 fn CallbackError(comptime decode: anytype) type {
@@ -56,4 +58,36 @@ fn CallbackError(comptime decode: anytype) type {
     const errors = @typeInfo(result).error_union.error_set;
     if (@typeInfo(errors).error_set.error_names == null) @compileError("acquisition callbacks require a named error set");
     return errors;
+}
+
+/// Caller-arena acquisition has no individual owner. Requests are charged per
+/// operation; failed scratch/result allocations remain until the caller resets.
+pub fn acquireLeaky(comptime T: type, arena: std.mem.Allocator, bytes: []const u8, limits: context.Limits, comptime decode: anytype) (context.DecodeError || CallbackError(decode))!T {
+    comptime descriptor.check(T, .{}, true, .borrowed);
+    if (bytes.len > limits.input_bytes) return error.InputLimit;
+    var c: context.Context = .init(arena, limits, .borrowed);
+    return decode(&c, bytes);
+}
+/// A checked deep copy into a new owner. Cycles are bounded by the depth limit;
+/// resources are excluded even when their serialization has an explicit codec.
+pub fn clone(gpa: std.mem.Allocator, value: anytype, limits: context.Limits) context.DecodeError!Parsed(@TypeOf(value)) {
+    const T = @TypeOf(value);
+    comptime cloneCheck(T, &.{});
+    comptime descriptor.check(T, .{}, true, .owned);
+    var backing: context.Backing = .{ .gpa = gpa, .limit = limits.allocation_bytes };
+    var arena: std.heap.ArenaAllocator = .init(backing.allocator());
+    errdefer arena.deinit();
+    var c: context.Context = .init(arena.allocator(), limits, .owned);
+    const copied = mapping.clone(T, value, &c) catch |err| return if (backing.limited) error.AllocationLimit else err;
+    return .{ .value = copied, .gpa = gpa, .state = arena.state, .requested_peak = c.allocation_requested, .retained_bytes = c.allocation_requested, .allocator_resident_bytes = backing.live };
+}
+fn cloneCheck(comptime T: type, comptime seen: []const type) void {
+    for (seen) |prior| if (T == prior) return;
+    const next = seen ++ .{T};
+    if (T == std.mem.Allocator or T == std.Io or T == std.Io.File or T == std.Io.Mutex or descriptor.has(T, "deinit")) @compileError("checked clone excludes resources");
+    switch (@typeInfo(T)) {
+        inline .pointer, .optional, .array, .vector => |i| cloneCheck(i.child, next),
+        inline .@"struct", .@"union" => |i| for (i.field_types) |F| cloneCheck(F, next),
+        else => {},
+    }
 }

@@ -515,3 +515,32 @@ fn pairsSweep(gpa: std.mem.Allocator) !void {
 test "S1 generic map backing and retained spans fault sweep" {
     try std.testing.checkAllAllocationFailures(std.testing.allocator, pairsSweep, .{});
 }
+
+fn cloneSweep(gpa: std.mem.Allocator) !void {
+    var bytes = [_]u8{ 'o', 'k' };
+    const value: struct { text: []const u8, sentinel: [2:0]u8, lanes: @Vector(2, u8) } = .{ .text = &bytes, .sentinel = .{ 1, 2 }, .lanes = .{ 3, 4 } };
+    var result = try core.clone(gpa, value, .{});
+    defer result.deinit();
+    bytes[0] = 'x';
+    try std.testing.expectEqualStrings("ok", result.value.text);
+    try std.testing.expectEqual(@as(u8, 0), result.value.sentinel[2]);
+    try std.testing.expectEqual(@as(u8, 4), result.value.lanes[1]);
+    try std.testing.expect(result.allocator_resident_bytes >= result.retained_bytes);
+}
+test "S1 checked clone separates input lifetime preserves fixed shape and rolls back" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, cloneSweep, .{});
+    try std.testing.expectError(error.AllocationLimit, core.clone(std.testing.allocator, @as([]const u8, "too long"), .{ .allocation_bytes = 1 }));
+    try std.testing.expectError(error.LengthLimit, core.clone(std.testing.allocator, @as([]const u8, "too long"), .{ .string_bytes = 1 }));
+}
+fn leakySweep(gpa: std.mem.Allocator) !void {
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    const value = try core.acquireLeaky(FactoryRecord, arena.allocator(), &.{ 6, 0, 0 }, .{}, factoryDecode);
+    try std.testing.expectEqualStrings("ok", value.payload);
+}
+test "S1 caller arena accounting failures publish no result and reset cleans retained requests" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, leakySweep, .{});
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    try std.testing.expectError(error.AllocationLimit, core.acquireLeaky(FactoryRecord, arena.allocator(), &.{ 6, 0, 0 }, .{ .allocation_bytes = 1 }, factoryDecode));
+}

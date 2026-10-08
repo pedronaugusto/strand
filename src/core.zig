@@ -20,3 +20,5 @@ pub const serialize = @import("core/encode.zig").serialize;
 pub const Raw = @import("core/model.zig").Raw;
 pub const Scalar = @import("core/model.zig").Scalar;
 pub const Pairs = @import("core/model.zig").Pairs;
+pub const acquireLeaky = @import("core/owner.zig").acquireLeaky;
+pub const clone = @import("core/owner.zig").clone;

@@ -448,7 +448,7 @@ pub fn Cursor(comptime Backend: type) type {
                         @field(value, name) = try declared.default(self.context);
                     } else {
                         const default_value = (comptime descriptor.default(T, name)) orelse return error.MissingField;
-                        @field(value, name) = try clone(F, default_value, self.context);
+                        @field(value, name) = try cloneField(F, comptime descriptor.field(T, name), default_value, self.context);
                     }
                     try descriptor.validate(T, name, @field(value, name));
                 }
@@ -578,10 +578,14 @@ pub fn Access(comptime Backend: type) type {
 
 /// Checked copying for defaults; result storage belongs to the same arena.
 pub fn clone(comptime T: type, value: T, c: *ctx.Context) ctx.DecodeError!T {
+    return cloneField(T, .{}, value, c);
+}
+fn cloneField(comptime T: type, comptime policy: descriptor.Field, value: T, c: *ctx.Context) ctx.DecodeError!T {
     @setRuntimeSafety(true);
     try c.enter();
     defer c.leave();
     try c.chargeWork(1);
+    try c.node();
     switch (@typeInfo(T)) {
         .pointer => |i| switch (i.size) {
             .one => {
@@ -590,7 +594,13 @@ pub fn clone(comptime T: type, value: T, c: *ctx.Context) ctx.DecodeError!T {
                 return result;
             },
             .slice => {
+                if (value.len > policy.max_len) return error.LengthLimit;
                 try c.count(value.len);
+                if (i.child == u8) {
+                    try c.span(value.len, false);
+                    try c.chargeWork(value.len);
+                    if (policy.as != .bytes and !std.unicode.utf8ValidateSlice(value)) return error.InvalidUtf8;
+                }
                 const result = try c.allocPointer(T, value.len);
                 for (result, value) |*to, from| to.* = try clone(i.child, from, c);
                 return result;
@@ -601,11 +611,17 @@ pub fn clone(comptime T: type, value: T, c: *ctx.Context) ctx.DecodeError!T {
         .@"struct" => |i| {
             var result = value;
             inline for (i.field_names, i.field_types, i.field_attrs) |name, F, attrs| if (!attrs.@"comptime") {
-                @field(result, name) = try clone(F, @field(value, name), c);
+                @field(result, name) = try cloneField(F, comptime descriptor.field(T, name), @field(value, name), c);
+                try descriptor.validate(T, name, @field(result, name));
             };
             return result;
         },
-        inline .array, .vector => |i| {
+        .array => |i| {
+            var result = value;
+            for (&result) |*v| v.* = try clone(i.child, v.*, c);
+            return result;
+        },
+        .vector => |i| {
             var result: [i.len]i.child = value;
             for (&result) |*v| v.* = try clone(i.child, v.*, c);
             return result;

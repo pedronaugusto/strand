@@ -3,6 +3,7 @@ const std = @import("std");
 const strand = @import("strand");
 const previous = @import("previous-main");
 const shakedown = @import("shakedown");
+const paired = @import("paired.zig");
 const Event = struct { id: u64, label: []const u8, data: strand.Raw };
 const prefix = "{\"id\":18446744073709551615,\"label\":\"";
 const suffix = "\",\"data\":[1,true]}";
@@ -140,6 +141,6 @@ pub fn main(init: std.process.Init) !void {
         .{ .name = "legacy.routing.header.512", .unit = "record", .initial = 1024, .run = route },
     };
     var output = std.Io.File.stdout().writerStreaming(init.io, &.{});
-    try shakedown.bench.run(init.gpa, init.io, &output.interface, &c, &rows, .{ .commit = if (args.len > 1) args[1] else "working-tree" }, .{ .samples = 31, .minimum = .fromMilliseconds(100), .smoke = args.len > 1 and std.mem.eql(u8, args[1], "--smoke") });
+    try paired.run(init.gpa, init.io, &output.interface, &c, &rows, .{ .commit = if (args.len > 1) args[1] else "working-tree" }, .{ .samples = 31, .minimum = .fromMilliseconds(100), .smoke = args.len > 1 and std.mem.eql(u8, args[1], "--smoke") });
     try output.interface.flush();
 }

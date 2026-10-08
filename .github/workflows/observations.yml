@@ -29,44 +29,44 @@ jobs:
       - uses: ./.preflight/.github/actions/setup
       - name: Compile paired manual observations without timing
         run: zig build baseline-build core-bench-build -Dbaseline-source=.zig-cache/previous-main/src/strand.zig
-      - name: Record compiler and provenance
+      - name: Record compiler and provenance in the CI run
         run: |
-          mkdir -p observation
-          zig env > observation/compiler.json
-          uname -a > observation/kernel.txt
-          git rev-parse HEAD > observation/candidate.txt
-          git -C .zig-cache/previous-main rev-parse HEAD > observation/previous-main.txt
+          mkdir -p "$RUNNER_TEMP/strand-observation"
+          zig env
+          uname -a
+          git rev-parse HEAD
+          git -C .zig-cache/previous-main rev-parse HEAD
       - name: Linux CPU and memory
         if: runner.os == 'Linux'
         run: |
-          lscpu > observation/cpu.txt
-          free -b > observation/memory.txt
+          lscpu
+          free -b
       - name: Windows CPU and memory
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          Get-CimInstance Win32_Processor | Format-List * | Out-File observation/cpu.txt
-          Get-CimInstance Win32_OperatingSystem | Select-Object TotalVisibleMemorySize,FreePhysicalMemory,Version | Out-File observation/memory.txt
+          Get-CimInstance Win32_Processor | Select-Object Name,NumberOfCores,NumberOfLogicalProcessors,MaxClockSpeed
+          Get-CimInstance Win32_OperatingSystem | Select-Object TotalVisibleMemorySize,FreePhysicalMemory,Version
       - name: macOS CPU and memory
         if: runner.os == 'macOS'
-        run: sysctl hw machdep.cpu > observation/cpu.txt
+        run: sysctl hw machdep.cpu
       - name: Explicit manual paired Linux timings
         if: runner.os == 'Linux'
         run: |
-          taskset -c 0 ./zig-out/bin/strand-baseline "$GITHUB_SHA" > observation/baseline.jsonl
-          taskset -c 0 ./zig-out/bin/strand-core-bench "$GITHUB_SHA" > observation/core.jsonl
+          taskset -c 0 ./zig-out/bin/strand-baseline "$GITHUB_SHA" > "$RUNNER_TEMP/strand-observation/baseline.jsonl"
+          taskset -c 0 ./zig-out/bin/strand-core-bench "$GITHUB_SHA" > "$RUNNER_TEMP/strand-observation/core.jsonl"
       - name: Explicit manual paired Windows timings
         if: runner.os == 'Windows'
         run: |
-          ./zig-out/bin/strand-baseline.exe "$GITHUB_SHA" > observation/baseline.jsonl
-          ./zig-out/bin/strand-core-bench.exe "$GITHUB_SHA" > observation/core.jsonl
+          ./zig-out/bin/strand-baseline.exe "$GITHUB_SHA" > "$RUNNER_TEMP/strand-observation/baseline.jsonl"
+          ./zig-out/bin/strand-core-bench.exe "$GITHUB_SHA" > "$RUNNER_TEMP/strand-observation/core.jsonl"
       - name: Explicit manual paired macOS timings
         if: runner.os == 'macOS'
         run: |
-          ./zig-out/bin/strand-baseline "$GITHUB_SHA" > observation/baseline.jsonl
-          ./zig-out/bin/strand-core-bench "$GITHUB_SHA" > observation/core.jsonl
+          ./zig-out/bin/strand-baseline "$GITHUB_SHA" > "$RUNNER_TEMP/strand-observation/baseline.jsonl"
+          ./zig-out/bin/strand-core-bench "$GITHUB_SHA" > "$RUNNER_TEMP/strand-observation/core.jsonl"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: strand-indicative-${{ runner.os }}
-          path: observation
+          path: ${{ runner.temp }}/strand-observation/*.jsonl

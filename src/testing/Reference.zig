@@ -50,6 +50,8 @@ pub fn next(self: *Self, c: *core.Context, _: core.Request) core.DecodeError!cor
             if (ordinal > @backingInt(core.Kind.named_unit)) return error.SyntaxError;
             const kind: core.Kind = @fromBackingInt(@intCast(ordinal)); // safe: ordinal checked against the exhaustive contiguous Kind tags.
             const len = (try self.read(c, 1))[0];
+            if ((kind == .some or kind == .newtype or kind == .variant) and len != 1) return error.SyntaxError;
+            if (kind == .named_unit and len != 0) return error.SyntaxError;
             const name_len = (try self.read(c, 1))[0];
             break :blk .{ .begin = .{ .kind = kind, .name = try self.read(c, name_len), .len = len } };
         },

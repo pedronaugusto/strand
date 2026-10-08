@@ -777,3 +777,13 @@ test "S1 format exclusions also apply to skipped nonfinite and indefinite wire v
     c = .init(std.testing.failing_allocator, .{}, .borrowed);
     try std.testing.expectError(error.UnsupportedValue, core.deserialize(struct {}, &backend, &c));
 }
+
+test "S1 Raw validation refuses impossible nominal compound arity" {
+    var memory: [64]u8 = undefined;
+    var out: Reference.Encoder = .{ .buffer = &memory };
+    var c: core.Context = .init(std.testing.failing_allocator, .{}, .borrowed);
+    const raw: core.Raw(Reference.Format) = .{ .bytes = &.{ 16, @backingInt(core.Kind.some), 0, 0, 0 } };
+    try std.testing.expectError(error.InvalidRaw, core.serialize(raw, &out, &c));
+    c = .init(std.testing.failing_allocator, .{}, .borrowed);
+    try std.testing.expectError(error.SyntaxError, decoded(core.Raw(Reference.Format), &c, raw.bytes));
+}

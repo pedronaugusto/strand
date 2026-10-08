@@ -3,6 +3,7 @@ const std = @import("std");
 const core = proof.core;
 const proof = @import("proof");
 const shakedown = @import("shakedown");
+const paired = @import("paired.zig");
 const Record = struct { id: u8, label: []const u8 };
 const Context = struct { value: Record = .{ .id = 42, .label = "plain" }, memory: [128]u8 = undefined };
 fn key(out: *proof.Reference.Encoder, c: *core.Context, name: []const u8) core.EncodeError!void {
@@ -71,6 +72,6 @@ pub fn main(init: std.process.Init) !void {
         .{ .name = "reference.core.b", .unit = "record", .initial = 1024, .run = coreRow },
     };
     var output = std.Io.File.stdout().writerStreaming(init.io, &.{});
-    try shakedown.bench.run(init.gpa, init.io, &output.interface, &context, &rows, .{ .commit = if (args.len > 1) args[1] else "working-tree" }, .{ .samples = 7, .minimum = .fromMilliseconds(100) });
+    try paired.run(init.gpa, init.io, &output.interface, &context, &rows, .{ .commit = if (args.len > 1) args[1] else "working-tree" }, .{ .samples = 7, .minimum = .fromMilliseconds(100) });
     try output.interface.flush();
 }

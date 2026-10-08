@@ -268,7 +268,11 @@ fn checkOptions(comptime T: type, comptime ownership: context.Ownership, comptim
             if (@typeInfo(T) == .@"union") for (i.field_types, i.field_names) |F, name| {
                 if (@hasField(@TypeOf(opt), "tag") and !@hasField(@TypeOf(opt), "content") and F != void) {
                     if (@typeInfo(F) != .@"struct" or @typeInfo(F).@"struct".is_tuple) @compileError("internal tag requires record or void payload");
-                    for (@typeInfo(F).@"struct".field_names) |payload_name| if (std.mem.eql(u8, field(F, payload_name).name, opt.tag)) @compileError("tag collides with payload field");
+                    for (@typeInfo(F).@"struct".field_names) |payload_name| {
+                        const f = field(F, payload_name);
+                        if (std.mem.eql(u8, f.name, opt.tag)) @compileError("tag collides with payload field");
+                        for (f.aliases) |alias| if (std.mem.eql(u8, alias, opt.tag)) @compileError("tag collides with payload alias");
+                    }
                 }
                 if (@hasField(@TypeOf(opt), "other") and std.mem.eql(u8, name, opt.other) and F != void and !has(F, "strandRawFormat")) @compileError("other payload requires void or format branded Raw");
                 checkOptions(F, ownership, next);

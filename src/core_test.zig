@@ -850,3 +850,11 @@ test "S1 recursive hook delegation reaches depth limit before work exhaustion" {
     try std.testing.expectEqual(@as(usize, 0), c.hook_depth);
     try std.testing.expectEqual(@as(usize, 0), out.used);
 }
+
+test "S1 checked clone preserves binary Raw instead of treating it as text" {
+    var wire = [_]u8{ 4, 1, 0xff };
+    var cloned = try core.clone(std.testing.allocator, core.Raw(Reference.Format){ .bytes = &wire }, .{});
+    defer cloned.deinit();
+    wire[2] = 0;
+    try std.testing.expectEqualSlices(u8, &.{ 4, 1, 0xff }, cloned.value.bytes);
+}

@@ -34,6 +34,7 @@ pub fn Raw(comptime Format: type) type {
         bytes: []const u8,
         const Self = @This();
         pub const strandRawFormat = Format;
+        pub const strand = .{ .fields = .{ .bytes = .{ .as = .bytes } } };
         pub fn strandDeserialize(access: anytype) @TypeOf(access.*).Error!Self {
             return .{ .bytes = try access.raw(Format) };
         }

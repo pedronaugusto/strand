@@ -34,10 +34,7 @@ fn emit(comptime policy: descriptor.Field, value: anytype, out: anytype, c: *ctx
                 try out.text(name, c);
             },
         },
-        .optional => if (value) |v| {
-            c.items -= 1;
-            try emit(policy, v, out, c, active);
-        } else try out.nullValue(c),
+        .optional => return emitOptional(T, policy, value, out, c, active),
         .pointer => |i| switch (i.size) {
             .one => {
                 var ancestor = active;
@@ -351,4 +348,18 @@ fn emitField(comptime T: type, comptime name: []const u8, value: T, out: anytype
         try declared.codec.encode(@field(value, name), &access);
         if (!access.used) return error.CustomRejected;
     } else try emit(comptime descriptor.field(T, name), @field(value, name), out, c, active);
+}
+
+fn emitOptional(comptime T: type, comptime policy: descriptor.Field, value: T, out: anytype, c: *ctx.Context, active: ?*const Active) Errors(T, @TypeOf(out.*))!void {
+    if (value) |v| {
+        if (@TypeOf(out.*).capabilities.nested_optional) {
+            try begin(out, c, .some, "", 1);
+            defer c.leave();
+            try emit(policy, v, out, c, active);
+            try out.end(c);
+        } else {
+            c.items -= 1;
+            try emit(policy, v, out, c, active);
+        }
+    } else try out.nullValue(c);
 }

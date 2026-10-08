@@ -167,6 +167,15 @@ pub fn Cursor(comptime Backend: type) type {
                         _ = try self.take();
                         return null;
                     }
+                    const event = try self.peek();
+                    if (event == .begin and event.begin.kind == .some) {
+                        const header = try self.start(.some);
+                        defer self.context.leave();
+                        if (header.len) |n| if (n != 1) return error.SyntaxError;
+                        const value: T = try self.read(i.child, policy);
+                        try self.end();
+                        return value;
+                    }
                     // Optional presence is a type hint, not an extra wire node.
                     if (!self.context.replaying) self.context.items -= 1;
                     return try self.read(i.child, policy);

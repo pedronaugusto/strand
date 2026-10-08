@@ -5,7 +5,7 @@ const core = @import("../core.zig");
 const core_decode = @import("../core/decode.zig");
 pub const Format = enum { reference };
 pub const Error = error{SyntaxError};
-pub const capabilities: core.Capabilities = .{};
+pub const capabilities: core.Capabilities = .{ .nested_optional = true };
 input: []const u8,
 position: usize = 0,
 end_position: ?usize = null,
@@ -99,7 +99,7 @@ pub const Encoder = struct {
         backend.endInput(c) catch return error.InvalidRaw;
     }
     pub const Error = core.EncodeError;
-    pub const capabilities: core.Capabilities = .{};
+    pub const capabilities: core.Capabilities = .{ .nested_optional = true };
     fn write(self: *Encoder, c: *core.Context, payload: []const u8) core.EncodeError!void {
         @setRuntimeSafety(true);
         try c.output(payload.len);

@@ -41,7 +41,7 @@ pub fn Parsed(comptime T: type) type {
 /// or result owner escapes. Caller-arena decoders have their own leaky contract.
 pub fn acquire(comptime T: type, comptime ownership: context.Ownership, gpa: std.mem.Allocator, bytes: []const u8, limits: context.Limits, comptime decode: anytype) (context.DecodeError || CallbackError(decode))!Parsed(T) {
     @setRuntimeSafety(true);
-    comptime descriptor.check(T, .{}, true, ownership);
+    comptime descriptor.check(T, descriptor.schema_capabilities, true, ownership);
     if (bytes.len > limits.input_bytes) return error.InputLimit;
     var backing: context.Backing = .{ .gpa = gpa, .limit = limits.allocation_bytes };
     var arena: std.heap.ArenaAllocator = .init(backing.allocator());
@@ -63,7 +63,7 @@ fn CallbackError(comptime decode: anytype) type {
 /// Caller-arena acquisition has no individual owner. Requests are charged per
 /// operation; failed scratch/result allocations remain until the caller resets.
 pub fn acquireLeaky(comptime T: type, arena: std.mem.Allocator, bytes: []const u8, limits: context.Limits, comptime decode: anytype) (context.DecodeError || CallbackError(decode))!T {
-    comptime descriptor.check(T, .{}, true, .borrowed);
+    comptime descriptor.check(T, descriptor.schema_capabilities, true, .borrowed);
     if (bytes.len > limits.input_bytes) return error.InputLimit;
     var c: context.Context = .init(arena, limits, .borrowed);
     return decode(&c, bytes);
@@ -73,7 +73,7 @@ pub fn acquireLeaky(comptime T: type, arena: std.mem.Allocator, bytes: []const u
 pub fn clone(gpa: std.mem.Allocator, value: anytype, limits: context.Limits) context.DecodeError!Parsed(@TypeOf(value)) {
     const T = @TypeOf(value);
     comptime cloneCheck(T, &.{});
-    comptime descriptor.check(T, .{}, true, .owned);
+    comptime descriptor.check(T, descriptor.schema_capabilities, true, .owned);
     var backing: context.Backing = .{ .gpa = gpa, .limit = limits.allocation_bytes };
     var arena: std.heap.ArenaAllocator = .init(backing.allocator());
     errdefer arena.deinit();

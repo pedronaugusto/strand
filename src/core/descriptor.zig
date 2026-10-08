@@ -17,6 +17,7 @@ pub const Capabilities = struct {
     max_integer_bits: usize = 128,
     max_float_bits: usize = 128,
 };
+pub const schema_capabilities: Capabilities = .{ .nested_optional = true, .max_integer_bits = std.math.maxInt(usize), .max_float_bits = std.math.maxInt(usize) };
 pub const Description = struct {
     support: Support = .supported,
     encode: bool = true,
@@ -108,6 +109,7 @@ fn inspect(comptime T: type, comptime fmt: Capabilities, comptime seen: []const 
             if (!std.mem.eql(u8, option, "fields") and !std.mem.eql(u8, option, "unknown_fields") and !std.mem.eql(u8, option, "duplicates") and !std.mem.eql(u8, option, "rename_all") and !std.mem.eql(u8, option, "variants") and !std.mem.eql(u8, option, "tag") and !std.mem.eql(u8, option, "content") and !std.mem.eql(u8, option, "other")) return rejected(path, "container option is not implemented by this S1 candidate");
         }
         if (@hasField(@TypeOf(opt), "fields")) {
+            if (@typeInfo(T) != .@"struct") return rejected(path, "fields policy requires a record or tuple");
             for (@typeInfo(@TypeOf(opt.fields)).@"struct".field_names) |name| {
                 if (!@hasField(T, name)) return rejected(path ++ "." ++ name, "option names no field");
                 const f = @field(opt.fields, name);
@@ -124,6 +126,7 @@ fn inspect(comptime T: type, comptime fmt: Capabilities, comptime seen: []const 
         if (fmt.map_keys == .text_only and !(@typeInfo(K) == .pointer and @typeInfo(K).pointer.size == .slice and @typeInfo(K).pointer.child == u8)) return rejected(path, "format requires text map keys");
         if (fmt.map_keys == .scalar and (@typeInfo(K) == .@"struct" or @typeInfo(K) == .@"union" or @typeInfo(K) == .array or @typeInfo(K) == .vector)) return rejected(path, "format requires scalar map keys");
     }
+    if ((has(T, "strandSerialize") or has(T, "strandDeserialize")) and containsResource(T, &.{})) return rejected(path, "data codec result cannot retain a resource");
     if (has(T, "strandSerialize") or has(T, "strandDeserialize")) return .{ .support = .conditional, .encode = has(T, "strandSerialize"), .decode = has(T, "strandDeserialize"), .path = path, .reason = "explicit data codec" };
     if (has(T, "deinit")) return rejected(path, "resource owner requires an explicit data codec");
     return switch (@typeInfo(T)) {
@@ -133,14 +136,17 @@ fn inspect(comptime T: type, comptime fmt: Capabilities, comptime seen: []const 
         .float => |i| if (i.bits > fmt.max_float_bits) .{ .support = .conditional, .path = path, .reason = "format float fidelity" } else .{},
         .@"enum" => |i| if (i.mode == .exhaustive) .{} else rejected(path, "nonexhaustive enum requires a numeric codec"),
         .optional => |i| if (!fmt.null_value or (@typeInfo(i.child) == .optional and !fmt.nested_optional)) rejected(path, "optional shape needs an explicit codec") else inspect(i.child, fmt, next, path),
-        .pointer => |i| if ((i.size != .one and i.size != .slice) or i.attrs.@"volatile" or i.attrs.@"allowzero" or (i.attrs.@"addrspace" orelse .generic) != .generic) rejected(path, "pointer has no safe data meaning") else inspect(i.child, fmt, next, path),
-        .array => |i| inspect(i.child, fmt, next, path),
+        .pointer => |i| if ((i.size != .one and i.size != .slice) or i.attrs.@"volatile" or i.attrs.@"allowzero" or (i.attrs.@"addrspace" orelse .generic) != .generic) rejected(path, "pointer has no safe data meaning") else if (i.sentinel() != null and containsPointers(i.child, &.{})) rejected(path, "pointer-containing sentinel cannot change ownership") else inspect(i.child, fmt, next, path),
+        .array => |i| if (i.sentinel() != null and containsPointers(i.child, &.{})) rejected(path, "pointer-containing sentinel cannot change ownership") else inspect(i.child, fmt, next, path),
         .vector => |i| inspect(i.child, fmt, next, path),
         .@"struct" => |i| aggregate: {
             var result: Description = .{};
             for (i.field_names, i.field_types, i.field_attrs) |name, F, attrs| {
                 const f = field(T, name);
                 const declared = fieldOptions(T, name);
+                if (@hasField(@TypeOf(declared), "codec") and containsResource(F, &.{})) break :aggregate rejected(path ++ "." ++ name, "field codec result cannot retain a resource");
+                if (f.omit == .null_value and @typeInfo(F) != .optional) break :aggregate rejected(path ++ "." ++ name, "omit.null_value requires an optional");
+                if (f.omit == .default_value and default(T, name) == null) break :aggregate rejected(path ++ "." ++ name, "omit.default_value requires a literal default");
                 const child = if (@hasField(@TypeOf(declared), "codec")) Description{ .support = .conditional, .encode = @hasDecl(declared.codec, "encode"), .decode = @hasDecl(declared.codec, "decode"), .path = path ++ "." ++ name, .reason = "explicit field codec" } else inspect(F, fmt, next, path ++ "." ++ name);
                 if (child.support == .unsupported) break :aggregate child;
                 if (child.support == .conditional) result = merge(result, child);
@@ -155,8 +161,7 @@ fn inspect(comptime T: type, comptime fmt: Capabilities, comptime seen: []const 
             if (i.tag_type == null) break :aggregate rejected(path, "untagged union has no active member witness");
             var result: Description = .{};
             for (i.field_names, i.field_types) |name, F| {
-                const declared = fieldOptions(T, name);
-                const child = if (@hasField(@TypeOf(declared), "codec")) Description{ .support = .conditional, .encode = @hasDecl(declared.codec, "encode"), .decode = @hasDecl(declared.codec, "decode"), .path = path ++ "." ++ name, .reason = "explicit field codec" } else inspect(F, fmt, next, path ++ "." ++ name);
+                const child = inspect(F, fmt, next, path ++ "." ++ name);
                 if (child.support == .unsupported) break :aggregate child;
                 if (child.support == .conditional) result = merge(result, child);
             }
@@ -321,4 +326,18 @@ pub fn variant(comptime T: type, comptime name: []const u8) Field {
         if (@hasField(@TypeOf(v), "aliases")) result.aliases = v.aliases;
     }
     return result;
+}
+
+fn containsResource(comptime T: type, comptime seen: []const type) bool {
+    if (T == std.mem.Allocator or T == std.Io or T == std.Io.File or T == std.Io.Mutex) return true;
+    for (seen) |v| if (T == v) return false;
+    const next = seen ++ .{T};
+    return switch (@typeInfo(T)) {
+        inline .pointer, .optional, .array, .vector => |i| containsResource(i.child, next),
+        inline .@"struct", .@"union" => |i| blk: {
+            for (i.field_types) |F| if (containsResource(F, next)) break :blk true;
+            break :blk false;
+        },
+        else => false,
+    };
 }

@@ -615,3 +615,20 @@ test "S1 backend receives destination width and exactness before consuming a sca
     var c: core.Context = .init(std.testing.failing_allocator, .{}, .borrowed);
     try std.testing.expectEqual(@as(u9, 256), try core.deserialize(u9, &backend, &c));
 }
+
+test "S1 a capable semantic backend preserves none and present none separately" {
+    var memory: [128]u8 = undefined;
+    const values = [_]??u8{ null, @as(?u8, null), @as(?u8, 7) };
+    for (values, 0..) |value, index| {
+        var out: Reference.Encoder = .{ .buffer = &memory };
+        var c: core.Context = .init(std.testing.failing_allocator, .{}, .borrowed);
+        try core.serialize(value, &out, &c);
+        c = .init(std.testing.failing_allocator, .{}, .borrowed);
+        const result = try decoded(??u8, &c, memory[0..out.used]);
+        if (index == 0) try std.testing.expect(result == null) else {
+            try std.testing.expect(result != null);
+            try std.testing.expectEqual(value.?, result.?);
+        }
+    }
+    try std.testing.expectEqual(core.Support.unsupported, core.describe(??u8, .{}).support);
+}

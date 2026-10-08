@@ -505,6 +505,15 @@ pub fn Cursor(comptime Backend: type) type {
                     const declared = comptime descriptor.fieldOptions(T, name);
                     if (@hasField(@TypeOf(declared), "default") and @typeInfo(@TypeOf(declared.default)) == .@"fn") {
                         @field(value, name) = try declared.default(self.context);
+                        if (comptime @typeInfo(F) == .pointer) {
+                            const pointer = @typeInfo(F).pointer;
+                            if (comptime pointer.size == .slice and pointer.child == u8 and !@hasField(@TypeOf(declared), "codec")) {
+                                const bytes = @field(value, name);
+                                try self.context.span(bytes.len, false);
+                                try self.context.chargeWork(bytes.len);
+                                if ((comptime descriptor.field(T, name)).as != .bytes and !std.unicode.utf8ValidateSlice(bytes)) return error.InvalidUtf8;
+                            }
+                        }
                     } else {
                         const default_value = (comptime descriptor.default(T, name)) orelse return error.MissingField;
                         @field(value, name) = try cloneField(F, comptime descriptor.field(T, name), default_value, self.context);

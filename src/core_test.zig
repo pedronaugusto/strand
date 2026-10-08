@@ -996,3 +996,30 @@ test "S1 raw named and map visits preserve enclosing codec policy" {
     try core.serialize(struct { n: core.Newtype(f128, "n") }{ .n = .{ .value = 1.0000000000000001 } }, &out, &c);
     try expectOwnedError(ExactNamed, error.InexactNumber, memory[0..out.used]);
 }
+
+const InvalidTextFactory = struct {
+    payload: []const u8,
+    pub const strand = .{ .fields = .{ .payload = .{ .default = makeDefault } } };
+    pub fn makeDefault(c: *core.Context) core.DecodeError![]const u8 {
+        const bytes = try c.alloc(u8, 1);
+        bytes[0] = 0xff;
+        return bytes;
+    }
+};
+fn invalidTextFactorySweep(gpa: std.mem.Allocator) !void {
+    var no_resize: shakedown.alloc.NoResize = .init(gpa);
+    var result = core.acquire(InvalidTextFactory, .owned, no_resize.allocator(), &.{ 6, 0, 0 }, .{}, struct {
+        fn decode(c: *core.Context, wire: []const u8) core.DecodeError!InvalidTextFactory {
+            return decoded(InvalidTextFactory, c, wire);
+        }
+    }.decode) catch |err| {
+        if (err == error.InvalidUtf8) return;
+        return err;
+    };
+    defer result.deinit();
+    return error.TestUnexpectedResult;
+}
+test "S1 factory text validates before publication and rolls back every allocation" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, invalidTextFactorySweep, .{});
+    try std.testing.expectError(error.LengthLimit, core.acquire(FactoryRecord, .owned, std.testing.allocator, &.{ 6, 0, 0 }, .{ .string_bytes = 1 }, factoryDecode));
+}

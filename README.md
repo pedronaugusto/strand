@@ -1,15 +1,15 @@
 # strand
 
-The serialization framework is work in progress on this branch. The existing
-JSON Lines API is implemented and retains its current contracts. S1 adds a
-std-only `strand.core` module with recursive admission, immediate semantic
-mapping, finite resource accounting, borrowed/owned arena results and a small
-reference-backend proof suite. Its API remains provisional until every S1 gate
-passes. JSON/JSONL migration onto that core, ZON, CBOR, MessagePack and TOML are
-planned in their assigned later phases; these format modules are not implemented
-by this batch. Current S1 gaps and acceptance evidence are tracked in private
-trials, rather than claimed as completed framework support.
+strand's serialization framework is work in progress. The JSON Lines API below
+is implemented. The provisional std-only `strand.core` module adds type-declared
+field policy, semantic mapping, bounded allocation and traversal, and explicit
+borrowed or owned results. Its small reference backend exercises those contracts;
+it is a test format. See [the core design](docs/design.md) for supported types,
+ownership and backend obligations.
 
+JSON and JSONL migration onto this core, ZON, CBOR, MessagePack and TOML belong to
+later phases and are not implemented here. Existing JSON Lines users continue to
+use the API below.
 
 strand reads and writes typed JSON Lines in Zig. Records carry their line number and
 byte offset, and damaged lines can be refused or skipped while reading continues.

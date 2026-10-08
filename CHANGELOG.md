@@ -4,17 +4,16 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased — serialization core work in progress
-
-- Add the provisional std-only `strand.core` module, bounded context, recursive
-  type inspection, immediate semantic mapping and explicit arena result owner.
-- Add a reference backend and ownership, rollback, wire-limit and fixed-buffer
-  proofs. Keep existing JSON Lines entry points unchanged.
-- Add `zig build baseline-build` to compile the own-kernel manual timing driver;
-  ordinary CI compiles it without collecting timing acceptance samples.
-
-
 ## [Unreleased]
+
+### Core framework work in progress
+
+- Add the provisional std-only `strand.core` module with recursive descriptors,
+  type-declared options, immediate semantic mapping and bounded arena owners.
+- Add a small reference test backend, generic ordered maps, explicit standard
+  list codec, fixed-buffer paths, rollback and full wire-limit proofs.
+- Compile manual paired timing drivers in ordinary CI; timings run only through
+  an explicit manual workflow. Existing JSON Lines entry points are unchanged.
 
 ### Breaking
 

@@ -39,6 +39,33 @@ fn parseStd(c: *Context, units: u64) !void {
     }
     std.mem.doNotOptimizeAway(sum);
 }
+// This control uses one nominal schema in both own-main modules. Raw remains
+// separately measured above because its marker type belongs to each module.
+const SharedEvent = struct { id: u64, label: []const u8, data: [2]u8 };
+const shared_suffix = "\",\"data\":[1,2]}";
+const shared_input = prefix ++ @as([512 - prefix.len - shared_suffix.len]u8, @splat('a')) ++ shared_suffix;
+fn sharedCurrent(c: *Context, units: u64) !void {
+    try sharedParse(.current, c, units);
+}
+fn sharedPrevious(c: *Context, units: u64) !void {
+    try sharedParse(.previous, c, units);
+}
+fn sharedStd(c: *Context, units: u64) !void {
+    try sharedParse(.stdlib, c, units);
+}
+fn sharedParse(comptime which: enum { current, previous, stdlib }, c: *Context, units: u64) !void {
+    var sum: u64 = 0;
+    for (0..units) |_| {
+        _ = c.arena.reset(.retain_capacity);
+        const value = switch (which) {
+            .current => try strand.parseLine(SharedEvent, c.arena.allocator(), shared_input, .{}),
+            .previous => try previous.parseLine(SharedEvent, c.arena.allocator(), shared_input, .{}),
+            .stdlib => try std.json.parseFromSliceLeaky(SharedEvent, c.arena.allocator(), shared_input, .{}),
+        };
+        sum +%= value.id +% value.label.len +% value.data[0] +% value.data[1];
+    }
+    std.mem.doNotOptimizeAway(sum);
+}
 fn parseCopied(c: *Context, units: u64) !void {
     var sum: u64 = 0;
     for (0..units) |_| {
@@ -99,6 +126,12 @@ pub fn main(init: std.process.Init) !void {
         .{ .name = "paired.std.b", .unit = "record", .initial = 1024, .run = parseStd },
         .{ .name = "paired.previous.b", .unit = "record", .initial = 1024, .run = parsePrevious },
         .{ .name = "paired.current.b", .unit = "record", .initial = 1024, .run = parseBorrowed },
+        .{ .name = "shared.current.a", .unit = "record", .initial = 1024, .run = sharedCurrent },
+        .{ .name = "shared.previous.a", .unit = "record", .initial = 1024, .run = sharedPrevious },
+        .{ .name = "shared.std.a", .unit = "record", .initial = 1024, .run = sharedStd },
+        .{ .name = "shared.std.b", .unit = "record", .initial = 1024, .run = sharedStd },
+        .{ .name = "shared.previous.b", .unit = "record", .initial = 1024, .run = sharedPrevious },
+        .{ .name = "shared.current.b", .unit = "record", .initial = 1024, .run = sharedCurrent },
         .{ .name = "legacy.parse.borrowed.512", .unit = "record", .initial = 1024, .run = parseBorrowed },
         .{ .name = "legacy.parse.copied.arena.512", .unit = "record", .initial = 1024, .run = parseCopied },
         .{ .name = "legacy.copyOwned.free.512", .unit = "record", .initial = 1024, .run = owned },

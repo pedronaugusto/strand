@@ -15,19 +15,19 @@
         // Syncing a file and telling files apart. Pinned to a commit; the
         // hash is what the build checks.
         .airlock = .{
-            .url = "git+https://github.com/pedronaugusto/airlock#112a6a233aa98ac831aa8b702ba0607587f367f4",
-            .hash = "airlock-0.1.0-rfvu6CZTBQB7slH2y-nDXvVwoLp-sbWLW_E1X9J3DwhQ",
+            .url = "git+https://github.com/pedronaugusto/airlock#2353ec6a8ea4e44338a6e806da104d5200806055",
+            .hash = "airlock-0.1.0-rfvu6CNTBQBc6soo3YE3Gr5IYQeS-eycX_V7hfCWhJmX",
         },
         // Test doubles, for the tests alone: no module a consumer builds
         // imports it, and a consumer never fetches it.
         .shakedown = .{
-            .url = "git+https://github.com/pedronaugusto/shakedown#0ebf97bba845a93833f90be6befc49cdc51084f6",
+            .url = "git+https://github.com/pedronaugusto/shakedown#57d6b02e0b875babcc65a733534d9052029d5548",
             .hash = "shakedown-0.1.0-BR8U44noDwAh7rsnq3dpDnt3_qbAKeBA_S3UtjUwWU7-",
             .lazy = true,
         },
         .preflight = .{
-            .url = "git+https://github.com/pedronaugusto/preflight#b28046cc22055fcd32640117fc0e6965283a8ae5",
-            .hash = "preflight-0.1.0-LX1ZwjmEBwCer1MlXnpPw9a_ko-7gFW-k0n7uD_6jv-P",
+            .url = "git+https://github.com/pedronaugusto/preflight#f34ca9adc0fcdf593acb616d87dedd9ad994211b",
+            .hash = "preflight-0.1.0-LX1ZwhbQCAA3VfNh10B9lBxEWqsBPWF0868sFi2HtLwI",
             .lazy = true,
         },
     },

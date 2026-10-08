@@ -209,6 +209,14 @@ pub fn build(b: *std.Build) !void {
             }),
         });
         baseline.root_module.addImport("shakedown", dependency.module("shakedown"));
+        const baseline_source = b.option([]const u8, "baseline-source", "Manual observation only: previous main root source");
+        const bench_module = baseline.root_module.import_table.get("strand").?;
+        baseline.root_module.addImport("previous-main", if (baseline_source) |source| b.createModule(.{
+            .root_source_file = .{ .cwd_relative = source },
+            .target = target,
+            .optimize = .fast,
+            .imports = &.{.{ .name = "airlock", .module = bench_module.import_table.get("airlock").? }},
+        }) else bench_module);
         const proof_module = b.createModule(.{ .root_source_file = b.path("src/core_test.zig"), .target = target, .optimize = .fast, .imports = &.{.{ .name = "shakedown", .module = dependency.module("shakedown") }} });
         const core_bench = b.addExecutable(.{
             .name = "strand-core-bench",

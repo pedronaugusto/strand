@@ -830,3 +830,22 @@ test "S1 indefinite numeric sequence grows without resize and rolls back on limi
     inline for (.{ @as(usize, 0), @as(usize, 1), @as(usize, 4) }) |limit| try std.testing.expectError(error.ItemLimit, core.acquire(NumericSequence, .owned, std.testing.allocator, &indefinite_sequence, .{ .container_items = limit }, decodeSequence));
     try std.testing.expectError(error.AllocationLimit, core.acquire(NumericSequence, .owned, std.testing.allocator, &indefinite_sequence, .{ .allocation_bytes = 4 }, decodeSequence));
 }
+
+pub const DelegatingLoop = struct {
+    pub fn strandSerialize(self: DelegatingLoop, access: anytype) core.EncodeError!void {
+        try access.write(self);
+    }
+    pub fn strandDeserialize(access: anytype) core.DecodeError!DelegatingLoop {
+        return access.read(DelegatingLoop);
+    }
+};
+test "S1 recursive hook delegation reaches depth limit before work exhaustion" {
+    var memory: [64]u8 = undefined;
+    var out: Reference.Encoder = .{ .buffer = &memory };
+    var c: core.Context = .init(std.testing.failing_allocator, .{ .depth = 2, .work = 10 }, .borrowed);
+    try std.testing.expectError(error.DepthLimit, core.serialize(DelegatingLoop{}, &out, &c));
+    c = .init(std.testing.failing_allocator, .{ .depth = 2, .work = 10 }, .borrowed);
+    try std.testing.expectError(error.DepthLimit, decoded(DelegatingLoop, &c, ""));
+    try std.testing.expectEqual(@as(usize, 0), c.depth);
+    try std.testing.expectEqual(@as(usize, 0), out.used);
+}

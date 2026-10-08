@@ -103,22 +103,7 @@ fn inspect(comptime T: type, comptime fmt: Capabilities, comptime seen: []const 
     if (T == std.mem.Allocator or T == std.Io or T == std.Io.File or T == std.Io.Mutex or containsSecret(T, &.{})) return rejected(path, "resource or secret is not automatic data");
     for (seen) |v| if (T == v) return .{};
     const next = seen ++ .{T};
-    if (has(T, "strand")) {
-        const opt = options(T);
-        for (@typeInfo(@TypeOf(opt)).@"struct".field_names) |option| {
-            if (!std.mem.eql(u8, option, "fields") and !std.mem.eql(u8, option, "unknown_fields") and !std.mem.eql(u8, option, "duplicates") and !std.mem.eql(u8, option, "rename_all") and !std.mem.eql(u8, option, "variants") and !std.mem.eql(u8, option, "tag") and !std.mem.eql(u8, option, "content") and !std.mem.eql(u8, option, "other")) return rejected(path, "container option is not implemented by this S1 candidate");
-        }
-        if (@hasField(@TypeOf(opt), "fields")) {
-            if (@typeInfo(T) != .@"struct") return rejected(path, "fields policy requires a record or tuple");
-            for (@typeInfo(@TypeOf(opt.fields)).@"struct".field_names) |name| {
-                if (!@hasField(T, name)) return rejected(path ++ "." ++ name, "option names no field");
-                const f = @field(opt.fields, name);
-                for (@typeInfo(@TypeOf(f)).@"struct".field_names) |option| {
-                    if (!@hasField(Field, option) and !std.mem.eql(u8, option, "default") and !std.mem.eql(u8, option, "codec") and !std.mem.eql(u8, option, "validate") and !std.mem.eql(u8, option, "range") and !std.mem.eql(u8, option, "omit_if") and !std.mem.eql(u8, option, "equal")) return rejected(path ++ "." ++ name, "field option is not implemented by this S1 candidate");
-                }
-            }
-        }
-    }
+    if (policyProblem(T, path)) |problem| return problem;
     if (has(T, "strandScalar") and !fmt.unicode_scalar) return rejected(path, "format has no Unicode scalar codec");
     if (has(T, "strandNamedShape") and !fmt.named_shapes) return rejected(path, "format has no named shape codec");
     if (has(T, "strandKeyType")) {
@@ -170,6 +155,49 @@ fn inspect(comptime T: type, comptime fmt: Capabilities, comptime seen: []const 
         else => rejected(path, "type has no automatic data meaning"),
     };
 }
+fn policyProblem(comptime T: type, comptime path: []const u8) ?Description {
+    if (has(T, "strand")) {
+        const opt = options(T);
+        if (@typeInfo(@TypeOf(opt)) != .@"struct") return rejected(path, "strand policy must be a struct value");
+        for (@typeInfo(@TypeOf(opt)).@"struct".field_names) |option| {
+            if (!std.mem.eql(u8, option, "fields") and !std.mem.eql(u8, option, "unknown_fields") and !std.mem.eql(u8, option, "duplicates") and !std.mem.eql(u8, option, "rename_all") and !std.mem.eql(u8, option, "variants") and !std.mem.eql(u8, option, "tag") and !std.mem.eql(u8, option, "content") and !std.mem.eql(u8, option, "other")) return rejected(path, "container option is not implemented by this S1 candidate");
+        }
+        if (@hasField(@TypeOf(opt), "fields")) {
+            if (@typeInfo(T) != .@"struct") return rejected(path, "fields policy requires a record or tuple");
+            if (@typeInfo(@TypeOf(opt.fields)) != .@"struct") return rejected(path, "fields policy must be a struct value");
+            for (@typeInfo(@TypeOf(opt.fields)).@"struct".field_names) |name| {
+                if (!@hasField(T, name)) return rejected(path ++ "." ++ name, "option names no field");
+                const f = @field(opt.fields, name);
+                if (@typeInfo(@TypeOf(f)) != .@"struct") return rejected(path ++ "." ++ name, "field policy must be a struct value");
+                if (fieldIssue(@FieldType(T, name), f)) |why| return rejected(path ++ "." ++ name, why);
+                for (@typeInfo(@TypeOf(f)).@"struct".field_names) |option| {
+                    if (!@hasField(Field, option) and !std.mem.eql(u8, option, "default") and !std.mem.eql(u8, option, "codec") and !std.mem.eql(u8, option, "validate") and !std.mem.eql(u8, option, "range") and !std.mem.eql(u8, option, "omit_if") and !std.mem.eql(u8, option, "equal")) return rejected(path ++ "." ++ name, "field option is not implemented by this S1 candidate");
+                }
+            }
+        }
+    }
+    return null;
+}
+fn fieldIssue(comptime F: type, comptime opt: anytype) ?[]const u8 {
+    if (@hasField(@TypeOf(opt), "codec") and @TypeOf(opt.codec) != type) return "codec must be a type";
+    inline for (.{ "validate", "omit_if", "equal" }) |name| {
+        if (@hasField(@TypeOf(opt), name)) {
+            const info = @typeInfo(@TypeOf(@field(opt, name)));
+            if (info != .@"fn") return name ++ " must be a pure predicate";
+            const n = if (std.mem.eql(u8, name, "equal")) 2 else 1;
+            if (info.@"fn".param_types.len != n or info.@"fn".return_type != bool) return name ++ " must return bool with the declared arity";
+            for (info.@"fn".param_types) |P| if (P != F) return name ++ " must take the field type";
+        }
+    }
+    if (@hasField(@TypeOf(opt), "range")) {
+        if (@typeInfo(F) != .int and @typeInfo(F) != .float) return "range requires a numeric field";
+        if (@typeInfo(@TypeOf(opt.range)) != .@"struct") return "range requires min and max";
+        if (!@hasField(@TypeOf(opt.range), "min") or !@hasField(@TypeOf(opt.range), "max")) return "range requires min and max";
+        if (!(opt.range.min <= opt.range.max)) return "range bounds must be ordered";
+    }
+    return null;
+}
+
 fn containsPointers(comptime T: type, comptime seen: []const type) bool {
     for (seen) |v| if (T == v) return false;
     const next = seen ++ .{T};

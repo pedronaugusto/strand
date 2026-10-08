@@ -724,3 +724,56 @@ test "S1 float narrowing rejects overflow and exact fields reject rounding" {
     c = .init(std.testing.failing_allocator, .{}, .borrowed);
     try std.testing.expectError(error.NumberOutOfRange, decoded(u8, &c, &.{ 9, 1 }));
 }
+
+test "S1 malformed policy inspection reports exclusions without instantiating operations" {
+    const BadPolicy = struct {
+        pub const strand = true;
+    };
+    const BadCodec = struct {
+        x: u8,
+        pub const strand = .{ .fields = .{ .x = .{ .codec = 1 } } };
+    };
+    const BadRange = struct {
+        x: bool,
+        pub const strand = .{ .fields = .{ .x = .{ .range = .{ .min = 0, .max = 1 } } } };
+    };
+    const BadPredicate = struct {
+        x: u8,
+        pub const strand = .{ .fields = .{ .x = .{ .validate = invalid } } };
+        fn invalid(_: u8) u8 {
+            return 0;
+        }
+    };
+    inline for (.{ BadPolicy, BadCodec, BadRange, BadPredicate }) |T| try std.testing.expectEqual(core.Support.unsupported, core.describe(T, .{}).support);
+    try std.testing.expectEqualStrings(".x", core.describe(BadPredicate, .{}).path);
+}
+test "S1 format exclusions also apply to skipped nonfinite and indefinite wire values" {
+    const Restricted = struct {
+        source: Reference,
+        pub const capabilities: core.Capabilities = .{ .scalar_roots = false, .nonfinite_floats = false, .indefinite_containers = false };
+        pub const Error = Reference.Error;
+        const Self = @This();
+        pub fn next(self: *Self, c: *core.Context, request: core.Request) core.DecodeError!core.Event {
+            return self.source.next(c, request);
+        }
+        pub fn offset(self: *const Self) usize {
+            return self.source.offset();
+        }
+        pub fn endInput(self: *Self, c: *core.Context) Error!void {
+            return self.source.endInput(c);
+        }
+    };
+    var backend: Restricted = .{ .source = .{ .input = &.{ 2, 1 } } };
+    var c: core.Context = .init(std.testing.failing_allocator, .{}, .borrowed);
+    try std.testing.expectError(error.UnsupportedValue, core.deserialize(u8, &backend, &c));
+    backend = .{ .source = .{ .input = &.{ 6, 1, 3, 1, 'x', 10, 0, 0 } } };
+    c = .init(std.testing.failing_allocator, .{}, .borrowed);
+    try std.testing.expectError(error.UnsupportedValue, core.deserialize(struct {}, &backend, &c));
+    var memory: [64]u8 = undefined;
+    var out: Reference.Encoder = .{ .buffer = &memory };
+    c = .init(std.testing.failing_allocator, .{}, .borrowed);
+    try core.serialize(struct { x: f128 }{ .x = std.math.inf(f128) }, &out, &c);
+    backend = .{ .source = .{ .input = memory[0..out.used] } };
+    c = .init(std.testing.failing_allocator, .{}, .borrowed);
+    try std.testing.expectError(error.UnsupportedValue, core.deserialize(struct {}, &backend, &c));
+}

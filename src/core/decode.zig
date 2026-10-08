@@ -22,6 +22,7 @@ pub fn Cursor(comptime Backend: type) type {
         pending: ?model.Event = null,
         pending_start: usize = 0,
         request: model.Request = .{},
+        first_event: bool = true,
         const Self = @This();
         const Error = ctx.DecodeError || Backend.Error;
         fn peek(self: *Self) Error!model.Event {
@@ -32,6 +33,8 @@ pub fn Cursor(comptime Backend: type) type {
                     if (self.context.diagnostics) |d| d.offset = self.backend.offset();
                     return err;
                 };
+                if (self.first_event and self.context.depth == 0 and !Backend.capabilities.scalar_roots and self.pending.? != .begin) return error.UnsupportedValue;
+                self.first_event = false;
             }
             return self.pending.?;
         }

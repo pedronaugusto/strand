@@ -61,7 +61,9 @@ const kind = strand.kindOf("{\"kind\":\"open\",\"at\":1}");
 
 ## Design
 
-strand uses only `std`. Readers take an allocator for a reusable line buffer and
+The serialization core uses `std`. The JSON Lines API also has a runtime dependency
+on [airlock](https://github.com/pedronaugusto/airlock) for file durability and identity.
+Readers take an allocator for a reusable line buffer and
 per-record arena; unescaped strings can borrow from the input. A returned line and its
 value last until the next read or `deinit`. `keep` copies the value through `copyOwned`,
 preserving edits without parsing again; release the copy with `freeOwned` or its arena.
@@ -129,13 +131,13 @@ a file named by its volume and number, as `Follower` uses it to notice a rotatio
 
 ## Built with
 
-- [Zig](https://ziglang.org) 0.17.0 and its standard library; nothing is linked.
+- [Zig](https://ziglang.org) 0.17.0 and its standard library.
 - [airlock](https://github.com/pedronaugusto/airlock) syncs the file under a `Writer`
   and numbers files for a `Follower`.
 - [shakedown](https://github.com/pedronaugusto/shakedown) supplies the tests' doubles:
   faulted and counted `Io` calls and allocators, and airlock's syncs through
-  `airlock.testing`, its test seam. Only the tests import them, so a project
-  depending on strand never fetches them.
+  `airlock.testing`, its test seam. Shakedown is a test dependency; airlock is
+  also a runtime dependency of the JSON Lines API.
 - [preflight](https://github.com/pedronaugusto/preflight) runs the source checks,
   the tests and CI.
 

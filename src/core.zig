@@ -17,3 +17,4 @@ pub const Event = @import("core/model.zig").Event;
 pub const Kind = @import("core/model.zig").Kind;
 pub const Span = @import("core/model.zig").Span;
 pub const serialize = @import("core/encode.zig").serialize;
+pub const Raw = @import("core/model.zig").Raw;

@@ -58,7 +58,10 @@ pub const layers: []const gantry.rules.Layer = &.{
 
 pub const entries: []const []const u8 = &.{};
 
-pub const modules: []const gantry.NamedModule = &.{.{ .name = "strand.owned", .path = "src/owned.zig" }};
+pub const modules: []const gantry.NamedModule = &.{
+    .{ .name = "strand.owned", .path = "src/owned.zig" },
+    .{ .name = "strand.core", .path = "src/core.zig" },
+};
 pub const references: []const gantry.rules.ReferenceRule = &.{
     .{ .name = "named dependencies", .unresolved_only = true, .except_targets = &.{
         "airlock",

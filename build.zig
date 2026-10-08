@@ -23,7 +23,7 @@ pub fn build(b: *std.Build) !void {
     });
 
     // The core's build has no runtime import or link to durability or tooling.
-    _ = b.addModule("strand.core", .{
+    const core_module = b.addModule("strand.core", .{
         .root_source_file = b.path("src/core.zig"),
         .target = target,
         .optimize = optimize,
@@ -137,6 +137,30 @@ pub fn build(b: *std.Build) !void {
         }
     }
 
+    if (test_filter == null or std.mem.find(u8, "S1", test_filter.?) != null) {
+        const expected = [_][]const u8{
+            "error: : resource or secret is not automatic data", "error: wire alias collision at left",               "error: owned decoding conflicts with borrow.require at label",
+            "error: : explicit data codec",                      "error: : resource or secret is not automatic data", "error: : pointer has no safe data meaning",
+        };
+        for (expected, 0..) |message, case| {
+            const rejection_options = b.addOptions();
+            rejection_options.addOption(usize, "case", case);
+            const rejected = b.addObject(.{
+                .name = b.fmt("core-rejected-{d}", .{case}),
+                .root_module = b.createModule(.{
+                    .root_source_file = b.path("src/testing/core_rejected.zig"),
+                    .target = target,
+                    .optimize = optimize,
+                    .imports = &.{.{ .name = "strand.core", .module = core_module }},
+                }),
+            });
+            rejected.root_module.addOptions("rejection_options", rejection_options);
+            rejected.expect_errors = .{ .contains = message };
+            test_step.dependOn(&rejected.step);
+            check_step.dependOn(&rejected.step);
+        }
+    }
+
     //=====================================================================
     // Examples
     //
@@ -185,6 +209,21 @@ pub fn build(b: *std.Build) !void {
             }),
         });
         baseline.root_module.addImport("shakedown", dependency.module("shakedown"));
+        const proof_module = b.createModule(.{ .root_source_file = b.path("src/core_test.zig"), .target = target, .optimize = .fast, .imports = &.{.{ .name = "shakedown", .module = dependency.module("shakedown") }} });
+        const core_bench = b.addExecutable(.{
+            .name = "strand-core-bench",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("bench/core.zig"),
+                .target = target,
+                .optimize = .fast,
+                .imports = &.{
+                    .{ .name = "proof", .module = proof_module },
+                    .{ .name = "shakedown", .module = dependency.module("shakedown") },
+                },
+            }),
+        });
+        b.step("core-bench-build", "Compile paired manual reference observations").dependOn(&b.addInstallArtifact(core_bench, .{}).step);
+        check_step.dependOn(&core_bench.step);
         const install = b.addInstallArtifact(baseline, .{});
         b.step("baseline-build", "Compile the manual legacy timing driver").dependOn(&install.step);
         check_step.dependOn(&baseline.step);

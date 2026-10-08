@@ -37,7 +37,7 @@ pub fn Parsed(comptime T: type) type {
 
 /// The callback only receives budgeted context access. No raw backing allocator
 /// or result owner escapes. Caller-arena decoders have their own leaky contract.
-pub fn acquire(comptime T: type, comptime ownership: context.Ownership, comptime decode: fn (*context.Context, []const u8) context.DecodeError!T, gpa: std.mem.Allocator, bytes: []const u8, limits: context.Limits) context.DecodeError!Parsed(T) {
+pub fn acquire(comptime T: type, comptime ownership: context.Ownership, gpa: std.mem.Allocator, bytes: []const u8, limits: context.Limits, comptime decode: anytype) (context.DecodeError || CallbackError(decode))!Parsed(T) {
     @setRuntimeSafety(true);
     comptime descriptor.check(T, .{}, true, ownership);
     if (bytes.len > limits.input_bytes) return error.InputLimit;
@@ -49,4 +49,11 @@ pub fn acquire(comptime T: type, comptime ownership: context.Ownership, comptime
     // Only the linked arena state survives. No pointer into stack-local backing
     // or arena/context survives publication; deinit promotes with the original gpa.
     return .{ .value = value, .gpa = gpa, .state = arena.state, .requested_peak = backing.peak, .retained_bytes = backing.live };
+}
+
+fn CallbackError(comptime decode: anytype) type {
+    const result = @typeInfo(@TypeOf(decode)).@"fn".return_type.?;
+    const errors = @typeInfo(result).error_union.error_set;
+    if (@typeInfo(errors).error_set.error_names == null) @compileError("acquisition callbacks require a named error set");
+    return errors;
 }

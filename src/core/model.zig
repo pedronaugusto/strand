@@ -17,3 +17,18 @@ pub const Event = union(enum) {
     begin: Compound,
     end,
 };
+
+/// Format-branded raw input. Strict acquisition validates the entire value;
+/// emission validates again and refuses an unnormalized canonical raw value.
+pub fn Raw(comptime Format: type) type {
+    return struct {
+        bytes: []const u8,
+        const Self = @This();
+        pub fn strandDeserialize(access: anytype) context.DecodeError!Self {
+            return .{ .bytes = try access.raw(Format) };
+        }
+        pub fn strandSerialize(self: Self, access: anytype) context.EncodeError!void {
+            try access.raw(Format, self.bytes);
+        }
+    };
+}

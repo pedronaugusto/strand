@@ -4,12 +4,12 @@ const descriptor = @import("descriptor.zig");
 const ctx = @import("context.zig");
 const model = @import("model.zig");
 
-pub fn serialize(value: anytype, serializer: anytype, c: *ctx.Context) (ctx.EncodeError || @TypeOf(serializer.*).Error)!void {
+pub fn serialize(value: anytype, serializer: anytype, c: *ctx.Context) Errors(@TypeOf(value), @TypeOf(serializer.*))!void {
     comptime descriptor.check(@TypeOf(value), @TypeOf(serializer.*).capabilities, false, .borrowed);
     try emit(.{}, value, serializer, c, null);
 }
 const Active = struct { address: usize, previous: ?*const Active };
-fn emit(comptime policy: descriptor.Field, value: anytype, out: anytype, c: *ctx.Context, active: ?*const Active) (ctx.EncodeError || @TypeOf(out.*).Error)!void {
+fn emit(comptime policy: descriptor.Field, value: anytype, out: anytype, c: *ctx.Context, active: ?*const Active) Errors(@TypeOf(value), @TypeOf(out.*))!void {
     @setRuntimeSafety(true);
     const T = @TypeOf(value);
     try c.node();
@@ -64,6 +64,17 @@ fn emit(comptime policy: descriptor.Field, value: anytype, out: anytype, c: *ctx
         },
         inline .array, .vector => |i| {
             const values: [i.len]i.child = value;
+            if (policy.as != .normal) {
+                if (i.child != u8) @compileError("text/bytes array codec requires u8 elements");
+                if (i.len > policy.max_len) return error.LengthLimit;
+                try c.span(i.len, false);
+                try c.chargeWork(i.len);
+                if (policy.as == .bytes) try out.bytes(&values, c) else {
+                    if (!std.unicode.utf8ValidateSlice(&values)) return error.InvalidUtf8;
+                    try out.text(&values, c);
+                }
+                return;
+            }
             try begin(out, c, .tuple, "", i.len);
             defer c.leave();
             for (values) |v| try emit(.{}, v, out, c, active);
@@ -128,12 +139,46 @@ pub fn Access(comptime Backend: type) type {
         context: *ctx.Context,
         active: ?*const Active,
         used: bool = false,
+        pub const Error = ctx.EncodeError || Backend.Error;
         const Self = @This();
-        pub fn write(self: *Self, value: anytype) (ctx.EncodeError || Backend.Error)!void {
+        pub fn raw(self: *Self, comptime Format: type, bytes: []const u8) (ctx.EncodeError || Backend.Error)!void {
+            if (Backend.Format != Format) @compileError("raw format brand does not match the backend");
+            if (self.used) return error.CustomRejected;
+            self.used = true;
+            if (Backend.canonical) return error.UnsupportedValue;
+            self.context.items -= 1;
+            try self.out.validateRaw(bytes, self.context);
+            try self.out.raw(bytes, self.context);
+        }
+        pub fn write(self: *Self, value: anytype) Errors(@TypeOf(value), Backend)!void {
+            comptime descriptor.check(@TypeOf(value), Backend.capabilities, false, .borrowed);
             if (self.used) return error.CustomRejected;
             self.used = true;
             self.context.items -= 1;
             try emit(.{}, value, self.out, self.context, self.active);
         }
+    };
+}
+
+fn Errors(comptime T: type, comptime Backend: type) type {
+    return ctx.EncodeError || Backend.Error || HookErrors(T, Backend, &.{});
+}
+fn HookErrors(comptime T: type, comptime Backend: type, comptime seen: []const type) type {
+    for (seen) |prior| if (T == prior) return error{};
+    const next = seen ++ .{T};
+    if (descriptor.has(T, "strandSerialize")) {
+        const result = @TypeOf(@as(T, undefined).strandSerialize(@as(*Access(Backend), undefined)));
+        const errors = @typeInfo(result).error_union.error_set;
+        if (@typeInfo(errors).error_set.error_names == null) @compileError("data codecs require a named error set");
+        return errors;
+    }
+    return switch (@typeInfo(T)) {
+        inline .pointer, .optional, .array, .vector => |i| HookErrors(i.child, Backend, next),
+        inline .@"struct", .@"union" => |i| blk: {
+            var errors: type = error{};
+            for (i.field_types) |F| errors = errors || HookErrors(F, Backend, next);
+            break :blk errors;
+        },
+        else => error{},
     };
 }

@@ -3,8 +3,8 @@
 const std = @import("std");
 
 pub const LimitError = error{ InputLimit, OutputLimit, DepthLimit, ItemLimit, LengthLimit, AllocationLimit, WorkLimit };
-pub const DecodeError = LimitError || error{ SyntaxError, InvalidUtf8, UnexpectedType, MissingField, UnknownField, DuplicateField, UnknownVariant, NumberOutOfRange, InexactNumber, UnsupportedValue, BorrowUnavailable, CustomRejected, OutOfMemory };
-pub const EncodeError = LimitError || error{ InvalidUtf8, NumberOutOfRange, InexactNumber, UnsupportedValue, CycleDetected, CustomRejected, OutOfMemory };
+pub const DecodeError = error{ InputLimit, DepthLimit, ItemLimit, LengthLimit, AllocationLimit, WorkLimit } || error{ SyntaxError, InvalidUtf8, UnexpectedType, MissingField, UnknownField, DuplicateField, UnknownVariant, NumberOutOfRange, InexactNumber, UnsupportedValue, BorrowUnavailable, CustomRejected, OutOfMemory };
+pub const EncodeError = LimitError || error{ InvalidRaw, InvalidUtf8, NumberOutOfRange, InexactNumber, UnsupportedValue, CycleDetected, CustomRejected, OutOfMemory };
 pub const Lifetime = enum { borrowed, transient, owned };
 pub const Ownership = enum { borrowed, owned };
 pub const Borrow = enum { prefer, copy, require };
@@ -66,7 +66,7 @@ pub const Context = struct {
     pub fn init(storage: std.mem.Allocator, limits: Limits, ownership: Ownership) Context {
         return .{ .storage = storage, .limits = limits, .ownership = ownership };
     }
-    pub fn enter(self: *Context) LimitError!void {
+    pub fn enter(self: *Context) error{DepthLimit}!void {
         @setRuntimeSafety(true);
         if (self.depth >= self.limits.depth) return error.DepthLimit;
         self.depth += 1;
@@ -75,30 +75,30 @@ pub const Context = struct {
         @setRuntimeSafety(true);
         self.depth -= 1;
     }
-    pub fn node(self: *Context) LimitError!void {
+    pub fn node(self: *Context) error{ItemLimit}!void {
         @setRuntimeSafety(true);
         if (self.items >= self.limits.items) return error.ItemLimit;
         self.items += 1;
     }
-    pub fn count(self: *Context, n: usize) LimitError!void {
+    pub fn count(self: *Context, n: usize) error{ItemLimit}!void {
         @setRuntimeSafety(true);
         if (n > self.limits.container_items or n > self.limits.items - self.items) return error.ItemLimit;
     }
-    pub fn span(self: *Context, n: usize, key: bool) LimitError!void {
+    pub fn span(self: *Context, n: usize, key: bool) error{LengthLimit}!void {
         if (n > if (key) self.limits.key_bytes else self.limits.string_bytes) return error.LengthLimit;
     }
-    pub fn chargeWork(self: *Context, n: usize) LimitError!void {
+    pub fn chargeWork(self: *Context, n: usize) error{WorkLimit}!void {
         @setRuntimeSafety(true);
         if (n > self.limits.work - self.work) return error.WorkLimit;
         self.work += n;
     }
-    pub fn input(self: *Context, n: usize) LimitError!void {
+    pub fn input(self: *Context, n: usize) error{ InputLimit, WorkLimit }!void {
         @setRuntimeSafety(true);
         if (n > self.limits.input_bytes - self.input_bytes) return error.InputLimit;
         self.input_bytes += n;
         try self.chargeWork(n);
     }
-    pub fn output(self: *Context, n: usize) LimitError!void {
+    pub fn output(self: *Context, n: usize) error{ OutputLimit, WorkLimit }!void {
         @setRuntimeSafety(true);
         if (n > self.limits.output_bytes - self.output_bytes) return error.OutputLimit;
         self.output_bytes += n;

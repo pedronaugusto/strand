@@ -52,6 +52,9 @@
 //! line means. There is no global state, and no dependency beyond `std`
 //! and airlock, which syncs the file under a `Writer` and numbers files for
 //! a `Follower`.
+/// Format-independent bounded serialization, provisional until S1 proof completes.
+pub const core = @import("core.zig");
+
 const codec_module = @import("codec.zig");
 const parse_module = @import("parse.zig");
 const reader_module = @import("line/reader.zig");

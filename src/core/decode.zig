@@ -7,7 +7,7 @@ const model = @import("model.zig");
 /// Backend.next(context) must meter wire reads/scratch through context before
 /// doing that work, validate grammar, and distinguish input from scratch spans.
 /// endInput verifies no trailing value. All backend errors are named.
-pub fn deserialize(comptime T: type, backend: anytype, c: *ctx.Context) (ctx.DecodeError || @TypeOf(backend.*).Error)!T {
+pub fn deserialize(comptime T: type, backend: anytype, c: *ctx.Context) Errors(T, @TypeOf(backend.*))!T {
     comptime descriptor.check(T, @TypeOf(backend.*).capabilities, true, .borrowed);
     var cursor: Cursor(@TypeOf(backend.*)) = .{ .backend = backend, .context = c };
     const value = try cursor.read(T, .{});
@@ -20,10 +20,14 @@ pub fn Cursor(comptime Backend: type) type {
         backend: *Backend,
         context: *ctx.Context,
         pending: ?model.Event = null,
+        pending_start: usize = 0,
         const Self = @This();
         const Error = ctx.DecodeError || Backend.Error;
         fn peek(self: *Self) Error!model.Event {
-            if (self.pending == null) self.pending = try self.backend.next(self.context);
+            if (self.pending == null) {
+                self.pending_start = self.backend.offset();
+                self.pending = try self.backend.next(self.context);
+            }
             return self.pending.?;
         }
         fn take(self: *Self) Error!model.Event {
@@ -39,6 +43,7 @@ pub fn Cursor(comptime Backend: type) type {
             if (event != .begin) return error.UnexpectedType;
             if (event.begin.kind != expected and !(expected == .tuple and event.begin.kind == .sequence) and !(expected == .record and event.begin.kind == .map)) return error.UnexpectedType;
             try self.context.enter();
+            errdefer self.context.leave();
             if (event.begin.len) |n| try self.context.count(n);
             return event.begin;
         }
@@ -95,8 +100,9 @@ pub fn Cursor(comptime Backend: type) type {
             // safe: positive magnitude was checked against the signed maximum.
             return @intCast(value); // safe: checked destination bounds or Zig-provided typed storage precede this conversion.
         }
-        pub fn read(self: *Self, comptime T: type, comptime policy: descriptor.Field) Error!T {
+        pub fn read(self: *Self, comptime T: type, comptime policy: descriptor.Field) Errors(T, Backend)!T {
             @setRuntimeSafety(true);
+            comptime descriptor.check(T, Backend.capabilities, true, .borrowed);
             try self.context.node();
             try self.context.chargeWork(1);
             if (comptime descriptor.has(T, "strandDeserialize")) {
@@ -152,20 +158,7 @@ pub fn Cursor(comptime Backend: type) type {
                     .slice => return self.slice(T, policy),
                     else => unreachable,
                 },
-                inline .array, .vector => |i| {
-                    const header = try self.start(.tuple);
-                    defer self.context.leave();
-                    if (header.len) |n| if (n != i.len) return error.UnexpectedType;
-                    var array: [i.len]i.child = undefined;
-                    for (&array, 0..) |*element, index| {
-                        const old = if (self.context.diagnostics) |d| d.count else 0;
-                        if (self.context.diagnostics) |d| d.index(index);
-                        element.* = try self.read(i.child, .{ .name = "" });
-                        if (self.context.diagnostics) |d| d.count = old;
-                    }
-                    try self.end();
-                    return array;
-                },
+                .array, .vector => return self.fixed(T, policy),
                 .@"struct" => |i| {
                     if (i.is_tuple) {
                         _ = try self.start(.tuple);
@@ -200,6 +193,45 @@ pub fn Cursor(comptime Backend: type) type {
                 else => @compileError("unsupported core decode type"),
             }
         }
+        fn fixed(self: *Self, comptime T: type, comptime policy: descriptor.Field) Errors(T, Backend)!T {
+            const i = if (@typeInfo(T) == .array) @typeInfo(T).array else @typeInfo(T).vector;
+
+            if (policy.as != .normal) {
+                if (i.child != u8) @compileError("text/bytes array codec requires u8 elements");
+                const event = try self.take();
+                const span = switch (event) {
+                    .text => |v| if (policy.as == .text) v else return error.UnexpectedType,
+                    .bytes => |v| if (policy.as == .bytes) v else return error.UnexpectedType,
+                    else => return error.UnexpectedType,
+                };
+                if (span.bytes.len != i.len) return error.UnexpectedType;
+                if (span.bytes.len > policy.max_len) return error.LengthLimit;
+                try self.context.span(span.bytes.len, false);
+                try self.context.chargeWork(span.bytes.len);
+                if (policy.as == .text and !std.unicode.utf8ValidateSlice(span.bytes)) return error.InvalidUtf8;
+                var array: if (@typeInfo(T) == .array) T else [i.len]i.child = undefined;
+                @memcpy(&array, span.bytes);
+                if (@typeInfo(T) == .array) if (i.sentinel()) |sentinel| {
+                    array[i.len] = sentinel;
+                };
+                return array;
+            }
+            const header = try self.start(.tuple);
+            defer self.context.leave();
+            if (header.len) |n| if (n != i.len) return error.UnexpectedType;
+            var array: if (@typeInfo(T) == .array) T else [i.len]i.child = undefined;
+            if (@typeInfo(T) == .array) if (i.sentinel()) |sentinel| {
+                array[i.len] = sentinel;
+            };
+            for (&array, 0..) |*element, index| {
+                const old = if (self.context.diagnostics) |d| d.count else 0;
+                if (self.context.diagnostics) |d| d.index(index);
+                element.* = try self.read(i.child, .{ .name = "" });
+                if (self.context.diagnostics) |d| d.count = old;
+            }
+            try self.end();
+            return array;
+        }
         fn keyValue(self: *Self) Error![]const u8 {
             const event = try self.take();
             if (event != .text) return error.UnexpectedType;
@@ -208,7 +240,7 @@ pub fn Cursor(comptime Backend: type) type {
             if (!std.unicode.utf8ValidateSlice(event.text.bytes)) return error.InvalidUtf8;
             return event.text.bytes;
         }
-        fn slice(self: *Self, comptime T: type, comptime policy: descriptor.Field) Error!T {
+        fn slice(self: *Self, comptime T: type, comptime policy: descriptor.Field) Errors(T, Backend)!T {
             const i = @typeInfo(T).pointer;
             if (i.child == u8) {
                 const event = try self.take();
@@ -230,14 +262,36 @@ pub fn Cursor(comptime Backend: type) type {
             }
             const header = try self.start(.sequence);
             defer self.context.leave();
-            const n = header.len orelse return error.UnsupportedValue;
-            if (n > policy.max_len) return error.LengthLimit;
-            const values = try self.context.allocPointer(T, n);
-            for (values) |*v| v.* = try self.read(i.child, .{ .name = "" });
+            if (header.len) |n| {
+                if (n > policy.max_len) return error.LengthLimit;
+                const values = try self.context.allocPointer(T, n);
+                for (values) |*v| v.* = try self.read(i.child, .{ .name = "" });
+                try self.end();
+                return values;
+            }
+            var values = try self.context.allocPointer(T, 0);
+            var initialized: usize = 0;
+            while (try self.peek() != .end) {
+                if (initialized >= policy.max_len or initialized >= self.context.limits.container_items) return error.LengthLimit;
+                try self.context.count(1);
+                if (initialized == values.len) {
+                    const capacity = @max(@as(usize, 1), std.math.mul(usize, values.len, 2) catch return error.AllocationLimit);
+                    const grown = try self.context.allocPointer(T, @min(capacity, @min(policy.max_len, self.context.limits.container_items)));
+                    try self.context.chargeWork(initialized);
+                    @memcpy(grown[0..initialized], values[0..initialized]);
+                    values = grown;
+                }
+                values[initialized] = try self.read(i.child, .{});
+                initialized += 1;
+            }
             try self.end();
-            return values;
+            if (i.sentinel()) |sentinel| {
+                values.ptr[initialized] = sentinel;
+                return values[0..initialized :sentinel];
+            }
+            return values[0..initialized];
         }
-        fn record(self: *Self, comptime T: type) Error!T {
+        fn record(self: *Self, comptime T: type) Errors(T, Backend)!T {
             const i = @typeInfo(T).@"struct";
             const opt = comptime descriptor.options(T);
             const unknown: descriptor.Unknown = if (@hasField(@TypeOf(opt), "unknown_fields")) opt.unknown_fields else .ignore;
@@ -323,7 +377,12 @@ pub fn Cursor(comptime Backend: type) type {
                     while (try self.peek() != .end) {
                         if (count >= self.context.limits.container_items) return error.ItemLimit;
                         count += 1;
-                        if (header.kind == .map or header.kind == .record) _ = try self.key();
+                        if (header.kind == .record) _ = try self.key();
+                        if (header.kind == .map) {
+                            const key_event = try self.peek();
+                            if (key_event == .text) try self.context.span(key_event.text.bytes.len, true);
+                            try self.skip();
+                        }
                         try self.skip();
                     }
                     if (header.len) |n| if (count != n) return error.SyntaxError;
@@ -342,12 +401,29 @@ pub fn Access(comptime Backend: type) type {
     return struct {
         cursor: *Cursor(Backend),
         used: bool = false,
+        pub const Error = ctx.DecodeError || Backend.Error;
         const Self = @This();
-        pub fn read(self: *Self, comptime T: type) (ctx.DecodeError || Backend.Error)!T {
+        pub fn read(self: *Self, comptime T: type) Errors(T, Backend)!T {
             if (self.used) return error.CustomRejected;
             self.used = true;
             self.cursor.context.items -= 1;
             return self.cursor.read(T, .{ .name = "" });
+        }
+        pub fn alloc(self: *Self, comptime T: type, n: usize) ctx.DecodeError![]T {
+            return self.cursor.context.alloc(T, n);
+        }
+        pub fn chargeWork(self: *Self, n: usize) ctx.DecodeError!void {
+            try self.cursor.context.chargeWork(n);
+        }
+        pub fn raw(self: *Self, comptime Format: type) (ctx.DecodeError || Backend.Error)![]const u8 {
+            if (Backend.Format != Format) @compileError("raw format brand does not match the backend");
+            if (self.used) return error.CustomRejected;
+            self.used = true;
+            const start = if (self.cursor.pending != null) self.cursor.pending_start else self.cursor.backend.offset();
+            self.cursor.context.items -= 1;
+            try self.cursor.skip();
+            const span = self.cursor.backend.raw(start, self.cursor.backend.offset());
+            return self.cursor.context.retain(span.bytes, span.lifetime, .prefer);
         }
         pub fn skip(self: *Self) (ctx.DecodeError || Backend.Error)!void {
             if (self.used) return error.CustomRejected;
@@ -397,4 +473,27 @@ fn clone(comptime T: type, value: T, c: *ctx.Context) ctx.DecodeError!T {
         },
         else => return value,
     }
+}
+
+fn Errors(comptime T: type, comptime Backend: type) type {
+    return ctx.DecodeError || Backend.Error || HookErrors(T, Backend, &.{});
+}
+fn HookErrors(comptime T: type, comptime Backend: type, comptime seen: []const type) type {
+    for (seen) |prior| if (T == prior) return error{};
+    const next = seen ++ .{T};
+    if (descriptor.has(T, "strandDeserialize")) {
+        const result = @TypeOf(T.strandDeserialize(@as(*Access(Backend), undefined)));
+        const errors = @typeInfo(result).error_union.error_set;
+        if (@typeInfo(errors).error_set.error_names == null) @compileError("data codecs require a named error set");
+        return errors;
+    }
+    return switch (@typeInfo(T)) {
+        inline .pointer, .optional, .array, .vector => |i| HookErrors(i.child, Backend, next),
+        inline .@"struct", .@"union" => |i| blk: {
+            var errors: type = error{};
+            for (i.field_types) |F| errors = errors || HookErrors(F, Backend, next);
+            break :blk errors;
+        },
+        else => error{},
+    };
 }

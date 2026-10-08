@@ -117,6 +117,8 @@ fn inspect(comptime T: type, comptime fmt: Capabilities, comptime seen: []const 
             }
         }
     }
+    if (has(T, "strandScalar") and !fmt.unicode_scalar) return rejected(path, "format has no Unicode scalar codec");
+    if (has(T, "strandNamedShape") and !fmt.named_shapes) return rejected(path, "format has no named shape codec");
     if (has(T, "strandKeyType")) {
         const K = T.strandKeyType;
         if (fmt.map_keys == .text_only and !(@typeInfo(K) == .pointer and @typeInfo(K).pointer.size == .slice and @typeInfo(K).pointer.child == u8)) return rejected(path, "format requires text map keys");

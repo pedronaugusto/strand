@@ -159,6 +159,51 @@ pub fn Access(comptime Backend: type) type {
         used: bool = false,
         pub const Error = ctx.EncodeError || Backend.Error;
         const Self = @This();
+        pub fn named(self: *Self, value: anytype, kind: model.Kind, name: []const u8) Errors(@TypeOf(value), Backend)!void {
+            if (self.used) return error.CustomRejected;
+            self.used = true;
+            try self.context.span(name.len, false);
+            try begin(self.out, self.context, kind, name, 1);
+            defer self.context.leave();
+            try emit(.{}, value, self.out, self.context, self.active);
+            try self.out.end(self.context);
+        }
+        pub fn namedUnit(self: *Self, name: []const u8) Error!void {
+            if (self.used) return error.CustomRejected;
+            self.used = true;
+            try self.context.span(name.len, false);
+            try begin(self.out, self.context, .named_unit, name, 0);
+            defer self.context.leave();
+            try self.out.end(self.context);
+        }
+        pub fn namedTuple(self: *Self, value: anytype, name: []const u8) Errors(@TypeOf(value), Backend)!void {
+            const T = @TypeOf(value);
+            if (self.used) return error.CustomRejected;
+            self.used = true;
+            try self.context.span(name.len, false);
+            switch (@typeInfo(T)) {
+                .@"struct" => |i| {
+                    if (!i.is_tuple) @compileError("named tuple requires a tuple shape");
+                    var count: usize = 0;
+                    inline for (i.field_attrs) |attrs| if (!attrs.@"comptime") {
+                        count += 1;
+                    };
+                    try begin(self.out, self.context, .named_tuple, name, count);
+                    defer self.context.leave();
+                    inline for (i.field_names, i.field_attrs) |field_name, attrs| if (!attrs.@"comptime") {
+                        try emit(.{}, @field(value, field_name), self.out, self.context, self.active);
+                    };
+                },
+                inline .array, .vector => |i| {
+                    try begin(self.out, self.context, .named_tuple, name, i.len);
+                    defer self.context.leave();
+                    const lanes: [i.len]i.child = value;
+                    for (lanes) |v| try emit(.{}, v, self.out, self.context, self.active);
+                },
+                else => @compileError("named tuple requires a fixed tuple shape"),
+            }
+            try self.out.end(self.context);
+        }
         pub fn scalar(self: *Self, value: u21) Error!void {
             if (self.used) return error.CustomRejected;
             self.used = true;

@@ -518,6 +518,43 @@ pub fn Access(comptime Backend: type) type {
             const header = try self.cursor.start(kind);
             return .{ .access = self, .header = header };
         }
+        pub fn named(self: *Self, comptime T: type, kind: model.Kind, name: []const u8) Errors(T, Backend)!T {
+            var compound = try self.begin(kind);
+            defer compound.abort();
+            if (!try self.cursor.equals(compound.header.name, name)) return error.UnexpectedType;
+            const value = try compound.element(T);
+            try compound.finish();
+            return value;
+        }
+        pub fn namedUnit(self: *Self, name: []const u8) Error!void {
+            var compound = try self.begin(.named_unit);
+            defer compound.abort();
+            if (!try self.cursor.equals(compound.header.name, name)) return error.UnexpectedType;
+            try compound.finish();
+        }
+        pub fn namedTuple(self: *Self, comptime T: type, name: []const u8) Errors(T, Backend)!T {
+            var compound = try self.begin(.named_tuple);
+            defer compound.abort();
+            if (!try self.cursor.equals(compound.header.name, name)) return error.UnexpectedType;
+            const result: T = switch (@typeInfo(T)) {
+                .@"struct" => |i| blk: {
+                    if (!i.is_tuple) @compileError("named tuple requires a tuple shape");
+                    var value: T = undefined;
+                    inline for (i.field_names, i.field_types, i.field_attrs) |field_name, F, attrs| if (!attrs.@"comptime") {
+                        @field(value, field_name) = try compound.element(F);
+                    };
+                    break :blk value;
+                },
+                inline .array, .vector => |i| blk: {
+                    var value: [i.len]i.child = undefined;
+                    for (&value) |*v| v.* = try compound.element(i.child);
+                    break :blk value;
+                },
+                else => @compileError("named tuple requires a fixed tuple shape"),
+            };
+            try compound.finish();
+            return result;
+        }
         pub fn scalar(self: *Self) Error!u21 {
             if (self.used) return error.CustomRejected;
             self.used = true;

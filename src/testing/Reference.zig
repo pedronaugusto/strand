@@ -35,6 +35,14 @@ pub fn next(self: *Self, c: *core.Context) core.DecodeError!core.Event {
         },
         5 => .{ .begin = .{ .kind = .sequence, .len = (try self.read(c, 1))[0] } },
         6 => .{ .begin = .{ .kind = .record, .len = (try self.read(c, 1))[0] } },
+        16 => blk: {
+            const ordinal = (try self.read(c, 1))[0];
+            if (ordinal > @backingInt(core.Kind.named_unit)) return error.SyntaxError;
+            const kind: core.Kind = @fromBackingInt(@intCast(ordinal)); // safe: ordinal checked against the exhaustive contiguous Kind tags.
+            const len = (try self.read(c, 1))[0];
+            const name_len = (try self.read(c, 1))[0];
+            break :blk .{ .begin = .{ .kind = kind, .name = try self.read(c, name_len), .len = len } };
+        },
         12 => blk: {
             const len = (try self.read(c, 1))[0];
             break :blk .{ .begin = .{ .kind = .variant, .name = try self.read(c, len), .len = 1 } };
@@ -138,7 +146,11 @@ pub const Encoder = struct {
     }
     pub fn begin(self: *Encoder, kind: core.Kind, name: []const u8, len: usize, c: *core.Context) core.EncodeError!void {
         const size = std.math.cast(u8, len) orelse return error.ItemLimit;
-        if (kind == .variant) {
+        if (kind == .newtype or kind == .named_unit or kind == .named_tuple or kind == .some) {
+            const n = std.math.cast(u8, name.len) orelse return error.LengthLimit;
+            try self.write(c, &.{ 16, @backingInt(kind), size, n });
+            try self.write(c, name);
+        } else if (kind == .variant) {
             if (len != 1) return error.UnsupportedValue;
             const n = std.math.cast(u8, name.len) orelse return error.LengthLimit;
             try self.write(c, &.{ 12, n });

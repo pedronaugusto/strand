@@ -39,6 +39,7 @@ pub fn Raw(comptime Format: type) type {
 pub const Scalar = struct {
     value: u21,
     pub const Self = Scalar;
+    pub const strandScalar = true;
     pub fn strandDeserialize(access: anytype) @TypeOf(access.*).Error!Self {
         return .{ .value = try access.scalar() };
     }
@@ -60,6 +61,47 @@ pub fn Pairs(comptime K: type, comptime V: type) type {
         }
         pub fn strandSerialize(self: Self, access: anytype) @typeInfo(@TypeOf(access.writePairs(self.items))).error_union.error_set!void {
             try access.writePairs(self.items);
+        }
+    };
+}
+
+/// Semantic nominal shapes; no machine-layout or memory representation is used.
+pub fn NamedUnit(comptime name: []const u8) type {
+    return struct {
+        pub const Self = @This();
+        pub const strandNamedShape = true;
+        pub fn strandDeserialize(access: anytype) @TypeOf(access.*).Error!Self {
+            try access.namedUnit(name);
+            return .{};
+        }
+        pub fn strandSerialize(_: Self, access: anytype) @TypeOf(access.*).Error!void {
+            try access.namedUnit(name);
+        }
+    };
+}
+pub fn Newtype(comptime T: type, comptime name: []const u8) type {
+    return struct {
+        value: T,
+        pub const Self = @This();
+        pub const strandNamedShape = true;
+        pub fn strandDeserialize(access: anytype) @typeInfo(@TypeOf(access.named(T, .newtype, name))).error_union.error_set!Self {
+            return .{ .value = try access.named(T, .newtype, name) };
+        }
+        pub fn strandSerialize(self: Self, access: anytype) @typeInfo(@TypeOf(access.named(self.value, .newtype, name))).error_union.error_set!void {
+            try access.named(self.value, .newtype, name);
+        }
+    };
+}
+pub fn NamedTuple(comptime T: type, comptime name: []const u8) type {
+    return struct {
+        value: T,
+        pub const Self = @This();
+        pub const strandNamedShape = true;
+        pub fn strandDeserialize(access: anytype) @typeInfo(@TypeOf(access.namedTuple(T, name))).error_union.error_set!Self {
+            return .{ .value = try access.namedTuple(T, name) };
+        }
+        pub fn strandSerialize(self: Self, access: anytype) @typeInfo(@TypeOf(access.namedTuple(self.value, name))).error_union.error_set!void {
+            try access.namedTuple(self.value, name);
         }
     };
 }

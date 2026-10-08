@@ -544,3 +544,16 @@ test "S1 caller arena accounting failures publish no result and reset cleans ret
     defer arena.deinit();
     try std.testing.expectError(error.AllocationLimit, core.acquireLeaky(FactoryRecord, arena.allocator(), &.{ 6, 0, 0 }, .{ .allocation_bytes = 1 }, factoryDecode));
 }
+
+test "S1 nominal semantic wrappers retain unit newtype and fixed tuple distinctions" {
+    var memory: [128]u8 = undefined;
+    inline for (.{ core.NamedUnit("unit"){}, core.Newtype(u8, "id"){ .value = 7 }, core.NamedTuple(struct { u8, u8 }, "point"){ .value = .{ 1, 2 } } }) |value| {
+        var out: Reference.Encoder = .{ .buffer = &memory };
+        var c: core.Context = .init(std.testing.failing_allocator, .{}, .borrowed);
+        try core.serialize(value, &out, &c);
+        c = .init(std.testing.failing_allocator, .{}, .borrowed);
+        const result = try decoded(@TypeOf(value), &c, memory[0..out.used]);
+        try std.testing.expectEqualDeep(value, result);
+        try std.testing.expectEqual(core.Support.unsupported, core.describe(@TypeOf(value), .{ .named_shapes = false }).support);
+    }
+}

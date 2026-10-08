@@ -22,3 +22,6 @@ pub const Scalar = @import("core/model.zig").Scalar;
 pub const Pairs = @import("core/model.zig").Pairs;
 pub const acquireLeaky = @import("core/owner.zig").acquireLeaky;
 pub const clone = @import("core/owner.zig").clone;
+pub const NamedUnit = @import("core/model.zig").NamedUnit;
+pub const Newtype = @import("core/model.zig").Newtype;
+pub const NamedTuple = @import("core/model.zig").NamedTuple;

@@ -18,3 +18,5 @@ pub const Kind = @import("core/model.zig").Kind;
 pub const Span = @import("core/model.zig").Span;
 pub const serialize = @import("core/encode.zig").serialize;
 pub const Raw = @import("core/model.zig").Raw;
+pub const Scalar = @import("core/model.zig").Scalar;
+pub const Pairs = @import("core/model.zig").Pairs;

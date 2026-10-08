@@ -2,7 +2,12 @@
 const std = @import("std");
 const context = @import("context.zig");
 pub const Support = enum { supported, conditional, unsupported };
+pub const MapKeys = enum { text_only, scalar, any };
 pub const Capabilities = struct {
+    map_keys: MapKeys = .any,
+    unicode_scalar: bool = true,
+    named_shapes: bool = true,
+    nonfinite_floats: bool = true,
     bytes: bool = true,
     null_value: bool = true,
     nested_optional: bool = false,
@@ -19,6 +24,7 @@ pub const Description = struct {
     path: []const u8 = "",
     reason: []const u8 = "",
 };
+pub const Rename = enum { snake_case, camel_case, PascalCase, kebab_case, SCREAMING_SNAKE_CASE };
 pub const Representation = enum { normal, text, bytes };
 pub const Omit = enum { never, null_value, default_value };
 pub const Duplicates = enum { reject, first, last };
@@ -29,6 +35,7 @@ pub const Field = struct {
     borrow: context.Borrow = .prefer,
     as: Representation = .normal,
     omit: Omit = .never,
+    exact: bool = false,
     skip_encode: bool = false,
     skip_decode: bool = false,
     max_len: usize = std.math.maxInt(usize),
@@ -41,11 +48,12 @@ pub fn has(comptime T: type, comptime name: []const u8) bool {
     };
 }
 pub fn options(comptime T: type) if (has(T, "strand")) @TypeOf(T.strand) else @TypeOf(.{}) {
-    return if (has(T, "strand")) T.strand else .{};
+    return if (comptime has(T, "strand")) T.strand else .{};
 }
 pub fn field(comptime T: type, comptime name: []const u8) Field {
     const opt = options(T);
     var f: Field = .{ .name = name };
+    if (@hasField(@TypeOf(opt), "rename_all")) f.name = rename(name, opt.rename_all);
     if (@hasField(@TypeOf(opt), "fields") and @hasField(@TypeOf(opt.fields), name)) {
         const declared = @field(opt.fields, name);
         inline for (@typeInfo(@TypeOf(declared)).@"struct".field_names) |option| {
@@ -58,7 +66,7 @@ pub fn default(comptime T: type, comptime name: []const u8) ?@FieldType(T, name)
     const opt = options(T);
     if (@hasField(@TypeOf(opt), "fields") and @hasField(@TypeOf(opt.fields), name)) {
         const f = @field(opt.fields, name);
-        if (@hasField(@TypeOf(f), "default")) return f.default;
+        if (@hasField(@TypeOf(f), "default") and @typeInfo(@TypeOf(f.default)) != .@"fn") return f.default;
     }
     const info = @typeInfo(T).@"struct";
     inline for (info.field_names, info.field_attrs) |n, attrs| {
@@ -97,17 +105,22 @@ fn inspect(comptime T: type, comptime fmt: Capabilities, comptime seen: []const 
     if (has(T, "strand")) {
         const opt = options(T);
         for (@typeInfo(@TypeOf(opt)).@"struct".field_names) |option| {
-            if (!std.mem.eql(u8, option, "fields") and !std.mem.eql(u8, option, "unknown_fields") and !std.mem.eql(u8, option, "duplicates")) return rejected(path, "container option is not implemented by this S1 candidate");
+            if (!std.mem.eql(u8, option, "fields") and !std.mem.eql(u8, option, "unknown_fields") and !std.mem.eql(u8, option, "duplicates") and !std.mem.eql(u8, option, "rename_all") and !std.mem.eql(u8, option, "variants") and !std.mem.eql(u8, option, "tag") and !std.mem.eql(u8, option, "content") and !std.mem.eql(u8, option, "other")) return rejected(path, "container option is not implemented by this S1 candidate");
         }
         if (@hasField(@TypeOf(opt), "fields")) {
             for (@typeInfo(@TypeOf(opt.fields)).@"struct".field_names) |name| {
                 if (!@hasField(T, name)) return rejected(path ++ "." ++ name, "option names no field");
                 const f = @field(opt.fields, name);
                 for (@typeInfo(@TypeOf(f)).@"struct".field_names) |option| {
-                    if (!@hasField(Field, option) and !std.mem.eql(u8, option, "default")) return rejected(path ++ "." ++ name, "field option is not implemented by this S1 candidate");
+                    if (!@hasField(Field, option) and !std.mem.eql(u8, option, "default") and !std.mem.eql(u8, option, "codec") and !std.mem.eql(u8, option, "validate") and !std.mem.eql(u8, option, "range") and !std.mem.eql(u8, option, "omit_if") and !std.mem.eql(u8, option, "equal")) return rejected(path ++ "." ++ name, "field option is not implemented by this S1 candidate");
                 }
             }
         }
+    }
+    if (has(T, "strandKeyType")) {
+        const K = T.strandKeyType;
+        if (fmt.map_keys == .text_only and !(@typeInfo(K) == .pointer and @typeInfo(K).pointer.size == .slice and @typeInfo(K).pointer.child == u8)) return rejected(path, "format requires text map keys");
+        if (fmt.map_keys == .scalar and (@typeInfo(K) == .@"struct" or @typeInfo(K) == .@"union" or @typeInfo(K) == .array or @typeInfo(K) == .vector)) return rejected(path, "format requires scalar map keys");
     }
     if (has(T, "strandSerialize") or has(T, "strandDeserialize")) return .{ .support = .conditional, .encode = has(T, "strandSerialize"), .decode = has(T, "strandDeserialize"), .path = path, .reason = "explicit data codec" };
     if (has(T, "deinit")) return rejected(path, "resource owner requires an explicit data codec");
@@ -125,13 +138,14 @@ fn inspect(comptime T: type, comptime fmt: Capabilities, comptime seen: []const 
             var result: Description = .{};
             for (i.field_names, i.field_types, i.field_attrs) |name, F, attrs| {
                 const f = field(T, name);
-                const child = inspect(F, fmt, next, path ++ "." ++ name);
+                const declared = fieldOptions(T, name);
+                const child = if (@hasField(@TypeOf(declared), "codec")) Description{ .support = .conditional, .encode = @hasDecl(declared.codec, "encode"), .decode = @hasDecl(declared.codec, "decode"), .path = path ++ "." ++ name, .reason = "explicit field codec" } else inspect(F, fmt, next, path ++ "." ++ name);
                 if (child.support == .unsupported) break :aggregate child;
                 if (child.support == .conditional) result = merge(result, child);
                 if (attrs.@"comptime" and containsPointers(F, &.{})) break :aggregate rejected(path ++ "." ++ name, "comptime field cannot retain pointers");
                 if (f.as == .bytes and !fmt.bytes) break :aggregate rejected(path ++ "." ++ name, "format has no native bytes");
-                if (f.skip_decode and default(T, name) == null) break :aggregate rejected(path ++ "." ++ name, "skip_decode requires a default");
-                if (f.skip_encode and default(T, name) == null) result = merge(result, .{ .support = .conditional, .path = path ++ "." ++ name, .reason = "omitted required field prevents lossless round trip" });
+                if (f.skip_decode and !hasDefault(T, name)) break :aggregate rejected(path ++ "." ++ name, "skip_decode requires a default");
+                if ((f.skip_encode or f.omit != .never or @hasField(@TypeOf(declared), "omit_if")) and !hasDefault(T, name)) result = merge(result, .{ .support = .conditional, .path = path ++ "." ++ name, .reason = "omitted required field prevents lossless round trip" });
             }
             break :aggregate result;
         },
@@ -139,7 +153,8 @@ fn inspect(comptime T: type, comptime fmt: Capabilities, comptime seen: []const 
             if (i.tag_type == null) break :aggregate rejected(path, "untagged union has no active member witness");
             var result: Description = .{};
             for (i.field_names, i.field_types) |name, F| {
-                const child = inspect(F, fmt, next, path ++ "." ++ name);
+                const declared = fieldOptions(T, name);
+                const child = if (@hasField(@TypeOf(declared), "codec")) Description{ .support = .conditional, .encode = @hasDecl(declared.codec, "encode"), .decode = @hasDecl(declared.codec, "decode"), .path = path ++ "." ++ name, .reason = "explicit field codec" } else inspect(F, fmt, next, path ++ "." ++ name);
                 if (child.support == .unsupported) break :aggregate child;
                 if (child.support == .conditional) result = merge(result, child);
             }
@@ -195,7 +210,35 @@ fn checkOptions(comptime T: type, comptime ownership: context.Ownership, comptim
                 checkOptions(F, ownership, next);
             }
         },
-        .@"union" => |i| for (i.field_types) |F| checkOptions(F, ownership, next),
+        inline .@"union", .@"enum" => |i| {
+            const opt = options(T);
+            for (i.field_names) |name| {
+                const f = variant(T, name);
+                for (f.aliases, 0..) |a, ai| {
+                    if (std.mem.eql(u8, a, f.name)) @compileError("variant name collision at " ++ name);
+                    for (f.aliases[0..ai]) |b| if (std.mem.eql(u8, a, b)) @compileError("repeated variant alias at " ++ name);
+                }
+                for (i.field_names) |other| {
+                    if (std.mem.eql(u8, name, other)) continue;
+                    const o = variant(T, other);
+                    if (std.mem.eql(u8, f.name, o.name)) @compileError("variant name collision at " ++ name);
+                    for (f.aliases) |a| {
+                        if (std.mem.eql(u8, a, o.name)) @compileError("variant alias collision at " ++ name);
+                        for (o.aliases) |b| if (std.mem.eql(u8, a, b)) @compileError("variant alias collision at " ++ name);
+                    }
+                }
+            }
+            if (@hasField(@TypeOf(opt), "content") and !@hasField(@TypeOf(opt), "tag")) @compileError("adjacent content requires tag");
+            if (@hasField(@TypeOf(opt), "content") and std.mem.eql(u8, opt.content, opt.tag)) @compileError("tag and content collide");
+            if (@typeInfo(T) == .@"union") for (i.field_types, i.field_names) |F, name| {
+                if (@hasField(@TypeOf(opt), "tag") and !@hasField(@TypeOf(opt), "content") and F != void) {
+                    if (@typeInfo(F) != .@"struct" or @typeInfo(F).@"struct".is_tuple) @compileError("internal tag requires record or void payload");
+                    for (@typeInfo(F).@"struct".field_names) |payload_name| if (std.mem.eql(u8, field(F, payload_name).name, opt.tag)) @compileError("tag collides with payload field");
+                }
+                if (@hasField(@TypeOf(opt), "other") and std.mem.eql(u8, name, opt.other) and F != void and !has(F, "strandRawFormat")) @compileError("other payload requires void or format branded Raw");
+                checkOptions(F, ownership, next);
+            };
+        },
         else => {},
     }
 }
@@ -218,5 +261,62 @@ fn merge(a: Description, b: Description) Description {
     var result = if (a.support == .supported) b else a;
     result.encode = a.encode and b.encode;
     result.decode = a.decode and b.decode;
+    return result;
+}
+
+/// Resolve one type's orthogonal field policy without copying runtime metadata.
+pub fn fieldOptions(comptime T: type, comptime name: []const u8) if (@hasField(@TypeOf(options(T)), "fields") and @hasField(@TypeOf(options(T).fields), name)) @TypeOf(@field(options(T).fields, name)) else @TypeOf(.{}) {
+    const opt = options(T);
+    return if (comptime @hasField(@TypeOf(opt), "fields") and @hasField(@TypeOf(opt.fields), name)) @field(opt.fields, name) else .{};
+}
+pub fn hasDefault(comptime T: type, comptime name: []const u8) bool {
+    const opt = fieldOptions(T, name);
+    return @hasField(@TypeOf(opt), "default") or default(T, name) != null;
+}
+pub fn validate(comptime T: type, comptime name: []const u8, value: @FieldType(T, name)) error{ NumberOutOfRange, CustomRejected, LengthLimit }!void {
+    const opt = comptime fieldOptions(T, name);
+    const policy = comptime field(T, name);
+    switch (@typeInfo(@TypeOf(value))) {
+        .pointer => |i| if (i.size == .slice and value.len > policy.max_len) {
+            return error.LengthLimit;
+        },
+        inline .array, .vector => |i| if (i.len > policy.max_len) {
+            return error.LengthLimit;
+        },
+        else => {},
+    }
+    if (@hasField(@TypeOf(opt), "range")) {
+        if (value < opt.range.min or value > opt.range.max) return error.NumberOutOfRange;
+    }
+    if (@hasField(@TypeOf(opt), "validate")) if (!opt.validate(value)) return error.CustomRejected;
+}
+fn rename(comptime name: []const u8, comptime style: Rename) []const u8 {
+    var result: []const u8 = "";
+    var upper = style == .PascalCase;
+    for (name, 0..) |ch, i| {
+        if (ch == '_' or ch == '-') {
+            if (style == .camel_case or style == .PascalCase) {
+                upper = true;
+                continue;
+            }
+            result = result ++ .{if (style == .kebab_case) @as(u8, '-') else @as(u8, '_')};
+            continue;
+        }
+        if (std.ascii.isUpper(ch) and i != 0 and name[i - 1] != '_' and name[i - 1] != '-' and std.ascii.isLower(name[i - 1]) and style != .camel_case and style != .PascalCase) result = result ++ .{if (style == .kebab_case) @as(u8, '-') else @as(u8, '_')};
+        result = result ++ .{if (upper or style == .SCREAMING_SNAKE_CASE) std.ascii.toUpper(ch) else if (style == .camel_case and i != 0) ch else std.ascii.toLower(ch)};
+        upper = false;
+    }
+    return result;
+}
+
+pub fn variant(comptime T: type, comptime name: []const u8) Field {
+    const opt = options(T);
+    var result: Field = .{ .name = name };
+    if (@hasField(@TypeOf(opt), "rename_all")) result.name = rename(name, opt.rename_all);
+    if (@hasField(@TypeOf(opt), "variants") and @hasField(@TypeOf(opt.variants), name)) {
+        const v = @field(opt.variants, name);
+        if (@hasField(@TypeOf(v), "name")) result.name = v.name;
+        if (@hasField(@TypeOf(v), "aliases")) result.aliases = v.aliases;
+    }
     return result;
 }

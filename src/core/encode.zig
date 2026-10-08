@@ -26,7 +26,14 @@ fn emit(comptime policy: descriptor.Field, value: anytype, out: anytype, c: *ctx
         .float => try out.floating(value, c),
         .void => try out.unit(c),
         .null => try out.nullValue(c),
-        .@"enum" => try out.text(@tagName(value), c),
+        .@"enum" => switch (value) {
+            inline else => |tag| {
+                const name = (comptime descriptor.variant(T, @tagName(tag))).name;
+                try c.span(name.len, false);
+                try c.chargeWork(name.len);
+                try out.text(name, c);
+            },
+        },
         .optional => if (value) |v| {
             c.items -= 1;
             try emit(policy, v, out, c, active);
@@ -83,28 +90,37 @@ fn emit(comptime policy: descriptor.Field, value: anytype, out: anytype, c: *ctx
         .@"struct" => |i| {
             var count: usize = 0;
             inline for (i.field_names, i.field_attrs) |name, attrs| {
-                if (!attrs.@"comptime" and !omit(T, name, value)) count += 1;
+                if (!attrs.@"comptime" and !(try omit(T, name, value, c))) count += 1;
             }
             try begin(out, c, if (i.is_tuple) .tuple else .record, @typeName(T), count);
             defer c.leave();
             inline for (i.field_names, i.field_attrs) |name, attrs| {
                 if (attrs.@"comptime") continue;
                 const f = comptime descriptor.field(T, name);
-                if (!omit(T, name, value)) {
+                if (!(try omit(T, name, value, c))) {
                     if (!i.is_tuple) {
                         try c.node();
                         try c.span(f.name.len, true);
                         try c.chargeWork(f.name.len);
                         try out.key(f.name, c);
                     }
-                    try emit(f, @field(value, name), out, c, active);
+                    try descriptor.validate(T, name, @field(value, name));
+                    const declared = comptime descriptor.fieldOptions(T, name);
+                    if (@hasField(@TypeOf(declared), "codec")) {
+                        try c.node();
+                        var access: Access(@TypeOf(out.*)) = .{ .out = out, .context = c, .active = active };
+                        try declared.codec.encode(@field(value, name), &access);
+                        if (!access.used) return error.CustomRejected;
+                    } else try emit(f, @field(value, name), out, c, active);
                 }
             }
             try out.end(c);
         },
         .@"union" => switch (value) {
             inline else => |v, tag| {
-                try begin(out, c, .variant, @tagName(tag), 1);
+                const opt = comptime descriptor.options(T);
+                if (@hasField(@TypeOf(opt), "tag")) return tagged(T, value, out, c, active);
+                try begin(out, c, .variant, (comptime descriptor.variant(T, @tagName(tag))).name, 1);
                 defer c.leave();
                 try emit(.{}, v, out, c, active);
                 try out.end(c);
@@ -119,15 +135,17 @@ fn begin(out: anytype, c: *ctx.Context, kind: model.Kind, name: []const u8, n: u
     try c.count(n);
     try out.begin(kind, name, n, c);
 }
-fn omit(comptime T: type, comptime name: []const u8, value: T) bool {
+fn omit(comptime T: type, comptime name: []const u8, value: T, c: *ctx.Context) ctx.EncodeError!bool {
     const policy = comptime descriptor.field(T, name);
     if (policy.skip_encode) return true;
+    const declared = comptime descriptor.fieldOptions(T, name);
+    if (@hasField(@TypeOf(declared), "omit_if")) return declared.omit_if(@field(value, name));
     return switch (policy.omit) {
         .never => false,
         .null_value => if (@typeInfo(@FieldType(T, name)) == .optional) @field(value, name) == null else @compileError("omit.null_value requires an optional"),
         .default_value => blk: {
             const expected = comptime descriptor.default(T, name) orelse @compileError("omit.default_value requires a default");
-            break :blk std.meta.eql(@field(value, name), expected);
+            break :blk if (@hasField(@TypeOf(declared), "equal")) declared.equal(@field(value, name), expected) else try equal(@FieldType(T, name), @field(value, name), expected, c);
         },
     };
 }
@@ -141,6 +159,26 @@ pub fn Access(comptime Backend: type) type {
         used: bool = false,
         pub const Error = ctx.EncodeError || Backend.Error;
         const Self = @This();
+        pub fn scalar(self: *Self, value: u21) Error!void {
+            if (self.used) return error.CustomRejected;
+            self.used = true;
+            if (!std.unicode.utf8ValidCodepoint(value)) return error.InvalidUtf8;
+            try self.out.scalar(value, self.context);
+        }
+        pub fn writePairs(self: *Self, values: anytype) (Errors(@TypeOf(values[0].key), Backend) || Errors(@TypeOf(values[0].value), Backend))!void {
+            comptime descriptor.check(@TypeOf(values[0].key), Backend.capabilities, false, .borrowed);
+            comptime descriptor.check(@TypeOf(values[0].value), Backend.capabilities, false, .borrowed);
+            if (self.used) return error.CustomRejected;
+            self.used = true;
+            try begin(self.out, self.context, .map, "", values.len);
+            defer self.context.leave();
+            for (values) |v| {
+                if (@typeInfo(@TypeOf(v.key)) == .pointer and @typeInfo(@TypeOf(v.key)).pointer.size == .slice and @typeInfo(@TypeOf(v.key)).pointer.child == u8) try self.context.span(v.key.len, true);
+                try emit(.{}, v.key, self.out, self.context, self.active);
+                try emit(.{}, v.value, self.out, self.context, self.active);
+            }
+            try self.out.end(self.context);
+        }
         pub fn raw(self: *Self, comptime Format: type, bytes: []const u8) (ctx.EncodeError || Backend.Error)!void {
             if (Backend.Format != Format) @compileError("raw format brand does not match the backend");
             if (self.used) return error.CustomRejected;
@@ -176,9 +214,92 @@ fn HookErrors(comptime T: type, comptime Backend: type, comptime seen: []const t
         inline .pointer, .optional, .array, .vector => |i| HookErrors(i.child, Backend, next),
         inline .@"struct", .@"union" => |i| blk: {
             var errors: type = error{};
-            for (i.field_types) |F| errors = errors || HookErrors(F, Backend, next);
+            for (i.field_types, i.field_names) |F, name| {
+                const opt = descriptor.fieldOptions(T, name);
+                if (@hasField(@TypeOf(opt), "codec") and @hasDecl(opt.codec, "encode")) errors = errors || @typeInfo(@TypeOf(opt.codec.encode(@as(F, undefined), @as(*Access(Backend), undefined)))).error_union.error_set else errors = errors || HookErrors(F, Backend, next);
+            }
+            if (@typeInfo(errors).error_set.error_names == null) @compileError("field codecs require named errors");
             break :blk errors;
         },
         else => error{},
     };
+}
+
+/// Structural default equality never compares padding or pointer addresses.
+fn equal(comptime T: type, a: T, b: T, c: *ctx.Context) ctx.EncodeError!bool {
+    try c.enter();
+    defer c.leave();
+    try c.chargeWork(1);
+    return switch (@typeInfo(T)) {
+        .pointer => |i| switch (i.size) {
+            .one => try equal(i.child, a.*, b.*, c),
+            .slice => blk: {
+                if (a.len != b.len) break :blk false;
+                for (a, b) |x, y| if (!try equal(i.child, x, y, c)) break :blk false;
+                break :blk true;
+            },
+            else => unreachable,
+        },
+        .optional => |i| if (a) |x| if (b) |y| try equal(i.child, x, y, c) else false else b == null,
+        .@"struct" => |i| blk: {
+            inline for (i.field_names, i.field_types) |name, F| if (!try equal(F, @field(a, name), @field(b, name), c)) break :blk false;
+            break :blk true;
+        },
+        .array, .vector => |i| blk: {
+            for (0..i.len) |index| if (!try equal(i.child, a[index], b[index], c)) break :blk false;
+            break :blk true;
+        },
+        .@"union" => blk: {
+            if (std.meta.activeTag(a) != std.meta.activeTag(b)) break :blk false;
+            break :blk switch (a) {
+                inline else => |v, tag| try equal(@TypeOf(v), v, @field(b, @tagName(tag)), c),
+            };
+        },
+        .void, .null => true,
+        else => a == b,
+    };
+}
+
+fn tagged(comptime T: type, value: T, out: anytype, c: *ctx.Context, active: ?*const Active) Errors(T, @TypeOf(out.*))!void {
+    const opt = comptime descriptor.options(T);
+    switch (value) {
+        inline else => |v, tag| {
+            const F = @TypeOf(v);
+            const count = if (@hasField(@TypeOf(opt), "content")) 2 else if (F == void) 1 else blk: {
+                var n: usize = 1;
+                inline for (@typeInfo(F).@"struct".field_names, @typeInfo(F).@"struct".field_attrs) |name, attrs| if (!attrs.@"comptime" and !try omit(F, name, v, c)) {
+                    n += 1;
+                };
+                break :blk n;
+            };
+            try begin(out, c, .record, @typeName(T), count);
+            defer c.leave();
+            try c.node();
+            try c.span(opt.tag.len, true);
+            try out.key(opt.tag, c);
+            const wire_tag = (comptime descriptor.variant(T, @tagName(tag))).name;
+            try c.node();
+            try c.span(wire_tag.len, false);
+            try out.text(wire_tag, c);
+            if (@hasField(@TypeOf(opt), "content")) {
+                try c.node();
+                try c.span(opt.content.len, true);
+                try out.key(opt.content, c);
+                try emit(.{}, v, out, c, active);
+            } else if (F != void) {
+                inline for (@typeInfo(F).@"struct".field_names, @typeInfo(F).@"struct".field_attrs) |name, attrs| {
+                    if (attrs.@"comptime") continue;
+                    if (!try omit(F, name, v, c)) {
+                        const policy = comptime descriptor.field(F, name);
+                        try c.node();
+                        try c.span(policy.name.len, true);
+                        try out.key(policy.name, c);
+                        try descriptor.validate(F, name, @field(v, name));
+                        try emit(policy, @field(v, name), out, c, active);
+                    }
+                }
+            }
+            try out.end(c);
+        },
+    }
 }

@@ -108,7 +108,7 @@ pub fn Cursor(comptime Backend: type) type {
             if (comptime descriptor.has(T, "strandDeserialize")) {
                 var access: Access(Backend) = .{ .cursor = self };
                 const value = try T.strandDeserialize(&access);
-                if (!access.used) return error.CustomRejected;
+                if (!access.used or !access.complete) return error.CustomRejected;
                 return value;
             }
             switch (@typeInfo(T)) {
@@ -129,6 +129,7 @@ pub fn Cursor(comptime Backend: type) type {
                     // overflow is explicitly rejected before publishing the result.
                     const value: T = @floatCast(event.floating); // safe: checked destination bounds or Zig-provided typed storage precede this conversion.
                     if (std.math.isFinite(event.floating) and !std.math.isFinite(value)) return error.NumberOutOfRange;
+                    if (policy.exact and std.math.isFinite(event.floating) and @as(f128, value) != event.floating) return error.InexactNumber;
                     return value;
                 },
                 .void => {
@@ -145,12 +146,12 @@ pub fn Cursor(comptime Backend: type) type {
                         return null;
                     }
                     // Optional presence is a type hint, not an extra wire node.
-                    self.context.items -= 1;
+                    if (!self.context.replaying) self.context.items -= 1;
                     return try self.read(i.child, policy);
                 },
                 .pointer => |i| switch (i.size) {
                     .one => {
-                        self.context.items -= 1;
+                        if (!self.context.replaying) self.context.items -= 1;
                         const storage = try self.context.allocPointer(T, 1);
                         storage.* = try self.read(i.child, policy);
                         return storage;
@@ -164,9 +165,9 @@ pub fn Cursor(comptime Backend: type) type {
                         _ = try self.start(.tuple);
                         defer self.context.leave();
                         var value: T = undefined;
-                        inline for (i.field_names, i.field_types, i.field_attrs) |name, F, attrs| {
+                        inline for (i.field_names, i.field_attrs) |name, attrs| {
                             if (attrs.@"comptime") continue;
-                            @field(value, name) = try self.read(F, comptime descriptor.field(T, name));
+                            @field(value, name) = try self.readField(T, name);
                         }
                         try self.end();
                         return value;
@@ -175,23 +176,110 @@ pub fn Cursor(comptime Backend: type) type {
                 },
                 .@"enum" => |i| {
                     const name = try self.keyValue();
-                    inline for (i.field_names) |variant| if (try self.equals(name, variant)) return @field(T, variant);
+                    inline for (i.field_names) |variant| {
+                        const v = comptime descriptor.variant(T, variant);
+                        var matches = try self.equals(name, v.name);
+                        inline for (v.aliases) |alias| matches = matches or try self.equals(name, alias);
+                        if (matches) return @field(T, variant);
+                    }
                     return error.UnknownVariant;
                 },
                 .@"union" => |i| {
+                    const opt = comptime descriptor.options(T);
+                    if (@hasField(@TypeOf(opt), "tag")) return self.tagged(T);
                     const header = try self.start(.variant);
                     defer self.context.leave();
                     inline for (i.field_names, i.field_types) |name, F| {
-                        if (try self.equals(header.name, name)) {
+                        const v = comptime descriptor.variant(T, name);
+                        var matches = try self.equals(header.name, v.name);
+                        inline for (v.aliases) |alias| matches = matches or try self.equals(header.name, alias);
+                        if (matches) {
                             const value = @unionInit(T, name, try self.read(F, .{ .name = name }));
                             try self.end();
                             return value;
                         }
                     }
+                    if (@hasField(@TypeOf(opt), "other")) {
+                        const F = @FieldType(T, opt.other);
+                        const payload = if (F == void) blk: {
+                            try self.skip();
+                            break :blk {};
+                        } else try self.read(F, .{});
+                        try self.end();
+                        return @unionInit(T, opt.other, payload);
+                    }
                     return error.UnknownVariant;
                 },
                 else => @compileError("unsupported core decode type"),
             }
+        }
+        /// Routing scans a bounded record once, then replays just the selected
+        /// payload. This supports content-before-tag without an unbounded DOM.
+        fn tagged(self: *Self, comptime T: type) Errors(T, Backend)!T {
+            const opt = comptime descriptor.options(T);
+            const record_start = if (self.pending != null) self.pending_start else self.backend.offset();
+            const header = try self.start(.record);
+            var entered = true;
+            defer if (entered) self.context.leave();
+            var tag: ?[]const u8 = null;
+            var payload: ?struct { start: usize, end: usize } = null;
+            var count: usize = 0;
+            while (try self.peek() != .end) {
+                if (count >= self.context.limits.container_items) return error.ItemLimit;
+                count += 1;
+                const name = try self.key();
+                if (try self.equals(name, opt.tag)) {
+                    if (tag != null) return error.DuplicateField;
+                    try self.context.node();
+                    const span = try self.keySpan();
+                    tag = if (span.lifetime == .transient) try self.context.retain(span.bytes, .transient, .copy) else span.bytes;
+                } else if (@hasField(@TypeOf(opt), "content") and try self.equals(name, opt.content)) {
+                    if (payload != null) return error.DuplicateField;
+                    const payload_start = self.backend.offset();
+                    try self.skip();
+                    payload = .{ .start = payload_start, .end = self.backend.offset() };
+                } else {
+                    if (@hasField(@TypeOf(opt), "content")) return error.UnknownField;
+                    try self.skip();
+                }
+            }
+            if (header.len) |n| if (n != count) return error.SyntaxError;
+            try self.end();
+            self.context.leave();
+            entered = false;
+            const tag_name = tag orelse return error.MissingField;
+            const record_end = self.backend.offset();
+            const was_replaying = self.context.replaying;
+            self.context.replaying = true;
+            defer self.context.replaying = was_replaying;
+            inline for (@typeInfo(T).@"union".field_names, @typeInfo(T).@"union".field_types) |name, F| {
+                const v = comptime descriptor.variant(T, name);
+                var matches = try self.equals(tag_name, v.name);
+                inline for (v.aliases) |alias| matches = matches or try self.equals(tag_name, alias);
+                if (matches) {
+                    const value = if (@hasField(@TypeOf(opt), "content")) blk: {
+                        const span = payload orelse return error.MissingField;
+                        var backend = self.backend.replay(span.start, span.end);
+                        break :blk try deserialize(F, &backend, self.context);
+                    } else if (F == void) blk: {
+                        if (count != 1) return error.UnknownField;
+                        break :blk {};
+                    } else blk: {
+                        var backend = self.backend.replay(record_start, record_end);
+                        var filtered: Filtered(Backend) = .{ .backend = &backend, .tag = opt.tag };
+                        break :blk try deserialize(F, &filtered, self.context);
+                    };
+                    return @unionInit(T, name, value);
+                }
+            }
+            if (@hasField(@TypeOf(opt), "other")) {
+                const F = @FieldType(T, opt.other);
+                if (F == void) return @unionInit(T, opt.other, {});
+                const span = payload orelse .{ .start = record_start, .end = record_end };
+                var backend = self.backend.replay(span.start, span.end);
+                return @unionInit(T, opt.other, try deserialize(F, &backend, self.context));
+            }
+            return error.UnknownVariant;
         }
         fn fixed(self: *Self, comptime T: type, comptime policy: descriptor.Field) Errors(T, Backend)!T {
             const i = if (@typeInfo(T) == .array) @typeInfo(T).array else @typeInfo(T).vector;
@@ -233,12 +321,15 @@ pub fn Cursor(comptime Backend: type) type {
             return array;
         }
         fn keyValue(self: *Self) Error![]const u8 {
+            return (try self.keySpan()).bytes;
+        }
+        fn keySpan(self: *Self) Error!model.Span {
             const event = try self.take();
             if (event != .text) return error.UnexpectedType;
             try self.context.span(event.text.bytes.len, false);
             try self.context.chargeWork(event.text.bytes.len);
             if (!std.unicode.utf8ValidateSlice(event.text.bytes)) return error.InvalidUtf8;
-            return event.text.bytes;
+            return event.text;
         }
         fn slice(self: *Self, comptime T: type, comptime policy: descriptor.Field) Errors(T, Backend)!T {
             const i = @typeInfo(T).pointer;
@@ -291,6 +382,18 @@ pub fn Cursor(comptime Backend: type) type {
             }
             return values[0..initialized];
         }
+        fn readField(self: *Self, comptime T: type, comptime name: []const u8) Errors(T, Backend)!@FieldType(T, name) {
+            const declared = comptime descriptor.fieldOptions(T, name);
+            const value = if (@hasField(@TypeOf(declared), "codec")) blk: {
+                try self.context.node();
+                var access: Access(Backend) = .{ .cursor = self };
+                const result = try declared.codec.decode(&access);
+                if (!access.used or !access.complete) return error.CustomRejected;
+                break :blk result;
+            } else try self.read(@FieldType(T, name), comptime descriptor.field(T, name));
+            try descriptor.validate(T, name, value);
+            return value;
+        }
         fn record(self: *Self, comptime T: type) Errors(T, Backend)!T {
             const i = @typeInfo(T).@"struct";
             const opt = comptime descriptor.options(T);
@@ -314,7 +417,7 @@ pub fn Cursor(comptime Backend: type) type {
                     inline for (f.aliases) |alias| matches = matches or try self.equals(name, alias);
                     if (matches) matched = index;
                 }
-                inline for (i.field_names, i.field_types, i.field_attrs, 0..) |field_name, F, attrs, index| {
+                inline for (i.field_names, i.field_attrs, 0..) |field_name, attrs, index| {
                     if (attrs.@"comptime") continue;
                     if (matched == index) {
                         const f = comptime descriptor.field(T, field_name);
@@ -324,7 +427,7 @@ pub fn Cursor(comptime Backend: type) type {
                         } else {
                             const old = if (self.context.diagnostics) |d| d.count else 0;
                             if (self.context.diagnostics) |d| d.field(field_name);
-                            @field(value, field_name) = try self.read(F, f);
+                            @field(value, field_name) = try self.readField(T, field_name);
                             if (self.context.diagnostics) |d| d.count = old;
                         }
                         seen[index] = !f.skip_decode;
@@ -340,11 +443,14 @@ pub fn Cursor(comptime Backend: type) type {
             inline for (i.field_names, i.field_types, i.field_attrs, 0..) |name, F, attrs, index| {
                 if (attrs.@"comptime") continue;
                 if (!seen[index]) {
-                    const default_option = comptime descriptor.default(T, name);
-                    const default_value = default_option orelse return error.MissingField;
-                    // Materialize pointer-bearing defaults in the result arena; static
-                    // literals must never be accidentally owned/freed or left borrowed.
-                    @field(value, name) = try clone(F, default_value, self.context);
+                    const declared = comptime descriptor.fieldOptions(T, name);
+                    if (@hasField(@TypeOf(declared), "default") and @typeInfo(@TypeOf(declared.default)) == .@"fn") {
+                        @field(value, name) = try declared.default(self.context);
+                    } else {
+                        const default_value = (comptime descriptor.default(T, name)) orelse return error.MissingField;
+                        @field(value, name) = try clone(F, default_value, self.context);
+                    }
+                    try descriptor.validate(T, name, @field(value, name));
                 }
             }
             return value;
@@ -365,6 +471,7 @@ pub fn Cursor(comptime Backend: type) type {
                     try self.context.span(span.bytes.len, false);
                     try self.context.chargeWork(span.bytes.len);
                 },
+                .scalar => |v| if (!std.unicode.utf8ValidCodepoint(v)) return error.InvalidUtf8,
                 .integer => |n| {
                     if (n.magnitude.len > self.context.limits.numeric_bytes) return error.LengthLimit;
                     try self.context.chargeWork(n.magnitude.len);
@@ -401,12 +508,47 @@ pub fn Access(comptime Backend: type) type {
     return struct {
         cursor: *Cursor(Backend),
         used: bool = false,
+        complete: bool = true,
         pub const Error = ctx.DecodeError || Backend.Error;
         const Self = @This();
+        pub fn begin(self: *Self, kind: model.Kind) Error!CompoundAccess(Backend) {
+            if (self.used) return error.CustomRejected;
+            self.used = true;
+            self.complete = false;
+            const header = try self.cursor.start(kind);
+            return .{ .access = self, .header = header };
+        }
+        pub fn scalar(self: *Self) Error!u21 {
+            if (self.used) return error.CustomRejected;
+            self.used = true;
+            const event = try self.cursor.take();
+            if (event != .scalar) return error.UnexpectedType;
+            if (!std.unicode.utf8ValidCodepoint(event.scalar)) return error.InvalidUtf8;
+            return event.scalar;
+        }
+        pub fn readPairs(self: *Self, comptime K: type, comptime V: type) (Errors(K, Backend) || Errors(V, Backend))![]model.Pair(K, V) {
+            var map = try self.begin(.map);
+            defer map.abort();
+            var storage: []model.Pair(K, V) = &.{};
+            var n: usize = 0;
+            while (try map.hasNext()) {
+                if (n == storage.len) {
+                    const capacity = @max(@as(usize, 1), std.math.mul(usize, n, 2) catch return error.AllocationLimit);
+                    const next = try self.alloc(model.Pair(K, V), @min(capacity, self.cursor.context.limits.container_items));
+                    try self.chargeWork(n);
+                    @memcpy(next[0..n], storage[0..n]);
+                    storage = next;
+                }
+                storage[n] = .{ .key = try map.key(K), .value = try map.element(V) };
+                n += 1;
+            }
+            try map.finish();
+            return storage[0..n];
+        }
         pub fn read(self: *Self, comptime T: type) Errors(T, Backend)!T {
             if (self.used) return error.CustomRejected;
             self.used = true;
-            self.cursor.context.items -= 1;
+            if (!self.cursor.context.replaying) self.cursor.context.items -= 1;
             return self.cursor.read(T, .{ .name = "" });
         }
         pub fn alloc(self: *Self, comptime T: type, n: usize) ctx.DecodeError![]T {
@@ -420,7 +562,7 @@ pub fn Access(comptime Backend: type) type {
             if (self.used) return error.CustomRejected;
             self.used = true;
             const start = if (self.cursor.pending != null) self.cursor.pending_start else self.cursor.backend.offset();
-            self.cursor.context.items -= 1;
+            if (!self.cursor.context.replaying) self.cursor.context.items -= 1;
             try self.cursor.skip();
             const span = self.cursor.backend.raw(start, self.cursor.backend.offset());
             return self.cursor.context.retain(span.bytes, span.lifetime, .prefer);
@@ -428,14 +570,14 @@ pub fn Access(comptime Backend: type) type {
         pub fn skip(self: *Self) (ctx.DecodeError || Backend.Error)!void {
             if (self.used) return error.CustomRejected;
             self.used = true;
-            self.cursor.context.items -= 1;
+            if (!self.cursor.context.replaying) self.cursor.context.items -= 1;
             try self.cursor.skip();
         }
     };
 }
 
 /// Checked copying for defaults; result storage belongs to the same arena.
-fn clone(comptime T: type, value: T, c: *ctx.Context) ctx.DecodeError!T {
+pub fn clone(comptime T: type, value: T, c: *ctx.Context) ctx.DecodeError!T {
     @setRuntimeSafety(true);
     try c.enter();
     defer c.leave();
@@ -491,9 +633,108 @@ fn HookErrors(comptime T: type, comptime Backend: type, comptime seen: []const t
         inline .pointer, .optional, .array, .vector => |i| HookErrors(i.child, Backend, next),
         inline .@"struct", .@"union" => |i| blk: {
             var errors: type = error{};
-            for (i.field_types) |F| errors = errors || HookErrors(F, Backend, next);
+            for (i.field_types, i.field_names) |F, name| {
+                const opt = descriptor.fieldOptions(T, name);
+                if (@hasField(@TypeOf(opt), "codec") and @hasDecl(opt.codec, "decode")) errors = errors || @typeInfo(@TypeOf(opt.codec.decode(@as(*Access(Backend), undefined)))).error_union.error_set else errors = errors || HookErrors(F, Backend, next);
+                if (@hasField(@TypeOf(opt), "default") and @typeInfo(@TypeOf(opt.default)) == .@"fn") errors = errors || @typeInfo(@TypeOf(opt.default(@as(*ctx.Context, undefined)))).error_union.error_set;
+            }
+            if (@typeInfo(errors).error_set.error_names == null) @compileError("field codecs and defaults require named errors");
             break :blk errors;
         },
         else => error{},
+    };
+}
+
+/// A validated internal-tag replay suppresses exactly the routing key/value.
+fn Filtered(comptime Backend: type) type {
+    return struct {
+        backend: *Backend,
+        tag: []const u8,
+        level: usize = 0,
+        key_turn: bool = true,
+        pub const Error = Backend.Error;
+        pub const Format = Backend.Format;
+        pub const capabilities = Backend.capabilities;
+        const Self = @This();
+        pub fn offset(self: *const Self) usize {
+            return self.backend.offset();
+        }
+        pub fn endInput(self: *Self, c: *ctx.Context) Error!void {
+            try self.backend.endInput(c);
+        }
+        pub fn raw(self: *const Self, start: usize, end: usize) model.Span {
+            return self.backend.raw(start, end);
+        }
+        pub fn replay(self: *const Self, start: usize, end: usize) Backend {
+            return self.backend.replay(start, end);
+        }
+        pub fn next(self: *Self, c: *ctx.Context) (ctx.DecodeError || Error)!model.Event {
+            while (true) {
+                var event = try self.backend.next(c);
+                if (self.level == 1 and self.key_turn and event == .text) {
+                    try c.chargeWork(event.text.bytes.len);
+                    if (std.mem.eql(u8, event.text.bytes, self.tag)) {
+                        _ = try self.backend.next(c);
+                        continue;
+                    }
+                    self.key_turn = false;
+                } else if (self.level == 1 and event != .end) self.key_turn = true;
+                if (event == .begin) {
+                    if (self.level == 0) if (event.begin.len) |n| {
+                        event.begin.len = n - 1;
+                    };
+                    self.level += 1;
+                } else if (event == .end) {
+                    self.level -= 1;
+                }
+                return event;
+            }
+        }
+    };
+}
+
+/// Bounded compound visitor: every member is read through the same kernel;
+/// finishing validates the declared arity and consumes the explicit end marker.
+pub fn CompoundAccess(comptime Backend: type) type {
+    return struct {
+        access: *Access(Backend),
+        header: model.Compound,
+        count: usize = 0,
+        key_pending: bool = false,
+        live: bool = true,
+        pub const Error = ctx.DecodeError || Backend.Error;
+        const Self = @This();
+        pub fn hasNext(self: *Self) Error!bool {
+            if (!self.live or self.key_pending) return error.CustomRejected;
+            return try self.access.cursor.peek() != .end;
+        }
+        pub fn key(self: *Self, comptime T: type) Errors(T, Backend)!T {
+            if (!self.live or self.key_pending or (self.header.kind != .map and self.header.kind != .record)) return error.CustomRejected;
+            if (self.count >= self.access.cursor.context.limits.container_items) return error.ItemLimit;
+            self.key_pending = true;
+            const event = try self.access.cursor.peek();
+            if (event == .text) try self.access.cursor.context.span(event.text.bytes.len, true);
+            return self.access.cursor.read(T, .{});
+        }
+        pub fn element(self: *Self, comptime T: type) Errors(T, Backend)!T {
+            if (!self.live or ((self.header.kind == .map or self.header.kind == .record) and !self.key_pending)) return error.CustomRejected;
+            if (self.count >= self.access.cursor.context.limits.container_items) return error.ItemLimit;
+            self.key_pending = false;
+            self.count += 1;
+            return self.access.cursor.read(T, .{});
+        }
+        pub fn finish(self: *Self) Error!void {
+            if (!self.live or self.key_pending) return error.CustomRejected;
+            if (self.header.len) |n| if (n != self.count) return error.SyntaxError;
+            try self.access.cursor.end();
+            self.access.complete = true;
+            self.abort();
+        }
+        pub fn abort(self: *Self) void {
+            if (self.live) {
+                self.access.cursor.context.leave();
+                self.live = false;
+            }
+        }
     };
 }

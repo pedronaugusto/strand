@@ -8,10 +8,11 @@ pub const Error = error{SyntaxError};
 pub const capabilities: core.Capabilities = .{};
 input: []const u8,
 position: usize = 0,
+end_position: ?usize = null,
 const Self = @This();
 fn read(self: *Self, c: *core.Context, n: usize) core.DecodeError![]const u8 {
     @setRuntimeSafety(true);
-    if (n > self.input.len - self.position) return error.SyntaxError;
+    if (n > (self.end_position orelse self.input.len) - self.position) return error.SyntaxError;
     try c.input(n);
     const bytes = self.input[self.position..][0..n];
     self.position += n;
@@ -34,6 +35,17 @@ pub fn next(self: *Self, c: *core.Context) core.DecodeError!core.Event {
         },
         5 => .{ .begin = .{ .kind = .sequence, .len = (try self.read(c, 1))[0] } },
         6 => .{ .begin = .{ .kind = .record, .len = (try self.read(c, 1))[0] } },
+        12 => blk: {
+            const len = (try self.read(c, 1))[0];
+            break :blk .{ .begin = .{ .kind = .variant, .name = try self.read(c, len), .len = 1 } };
+        },
+        14 => blk: {
+            const bytes = try self.read(c, 3);
+            const value = std.mem.readInt(u24, bytes[0..3], .little);
+            if (value > 0x10ffff or (value >= 0xd800 and value <= 0xdfff)) return error.InvalidUtf8;
+            break :blk .{ .scalar = @intCast(value) }; // safe: Unicode scalar bound fits u21.
+        },
+        13 => .{ .begin = .{ .kind = .map, .len = (try self.read(c, 1))[0] } },
         10 => .{ .begin = .{ .kind = .sequence } },
         11 => .{ .begin = .{ .kind = .map } },
         7 => .none,
@@ -48,8 +60,11 @@ pub fn offset(self: *const Self) usize {
 pub fn raw(self: *const Self, start: usize, end: usize) core.Span {
     return .{ .bytes = self.input[start..end], .lifetime = .borrowed };
 }
+pub fn replay(self: *const Self, start: usize, end: usize) Self {
+    return .{ .input = self.input, .position = start, .end_position = end };
+}
 pub fn endInput(self: *Self, _: *core.Context) Error!void {
-    if (self.position != self.input.len) return error.SyntaxError;
+    if (self.position != (self.end_position orelse self.input.len)) return error.SyntaxError;
 }
 
 /// Fixed-buffer semantic writer. Backends meter encoded bytes before publication.
@@ -84,6 +99,12 @@ pub const Encoder = struct {
         @memcpy(self.buffer[self.used..][0..payload.len], payload);
         self.used += payload.len;
     }
+    pub fn scalar(self: *Encoder, value: u21, c: *core.Context) core.EncodeError!void {
+        var encoded: [3]u8 = undefined;
+        std.mem.writeInt(u24, &encoded, value, .little);
+        try self.write(c, &.{14});
+        try self.write(c, &encoded);
+    }
     pub fn boolean(self: *Encoder, value: bool, c: *core.Context) core.EncodeError!void {
         try self.write(c, &.{ 1, @intFromBool(value) });
     }
@@ -115,9 +136,14 @@ pub const Encoder = struct {
     pub fn unit(self: *Encoder, c: *core.Context) core.EncodeError!void {
         try self.write(c, &.{8});
     }
-    pub fn begin(self: *Encoder, kind: core.Kind, _: []const u8, len: usize, c: *core.Context) core.EncodeError!void {
+    pub fn begin(self: *Encoder, kind: core.Kind, name: []const u8, len: usize, c: *core.Context) core.EncodeError!void {
         const size = std.math.cast(u8, len) orelse return error.ItemLimit;
-        try self.write(c, &.{ if (kind == .record or kind == .map) @as(u8, 6) else @as(u8, 5), size });
+        if (kind == .variant) {
+            if (len != 1) return error.UnsupportedValue;
+            const n = std.math.cast(u8, name.len) orelse return error.LengthLimit;
+            try self.write(c, &.{ 12, n });
+            try self.write(c, name);
+        } else try self.write(c, &.{ if (kind == .record) @as(u8, 6) else if (kind == .map) @as(u8, 13) else @as(u8, 5), size });
     }
     pub fn end(self: *Encoder, c: *core.Context) core.EncodeError!void {
         try self.write(c, &.{0});

@@ -62,6 +62,8 @@ pub const Context = struct {
     output_bytes: usize = 0,
     allocation_requested: usize = 0,
     diagnostics: ?*Diagnostics = null,
+    /// Internal replay: wire nodes/bytes were already validated and charged.
+    replaying: bool = false,
 
     pub fn init(storage: std.mem.Allocator, limits: Limits, ownership: Ownership) Context {
         return .{ .storage = storage, .limits = limits, .ownership = ownership };
@@ -77,12 +79,13 @@ pub const Context = struct {
     }
     pub fn node(self: *Context) error{ItemLimit}!void {
         @setRuntimeSafety(true);
+        if (self.replaying) return;
         if (self.items >= self.limits.items) return error.ItemLimit;
         self.items += 1;
     }
     pub fn count(self: *Context, n: usize) error{ItemLimit}!void {
         @setRuntimeSafety(true);
-        if (n > self.limits.container_items or n > self.limits.items - self.items) return error.ItemLimit;
+        if (n > self.limits.container_items or (!self.replaying and n > self.limits.items - self.items)) return error.ItemLimit;
     }
     pub fn span(self: *Context, n: usize, key: bool) error{LengthLimit}!void {
         if (n > if (key) self.limits.key_bytes else self.limits.string_bytes) return error.LengthLimit;
@@ -94,6 +97,7 @@ pub const Context = struct {
     }
     pub fn input(self: *Context, n: usize) error{ InputLimit, WorkLimit }!void {
         @setRuntimeSafety(true);
+        if (self.replaying) return self.chargeWork(n);
         if (n > self.limits.input_bytes - self.input_bytes) return error.InputLimit;
         self.input_bytes += n;
         try self.chargeWork(n);
@@ -133,6 +137,8 @@ pub const Context = struct {
     pub fn retain(self: *Context, bytes: []const u8, lifetime: Lifetime, borrow: Borrow) DecodeError![]const u8 {
         try self.span(bytes.len, false);
         if (borrow == .require and (self.ownership == .owned or lifetime != .borrowed)) return error.BorrowUnavailable;
+        // An owned visit already belongs to this operation's result arena.
+        if (lifetime == .owned and borrow != .copy) return bytes;
         if (self.ownership == .borrowed and lifetime == .borrowed and borrow != .copy) return bytes;
         try self.chargeWork(bytes.len);
         const copy = try self.alloc(u8, bytes.len);

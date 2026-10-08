@@ -1,6 +1,7 @@
 const shakedown = @import("shakedown");
 const std = @import("std");
 pub const core = @import("core.zig");
+const model = @import("core/model.zig");
 
 test "S1 admission sees rejected inactive branches and recursive data" {
     const Node = struct {
@@ -331,11 +332,11 @@ test "S1 named custom failures compose and rollback allocated surrogate data" {
 
 test "S1 one way fields never overwrite another field direction exclusion" {
     const Write = struct {
-        const Self = @This();
+        pub const Self = @This();
         pub fn strandSerialize(_: Self, _: anytype) core.EncodeError!void {}
     };
     const Read = struct {
-        const Self = @This();
+        pub const Self = @This();
         pub fn strandDeserialize(_: anytype) core.DecodeError!Self {
             return .{};
         }
@@ -347,4 +348,170 @@ test "S1 one way fields never overwrite another field direction exclusion" {
         pub const strand = .{ .fields = .{ .value = .{ .skip_decode = true } } };
     }, .{});
     try std.testing.expectEqual(core.Support.unsupported, missing_default.support);
+}
+
+test "S1 canonical raw refuses unnormalized bytes before output" {
+    const Canonical = struct {
+        pub const Error = core.EncodeError;
+        pub const Format = Reference.Format;
+        pub const canonical = true;
+        pub const capabilities: core.Capabilities = .{};
+    };
+    var backend: Canonical = .{};
+    var c: core.Context = .init(std.testing.failing_allocator, .{}, .borrowed);
+    try std.testing.expectError(error.UnsupportedValue, core.serialize(ReferenceRaw{ .bytes = &.{ 2, 42 } }, &backend, &c));
+    try std.testing.expectEqual(@as(usize, 0), c.output_bytes);
+}
+
+const FactoryRecord = struct {
+    payload: []const u8,
+    pub const strand = .{ .fields = .{ .payload = .{ .default = makeDefault } } };
+    pub fn makeDefault(c: *core.Context) core.DecodeError![]const u8 {
+        const bytes = try c.alloc(u8, 2);
+        @memcpy(bytes, "ok");
+        return bytes;
+    }
+};
+fn factoryDecode(c: *core.Context, input: []const u8) core.DecodeError!FactoryRecord {
+    return decoded(FactoryRecord, c, input);
+}
+fn factorySweep(gpa: std.mem.Allocator) !void {
+    var value = try core.acquire(FactoryRecord, .owned, gpa, &.{ 6, 0, 0 }, .{}, factoryDecode);
+    defer value.deinit();
+    try std.testing.expectEqualStrings("ok", value.value.payload);
+}
+test "S1 missing default factory has budgeted allocation and complete failure rollback" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, factorySweep, .{});
+    try std.testing.expectError(error.AllocationLimit, core.acquire(FactoryRecord, .owned, std.testing.allocator, &.{ 6, 0, 0 }, .{ .allocation_bytes = 1 }, factoryDecode));
+    try std.testing.expectError(error.UnexpectedType, core.acquire(FactoryRecord, .owned, std.testing.allocator, &.{ 6, 1, 3, 7, 'p', 'a', 'y', 'l', 'o', 'a', 'd', 7, 0 }, .{}, factoryDecode));
+}
+
+const FieldRecord = struct {
+    is_ready: u8,
+    item_count: u8,
+    pub const strand = .{ .rename_all = .camel_case, .fields = .{
+        .is_ready = .{ .codec = BoolByte },
+        .item_count = .{ .range = .{ .min = 1, .max = 8 }, .validate = even },
+    } };
+    pub fn even(value: u8) bool {
+        return value % 2 == 0;
+    }
+    pub const BoolByte = struct {
+        pub fn encode(value: u8, access: anytype) @TypeOf(access.*).Error!void {
+            try access.write(value != 0);
+        }
+        pub fn decode(access: anytype) @TypeOf(access.*).Error!u8 {
+            return @intFromBool(try access.read(bool));
+        }
+    };
+};
+test "S1 field codec casing range and validation share both directions" {
+    var storage: [128]u8 = undefined;
+    var out: Reference.Encoder = .{ .buffer = &storage };
+    var c: core.Context = .init(std.testing.failing_allocator, .{}, .borrowed);
+    try core.serialize(FieldRecord{ .is_ready = 1, .item_count = 4 }, &out, &c);
+    c = .init(std.testing.failing_allocator, .{}, .borrowed);
+    const value = try decoded(FieldRecord, &c, storage[0..out.used]);
+    try std.testing.expectEqual(@as(u8, 1), value.is_ready);
+    try std.testing.expectEqual(@as(u8, 4), value.item_count);
+    out.used = 0;
+    c = .init(std.testing.failing_allocator, .{}, .borrowed);
+    try std.testing.expectError(error.NumberOutOfRange, core.serialize(FieldRecord{ .is_ready = 0, .item_count = 9 }, &out, &c));
+    out.used = 0;
+    c = .init(std.testing.failing_allocator, .{}, .borrowed);
+    try std.testing.expectError(error.CustomRejected, core.serialize(FieldRecord{ .is_ready = 0, .item_count = 3 }, &out, &c));
+}
+test "S1 omit default compares slice contents rather than identity" {
+    const WithDefault = struct {
+        value: []const u8 = "ok",
+        pub const strand = .{ .fields = .{ .value = .{ .omit = .default_value } } };
+    };
+    var different_storage = [_]u8{ 'o', 'k' };
+    var storage: [64]u8 = undefined;
+    var out: Reference.Encoder = .{ .buffer = &storage };
+    var c: core.Context = .init(std.testing.failing_allocator, .{}, .borrowed);
+    try core.serialize(WithDefault{ .value = &different_storage }, &out, &c);
+    try std.testing.expectEqualSlices(u8, &.{ 6, 0, 0 }, storage[0..out.used]);
+}
+
+const External = union(enum) {
+    count: u8,
+    empty: void,
+    unknown: void,
+    pub const strand = .{ .other = "unknown", .variants = .{ .count = .{ .name = "c", .aliases = &.{"count"} } } };
+};
+const Internal = union(enum) {
+    count: struct { value: u8 },
+    empty: void,
+    pub const strand = .{ .tag = "type" };
+};
+const Adjacent = union(enum) {
+    count: u8,
+    empty: void,
+    pub const strand = .{ .tag = "t", .content = "c", .duplicates = .last };
+};
+test "S1 external internal adjacent tagged payloads round trip and never relax repeated tags" {
+    var memory: [128]u8 = undefined;
+    var out: Reference.Encoder = .{ .buffer = &memory };
+    var c: core.Context = .init(std.testing.failing_allocator, .{}, .borrowed);
+    try core.serialize(External{ .count = 9 }, &out, &c);
+    c = .init(std.testing.failing_allocator, .{}, .borrowed);
+    try std.testing.expectEqual(@as(u8, 9), (try decoded(External, &c, memory[0..out.used])).count);
+    c = .init(std.testing.failing_allocator, .{}, .borrowed);
+    try std.testing.expectEqual(External.unknown, try decoded(External, &c, &.{ 12, 1, 'x', 5, 1, 2, 1, 0, 0 }));
+    out.used = 0;
+    c = .init(std.testing.failing_allocator, .{}, .borrowed);
+    try core.serialize(Internal{ .count = .{ .value = 5 } }, &out, &c);
+    c = .init(std.testing.failing_allocator, .{}, .borrowed);
+    try std.testing.expectEqual(@as(u8, 5), (try decoded(Internal, &c, memory[0..out.used])).count.value);
+    out.used = 0;
+    c = .init(std.testing.failing_allocator, .{}, .borrowed);
+    try core.serialize(Adjacent{ .count = 7 }, &out, &c);
+    c = .init(std.testing.failing_allocator, .{}, .borrowed);
+    try std.testing.expectEqual(@as(u8, 7), (try decoded(Adjacent, &c, memory[0..out.used])).count);
+    const content_first = [_]u8{ 6, 2, 3, 1, 'c', 2, 8, 3, 1, 't', 3, 5, 'c', 'o', 'u', 'n', 't', 0 };
+    c = .init(std.testing.failing_allocator, .{ .items = 5, .depth = 1 }, .borrowed);
+    try std.testing.expectEqual(@as(u8, 8), (try decoded(Adjacent, &c, &content_first)).count);
+    const repeated = [_]u8{ 6, 3, 3, 1, 't', 3, 5, 'c', 'o', 'u', 'n', 't', 3, 1, 'c', 2, 8, 3, 1, 't', 3, 5, 'c', 'o', 'u', 'n', 't', 0 };
+    c = .init(std.testing.failing_allocator, .{}, .borrowed);
+    try std.testing.expectError(error.DuplicateField, decoded(Adjacent, &c, &repeated));
+    c = .init(std.testing.failing_allocator, .{}, .borrowed);
+    try std.testing.expectError(error.UnknownVariant, decoded(Adjacent, &c, &.{ 6, 2, 3, 1, 'c', 2, 8, 3, 1, 't', 3, 1, 'x', 0 }));
+}
+
+test "S1 ordered generic maps and unicode scalar preserve meaning and ownership" {
+    const Map = core.Pairs(u8, []const u8);
+    const entries = [_]model.Pair(u8, []const u8){ .{ .key = 1, .value = "one" }, .{ .key = 1, .value = "again" } };
+    var memory: [128]u8 = undefined;
+    var out: Reference.Encoder = .{ .buffer = &memory };
+    var c: core.Context = .init(std.testing.failing_allocator, .{}, .borrowed);
+    try core.serialize(Map{ .items = &entries }, &out, &c);
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    c = .init(arena.allocator(), .{}, .owned);
+    const result = try decoded(Map, &c, memory[0..out.used]);
+    try std.testing.expectEqual(@as(usize, 2), result.items.len);
+    try std.testing.expectEqualStrings("again", result.items[1].value);
+    try std.testing.expectEqual(core.Support.unsupported, core.describe(Map, .{ .map_keys = .text_only }).support);
+    out.used = 0;
+    c = .init(std.testing.failing_allocator, .{}, .borrowed);
+    try core.serialize(core.Scalar{ .value = 0x1f30d }, &out, &c);
+    c = .init(std.testing.failing_allocator, .{}, .borrowed);
+    try std.testing.expectEqual(@as(u21, 0x1f30d), (try decoded(core.Scalar, &c, memory[0..out.used])).value);
+    out.used = 0;
+    c = .init(std.testing.failing_allocator, .{}, .borrowed);
+    try std.testing.expectError(error.InvalidUtf8, core.serialize(core.Scalar{ .value = 0xd800 }, &out, &c));
+}
+fn pairsSweep(gpa: std.mem.Allocator) !void {
+    const Map = core.Pairs(u8, []const u8);
+    var result = try core.acquire(Map, .owned, gpa, &.{ 13, 2, 2, 1, 3, 1, 'a', 2, 2, 3, 1, 'b', 0 }, .{}, struct {
+        fn decode(c: *core.Context, input: []const u8) core.DecodeError!Map {
+            return decoded(Map, c, input);
+        }
+    }.decode);
+    defer result.deinit();
+    try std.testing.expectEqual(@as(usize, 2), result.value.items.len);
+}
+test "S1 generic map backing and retained spans fault sweep" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, pairsSweep, .{});
 }

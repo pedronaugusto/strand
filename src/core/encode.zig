@@ -200,6 +200,14 @@ pub fn Access(comptime Backend: type) type {
             }
             try self.out.end(self.context);
         }
+        pub fn bytes(self: *Self, value: []const u8) Error!void {
+            if (!Backend.capabilities.bytes) return error.UnsupportedValue;
+            if (self.used) return error.CustomRejected;
+            self.used = true;
+            try self.context.span(value.len, false);
+            try self.context.chargeWork(value.len);
+            try self.out.bytes(value, self.context);
+        }
         pub fn scalar(self: *Self, value: u21) Error!void {
             if (self.used) return error.CustomRejected;
             self.used = true;
@@ -227,19 +235,20 @@ pub fn Access(comptime Backend: type) type {
             defer self.context.leave();
             for (values) |v| {
                 if (@typeInfo(@TypeOf(v.key)) == .pointer and @typeInfo(@TypeOf(v.key)).pointer.size == .slice and @typeInfo(@TypeOf(v.key)).pointer.child == u8) try self.context.span(v.key.len, true);
+                if (comptime descriptor.has(@TypeOf(v.key), "strandBytes")) try self.context.span(v.key.value.len, true);
                 try emit(.{}, v.key, self.out, self.context, self.active);
                 try emit(.{}, v.value, self.out, self.context, self.active);
             }
             try self.out.end(self.context);
         }
-        pub fn raw(self: *Self, comptime Format: type, bytes: []const u8) (ctx.EncodeError || Backend.Error)!void {
+        pub fn raw(self: *Self, comptime Format: type, payload: []const u8) (ctx.EncodeError || Backend.Error)!void {
             if (Backend.Format != Format) @compileError("raw format brand does not match the backend");
             if (self.used) return error.CustomRejected;
             self.used = true;
             if (Backend.canonical) return error.UnsupportedValue;
             self.context.items -= 1;
-            try self.out.validateRaw(bytes, self.context);
-            try self.out.raw(bytes, self.context);
+            try self.out.validateRaw(payload, self.context);
+            try self.out.raw(payload, self.context);
         }
         pub fn write(self: *Self, value: anytype) Errors(@TypeOf(value), Backend)!void {
             comptime descriptor.check(@TypeOf(value), Backend.capabilities, false, .borrowed);

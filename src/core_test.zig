@@ -858,3 +858,38 @@ test "S1 checked clone preserves binary Raw instead of treating it as text" {
     wire[2] = 0;
     try std.testing.expectEqualSlices(u8, &.{ 4, 1, 0xff }, cloned.value.bytes);
 }
+
+fn decodeBytes(c: *core.Context, bytes: []const u8) core.DecodeError!core.Bytes {
+    return decoded(core.Bytes, c, bytes);
+}
+fn bytesSweep(gpa: std.mem.Allocator) !void {
+    var no_resize: shakedown.alloc.NoResize = .init(gpa);
+    var parsed = try core.acquire(core.Bytes, .owned, no_resize.allocator(), &.{ 4, 2, 0xff, 0 }, .{}, decodeBytes);
+    defer parsed.deinit();
+    try std.testing.expectEqualSlices(u8, &.{ 0xff, 0 }, parsed.value.value);
+}
+test "S1 explicit byte visits compose with codecs ownership and scalar key limits" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, bytesSweep, .{});
+    try std.testing.expectEqual(core.Support.unsupported, core.describe(core.Bytes, .{ .bytes = false }).support);
+    try std.testing.expectEqual(core.Support.unsupported, core.describe(core.Pairs([]const u16, u8), .{ .map_keys = .scalar }).support);
+    try std.testing.expect(core.describe(core.Pairs(core.Bytes, u8), .{ .map_keys = .scalar }).support != .unsupported);
+    var input = [_]u8{ 4, 2, 0xff, 0 };
+    var borrowed = try core.acquire(core.Bytes, .borrowed, std.testing.allocator, &input, .{}, decodeBytes);
+    defer borrowed.deinit();
+    try std.testing.expectEqual(@intFromPtr(&input[2]), @intFromPtr(borrowed.value.value.ptr));
+    var memory: [64]u8 = undefined;
+    var out: Reference.Encoder = .{ .buffer = &memory };
+    var c: core.Context = .init(std.testing.failing_allocator, .{}, .borrowed);
+    try core.serialize(borrowed.value, &out, &c);
+    try std.testing.expectEqualSlices(u8, &input, memory[0..out.used]);
+    c = .init(std.testing.failing_allocator, .{ .key_bytes = 1 }, .borrowed);
+    const values = [_]model.Pair(core.Bytes, u8){.{ .key = .{ .value = &.{ 0xff, 0 } }, .value = 1 }};
+    out.used = 0;
+    try std.testing.expectError(error.LengthLimit, core.serialize(core.Pairs(core.Bytes, u8){ .items = &values }, &out, &c));
+    c = .init(std.testing.failing_allocator, .{ .key_bytes = 1 }, .borrowed);
+    try std.testing.expectError(error.LengthLimit, core.acquire(core.Pairs(core.Bytes, u8), .owned, std.testing.allocator, &.{ 13, 1, 4, 2, 0xff, 0, 2, 1, 0 }, .{ .key_bytes = 1 }, struct {
+        fn decode(context: *core.Context, bytes: []const u8) core.DecodeError!core.Pairs(core.Bytes, u8) {
+            return decoded(core.Pairs(core.Bytes, u8), context, bytes);
+        }
+    }.decode));
+}

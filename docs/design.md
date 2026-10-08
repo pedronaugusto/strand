@@ -15,7 +15,8 @@ Recursive inspection uses a visited-type set; traversal limits apply separately.
 The mapping kernels specialize into direct backend calls. Immediate semantic
 visits preserve text versus bytes, integer magnitude and sign, Unicode scalar,
 none versus some, unit, sequence, tuple, map, record and variant. `NamedUnit`,
-`Newtype` and `NamedTuple` carry nominal shapes. `Pairs(K,V)` preserves entry order
+`Newtype` and `NamedTuple` carry nominal shapes. `Bytes` and bounded byte access
+let custom codecs retain arbitrary bytes without a text interpretation. `Pairs(K,V)` preserves entry order
 and duplicates. The maintained unmanaged `ArrayList(T)` field codec uses the
 standard library's public owned-slice API; other resource-owning containers need
 an explicit data codec. No container capacity or hash internals are serialized.

@@ -553,6 +553,7 @@ pub fn Cursor(comptime Backend: type) type {
                         if (header.kind == .map) {
                             const key_event = try self.peek();
                             if (key_event == .text) try self.context.span(key_event.text.bytes.len, true);
+                            if (key_event == .bytes) try self.context.span(key_event.bytes.bytes.len, true);
                             try self.skip();
                         }
                         try self.skip();
@@ -625,6 +626,13 @@ pub fn Access(comptime Backend: type) type {
             };
             try compound.finish();
             return result;
+        }
+        pub fn bytes(self: *Self, comptime borrow: ctx.Borrow) Error![]const u8 {
+            if (!Backend.capabilities.bytes) return error.UnsupportedValue;
+            if (self.used) return error.CustomRejected;
+            self.used = true;
+            if (!self.cursor.context.replaying) self.cursor.context.items -= 1;
+            return self.cursor.read([]const u8, .{ .as = .bytes, .borrow = borrow });
         }
         pub fn scalar(self: *Self) Error!u21 {
             if (self.used) return error.CustomRejected;
@@ -868,6 +876,7 @@ pub fn CompoundAccess(comptime Backend: type) type {
             self.key_pending = true;
             const event = try self.access.cursor.peek();
             if (event == .text) try self.access.cursor.context.span(event.text.bytes.len, true);
+            if (event == .bytes) try self.access.cursor.context.span(event.bytes.bytes.len, true);
             return self.access.cursor.read(T, .{});
         }
         pub fn element(self: *Self, comptime T: type) Errors(T, Backend)!T {

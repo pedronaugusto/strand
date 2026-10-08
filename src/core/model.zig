@@ -27,6 +27,19 @@ pub const Event = union(enum) {
     end,
 };
 
+/// Explicit arbitrary bytes, including in type codecs and generic map keys.
+pub const Bytes = struct {
+    value: []const u8,
+    pub const strandBytes = true;
+    pub const strand = .{ .fields = .{ .value = .{ .as = .bytes } } };
+    pub fn strandDeserialize(access: anytype) @TypeOf(access.*).Error!Bytes {
+        return .{ .value = try access.bytes(.prefer) };
+    }
+    pub fn strandSerialize(self: Bytes, access: anytype) @TypeOf(access.*).Error!void {
+        try access.bytes(self.value);
+    }
+};
+
 /// Format-branded raw input. Strict acquisition validates the entire value;
 /// emission validates again and refuses an unnormalized canonical raw value.
 pub fn Raw(comptime Format: type) type {

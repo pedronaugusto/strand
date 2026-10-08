@@ -104,12 +104,13 @@ fn inspect(comptime T: type, comptime fmt: Capabilities, comptime seen: []const 
     for (seen) |v| if (T == v) return .{};
     const next = seen ++ .{T};
     if (policyProblem(T, path)) |problem| return problem;
+    if (has(T, "strandBytes") and !fmt.bytes) return rejected(path, "format has no native byte codec");
     if (has(T, "strandScalar") and !fmt.unicode_scalar) return rejected(path, "format has no Unicode scalar codec");
     if (has(T, "strandNamedShape") and !fmt.named_shapes) return rejected(path, "format has no named shape codec");
     if (has(T, "strandKeyType")) {
         const K = T.strandKeyType;
         if (fmt.map_keys == .text_only and !(@typeInfo(K) == .pointer and @typeInfo(K).pointer.size == .slice and @typeInfo(K).pointer.child == u8)) return rejected(path, "format requires text map keys");
-        if (fmt.map_keys == .scalar and (@typeInfo(K) == .@"struct" or @typeInfo(K) == .@"union" or @typeInfo(K) == .array or @typeInfo(K) == .vector)) return rejected(path, "format requires scalar map keys");
+        if (fmt.map_keys == .scalar and !scalarKey(K)) return rejected(path, "format requires scalar map keys");
     }
     if ((has(T, "strandSerialize") or has(T, "strandDeserialize")) and containsResource(T, &.{})) return rejected(path, "data codec result cannot retain a resource");
     if (has(T, "strandSerialize") or has(T, "strandDeserialize")) return .{ .support = .conditional, .encode = has(T, "strandSerialize"), .decode = has(T, "strandDeserialize"), .path = path, .reason = "explicit data codec" };
@@ -358,6 +359,16 @@ pub fn variant(comptime T: type, comptime name: []const u8) Field {
         if (@hasField(@TypeOf(v), "aliases")) result.aliases = v.aliases;
     }
     return result;
+}
+
+fn scalarKey(comptime T: type) bool {
+    return switch (@typeInfo(T)) {
+        .bool, .int, .float, .@"enum", .null, .void => true,
+        .optional => |i| scalarKey(i.child),
+        .pointer => |i| if (i.size == .one) scalarKey(i.child) else i.size == .slice and i.child == u8,
+        .@"struct" => has(T, "strandScalar") or has(T, "strandBytes"),
+        else => false,
+    };
 }
 
 fn containsResource(comptime T: type, comptime seen: []const type) bool {

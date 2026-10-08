@@ -27,3 +27,6 @@ pub const Newtype = @import("core/model.zig").Newtype;
 pub const NamedTuple = @import("core/model.zig").NamedTuple;
 pub const Acceptance = @import("core/context.zig").Acceptance;
 pub const Request = @import("core/model.zig").Request;
+pub const codecs = @import("core/codecs.zig");
+pub const acquireWith = @import("core/owner.zig").acquireWith;
+pub const AcquisitionOptions = @import("core/owner.zig").AcquisitionOptions;

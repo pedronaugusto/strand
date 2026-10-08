@@ -632,3 +632,45 @@ test "S1 a capable semantic backend preserves none and present none separately" 
     }
     try std.testing.expectEqual(core.Support.unsupported, core.describe(??u8, .{}).support);
 }
+
+const ListRecord = struct {
+    items: std.ArrayList(u8),
+    pub const strand = .{ .fields = .{ .items = .{ .codec = core.codecs.ArrayList(u8) } } };
+};
+fn listDecode(c: *core.Context, input: []const u8) core.DecodeError!ListRecord {
+    return decoded(ListRecord, c, input);
+}
+fn listSweep(gpa: std.mem.Allocator) !void {
+    var result = try core.acquire(ListRecord, .owned, gpa, &.{ 6, 1, 3, 5, 'i', 't', 'e', 'm', 's', 5, 2, 2, 0xff, 2, 0, 0, 0 }, .{}, listDecode);
+    defer result.deinit();
+    try std.testing.expectEqualSlices(u8, &.{ 0xff, 0 }, result.value.items.items);
+}
+test "S1 maintained ArrayList codec uses public owned slice API and numeric u8 sequence" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, listSweep, .{});
+    var list = std.ArrayList(u8).empty;
+    defer list.deinit(std.testing.allocator);
+    try list.appendSlice(std.testing.allocator, &.{ 0xff, 0 });
+    var memory: [128]u8 = undefined;
+    var out: Reference.Encoder = .{ .buffer = &memory };
+    var c: core.Context = .init(std.testing.failing_allocator, .{}, .borrowed);
+    try core.serialize(ListRecord{ .items = list }, &out, &c);
+    var result = try core.acquire(ListRecord, .owned, std.testing.allocator, memory[0..out.used], .{}, listDecode);
+    defer result.deinit();
+    try std.testing.expectEqualSlices(u8, list.items, result.value.items.items);
+}
+test "S1 acquisition publishes bounded diagnostics and rejects allocated default validation" {
+    const InvalidDefault = struct {
+        payload: []const u8,
+        pub const strand = .{ .fields = .{ .payload = .{ .default = FactoryRecord.makeDefault, .validate = reject } } };
+        pub fn reject(_: []const u8) bool {
+            return false;
+        }
+    };
+    var diagnostics: core.Diagnostics = .{};
+    try std.testing.expectError(error.CustomRejected, core.acquireWith(InvalidDefault, .owned, std.testing.allocator, &.{ 6, 0, 0 }, .{ .diagnostics = &diagnostics }, struct {
+        fn decode(c: *core.Context, input: []const u8) core.DecodeError!InvalidDefault {
+            return decoded(InvalidDefault, c, input);
+        }
+    }.decode));
+    try std.testing.expectEqual(@as(usize, 3), diagnostics.offset);
+}

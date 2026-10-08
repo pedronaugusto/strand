@@ -490,6 +490,11 @@ pub fn Cursor(comptime Backend: type) type {
             inline for (i.field_names, i.field_types, i.field_attrs, 0..) |name, F, attrs, index| {
                 if (attrs.@"comptime") continue;
                 if (!seen[index]) {
+                    const mark: ctx.Diagnostics.Checkpoint = if (self.context.diagnostics) |d| d.checkpoint() else .{ .count = 0, .used = 0, .truncated = false };
+                    if (self.context.diagnostics) |d| {
+                        d.offset = self.backend.offset();
+                        d.field(name);
+                    }
                     const declared = comptime descriptor.fieldOptions(T, name);
                     if (@hasField(@TypeOf(declared), "default") and @typeInfo(@TypeOf(declared.default)) == .@"fn") {
                         @field(value, name) = try declared.default(self.context);
@@ -498,6 +503,7 @@ pub fn Cursor(comptime Backend: type) type {
                         @field(value, name) = try cloneField(F, comptime descriptor.field(T, name), default_value, self.context);
                     }
                     try descriptor.validate(T, name, @field(value, name));
+                    if (self.context.diagnostics) |d| d.restore(mark);
                 }
             }
             return value;
@@ -612,6 +618,34 @@ pub fn Access(comptime Backend: type) type {
             if (event != .scalar) return error.UnexpectedType;
             if (!std.unicode.utf8ValidCodepoint(event.scalar)) return error.InvalidUtf8;
             return event.scalar;
+        }
+        pub fn sequence(self: *Self, comptime T: type) Errors(T, Backend)![]T {
+            var sequence_access = try self.begin(.sequence);
+            defer sequence_access.abort();
+            if (sequence_access.header.len) |n| {
+                const result = try self.alloc(T, n);
+                for (result) |*v| v.* = try sequence_access.element(T);
+                try sequence_access.finish();
+                return result;
+            }
+            var result: []T = &.{};
+            var n: usize = 0;
+            while (try sequence_access.hasNext()) {
+                if (n == result.len) {
+                    const capacity = @max(@as(usize, 1), std.math.mul(usize, n, 2) catch return error.AllocationLimit);
+                    const grown = try self.alloc(T, @min(capacity, self.cursor.context.limits.container_items));
+                    try self.chargeWork(n);
+                    @memcpy(grown[0..n], result[0..n]);
+                    result = grown;
+                }
+                result[n] = try sequence_access.element(T);
+                n += 1;
+            }
+            try sequence_access.finish();
+            return result[0..n];
+        }
+        pub fn reject(self: *Self, code: u32) error{CustomRejected} {
+            return self.cursor.context.reject(code);
         }
         pub fn readPairs(self: *Self, comptime K: type, comptime V: type) (Errors(K, Backend) || Errors(V, Backend))![]model.Pair(K, V) {
             var map = try self.begin(.map);

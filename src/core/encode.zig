@@ -201,6 +201,18 @@ pub fn Access(comptime Backend: type) type {
             if (!std.unicode.utf8ValidCodepoint(value)) return error.InvalidUtf8;
             try self.out.scalar(value, self.context);
         }
+        pub fn writeSequence(self: *Self, values: anytype) Errors(@TypeOf(values[0]), Backend)!void {
+            comptime descriptor.check(@TypeOf(values[0]), Backend.capabilities, false, .borrowed);
+            if (self.used) return error.CustomRejected;
+            self.used = true;
+            try begin(self.out, self.context, .sequence, "", values.len);
+            defer self.context.leave();
+            for (values) |v| try emit(.{}, v, self.out, self.context, self.active);
+            try self.out.end(self.context);
+        }
+        pub fn reject(self: *Self, code: u32) error{CustomRejected} {
+            return self.context.reject(code);
+        }
         pub fn writePairs(self: *Self, values: anytype) (Errors(@TypeOf(values[0].key), Backend) || Errors(@TypeOf(values[0].value), Backend))!void {
             comptime descriptor.check(@TypeOf(values[0].key), Backend.capabilities, false, .borrowed);
             comptime descriptor.check(@TypeOf(values[0].value), Backend.capabilities, false, .borrowed);

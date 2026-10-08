@@ -7,6 +7,7 @@ pub const layers: []const gantry.rules.Layer = &.{
         "src/core.zig",
         "src/core/context.zig",
         "src/core/model.zig",
+        "src/core/codecs.zig",
         "src/core/descriptor.zig",
         "src/core/owner.zig",
         "src/core/decode.zig",

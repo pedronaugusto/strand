@@ -601,7 +601,13 @@ pub fn Access(comptime Backend: type) type {
                     };
                     break :blk value;
                 },
-                inline .array, .vector => |i| blk: {
+                .array => |i| blk: {
+                    var value: T = undefined;
+                    for (0..i.len) |j| value[j] = try compound.element(i.child);
+                    if (comptime i.sentinel()) |sentinel| value[i.len] = sentinel;
+                    break :blk value;
+                },
+                .vector => |i| blk: {
                     var value: [i.len]i.child = undefined;
                     for (&value) |*v| v.* = try compound.element(i.child);
                     break :blk value;
@@ -631,6 +637,7 @@ pub fn Access(comptime Backend: type) type {
             var result: []T = &.{};
             var n: usize = 0;
             while (try sequence_access.hasNext()) {
+                if (n >= self.cursor.context.limits.container_items) return error.ItemLimit;
                 if (n == result.len) {
                     const capacity = @max(@as(usize, 1), std.math.mul(usize, n, 2) catch return error.AllocationLimit);
                     const grown = try self.alloc(T, @min(capacity, self.cursor.context.limits.container_items));
@@ -653,6 +660,7 @@ pub fn Access(comptime Backend: type) type {
             var storage: []model.Pair(K, V) = &.{};
             var n: usize = 0;
             while (try map.hasNext()) {
+                if (n >= self.cursor.context.limits.container_items) return error.ItemLimit;
                 if (n == storage.len) {
                     const capacity = @max(@as(usize, 1), std.math.mul(usize, n, 2) catch return error.AllocationLimit);
                     const next = try self.alloc(model.Pair(K, V), @min(capacity, self.cursor.context.limits.container_items));

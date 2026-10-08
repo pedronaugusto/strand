@@ -674,3 +674,10 @@ test "S1 acquisition publishes bounded diagnostics and rejects allocated default
     }.decode));
     try std.testing.expectEqual(@as(usize, 3), diagnostics.offset);
 }
+
+test "S1 zero container limit rejects indefinite visitors before indexed storage" {
+    var c: core.Context = .init(std.testing.allocator, .{ .container_items = 0 }, .owned);
+    try std.testing.expectError(error.ItemLimit, decoded(ListRecord, &c, &.{ 6, 1, 3, 5, 'i', 't', 'e', 'm', 's', 10, 2, 1, 0, 0 }));
+    c = .init(std.testing.allocator, .{ .container_items = 0 }, .owned);
+    try std.testing.expectError(error.ItemLimit, decoded(core.Pairs(u8, u8), &c, &.{ 11, 2, 1, 2, 2, 0 }));
+}

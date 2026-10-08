@@ -141,6 +141,7 @@ pub fn build(b: *std.Build) !void {
         const expected = [_][]const u8{
             "error: : resource or secret is not automatic data", "error: wire alias collision at left",               "error: owned decoding conflicts with borrow.require at label",
             "error: : explicit data codec",                      "error: : resource or secret is not automatic data", "error: : pointer has no safe data meaning",
+            "error: tag collides with payload alias",            "error: data codecs require a named error set",
         };
         for (expected, 0..) |message, case| {
             const rejection_options = b.addOptions();

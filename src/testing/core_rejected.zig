@@ -22,6 +22,9 @@ const Secret = struct {
         return error.SecretNotFormattable;
     }
 };
+pub const UnboundedHook = struct {
+    pub fn strandSerialize(_: UnboundedHook, _: anytype) anyerror!void {}
+};
 pub export fn rejected() void {
     var backend: Backend = .{};
     var c: core.Context = .init(std.testing.failing_allocator, .{}, .borrowed);
@@ -43,6 +46,18 @@ pub export fn rejected() void {
         },
         4 => core.serialize(@as(struct { hidden: ?Secret }, .{ .hidden = null }), &backend, &c) catch unreachable,
         5 => core.serialize(@as([*c]const u8, undefined), &backend, &c) catch unreachable,
+        6 => {
+            const Payload = struct {
+                x: u8,
+                pub const strand = .{ .fields = .{ .x = .{ .aliases = &.{"t"} } } };
+            };
+            const T = union(enum) {
+                data: Payload,
+                pub const strand = .{ .tag = "t" };
+            };
+            core.serialize(T{ .data = .{ .x = 1 } }, &backend, &c) catch unreachable;
+        },
+        7 => core.serialize(UnboundedHook{}, &backend, &c) catch unreachable,
         else => unreachable,
     }
 }

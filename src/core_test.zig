@@ -787,3 +787,46 @@ test "S1 Raw validation refuses impossible nominal compound arity" {
     c = .init(std.testing.failing_allocator, .{}, .borrowed);
     try std.testing.expectError(error.SyntaxError, decoded(core.Raw(Reference.Format), &c, raw.bytes));
 }
+
+test "S1 unfinished visitor refuses publication and float ranges exclude NaN" {
+    const Unfinished = struct {
+        pub const Self = @This();
+        pub fn strandDeserialize(access: anytype) core.DecodeError!Self {
+            var seq = try access.begin(.sequence);
+            defer seq.abort();
+            _ = try seq.element(u8);
+            return .{};
+        }
+    };
+    var c: core.Context = .init(std.testing.failing_allocator, .{}, .borrowed);
+    try std.testing.expectError(error.CustomRejected, decoded(Unfinished, &c, &.{ 5, 1, 2, 1, 0 }));
+    const RangeRecord = struct {
+        n: f32,
+        pub const strand = .{ .fields = .{ .n = .{ .range = .{ .min = 0, .max = 1 } } } };
+    };
+    var memory: [64]u8 = undefined;
+    var out: Reference.Encoder = .{ .buffer = &memory };
+    c = .init(std.testing.failing_allocator, .{}, .borrowed);
+    try std.testing.expectError(error.NumberOutOfRange, core.serialize(RangeRecord{ .n = std.math.nan(f32) }, &out, &c));
+}
+pub const NumericSequence = struct {
+    items: []u8,
+    pub fn strandDeserialize(access: anytype) core.DecodeError!NumericSequence {
+        return .{ .items = try access.sequence(u8) };
+    }
+};
+fn decodeSequence(c: *core.Context, bytes: []const u8) core.DecodeError!NumericSequence {
+    return decoded(NumericSequence, c, bytes);
+}
+const indefinite_sequence = [_]u8{ 10, 2, 1, 2, 2, 2, 3, 2, 4, 2, 5, 0 };
+fn indefiniteSweep(gpa: std.mem.Allocator) !void {
+    var no_resize: shakedown.alloc.NoResize = .init(gpa);
+    var parsed = try core.acquire(NumericSequence, .owned, no_resize.allocator(), &indefinite_sequence, .{}, decodeSequence);
+    defer parsed.deinit();
+    try std.testing.expectEqualSlices(u8, &.{ 1, 2, 3, 4, 5 }, parsed.value.items);
+}
+test "S1 indefinite numeric sequence grows without resize and rolls back on limits" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, indefiniteSweep, .{});
+    inline for (.{ @as(usize, 0), @as(usize, 1), @as(usize, 4) }) |limit| try std.testing.expectError(error.ItemLimit, core.acquire(NumericSequence, .owned, std.testing.allocator, &indefinite_sequence, .{ .container_items = limit }, decodeSequence));
+    try std.testing.expectError(error.AllocationLimit, core.acquire(NumericSequence, .owned, std.testing.allocator, &indefinite_sequence, .{ .allocation_bytes = 4 }, decodeSequence));
+}

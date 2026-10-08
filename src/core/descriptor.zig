@@ -325,7 +325,7 @@ pub fn validate(comptime T: type, comptime name: []const u8, value: @FieldType(T
         else => {},
     }
     if (@hasField(@TypeOf(opt), "range")) {
-        if (value < opt.range.min or value > opt.range.max) return error.NumberOutOfRange;
+        if (!(value >= opt.range.min and value <= opt.range.max)) return error.NumberOutOfRange;
     }
     if (@hasField(@TypeOf(opt), "validate")) if (!opt.validate(value)) return error.CustomRejected;
 }

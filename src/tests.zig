@@ -32,6 +32,7 @@ const from_value_module = @import("from_value.zig");
 const codec_test_module = @import("codec_test.zig");
 
 test {
+    _ = @import("core_test.zig");
     _ = strand_module;
     _ = raw_test_module;
     _ = tail_test_module;

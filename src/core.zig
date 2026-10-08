@@ -1,0 +1,19 @@
+//! Format-independent serialization policy and bounded result ownership.
+pub const Context = @import("core/context.zig").Context;
+pub const Limits = @import("core/context.zig").Limits;
+pub const Diagnostics = @import("core/context.zig").Diagnostics;
+pub const DecodeError = @import("core/context.zig").DecodeError;
+pub const EncodeError = @import("core/context.zig").EncodeError;
+pub const Lifetime = @import("core/context.zig").Lifetime;
+pub const Ownership = @import("core/context.zig").Ownership;
+pub const Borrow = @import("core/context.zig").Borrow;
+pub const Parsed = @import("core/owner.zig").Parsed;
+pub const acquire = @import("core/owner.zig").acquire;
+pub const Support = @import("core/descriptor.zig").Support;
+pub const Capabilities = @import("core/descriptor.zig").Capabilities;
+pub const describe = @import("core/descriptor.zig").describe;
+pub const deserialize = @import("core/decode.zig").deserialize;
+pub const Event = @import("core/model.zig").Event;
+pub const Kind = @import("core/model.zig").Kind;
+pub const Span = @import("core/model.zig").Span;
+pub const serialize = @import("core/encode.zig").serialize;

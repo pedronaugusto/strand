@@ -22,6 +22,13 @@ pub fn build(b: *std.Build) !void {
         .imports = &.{.{ .name = "airlock", .module = airlock }},
     });
 
+    // The core's build has no runtime import or link to durability or tooling.
+    _ = b.addModule("strand.core", .{
+        .root_source_file = b.path("src/core.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     // Everything below is strand's own: a project depending on strand
     // neither builds nor fetches its tests, benchmarks or CI.
     if (b.pkg_hash.len != 0) return;
@@ -165,6 +172,23 @@ pub fn build(b: *std.Build) !void {
     // bench/bench.zig in ReleaseFast; the tests run it once with `--smoke`.
     // bench_scratch.zig's own tests check the scratch files it writes.
     //=====================================================================
+
+    // Explicit manual measurement, compiled without timing by the check graph.
+    if (b.dependencyLazy("shakedown", .{ .target = target, .optimize = .fast })) |dependency| {
+        const baseline = b.addExecutable(.{
+            .name = "strand-baseline",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("bench/baseline.zig"),
+                .target = target,
+                .optimize = .fast,
+                .imports = benchImports(b, target, .fast),
+            }),
+        });
+        baseline.root_module.addImport("shakedown", dependency.module("shakedown"));
+        const install = b.addInstallArtifact(baseline, .{});
+        b.step("baseline-build", "Compile the manual legacy timing driver").dependOn(&install.step);
+        check_step.dependOn(&baseline.step);
+    } else |err| needed = err;
 
     const bench_tests = b.addTest(.{
         .name = "strand-bench-tests",

@@ -4,6 +4,13 @@ const gantry = @import("gantry");
 pub const layers: []const gantry.rules.Layer = &.{
     .{ .name = "primitives", .patterns = &.{
         "src/encode/Buffer.zig",
+        "src/core.zig",
+        "src/core/context.zig",
+        "src/core/model.zig",
+        "src/core/descriptor.zig",
+        "src/core/owner.zig",
+        "src/core/decode.zig",
+        "src/core/encode.zig",
         "src/encode.zig",
         "src/indent.zig",
         "src/int.zig",

@@ -25,3 +25,4 @@ pub const clone = @import("core/owner.zig").clone;
 pub const NamedUnit = @import("core/model.zig").NamedUnit;
 pub const Newtype = @import("core/model.zig").Newtype;
 pub const NamedTuple = @import("core/model.zig").NamedTuple;
+pub const Acceptance = @import("core/context.zig").Acceptance;

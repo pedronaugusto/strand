@@ -71,6 +71,7 @@ fn emit(comptime policy: descriptor.Field, value: anytype, out: anytype, c: *ctx
         },
         inline .array, .vector => |i| {
             const values: [i.len]i.child = value;
+            if (i.len > policy.max_len) return error.LengthLimit;
             if (policy.as != .normal) {
                 if (i.child != u8) @compileError("text/bytes array codec requires u8 elements");
                 if (i.len > policy.max_len) return error.LengthLimit;
@@ -104,14 +105,7 @@ fn emit(comptime policy: descriptor.Field, value: anytype, out: anytype, c: *ctx
                         try c.chargeWork(f.name.len);
                         try out.key(f.name, c);
                     }
-                    try descriptor.validate(T, name, @field(value, name));
-                    const declared = comptime descriptor.fieldOptions(T, name);
-                    if (@hasField(@TypeOf(declared), "codec")) {
-                        try c.node();
-                        var access: Access(@TypeOf(out.*)) = .{ .out = out, .context = c, .active = active };
-                        try declared.codec.encode(@field(value, name), &access);
-                        if (!access.used) return error.CustomRejected;
-                    } else try emit(f, @field(value, name), out, c, active);
+                    try emitField(T, name, value, out, c, active);
                 }
             }
             try out.end(c);
@@ -339,12 +333,22 @@ fn tagged(comptime T: type, value: T, out: anytype, c: *ctx.Context, active: ?*c
                         try c.node();
                         try c.span(policy.name.len, true);
                         try out.key(policy.name, c);
-                        try descriptor.validate(F, name, @field(v, name));
-                        try emit(policy, @field(v, name), out, c, active);
+                        try emitField(F, name, v, out, c, active);
                     }
                 }
             }
             try out.end(c);
         },
     }
+}
+
+fn emitField(comptime T: type, comptime name: []const u8, value: T, out: anytype, c: *ctx.Context, active: ?*const Active) Errors(T, @TypeOf(out.*))!void {
+    try descriptor.validate(T, name, @field(value, name));
+    const declared = comptime descriptor.fieldOptions(T, name);
+    if (@hasField(@TypeOf(declared), "codec")) {
+        try c.node();
+        var access: Access(@TypeOf(out.*)) = .{ .out = out, .context = c, .active = active };
+        try declared.codec.encode(@field(value, name), &access);
+        if (!access.used) return error.CustomRejected;
+    } else try emit(comptime descriptor.field(T, name), @field(value, name), out, c, active);
 }

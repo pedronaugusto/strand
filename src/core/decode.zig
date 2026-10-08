@@ -26,7 +26,11 @@ pub fn Cursor(comptime Backend: type) type {
         fn peek(self: *Self) Error!model.Event {
             if (self.pending == null) {
                 self.pending_start = self.backend.offset();
-                self.pending = try self.backend.next(self.context);
+                if (self.context.diagnostics) |d| d.offset = self.pending_start;
+                self.pending = self.backend.next(self.context) catch |err| {
+                    if (self.context.diagnostics) |d| d.offset = self.backend.offset();
+                    return err;
+                };
             }
             return self.pending.?;
         }
@@ -41,6 +45,9 @@ pub fn Cursor(comptime Backend: type) type {
         fn start(self: *Self, expected: model.Kind) Error!model.Compound {
             const event = try self.take();
             if (event != .begin) return error.UnexpectedType;
+            try self.context.span(event.begin.name.len, false);
+            try self.context.chargeWork(event.begin.name.len);
+            if (!std.unicode.utf8ValidateSlice(event.begin.name)) return error.InvalidUtf8;
             if (event.begin.kind != expected and !(expected == .tuple and event.begin.kind == .sequence) and !(expected == .record and event.begin.kind == .map)) return error.UnexpectedType;
             try self.context.enter();
             errdefer self.context.leave();
@@ -103,6 +110,7 @@ pub fn Cursor(comptime Backend: type) type {
         pub fn read(self: *Self, comptime T: type, comptime policy: descriptor.Field) Errors(T, Backend)!T {
             @setRuntimeSafety(true);
             comptime descriptor.check(T, Backend.capabilities, true, .borrowed);
+            if (self.context.diagnostics) |d| d.expected = expectedKind(T, policy);
             try self.context.node();
             try self.context.chargeWork(1);
             if (comptime descriptor.has(T, "strandDeserialize")) {
@@ -162,8 +170,13 @@ pub fn Cursor(comptime Backend: type) type {
                 .array, .vector => return self.fixed(T, policy),
                 .@"struct" => |i| {
                     if (i.is_tuple) {
-                        _ = try self.start(.tuple);
+                        const header = try self.start(.tuple);
                         defer self.context.leave();
+                        var count: usize = 0;
+                        inline for (i.field_attrs) |attrs| if (!attrs.@"comptime") {
+                            count += 1;
+                        };
+                        if (header.len) |n| if (n != count) return error.UnexpectedType;
                         var value: T = undefined;
                         inline for (i.field_names, i.field_attrs) |name, attrs| {
                             if (attrs.@"comptime") continue;
@@ -189,6 +202,7 @@ pub fn Cursor(comptime Backend: type) type {
                     if (@hasField(@TypeOf(opt), "tag")) return self.tagged(T);
                     const header = try self.start(.variant);
                     defer self.context.leave();
+                    if (header.len) |n| if (n != 1) return error.SyntaxError;
                     inline for (i.field_names, i.field_types) |name, F| {
                         const v = comptime descriptor.variant(T, name);
                         var matches = try self.equals(header.name, v.name);
@@ -283,6 +297,7 @@ pub fn Cursor(comptime Backend: type) type {
         }
         fn fixed(self: *Self, comptime T: type, comptime policy: descriptor.Field) Errors(T, Backend)!T {
             const i = if (@typeInfo(T) == .array) @typeInfo(T).array else @typeInfo(T).vector;
+            if (i.len > policy.max_len) return error.LengthLimit;
 
             if (policy.as != .normal) {
                 if (i.child != u8) @compileError("text/bytes array codec requires u8 elements");
@@ -312,10 +327,10 @@ pub fn Cursor(comptime Backend: type) type {
                 array[i.len] = sentinel;
             };
             for (&array, 0..) |*element, index| {
-                const old = if (self.context.diagnostics) |d| d.count else 0;
+                const mark: ctx.Diagnostics.Checkpoint = if (self.context.diagnostics) |d| d.checkpoint() else .{ .count = 0, .used = 0, .truncated = false };
                 if (self.context.diagnostics) |d| d.index(index);
                 element.* = try self.read(i.child, .{ .name = "" });
-                if (self.context.diagnostics) |d| d.count = old;
+                if (self.context.diagnostics) |d| d.restore(mark);
             }
             try self.end();
             return array;
@@ -397,8 +412,8 @@ pub fn Cursor(comptime Backend: type) type {
         fn record(self: *Self, comptime T: type) Errors(T, Backend)!T {
             const i = @typeInfo(T).@"struct";
             const opt = comptime descriptor.options(T);
-            const unknown: descriptor.Unknown = if (@hasField(@TypeOf(opt), "unknown_fields")) opt.unknown_fields else .ignore;
-            const duplicates: descriptor.Duplicates = if (@hasField(@TypeOf(opt), "duplicates")) opt.duplicates else .reject;
+            const unknown: descriptor.Unknown = if (self.context.acceptance.reject_unknown_fields) .reject else if (@hasField(@TypeOf(opt), "unknown_fields")) opt.unknown_fields else .ignore;
+            const duplicates: descriptor.Duplicates = if (self.context.acceptance.reject_duplicates) .reject else if (@hasField(@TypeOf(opt), "duplicates")) opt.duplicates else .reject;
             const header = try self.start(.record);
             defer self.context.leave();
             var value: T = undefined;
@@ -421,20 +436,26 @@ pub fn Cursor(comptime Backend: type) type {
                     if (attrs.@"comptime") continue;
                     if (matched == index) {
                         const f = comptime descriptor.field(T, field_name);
-                        if (seen[index] and duplicates == .reject) return error.DuplicateField;
+                        if (seen[index] and duplicates == .reject) {
+                            if (self.context.diagnostics) |d| d.field(field_name);
+                            return error.DuplicateField;
+                        }
                         if (f.skip_decode or (seen[index] and duplicates == .first)) {
                             try self.skip();
                         } else {
-                            const old = if (self.context.diagnostics) |d| d.count else 0;
+                            const mark: ctx.Diagnostics.Checkpoint = if (self.context.diagnostics) |d| d.checkpoint() else .{ .count = 0, .used = 0, .truncated = false };
                             if (self.context.diagnostics) |d| d.field(field_name);
                             @field(value, field_name) = try self.readField(T, field_name);
-                            if (self.context.diagnostics) |d| d.count = old;
+                            if (self.context.diagnostics) |d| d.restore(mark);
                         }
                         seen[index] = !f.skip_decode;
                     }
                 }
                 if (matched == null) {
-                    if (unknown == .reject) return error.UnknownField;
+                    if (unknown == .reject) {
+                        if (self.context.diagnostics) |d| d.field(name);
+                        return error.UnknownField;
+                    }
                     try self.skip();
                 }
             }
@@ -477,6 +498,9 @@ pub fn Cursor(comptime Backend: type) type {
                     try self.context.chargeWork(n.magnitude.len);
                 },
                 .begin => |header| {
+                    try self.context.span(header.name.len, false);
+                    try self.context.chargeWork(header.name.len);
+                    if (!std.unicode.utf8ValidateSlice(header.name)) return error.InvalidUtf8;
                     try self.context.enter();
                     defer self.context.leave();
                     if (header.len) |n| try self.context.count(n);
@@ -789,5 +813,20 @@ pub fn CompoundAccess(comptime Backend: type) type {
                 self.live = false;
             }
         }
+    };
+}
+
+fn expectedKind(comptime T: type, comptime policy: descriptor.Field) ctx.Diagnostics.Expected {
+    return switch (@typeInfo(T)) {
+        .bool => .boolean,
+        .int => .integer,
+        .float => .floating,
+        .optional => .option,
+        .void, .null => .unit,
+        .pointer => |i| if (i.size == .slice and i.child == u8) (if (policy.as == .bytes) .bytes else .text) else .sequence,
+        .array, .vector => .tuple,
+        .@"struct" => |i| if (i.is_tuple) .tuple else .record,
+        .@"union", .@"enum" => .variant,
+        else => .unknown,
     };
 }

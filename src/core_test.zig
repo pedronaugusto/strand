@@ -557,3 +557,38 @@ test "S1 nominal semantic wrappers retain unit newtype and fixed tuple distincti
         try std.testing.expectEqual(core.Support.unsupported, core.describe(@TypeOf(value), .{ .named_shapes = false }).support);
     }
 }
+
+test "S1 strict caller policy tightens schema and diagnostics survive input mutation" {
+    const Loose = struct {
+        id: u8,
+        pub const strand = .{ .unknown_fields = .ignore, .duplicates = .last };
+    };
+    var diagnostics: core.Diagnostics = .{};
+    var c: core.Context = .init(std.testing.failing_allocator, .{}, .borrowed);
+    c.acceptance = .{ .reject_duplicates = true, .reject_unknown_fields = true };
+    c.diagnostics = &diagnostics;
+    try std.testing.expectError(error.DuplicateField, decoded(Loose, &c, &.{ 6, 2, 3, 2, 'i', 'd', 2, 1, 3, 2, 'i', 'd', 2, 2, 0 }));
+    try std.testing.expectEqual(@as(usize, 1), diagnostics.count);
+    diagnostics = .{};
+    var input = [_]u8{ 6, 1, 3, 1, 'x', 2, 1, 0 };
+    c = .init(std.testing.failing_allocator, .{}, .borrowed);
+    c.acceptance.reject_unknown_fields = true;
+    c.diagnostics = &diagnostics;
+    try std.testing.expectError(error.UnknownField, decoded(Loose, &c, &input));
+    input[4] = 'z';
+    try std.testing.expectEqual(@as(u8, 'x'), diagnostics.names[0]);
+}
+test "S1 internal tagging composes field codecs and typed tuples reject false arity hints" {
+    const Wrapped = union(enum) {
+        data: FieldRecord,
+        pub const strand = .{ .tag = "t" };
+    };
+    var memory: [128]u8 = undefined;
+    var out: Reference.Encoder = .{ .buffer = &memory };
+    var c: core.Context = .init(std.testing.failing_allocator, .{}, .borrowed);
+    try core.serialize(Wrapped{ .data = .{ .is_ready = 1, .item_count = 4 } }, &out, &c);
+    c = .init(std.testing.failing_allocator, .{}, .borrowed);
+    try std.testing.expectEqual(@as(u8, 1), (try decoded(Wrapped, &c, memory[0..out.used])).data.is_ready);
+    c = .init(std.testing.failing_allocator, .{}, .borrowed);
+    try std.testing.expectError(error.UnexpectedType, decoded(struct { u8, u8 }, &c, &.{ 5, 0, 2, 1, 2, 2, 0 }));
+}

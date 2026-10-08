@@ -8,6 +8,7 @@ pub const EncodeError = LimitError || error{ InvalidRaw, InvalidUtf8, NumberOutO
 pub const Lifetime = enum { borrowed, transient, owned };
 pub const Ownership = enum { borrowed, owned };
 pub const Borrow = enum { prefer, copy, require };
+pub const Acceptance = struct { reject_unknown_fields: bool = false, reject_duplicates: bool = false };
 
 pub const Limits = struct {
     input_bytes: usize = 16 * 1024 * 1024,
@@ -25,11 +26,26 @@ pub const Limits = struct {
 /// Names in errors are copied into inline storage, never retained from input.
 pub const Diagnostics = struct {
     offset: usize = 0,
+    line: ?usize = null,
+    column: ?usize = null,
+    format: []const u8 = "",
+    expected: Expected = .unknown,
+    custom_code: ?u32 = null,
     path: [32]Component = undefined,
     count: usize = 0,
     names: [512]u8 = undefined,
     used: usize = 0,
     truncated: bool = false,
+    pub const Expected = enum { unknown, boolean, integer, floating, text, scalar, bytes, option, unit, sequence, tuple, record, variant };
+    pub const Checkpoint = struct { count: usize, used: usize, truncated: bool };
+    pub fn checkpoint(self: *const Diagnostics) Checkpoint {
+        return .{ .count = self.count, .used = self.used, .truncated = self.truncated };
+    }
+    pub fn restore(self: *Diagnostics, mark: Checkpoint) void {
+        self.count = mark.count;
+        self.used = mark.used;
+        self.truncated = mark.truncated;
+    }
     pub const Component = union(enum) { field: struct { start: usize, len: usize }, index: usize };
     pub fn field(self: *Diagnostics, name: []const u8) void {
         if (self.count == self.path.len or name.len > self.names.len - self.used) {
@@ -62,6 +78,7 @@ pub const Context = struct {
     output_bytes: usize = 0,
     allocation_requested: usize = 0,
     diagnostics: ?*Diagnostics = null,
+    acceptance: Acceptance = .{},
     /// Internal replay: wire nodes/bytes were already validated and charged.
     replaying: bool = false,
 
@@ -133,6 +150,10 @@ pub const Context = struct {
         const memory = try self.storage.allocWithOptions(info.child, n, .fromByteUnits(alignment), sentinel);
         self.allocation_requested += bytes;
         return if (info.size == .one) &memory[0] else memory;
+    }
+    pub fn reject(self: *Context, code: u32) error{CustomRejected} {
+        if (self.diagnostics) |d| d.custom_code = code;
+        return error.CustomRejected;
     }
     pub fn retain(self: *Context, bytes: []const u8, lifetime: Lifetime, borrow: Borrow) DecodeError![]const u8 {
         try self.span(bytes.len, false);

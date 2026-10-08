@@ -15,8 +15,8 @@
         // Syncing a file and telling files apart. Pinned to a commit; the
         // hash is what the build checks.
         .airlock = .{
-            .url = "git+https://github.com/pedronaugusto/airlock#7f4add1981b59692b7fd7847f32fa6b32768bd3d",
-            .hash = "airlock-0.1.0-rfvu6NjxBABhOEPDMvXzGDAD-pNwgnBCo8wNfrF2g-EU",
+            .url = "git+https://github.com/pedronaugusto/airlock#112a6a233aa98ac831aa8b702ba0607587f367f4",
+            .hash = "airlock-0.1.0-rfvu6CZTBQB7slH2y-nDXvVwoLp-sbWLW_E1X9J3DwhQ",
         },
         // Test doubles, for the tests alone: no module a consumer builds
         // imports it, and a consumer never fetches it.

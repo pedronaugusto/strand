@@ -132,8 +132,8 @@ pub fn Cursor(comptime Backend: type) type {
             try self.context.node();
             try self.context.chargeWork(1);
             if (comptime descriptor.has(T, "strandDeserialize")) {
-                try self.context.enter();
-                defer self.context.leave();
+                try self.context.enterHook();
+                defer self.context.leaveHook();
                 var access: Access(Backend) = .{ .cursor = self };
                 const value = try T.strandDeserialize(&access);
                 if (!access.used or !access.complete) return error.CustomRejected;

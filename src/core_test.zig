@@ -847,5 +847,6 @@ test "S1 recursive hook delegation reaches depth limit before work exhaustion" {
     c = .init(std.testing.failing_allocator, .{ .depth = 2, .work = 10 }, .borrowed);
     try std.testing.expectError(error.DepthLimit, decoded(DelegatingLoop, &c, ""));
     try std.testing.expectEqual(@as(usize, 0), c.depth);
+    try std.testing.expectEqual(@as(usize, 0), c.hook_depth);
     try std.testing.expectEqual(@as(usize, 0), out.used);
 }

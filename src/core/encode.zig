@@ -15,8 +15,8 @@ fn emit(comptime policy: descriptor.Field, value: anytype, out: anytype, c: *ctx
     try c.node();
     try c.chargeWork(1);
     if (comptime descriptor.has(T, "strandSerialize")) {
-        try c.enter();
-        defer c.leave();
+        try c.enterHook();
+        defer c.leaveHook();
         var access: Access(@TypeOf(out.*)) = .{ .out = out, .context = c, .active = active };
         try value.strandSerialize(&access);
         if (!access.used) return error.CustomRejected;

@@ -54,7 +54,8 @@ reported separately. `acquireLeaky` uses a caller arena: failed allocations rema
 until the caller resets it. Checked `clone` copies reflected plain data into a
 new owner, excludes resource owners and bounds cycles by depth.
 
-Limits cover input/output bytes, depth, total and per-container items, text/key
+Limits cover input/output bytes, wire depth and independently capped hook
+delegation depth, total and per-container items, text/key
 length, numeric length, allocation and work. Skipped fields, unknown payloads,
 Raw validation and custom access still traverse and charge the whole wire value.
 Tag routing may replay validated spans; replay charges additional work without

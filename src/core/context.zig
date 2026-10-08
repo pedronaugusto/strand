@@ -72,6 +72,7 @@ pub const Context = struct {
     limits: Limits,
     ownership: Ownership,
     depth: usize = 0,
+    hook_depth: usize = 0,
     items: usize = 0,
     work: usize = 0,
     input_bytes: usize = 0,
@@ -93,6 +94,15 @@ pub const Context = struct {
     pub fn leave(self: *Context) void {
         @setRuntimeSafety(true);
         self.depth -= 1;
+    }
+    /// Callback delegation has the same finite cap without altering wire depth.
+    pub fn enterHook(self: *Context) error{DepthLimit}!void {
+        if (self.hook_depth >= self.limits.depth) return error.DepthLimit;
+        self.hook_depth += 1;
+    }
+    pub fn leaveHook(self: *Context) void {
+        std.debug.assert(self.hook_depth != 0);
+        self.hook_depth -= 1;
     }
     pub fn node(self: *Context) error{ItemLimit}!void {
         @setRuntimeSafety(true);

@@ -3,6 +3,14 @@ const context = @import("context.zig");
 pub const Kind = enum { sequence, tuple, named_tuple, map, record, variant, newtype, some, named_unit };
 pub const Span = struct { bytes: []const u8, lifetime: context.Lifetime };
 pub const Compound = struct { kind: Kind, len: ?usize = null, name: []const u8 = "" };
+/// Typed hints accompany backend requests; they never override wire grammar.
+pub const Request = struct {
+    expected: context.Diagnostics.Expected = .unknown,
+    integer_bits: usize = 0,
+    float_bits: usize = 0,
+    exact: bool = false,
+    borrow: context.Borrow = .prefer,
+};
 /// Unsigned little-endian magnitude. Formats can supply any Zig integer width.
 /// Textual decimal/exponent normalization belongs to the format's checked kernel.
 pub const Integer = struct { negative: bool = false, magnitude: []const u8 };

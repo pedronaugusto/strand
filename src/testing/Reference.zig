@@ -18,7 +18,7 @@ fn read(self: *Self, c: *core.Context, n: usize) core.DecodeError![]const u8 {
     self.position += n;
     return bytes;
 }
-pub fn next(self: *Self, c: *core.Context) core.DecodeError!core.Event {
+pub fn next(self: *Self, c: *core.Context, _: core.Request) core.DecodeError!core.Event {
     const tag = (try self.read(c, 1))[0];
     return switch (tag) {
         0 => .end,

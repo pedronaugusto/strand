@@ -592,3 +592,26 @@ test "S1 internal tagging composes field codecs and typed tuples reject false ar
     c = .init(std.testing.failing_allocator, .{}, .borrowed);
     try std.testing.expectError(error.UnexpectedType, decoded(struct { u8, u8 }, &c, &.{ 5, 0, 2, 1, 2, 2, 0 }));
 }
+
+test "S1 backend receives destination width and exactness before consuming a scalar" {
+    const WidthBackend = struct {
+        used: bool = false,
+        pub const capabilities: core.Capabilities = .{};
+        pub const Error = core.DecodeError;
+        const Self = @This();
+        pub fn offset(_: *const Self) usize {
+            return 0;
+        }
+        pub fn next(self: *Self, _: *core.Context, request: core.Request) Error!core.Event {
+            if (self.used or request.integer_bits != 9 or request.expected != .integer) return error.CustomRejected;
+            self.used = true;
+            return .{ .integer = .{ .magnitude = &.{ 0, 1 } } };
+        }
+        pub fn endInput(self: *Self, _: *core.Context) Error!void {
+            if (!self.used) return error.SyntaxError;
+        }
+    };
+    var backend: WidthBackend = .{};
+    var c: core.Context = .init(std.testing.failing_allocator, .{}, .borrowed);
+    try std.testing.expectEqual(@as(u9, 256), try core.deserialize(u9, &backend, &c));
+}

@@ -21,13 +21,14 @@ pub fn Cursor(comptime Backend: type) type {
         context: *ctx.Context,
         pending: ?model.Event = null,
         pending_start: usize = 0,
+        request: model.Request = .{},
         const Self = @This();
         const Error = ctx.DecodeError || Backend.Error;
         fn peek(self: *Self) Error!model.Event {
             if (self.pending == null) {
                 self.pending_start = self.backend.offset();
                 if (self.context.diagnostics) |d| d.offset = self.pending_start;
-                self.pending = self.backend.next(self.context) catch |err| {
+                self.pending = self.backend.next(self.context, self.request) catch |err| {
                     if (self.context.diagnostics) |d| d.offset = self.backend.offset();
                     return err;
                 };
@@ -43,6 +44,17 @@ pub fn Cursor(comptime Backend: type) type {
             if (try self.take() != .end) return error.SyntaxError;
         }
         fn start(self: *Self, expected: model.Kind) Error!model.Compound {
+            self.request = .{ .expected = switch (expected) {
+                .sequence => .sequence,
+                .tuple => .tuple,
+                .named_tuple => .named_tuple,
+                .map => .map,
+                .record => .record,
+                .variant => .variant,
+                .named_unit => .named_unit,
+                .newtype => .newtype,
+                .some => .some,
+            } };
             const event = try self.take();
             if (event != .begin) return error.UnexpectedType;
             try self.context.span(event.begin.name.len, false);
@@ -59,6 +71,7 @@ pub fn Cursor(comptime Backend: type) type {
             return std.mem.eql(u8, a, b);
         }
         fn key(self: *Self) Error![]const u8 {
+            self.request = .{ .expected = .text };
             try self.context.node();
             const event = try self.take();
             if (event != .text) return error.UnexpectedType;
@@ -110,7 +123,8 @@ pub fn Cursor(comptime Backend: type) type {
         pub fn read(self: *Self, comptime T: type, comptime policy: descriptor.Field) Errors(T, Backend)!T {
             @setRuntimeSafety(true);
             comptime descriptor.check(T, Backend.capabilities, true, .borrowed);
-            if (self.context.diagnostics) |d| d.expected = expectedKind(T, policy);
+            self.request = typeRequest(T, policy);
+            if (self.context.diagnostics) |d| d.expected = self.request.expected;
             try self.context.node();
             try self.context.chargeWork(1);
             if (comptime descriptor.has(T, "strandDeserialize")) {
@@ -197,35 +211,37 @@ pub fn Cursor(comptime Backend: type) type {
                     }
                     return error.UnknownVariant;
                 },
-                .@"union" => |i| {
-                    const opt = comptime descriptor.options(T);
-                    if (@hasField(@TypeOf(opt), "tag")) return self.tagged(T);
-                    const header = try self.start(.variant);
-                    defer self.context.leave();
-                    if (header.len) |n| if (n != 1) return error.SyntaxError;
-                    inline for (i.field_names, i.field_types) |name, F| {
-                        const v = comptime descriptor.variant(T, name);
-                        var matches = try self.equals(header.name, v.name);
-                        inline for (v.aliases) |alias| matches = matches or try self.equals(header.name, alias);
-                        if (matches) {
-                            const value = @unionInit(T, name, try self.read(F, .{ .name = name }));
-                            try self.end();
-                            return value;
-                        }
-                    }
-                    if (@hasField(@TypeOf(opt), "other")) {
-                        const F = @FieldType(T, opt.other);
-                        const payload = if (F == void) blk: {
-                            try self.skip();
-                            break :blk {};
-                        } else try self.read(F, .{});
-                        try self.end();
-                        return @unionInit(T, opt.other, payload);
-                    }
-                    return error.UnknownVariant;
-                },
+                .@"union" => return self.readUnion(T),
                 else => @compileError("unsupported core decode type"),
             }
+        }
+        fn readUnion(self: *Self, comptime T: type) Errors(T, Backend)!T {
+            const i = @typeInfo(T).@"union";
+            const opt = comptime descriptor.options(T);
+            if (@hasField(@TypeOf(opt), "tag")) return self.tagged(T);
+            const header = try self.start(.variant);
+            defer self.context.leave();
+            if (header.len) |n| if (n != 1) return error.SyntaxError;
+            inline for (i.field_names, i.field_types) |name, F| {
+                const v = comptime descriptor.variant(T, name);
+                var matches = try self.equals(header.name, v.name);
+                inline for (v.aliases) |alias| matches = matches or try self.equals(header.name, alias);
+                if (matches) {
+                    const value = @unionInit(T, name, try self.read(F, .{ .name = name }));
+                    try self.end();
+                    return value;
+                }
+            }
+            if (@hasField(@TypeOf(opt), "other")) {
+                const F = @FieldType(T, opt.other);
+                const payload = if (F == void) blk: {
+                    try self.skip();
+                    break :blk {};
+                } else try self.read(F, .{});
+                try self.end();
+                return @unionInit(T, opt.other, payload);
+            }
+            return error.UnknownVariant;
         }
         /// Routing scans a bounded record once, then replays just the selected
         /// payload. This supports content-before-tag without an unbounded DOM.
@@ -339,6 +355,7 @@ pub fn Cursor(comptime Backend: type) type {
             return (try self.keySpan()).bytes;
         }
         fn keySpan(self: *Self) Error!model.Span {
+            self.request = .{ .expected = .text };
             const event = try self.take();
             if (event != .text) return error.UnexpectedType;
             try self.context.span(event.text.bytes.len, false);
@@ -745,13 +762,13 @@ fn Filtered(comptime Backend: type) type {
         pub fn replay(self: *const Self, start: usize, end: usize) Backend {
             return self.backend.replay(start, end);
         }
-        pub fn next(self: *Self, c: *ctx.Context) (ctx.DecodeError || Error)!model.Event {
+        pub fn next(self: *Self, c: *ctx.Context, request: model.Request) (ctx.DecodeError || Error)!model.Event {
             while (true) {
-                var event = try self.backend.next(c);
+                var event = try self.backend.next(c, request);
                 if (self.level == 1 and self.key_turn and event == .text) {
                     try c.chargeWork(event.text.bytes.len);
                     if (std.mem.eql(u8, event.text.bytes, self.tag)) {
-                        _ = try self.backend.next(c);
+                        _ = try self.backend.next(c, request);
                         continue;
                     }
                     self.key_turn = false;
@@ -829,4 +846,24 @@ fn expectedKind(comptime T: type, comptime policy: descriptor.Field) ctx.Diagnos
         .@"union", .@"enum" => .variant,
         else => .unknown,
     };
+}
+
+fn typeRequest(comptime T: type, comptime policy: descriptor.Field) model.Request {
+    var result: model.Request = .{ .expected = expectedKind(T, policy), .exact = policy.exact, .borrow = policy.borrow };
+    switch (@typeInfo(T)) {
+        .int => |i| result.integer_bits = i.bits,
+        .float => |i| result.float_bits = i.bits,
+        .optional => |i| {
+            const child = typeRequest(i.child, policy);
+            result.integer_bits = child.integer_bits;
+            result.float_bits = child.float_bits;
+        },
+        .pointer => |i| if (i.size == .one) {
+            const child = typeRequest(i.child, policy);
+            result.integer_bits = child.integer_bits;
+            result.float_bits = child.float_bits;
+        },
+        else => {},
+    }
+    return result;
 }

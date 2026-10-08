@@ -36,7 +36,7 @@ pub const Diagnostics = struct {
     names: [512]u8 = undefined,
     used: usize = 0,
     truncated: bool = false,
-    pub const Expected = enum { unknown, boolean, integer, floating, text, scalar, bytes, option, unit, sequence, tuple, record, variant };
+    pub const Expected = enum { unknown, boolean, integer, floating, text, scalar, bytes, option, unit, sequence, tuple, record, variant, map, named_tuple, named_unit, newtype, some };
     pub const Checkpoint = struct { count: usize, used: usize, truncated: bool };
     pub fn checkpoint(self: *const Diagnostics) Checkpoint {
         return .{ .count = self.count, .used = self.used, .truncated = self.truncated };

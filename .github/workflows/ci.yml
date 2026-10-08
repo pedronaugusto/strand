@@ -9,6 +9,10 @@ on:
         type: choice
         options: [fast, merge, release]
         default: fast
+      indicative_timing:
+        description: Explicit manual hosted own/std/previous-main timing observations
+        type: boolean
+        default: false
       status-only:
         description: Verify the recorded merge or release tier for this exact commit
         type: boolean
@@ -55,3 +59,71 @@ jobs:
         {"include":[{"os":"macos-latest","name":"test (macos-latest, Debug)","step":"ci-run","args":"-Doptimize=debug -Dci-lint=false -Dci-timings=true","shard":"","setup":true,"job_timeout":20,"cache_key":"8c46ddba71b8f318","artifact":"preflight-8c46ddba71b8f318","operation":"replay"},{"os":"macos-latest","name":"test (macos-latest, ReleaseSafe)","step":"ci-run","args":"-Doptimize=safe -Dci-lint=false -Dci-timings=true","shard":"","setup":true,"job_timeout":20,"cache_key":"09a00ce0bc391ea0","artifact":"preflight-09a00ce0bc391ea0","operation":"replay"},{"os":"windows-latest","name":"test (windows-latest, Debug)","step":"ci-run","args":"-Doptimize=debug -Dci-lint=false -Dci-timings=true","shard":"","setup":true,"job_timeout":20,"cache_key":"8c10bd50445b6b62","artifact":"preflight-8c10bd50445b6b62","operation":"replay"},{"os":"windows-latest","name":"test (windows-latest, ReleaseSafe)","step":"ci-run","args":"-Doptimize=safe -Dci-lint=false -Dci-timings=true","shard":"","setup":true,"job_timeout":20,"cache_key":"c0f8f844e3a1bd3d","artifact":"preflight-c0f8f844e3a1bd3d","operation":"replay"}]}
       windows-git-latest: false
       compile-once: true
+
+  manual-observations:
+    if: github.event_name == 'workflow_dispatch' && inputs.indicative_timing
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          ref: 753bfaf82309b760138d1e7f7746c02cdbdcf072
+          path: .zig-cache/previous-main
+          sparse-checkout: src
+      - uses: actions/checkout@v4
+        with:
+          repository: pedronaugusto/preflight
+          ref: b28046cc22055fcd32640117fc0e6965283a8ae5
+          path: .preflight
+      - uses: ./.preflight/.github/actions/setup
+      - name: Compile paired manual observations without timing
+        run: zig build baseline-build core-bench-build -Dbaseline-source=.zig-cache/previous-main/src/strand.zig
+      - name: Record compiler and provenance
+        run: |
+          mkdir -p observation
+          zig env > observation/compiler.json
+          uname -a > observation/kernel.txt
+          git rev-parse HEAD > observation/candidate.txt
+          git -C .zig-cache/previous-main rev-parse HEAD > observation/previous-main.txt
+      - name: Linux CPU and memory
+        if: runner.os == 'Linux'
+        run: |
+          lscpu > observation/cpu.txt
+          free -b > observation/memory.txt
+      - name: Windows CPU and memory
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Get-CimInstance Win32_Processor | Format-List * | Out-File observation/cpu.txt
+          Get-CimInstance Win32_OperatingSystem | Select-Object TotalVisibleMemorySize,FreePhysicalMemory,Version | Out-File observation/memory.txt
+      - name: macOS CPU and memory
+        if: runner.os == 'macOS'
+        run: sysctl hw machdep.cpu > observation/cpu.txt
+      - name: Explicit manual paired Linux timings
+        if: runner.os == 'Linux'
+        run: |
+          taskset -c 0 ./zig-out/bin/strand-baseline "$GITHUB_SHA" > observation/baseline.jsonl
+          taskset -c 0 ./zig-out/bin/strand-core-bench "$GITHUB_SHA" > observation/core.jsonl
+      - name: Explicit manual paired Windows timings
+        if: runner.os == 'Windows'
+        run: |
+          ./zig-out/bin/strand-baseline.exe "$GITHUB_SHA" > observation/baseline.jsonl
+          ./zig-out/bin/strand-core-bench.exe "$GITHUB_SHA" > observation/core.jsonl
+      - name: Explicit manual paired macOS timings
+        if: runner.os == 'macOS'
+        run: |
+          ./zig-out/bin/strand-baseline "$GITHUB_SHA" > observation/baseline.jsonl
+          ./zig-out/bin/strand-core-bench "$GITHUB_SHA" > observation/core.jsonl
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: strand-indicative-${{ runner.os }}
+          path: observation

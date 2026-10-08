@@ -4,7 +4,7 @@ const descriptor = @import("descriptor.zig");
 const ctx = @import("context.zig");
 const model = @import("model.zig");
 
-/// Backend.next(context) must meter wire reads/scratch through context before
+/// Backend.next(context, request) must meter wire reads/scratch through context before
 /// doing that work, validate grammar, and distinguish input from scratch spans.
 /// endInput verifies no trailing value. All backend errors are named.
 pub fn deserialize(comptime T: type, backend: anytype, c: *ctx.Context) Errors(T, @TypeOf(backend.*))!T {
@@ -60,6 +60,7 @@ pub fn Cursor(comptime Backend: type) type {
             try self.context.span(event.begin.name.len, false);
             try self.context.chargeWork(event.begin.name.len);
             if (!std.unicode.utf8ValidateSlice(event.begin.name)) return error.InvalidUtf8;
+            if (event.begin.len == null and !Backend.capabilities.indefinite_containers) return error.UnsupportedValue;
             if (event.begin.kind != expected and !(expected == .tuple and event.begin.kind == .sequence) and !(expected == .record and event.begin.kind == .map)) return error.UnexpectedType;
             try self.context.enter();
             errdefer self.context.leave();
@@ -149,6 +150,7 @@ pub fn Cursor(comptime Backend: type) type {
                     if (event != .floating) return error.UnexpectedType;
                     // safe: float narrowing is the declared destination's rounding;
                     // overflow is explicitly rejected before publishing the result.
+                    if (!Backend.capabilities.nonfinite_floats and !std.math.isFinite(event.floating)) return error.UnsupportedValue;
                     const value: T = @floatCast(event.floating); // safe: checked destination bounds or Zig-provided typed storage precede this conversion.
                     if (std.math.isFinite(event.floating) and !std.math.isFinite(value)) return error.NumberOutOfRange;
                     if (policy.exact and std.math.isFinite(event.floating) and @as(f128, value) != event.floating) return error.InexactNumber;
@@ -525,11 +527,13 @@ pub fn Cursor(comptime Backend: type) type {
                     try self.context.chargeWork(span.bytes.len);
                 },
                 .scalar => |v| if (!std.unicode.utf8ValidCodepoint(v)) return error.InvalidUtf8,
+                .floating => |v| if (!Backend.capabilities.nonfinite_floats and !std.math.isFinite(v)) return error.UnsupportedValue,
                 .integer => |n| {
                     if (n.magnitude.len > self.context.limits.numeric_bytes) return error.LengthLimit;
                     try self.context.chargeWork(n.magnitude.len);
                 },
                 .begin => |header| {
+                    if (header.len == null and !Backend.capabilities.indefinite_containers) return error.UnsupportedValue;
                     try self.context.span(header.name.len, false);
                     try self.context.chargeWork(header.name.len);
                     if (!std.unicode.utf8ValidateSlice(header.name)) return error.InvalidUtf8;

@@ -681,3 +681,46 @@ test "S1 zero container limit rejects indefinite visitors before indexed storage
     c = .init(std.testing.allocator, .{ .container_items = 0 }, .owned);
     try std.testing.expectError(error.ItemLimit, decoded(core.Pairs(u8, u8), &c, &.{ 11, 2, 1, 2, 2, 0 }));
 }
+
+test "S1 reference numeric semantics preserve wide signed minima floats and sentinels" {
+    var memory: [256]u8 = undefined;
+    inline for (.{ @as(i257, std.math.minInt(i257)), @as(u257, std.math.maxInt(u257)), @as(f128, 1.25), @as(f128, -0.0) }) |value| {
+        var out: Reference.Encoder = .{ .buffer = &memory };
+        var c: core.Context = .init(std.testing.failing_allocator, .{}, .borrowed);
+        try core.serialize(value, &out, &c);
+        c = .init(std.testing.failing_allocator, .{}, .borrowed);
+        const result = try decoded(@TypeOf(value), &c, memory[0..out.used]);
+        try std.testing.expectEqual(value, result);
+        if (@typeInfo(@TypeOf(value)) == .float and value == 0) try std.testing.expect(std.math.signbit(result));
+        c = .init(std.testing.failing_allocator, .{ .numeric_bytes = 0 }, .borrowed);
+        try std.testing.expectError(error.LengthLimit, decoded(@TypeOf(value), &c, memory[0..out.used]));
+    }
+    const Shape = core.NamedTuple([2:9]u8, "pair");
+    var out: Reference.Encoder = .{ .buffer = &memory };
+    var c: core.Context = .init(std.testing.failing_allocator, .{}, .borrowed);
+    try core.serialize(Shape{ .value = .{ 1, 2 } }, &out, &c);
+    c = .init(std.testing.failing_allocator, .{}, .borrowed);
+    const result = try decoded(Shape, &c, memory[0..out.used]);
+    try std.testing.expectEqual(@as(u8, 9), result.value[2]);
+}
+test "S1 float narrowing rejects overflow and exact fields reject rounding" {
+    const FloatRecord = struct {
+        f: f32,
+        pub const strand = .{ .fields = .{ .f = .{ .exact = true } } };
+    };
+    var memory: [128]u8 = undefined;
+    var out: Reference.Encoder = .{ .buffer = &memory };
+    var c: core.Context = .init(std.testing.failing_allocator, .{}, .borrowed);
+    try core.serialize(struct { f: f128 }{ .f = 1.0000000000000001 }, &out, &c);
+    c = .init(std.testing.failing_allocator, .{}, .borrowed);
+    try std.testing.expectError(error.InexactNumber, decoded(FloatRecord, &c, memory[0..out.used]));
+    out.used = 0;
+    c = .init(std.testing.failing_allocator, .{}, .borrowed);
+    try core.serialize(@as(f128, 1e100), &out, &c);
+    c = .init(std.testing.failing_allocator, .{}, .borrowed);
+    try std.testing.expectError(error.NumberOutOfRange, decoded(f32, &c, memory[0..out.used]));
+    c = .init(std.testing.failing_allocator, .{}, .borrowed);
+    try std.testing.expectError(error.NumberOutOfRange, decoded(u8, &c, &.{ 15, 2, 0, 1 }));
+    c = .init(std.testing.failing_allocator, .{}, .borrowed);
+    try std.testing.expectError(error.NumberOutOfRange, decoded(u8, &c, &.{ 9, 1 }));
+}

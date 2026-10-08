@@ -5,7 +5,7 @@ const core = @import("../core.zig");
 const core_decode = @import("../core/decode.zig");
 pub const Format = enum { reference };
 pub const Error = error{SyntaxError};
-pub const capabilities: core.Capabilities = .{ .nested_optional = true };
+pub const capabilities: core.Capabilities = .{ .nested_optional = true, .max_integer_bits = 2040 };
 input: []const u8,
 position: usize = 0,
 end_position: ?usize = null,
@@ -28,6 +28,16 @@ pub fn next(self: *Self, c: *core.Context, _: core.Request) core.DecodeError!cor
             break :blk .{ .boolean = value != 0 };
         },
         2 => .{ .integer = .{ .magnitude = try self.read(c, 1) } },
+        15, 17 => blk: {
+            const len = (try self.read(c, 1))[0];
+            if (len > c.limits.numeric_bytes) return error.LengthLimit;
+            break :blk .{ .integer = .{ .negative = tag == 17, .magnitude = try self.read(c, len) } };
+        },
+        18 => blk: {
+            if (16 > c.limits.numeric_bytes) return error.LengthLimit;
+            const bits = std.mem.readInt(u128, (try self.read(c, 16))[0..16], .little);
+            break :blk .{ .floating = @bitCast(bits) }; // safe: every u128 bit pattern is a valid f128 representation.
+        },
         3, 4 => blk: {
             const len = (try self.read(c, 1))[0];
             const span: core.Span = .{ .bytes = try self.read(c, len), .lifetime = .borrowed };
@@ -99,7 +109,7 @@ pub const Encoder = struct {
         backend.endInput(c) catch return error.InvalidRaw;
     }
     pub const Error = core.EncodeError;
-    pub const capabilities: core.Capabilities = .{ .nested_optional = true };
+    pub const capabilities: core.Capabilities = .{ .nested_optional = true, .max_integer_bits = 2040 };
     fn write(self: *Encoder, c: *core.Context, payload: []const u8) core.EncodeError!void {
         @setRuntimeSafety(true);
         try c.output(payload.len);
@@ -117,12 +127,24 @@ pub const Encoder = struct {
         try self.write(c, &.{ 1, @intFromBool(value) });
     }
     pub fn integer(self: *Encoder, value: anytype, c: *core.Context) core.EncodeError!void {
-        if (value < 0) {
-            const magnitude = std.math.cast(u8, std.math.absCast(value)) orelse return error.NumberOutOfRange;
-            try self.write(c, &.{ 9, magnitude });
+        const T = @TypeOf(value);
+        const magnitude = @abs(value);
+        if (std.math.cast(u8, magnitude)) |small| {
+            if (c.limits.numeric_bytes == 0) return error.LengthLimit;
+            try self.write(c, &.{ if (value < 0) @as(u8, 9) else @as(u8, 2), small });
         } else {
-            const magnitude = std.math.cast(u8, value) orelse return error.NumberOutOfRange;
-            try self.write(c, &.{ 2, magnitude });
+            const len = (@typeInfo(T).int.bits + 7) / 8;
+            if (len > c.limits.numeric_bytes) return error.LengthLimit;
+            const size = std.math.cast(u8, len) orelse return error.NumberOutOfRange;
+            var encoded: [len]u8 = undefined;
+            var remaining = magnitude;
+            for (&encoded) |*byte| {
+                byte.* = if (comptime @typeInfo(T).int.bits < 8) @intCast(remaining) else @truncate(remaining); // safe: low eight magnitude bits are the wire byte; higher bits are emitted next.
+                remaining = if (comptime @typeInfo(T).int.bits > 8) remaining >> 8 else 0;
+            }
+            try c.chargeWork(len);
+            try self.write(c, &.{ if (value < 0) @as(u8, 17) else @as(u8, 15), size });
+            try self.write(c, &encoded);
         }
     }
     pub fn text(self: *Encoder, value: []const u8, c: *core.Context) core.EncodeError!void {
@@ -160,7 +182,12 @@ pub const Encoder = struct {
     pub fn end(self: *Encoder, c: *core.Context) core.EncodeError!void {
         try self.write(c, &.{0});
     }
-    pub fn floating(_: *Encoder, _: anytype, _: *core.Context) core.EncodeError!void {
-        return error.UnsupportedValue;
+    pub fn floating(self: *Encoder, value: anytype, c: *core.Context) core.EncodeError!void {
+        if (16 > c.limits.numeric_bytes) return error.LengthLimit;
+        var encoded: [16]u8 = undefined;
+        std.mem.writeInt(u128, &encoded, @bitCast(@as(f128, value)), .little); // safe: float representation is emitted as little-endian bits, without arithmetic reinterpretation.
+        try c.chargeWork(encoded.len);
+        try self.write(c, &.{18});
+        try self.write(c, &encoded);
     }
 };

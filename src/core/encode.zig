@@ -23,7 +23,10 @@ fn emit(comptime policy: descriptor.Field, value: anytype, out: anytype, c: *ctx
     switch (@typeInfo(T)) {
         .bool => try out.boolean(value, c),
         .int => try out.integer(value, c),
-        .float => try out.floating(value, c),
+        .float => {
+            if (!@TypeOf(out.*).capabilities.nonfinite_floats and !std.math.isFinite(value)) return error.UnsupportedValue;
+            try out.floating(value, c);
+        },
         .void => try out.unit(c),
         .null => try out.nullValue(c),
         .@"enum" => switch (value) {

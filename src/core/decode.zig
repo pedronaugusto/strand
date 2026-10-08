@@ -134,7 +134,7 @@ pub fn Cursor(comptime Backend: type) type {
             if (comptime descriptor.has(T, "strandDeserialize")) {
                 try self.context.enterHook();
                 defer self.context.leaveHook();
-                var access: Access(Backend) = .{ .cursor = self };
+                var access: PolicyAccess(Backend, policy) = .{ .cursor = self };
                 const value = try T.strandDeserialize(&access);
                 if (!access.used or !access.complete) return error.CustomRejected;
                 return value;
@@ -434,7 +434,7 @@ pub fn Cursor(comptime Backend: type) type {
             const declared = comptime descriptor.fieldOptions(T, name);
             const value = if (@hasField(@TypeOf(declared), "codec")) blk: {
                 try self.context.node();
-                var access: Access(Backend) = .{ .cursor = self };
+                var access: PolicyAccess(Backend, descriptor.field(T, name)) = .{ .cursor = self };
                 const result = try declared.codec.decode(&access);
                 if (!access.used or !access.complete) return error.CustomRejected;
                 break :blk result;
@@ -571,24 +571,29 @@ pub fn Cursor(comptime Backend: type) type {
 /// record/tuple/newtype. A second read or no read is rejected. It cannot obtain
 /// an unmetered token source through this contract.
 pub fn Access(comptime Backend: type) type {
+    return PolicyAccess(Backend, .{});
+}
+fn PolicyAccess(comptime Backend: type, comptime policy: descriptor.Field) type {
     return struct {
         cursor: *Cursor(Backend),
         used: bool = false,
         complete: bool = true,
         pub const Error = ctx.DecodeError || Backend.Error;
         const Self = @This();
-        pub fn begin(self: *Self, kind: model.Kind) Error!CompoundAccess(Backend) {
+        pub fn begin(self: *Self, kind: model.Kind) Error!PolicyCompoundAccess(Backend, policy) {
             if (self.used) return error.CustomRejected;
             self.used = true;
             self.complete = false;
             const header = try self.cursor.start(kind);
+            errdefer self.cursor.context.leave();
+            if (header.len) |n| if (n > policy.max_len) return error.LengthLimit;
             return .{ .access = self, .header = header };
         }
         pub fn named(self: *Self, comptime T: type, kind: model.Kind, name: []const u8) Errors(T, Backend)!T {
             var compound = try self.begin(kind);
             defer compound.abort();
             if (!try self.cursor.equals(compound.header.name, name)) return error.UnexpectedType;
-            const value = try compound.element(T);
+            const value = try compound.elementPolicy(T, policy);
             try compound.finish();
             return value;
         }
@@ -632,7 +637,13 @@ pub fn Access(comptime Backend: type) type {
             if (self.used) return error.CustomRejected;
             self.used = true;
             if (!self.cursor.context.replaying) self.cursor.context.items -= 1;
-            return self.cursor.read([]const u8, .{ .as = .bytes, .borrow = borrow });
+            const bytes_policy = comptime blk: {
+                var f = policy;
+                f.as = .bytes;
+                if (f.borrow == .prefer) f.borrow = borrow;
+                break :blk f;
+            };
+            return self.cursor.read([]const u8, bytes_policy);
         }
         pub fn scalar(self: *Self) Error!u21 {
             if (self.used) return error.CustomRejected;
@@ -654,10 +665,11 @@ pub fn Access(comptime Backend: type) type {
             var result: []T = &.{};
             var n: usize = 0;
             while (try sequence_access.hasNext()) {
+                if (n >= policy.max_len) return error.LengthLimit;
                 if (n >= self.cursor.context.limits.container_items) return error.ItemLimit;
                 if (n == result.len) {
                     const capacity = @max(@as(usize, 1), std.math.mul(usize, n, 2) catch return error.AllocationLimit);
-                    const grown = try self.alloc(T, @min(capacity, self.cursor.context.limits.container_items));
+                    const grown = try self.alloc(T, @min(capacity, @min(policy.max_len, self.cursor.context.limits.container_items)));
                     try self.chargeWork(n);
                     @memcpy(grown[0..n], result[0..n]);
                     result = grown;
@@ -677,10 +689,11 @@ pub fn Access(comptime Backend: type) type {
             var storage: []model.Pair(K, V) = &.{};
             var n: usize = 0;
             while (try map.hasNext()) {
+                if (n >= policy.max_len) return error.LengthLimit;
                 if (n >= self.cursor.context.limits.container_items) return error.ItemLimit;
                 if (n == storage.len) {
                     const capacity = @max(@as(usize, 1), std.math.mul(usize, n, 2) catch return error.AllocationLimit);
-                    const next = try self.alloc(model.Pair(K, V), @min(capacity, self.cursor.context.limits.container_items));
+                    const next = try self.alloc(model.Pair(K, V), @min(capacity, @min(policy.max_len, self.cursor.context.limits.container_items)));
                     try self.chargeWork(n);
                     @memcpy(next[0..n], storage[0..n]);
                     storage = next;
@@ -695,7 +708,7 @@ pub fn Access(comptime Backend: type) type {
             if (self.used) return error.CustomRejected;
             self.used = true;
             if (!self.cursor.context.replaying) self.cursor.context.items -= 1;
-            return self.cursor.read(T, .{ .name = "" });
+            return self.cursor.read(T, policy);
         }
         pub fn alloc(self: *Self, comptime T: type, n: usize) ctx.DecodeError![]T {
             return self.cursor.context.alloc(T, n);
@@ -711,7 +724,8 @@ pub fn Access(comptime Backend: type) type {
             if (!self.cursor.context.replaying) self.cursor.context.items -= 1;
             try self.cursor.skip();
             const span = self.cursor.backend.raw(start, self.cursor.backend.offset());
-            return self.cursor.context.retain(span.bytes, span.lifetime, .prefer);
+            if (span.bytes.len > policy.max_len) return error.LengthLimit;
+            return self.cursor.context.retain(span.bytes, span.lifetime, policy.borrow);
         }
         pub fn skip(self: *Self) (ctx.DecodeError || Backend.Error)!void {
             if (self.used) return error.CustomRejected;
@@ -858,8 +872,11 @@ fn Filtered(comptime Backend: type) type {
 /// Bounded compound visitor: every member is read through the same kernel;
 /// finishing validates the declared arity and consumes the explicit end marker.
 pub fn CompoundAccess(comptime Backend: type) type {
+    return PolicyCompoundAccess(Backend, .{});
+}
+fn PolicyCompoundAccess(comptime Backend: type, comptime policy: descriptor.Field) type {
     return struct {
-        access: *Access(Backend),
+        access: *PolicyAccess(Backend, policy),
         header: model.Compound,
         count: usize = 0,
         key_pending: bool = false,
@@ -872,6 +889,7 @@ pub fn CompoundAccess(comptime Backend: type) type {
         }
         pub fn key(self: *Self, comptime T: type) Errors(T, Backend)!T {
             if (!self.live or self.key_pending or (self.header.kind != .map and self.header.kind != .record)) return error.CustomRejected;
+            if (self.count >= policy.max_len) return error.LengthLimit;
             if (self.count >= self.access.cursor.context.limits.container_items) return error.ItemLimit;
             self.key_pending = true;
             const event = try self.access.cursor.peek();
@@ -880,11 +898,15 @@ pub fn CompoundAccess(comptime Backend: type) type {
             return self.access.cursor.read(T, .{});
         }
         pub fn element(self: *Self, comptime T: type) Errors(T, Backend)!T {
+            return self.elementPolicy(T, .{});
+        }
+        fn elementPolicy(self: *Self, comptime T: type, comptime field_policy: descriptor.Field) Errors(T, Backend)!T {
             if (!self.live or ((self.header.kind == .map or self.header.kind == .record) and !self.key_pending)) return error.CustomRejected;
+            if (self.count >= policy.max_len) return error.LengthLimit;
             if (self.count >= self.access.cursor.context.limits.container_items) return error.ItemLimit;
             self.key_pending = false;
             self.count += 1;
-            return self.access.cursor.read(T, .{});
+            return self.access.cursor.read(T, field_policy);
         }
         pub fn finish(self: *Self) Error!void {
             if (!self.live or self.key_pending) return error.CustomRejected;

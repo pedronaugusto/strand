@@ -893,3 +893,106 @@ test "S1 explicit byte visits compose with codecs ownership and scalar key limit
         }
     }.decode));
 }
+
+const LimitedListRecord = struct {
+    items: std.ArrayList(u8),
+    pub const strand = .{ .fields = .{ .items = .{ .codec = core.codecs.ArrayList(u8), .max_len = 1, .default = makeDefault } } };
+    pub fn makeDefault(c: *core.Context) core.DecodeError!std.ArrayList(u8) {
+        const values = try c.alloc(u8, 2);
+        @memcpy(values, &[_]u8{ 1, 2 });
+        return .fromOwnedSlice(values);
+    }
+};
+fn expectOwnedError(comptime T: type, expected: core.DecodeError, input: []const u8) !void {
+    const result = core.acquire(T, .owned, std.testing.allocator, input, .{}, struct {
+        fn decode(c: *core.Context, wire: []const u8) core.DecodeError!T {
+            return decoded(T, c, wire);
+        }
+    }.decode);
+    if (result) |value| {
+        var owner = value;
+        defer owner.deinit();
+        return error.TestUnexpectedResult;
+    } else |actual| try std.testing.expectEqual(expected, actual);
+}
+test "S1 field codecs preserve length limits for definite indefinite and default sequences" {
+    try expectOwnedError(LimitedListRecord, error.LengthLimit, &.{ 6, 1, 3, 5, 'i', 't', 'e', 'm', 's', 5, 2, 2, 1, 2, 2, 0, 0 });
+    try expectOwnedError(LimitedListRecord, error.LengthLimit, &.{ 6, 1, 3, 5, 'i', 't', 'e', 'm', 's', 10, 2, 1, 2, 2, 0, 0 });
+    try expectOwnedError(LimitedListRecord, error.LengthLimit, &.{ 6, 0, 0 });
+    var values = [_]u8{ 1, 2 };
+    var memory: [64]u8 = undefined;
+    var out: Reference.Encoder = .{ .buffer = &memory };
+    var c: core.Context = .init(std.testing.failing_allocator, .{}, .borrowed);
+    try std.testing.expectError(error.LengthLimit, core.serialize(LimitedListRecord{ .items = .fromOwnedSlice(&values) }, &out, &c));
+}
+const CopiedBytesRecord = struct {
+    blob: core.Bytes,
+    pub const strand = .{ .fields = .{ .blob = .{ .borrow = .copy, .max_len = 1 } } };
+};
+fn copiedBytesDecode(c: *core.Context, wire: []const u8) core.DecodeError!CopiedBytesRecord {
+    return decoded(CopiedBytesRecord, c, wire);
+}
+test "S1 type hooks preserve enclosing field byte ownership and length policy" {
+    var wire = [_]u8{ 6, 1, 3, 4, 'b', 'l', 'o', 'b', 4, 1, 0xff, 0 };
+    var value = try core.acquire(CopiedBytesRecord, .borrowed, std.testing.allocator, &wire, .{}, copiedBytesDecode);
+    defer value.deinit();
+    try std.testing.expect(value.value.blob.value.ptr != wire[10..].ptr);
+    wire[10] = 0;
+    try std.testing.expectEqual(@as(u8, 0xff), value.value.blob.value[0]);
+    try expectOwnedError(CopiedBytesRecord, error.LengthLimit, &.{ 6, 1, 3, 4, 'b', 'l', 'o', 'b', 4, 2, 0xff, 0, 0 });
+    var memory: [64]u8 = undefined;
+    var out: Reference.Encoder = .{ .buffer = &memory };
+    var c: core.Context = .init(std.testing.failing_allocator, .{}, .borrowed);
+    try std.testing.expectError(error.LengthLimit, core.serialize(CopiedBytesRecord{ .blob = .{ .value = &.{ 0xff, 0 } } }, &out, &c));
+}
+const ExactCodecRecord = struct {
+    number: f32,
+    pub const strand = .{ .fields = .{ .number = .{ .exact = true, .codec = FloatCodec } } };
+    pub const FloatCodec = struct {
+        pub fn decode(access: anytype) core.DecodeError!f32 {
+            return access.read(f32);
+        }
+        pub fn encode(value: f32, access: anytype) core.EncodeError!void {
+            try access.write(value);
+        }
+    };
+};
+test "S1 field codec reads preserve exact numeric requests" {
+    var memory: [128]u8 = undefined;
+    var out: Reference.Encoder = .{ .buffer = &memory };
+    var c: core.Context = .init(std.testing.failing_allocator, .{}, .borrowed);
+    try core.serialize(struct { number: f128 }{ .number = 1.0000000000000001 }, &out, &c);
+    try expectOwnedError(ExactCodecRecord, error.InexactNumber, memory[0..out.used]);
+}
+
+test "S1 raw named and map visits preserve enclosing codec policy" {
+    const RawRecord = struct {
+        raw: ReferenceRaw,
+        pub const strand = .{ .fields = .{ .raw = .{ .borrow = .copy, .max_len = 2 } } };
+    };
+    var wire = [_]u8{ 6, 1, 3, 3, 'r', 'a', 'w', 2, 9, 0 };
+    var parsed = try core.acquire(RawRecord, .borrowed, std.testing.allocator, &wire, .{}, struct {
+        fn decode(c: *core.Context, input: []const u8) core.DecodeError!RawRecord {
+            return decoded(RawRecord, c, input);
+        }
+    }.decode);
+    defer parsed.deinit();
+    try std.testing.expect(parsed.value.raw.bytes.ptr != wire[7..].ptr);
+    wire[8] = 0;
+    try std.testing.expectEqualSlices(u8, &.{ 2, 9 }, parsed.value.raw.bytes);
+    try expectOwnedError(RawRecord, error.LengthLimit, &.{ 6, 1, 3, 3, 'r', 'a', 'w', 3, 2, 'o', 'k', 0 });
+    const MapRecord = struct {
+        map: core.Pairs(u8, u8),
+        pub const strand = .{ .fields = .{ .map = .{ .max_len = 0 } } };
+    };
+    try expectOwnedError(MapRecord, error.LengthLimit, &.{ 6, 1, 3, 3, 'm', 'a', 'p', 11, 2, 1, 2, 2, 0, 0 });
+    const ExactNamed = struct {
+        n: core.Newtype(f32, "n"),
+        pub const strand = .{ .fields = .{ .n = .{ .exact = true } } };
+    };
+    var memory: [128]u8 = undefined;
+    var out: Reference.Encoder = .{ .buffer = &memory };
+    var c: core.Context = .init(std.testing.failing_allocator, .{}, .borrowed);
+    try core.serialize(struct { n: core.Newtype(f128, "n") }{ .n = .{ .value = 1.0000000000000001 } }, &out, &c);
+    try expectOwnedError(ExactNamed, error.InexactNumber, memory[0..out.used]);
+}

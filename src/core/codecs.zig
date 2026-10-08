@@ -4,6 +4,10 @@ const std = @import("std");
 /// Its data belongs to Parsed/the caller arena; do not deinit it separately.
 pub fn ArrayList(comptime T: type) type {
     return struct {
+        /// Logical sequence length for validation of constructed defaults.
+        pub fn length(value: std.ArrayList(T)) usize {
+            return value.items.len;
+        }
         pub fn encode(value: std.ArrayList(T), access: anytype) @typeInfo(@TypeOf(access.writeSequence(value.items))).error_union.error_set!void {
             try access.writeSequence(value.items);
         }

@@ -17,7 +17,7 @@ fn emit(comptime policy: descriptor.Field, value: anytype, out: anytype, c: *ctx
     if (comptime descriptor.has(T, "strandSerialize")) {
         try c.enterHook();
         defer c.leaveHook();
-        var access: Access(@TypeOf(out.*)) = .{ .out = out, .context = c, .active = active };
+        var access: PolicyAccess(@TypeOf(out.*), policy) = .{ .out = out, .context = c, .active = active };
         try value.strandSerialize(&access);
         if (!access.used) return error.CustomRejected;
         return;
@@ -148,6 +148,9 @@ fn omit(comptime T: type, comptime name: []const u8, value: T, c: *ctx.Context) 
 
 /// Custom codecs emit one surrogate value through the same checked kernel.
 pub fn Access(comptime Backend: type) type {
+    return PolicyAccess(Backend, .{});
+}
+fn PolicyAccess(comptime Backend: type, comptime policy: descriptor.Field) type {
     return struct {
         out: *Backend,
         context: *ctx.Context,
@@ -161,7 +164,7 @@ pub fn Access(comptime Backend: type) type {
             try self.context.span(name.len, false);
             try begin(self.out, self.context, kind, name, 1);
             defer self.context.leave();
-            try emit(.{}, value, self.out, self.context, self.active);
+            try emit(policy, value, self.out, self.context, self.active);
             try self.out.end(self.context);
         }
         pub fn namedUnit(self: *Self, name: []const u8) Error!void {
@@ -184,6 +187,7 @@ pub fn Access(comptime Backend: type) type {
                     inline for (i.field_attrs) |attrs| if (!attrs.@"comptime") {
                         count += 1;
                     };
+                    if (count > policy.max_len) return error.LengthLimit;
                     try begin(self.out, self.context, .named_tuple, name, count);
                     defer self.context.leave();
                     inline for (i.field_names, i.field_attrs) |field_name, attrs| if (!attrs.@"comptime") {
@@ -191,6 +195,7 @@ pub fn Access(comptime Backend: type) type {
                     };
                 },
                 inline .array, .vector => |i| {
+                    if (i.len > policy.max_len) return error.LengthLimit;
                     try begin(self.out, self.context, .named_tuple, name, i.len);
                     defer self.context.leave();
                     const lanes: [i.len]i.child = value;
@@ -204,6 +209,7 @@ pub fn Access(comptime Backend: type) type {
             if (!Backend.capabilities.bytes) return error.UnsupportedValue;
             if (self.used) return error.CustomRejected;
             self.used = true;
+            if (value.len > policy.max_len) return error.LengthLimit;
             try self.context.span(value.len, false);
             try self.context.chargeWork(value.len);
             try self.out.bytes(value, self.context);
@@ -218,6 +224,7 @@ pub fn Access(comptime Backend: type) type {
             comptime descriptor.check(@TypeOf(values[0]), Backend.capabilities, false, .borrowed);
             if (self.used) return error.CustomRejected;
             self.used = true;
+            if (values.len > policy.max_len) return error.LengthLimit;
             try begin(self.out, self.context, .sequence, "", values.len);
             defer self.context.leave();
             for (values) |v| try emit(.{}, v, self.out, self.context, self.active);
@@ -231,6 +238,7 @@ pub fn Access(comptime Backend: type) type {
             comptime descriptor.check(@TypeOf(values[0].value), Backend.capabilities, false, .borrowed);
             if (self.used) return error.CustomRejected;
             self.used = true;
+            if (values.len > policy.max_len) return error.LengthLimit;
             try begin(self.out, self.context, .map, "", values.len);
             defer self.context.leave();
             for (values) |v| {
@@ -246,6 +254,7 @@ pub fn Access(comptime Backend: type) type {
             if (self.used) return error.CustomRejected;
             self.used = true;
             if (Backend.canonical) return error.UnsupportedValue;
+            if (payload.len > policy.max_len) return error.LengthLimit;
             self.context.items -= 1;
             try self.out.validateRaw(payload, self.context);
             try self.out.raw(payload, self.context);
@@ -255,7 +264,7 @@ pub fn Access(comptime Backend: type) type {
             if (self.used) return error.CustomRejected;
             self.used = true;
             self.context.items -= 1;
-            try emit(.{}, value, self.out, self.context, self.active);
+            try emit(policy, value, self.out, self.context, self.active);
         }
     };
 }
@@ -370,7 +379,7 @@ fn emitField(comptime T: type, comptime name: []const u8, value: T, out: anytype
     const declared = comptime descriptor.fieldOptions(T, name);
     if (@hasField(@TypeOf(declared), "codec")) {
         try c.node();
-        var access: Access(@TypeOf(out.*)) = .{ .out = out, .context = c, .active = active };
+        var access: PolicyAccess(@TypeOf(out.*), descriptor.field(T, name)) = .{ .out = out, .context = c, .active = active };
         try declared.codec.encode(@field(value, name), &access);
         if (!access.used) return error.CustomRejected;
     } else try emit(comptime descriptor.field(T, name), @field(value, name), out, c, active);

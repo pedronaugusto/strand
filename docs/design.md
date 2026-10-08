@@ -82,7 +82,10 @@ can supply; it never permits labelling scratch as input. Canonical Raw emission
 must normalize or refuse; the core refuses unnormalized Raw in canonical mode.
 The binary `testing/Reference.zig` backend exists only to exercise these contracts.
 
-Hooks and field codecs consume one value through bounded access. Compounds must
+Hooks and field codecs consume one value through bounded access that carries
+the enclosing field's representation, borrow policy, exactness and length limit.
+A container codec can expose a pure `length(value) usize` to validate constructed
+defaults; the maintained ArrayList codec does so. Compounds must
 finish exactly their payload. Allocation goes through access/context, and errors
 are explicit named sets. Predicate hooks are pure bool functions over their
 field type. All custom codecs must return initialized plain data, allocate only

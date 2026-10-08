@@ -181,6 +181,11 @@ fn policyProblem(comptime T: type, comptime path: []const u8) ?Description {
 }
 fn fieldIssue(comptime F: type, comptime opt: anytype) ?[]const u8 {
     if (@hasField(@TypeOf(opt), "codec") and @TypeOf(opt.codec) != type) return "codec must be a type";
+    if (@hasField(@TypeOf(opt), "codec") and @hasDecl(opt.codec, "length")) {
+        const info = @typeInfo(@TypeOf(opt.codec.length));
+        if (info != .@"fn") return "codec length must be a pure function";
+        if (info.@"fn".param_types.len != 1 or info.@"fn".param_types[0] != F or info.@"fn".return_type != usize) return "codec length must take the field type and return usize";
+    }
     inline for (.{ "validate", "omit_if", "equal" }) |name| {
         if (@hasField(@TypeOf(opt), name)) {
             const info = @typeInfo(@TypeOf(@field(opt, name)));
@@ -324,6 +329,11 @@ pub fn validate(comptime T: type, comptime name: []const u8, value: @FieldType(T
             return error.LengthLimit;
         },
         else => {},
+    }
+    if (@hasField(@TypeOf(opt), "codec")) {
+        if (@hasDecl(opt.codec, "length") and opt.codec.length(value) > policy.max_len) return error.LengthLimit;
+    } else if (comptime has(@TypeOf(value), "strandBytes")) {
+        if (value.value.len > policy.max_len) return error.LengthLimit;
     }
     if (@hasField(@TypeOf(opt), "range")) {
         if (!(value >= opt.range.min and value <= opt.range.max)) return error.NumberOutOfRange;

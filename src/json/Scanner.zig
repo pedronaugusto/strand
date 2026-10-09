@@ -193,7 +193,8 @@ pub fn next(self: *Self) NextError!Token {
 
 /// Consume a kind returned by peekNextTokenType with no intervening operation.
 /// All grammar/state transitions remain here; preparation is not repeated.
-pub fn nextPrepared(self: *Self, kind: TokenType) NextError!Token {
+/// Inline keeps historical next calls fused with this state transition.
+pub inline fn nextPrepared(self: *Self, kind: TokenType) NextError!Token {
     assert(self.cursor <= self.input.len);
     defer assert(self.cursor <= self.input.len);
     assert(self.value_start <= self.input.len);
@@ -496,7 +497,8 @@ pub fn nextAllocMax(self: *Self, gpa: Allocator, when: AllocWhen, max: usize) Al
 }
 
 /// Allocation assembly for an already prepared kind; same bounds/ownership.
-pub fn nextAllocPrepared(self: *Self, gpa: Allocator, kind: TokenType, when: AllocWhen, max: usize) AllocError!Token {
+/// Inline preserves fused legacy entry points and specializes allocation policy.
+pub inline fn nextAllocPrepared(self: *Self, gpa: Allocator, kind: TokenType, when: AllocWhen, max: usize) AllocError!Token {
     switch (kind) {
         .number, .string => {
             var list: ValueList = .init(gpa);

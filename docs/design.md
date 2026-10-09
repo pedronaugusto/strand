@@ -116,3 +116,9 @@ workloads changes its inlining opportunities and invalidates the comparison.
 Both sides parse the same input with the same options, compiler and build mode,
 and check result equality before interleaved timing. Legacy standalone workloads
 retain their own schema. Timings are manual observations, not CI acceptance tests.
+
+Hosted observations also rebuild the same driver after restoring the previous
+main's source at the current module's paths. That identical-source control keeps
+the module names, nominal schemas and call sites unchanged. A slowdown reproduced
+by that control is measurement specialization/layout bias, not a source regression.
+Keep all interleaved samples and disclose both candidate and control spreads.

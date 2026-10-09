@@ -123,6 +123,7 @@ jobs:
           ./zig-out/bin/strand-core-bench "$GITHUB_SHA" > "$RUNNER_TEMP/strand-observation/core.jsonl"
       - name: Compile the identical-old-source control at the same call sites
         run: |
+          git fetch --no-tags --depth=1 origin 753bfaf82309b760138d1e7f7746c02cdbdcf072
           git checkout 753bfaf82309b760138d1e7f7746c02cdbdcf072 -- src
           zig build baseline-build -Dbaseline-source=.zig-cache/previous-main/src/strand.zig
       - name: Measure the identical-old-source control

@@ -99,3 +99,12 @@ marks the path truncated. Common mapping supplies offsets and expected kinds;
 text backends supply format identity and line/column when available. No input
 fragment is logged. Legacy JSON hooks retain their existing allocation and limit
 contract; exposing the core does not strengthen legacy hooks implicitly.
+
+## Manual comparison protocol
+
+The legacy Raw driver gives both revisions an isolated schema from the same type
+factory and equal parse call-site reuse. Reusing a current-only schema in other
+workloads changes its inlining opportunities and invalidates the comparison.
+Both sides parse the same input with the same options, compiler and build mode,
+and check result equality before interleaved timing. Legacy standalone workloads
+retain their own schema. Timings are manual observations, not CI acceptance tests.

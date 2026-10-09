@@ -15,6 +15,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Compile manual paired timing drivers in ordinary CI; timings run only through
   an explicit manual workflow. Existing JSON Lines entry points are unchanged.
 
+- Give the manual Raw comparison equal schema specialization and call-site reuse
+  on both revisions, with a semantic equality check before timing.
+
 ### Breaking
 
 - strand requires Zig 0.17.0.

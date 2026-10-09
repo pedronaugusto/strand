@@ -21,12 +21,23 @@ fn parseBorrowed(c: *Context, units: u64) !void {
     }
     std.mem.doNotOptimizeAway(sum);
 }
-fn parsePrevious(c: *Context, units: u64) !void {
-    const OldEvent = struct { id: u64, label: []const u8, data: previous.Raw };
+// Isolate the paired Raw specialization from the legacy workload below.
+// Both revisions get the same factory, options and number of parse call sites;
+// extra current-only callers otherwise prevent inlining on just one side.
+fn PairedEvent(comptime Raw: type) type {
+    return struct { id: u64, label: []const u8, data: Raw };
+}
+fn pairedCurrent(c: *Context, units: u64) !void {
+    try pairedParse(strand, PairedEvent(strand.Raw), c, units);
+}
+fn pairedPrevious(c: *Context, units: u64) !void {
+    try pairedParse(previous, PairedEvent(previous.Raw), c, units);
+}
+fn pairedParse(comptime Api: type, comptime T: type, c: *Context, units: u64) !void {
     var sum: u64 = 0;
     for (0..units) |_| {
         _ = c.arena.reset(.retain_capacity);
-        const value = try previous.parseLine(OldEvent, c.arena.allocator(), input, .{});
+        const value = try Api.parseLine(T, c.arena.allocator(), input, .{});
         sum +%= value.id +% value.label.len +% value.data.bytes.len;
     }
     std.mem.doNotOptimizeAway(sum);
@@ -35,7 +46,7 @@ fn parseStd(c: *Context, units: u64) !void {
     var sum: u64 = 0;
     for (0..units) |_| {
         _ = c.arena.reset(.retain_capacity);
-        const value = try std.json.parseFromSliceLeaky(Event, c.arena.allocator(), input, .{});
+        const value = try std.json.parseFromSliceLeaky(PairedEvent(strand.Raw), c.arena.allocator(), input, .{});
         sum +%= value.id +% value.label.len +% value.data.bytes.len;
     }
     std.mem.doNotOptimizeAway(sum);
@@ -119,14 +130,19 @@ pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
     var c: Context = .{ .gpa = std.heap.smp_allocator, .arena = .init(std.heap.smp_allocator), .value = undefined };
     defer c.arena.deinit();
+    const current_value = try strand.parseLine(PairedEvent(strand.Raw), c.arena.allocator(), input, .{});
+    const previous_value = try previous.parseLine(PairedEvent(previous.Raw), c.arena.allocator(), input, .{});
+    if (current_value.id != previous_value.id or
+        !std.mem.eql(u8, current_value.label, previous_value.label) or
+        !std.mem.eql(u8, current_value.data.bytes, previous_value.data.bytes)) return error.SemanticMismatch;
     c.value = try strand.parseLine(Event, c.arena.allocator(), input, .{});
     const rows = [_]shakedown.bench.Row(Context){
-        .{ .name = "paired.current.a", .unit = "record", .initial = 1024, .run = parseBorrowed },
-        .{ .name = "paired.previous.a", .unit = "record", .initial = 1024, .run = parsePrevious },
+        .{ .name = "paired.current.a", .unit = "record", .initial = 1024, .run = pairedCurrent },
+        .{ .name = "paired.previous.a", .unit = "record", .initial = 1024, .run = pairedPrevious },
         .{ .name = "paired.std.a", .unit = "record", .initial = 1024, .run = parseStd },
         .{ .name = "paired.std.b", .unit = "record", .initial = 1024, .run = parseStd },
-        .{ .name = "paired.previous.b", .unit = "record", .initial = 1024, .run = parsePrevious },
-        .{ .name = "paired.current.b", .unit = "record", .initial = 1024, .run = parseBorrowed },
+        .{ .name = "paired.previous.b", .unit = "record", .initial = 1024, .run = pairedPrevious },
+        .{ .name = "paired.current.b", .unit = "record", .initial = 1024, .run = pairedCurrent },
         .{ .name = "shared.current.a", .unit = "record", .initial = 1024, .run = sharedCurrent },
         .{ .name = "shared.previous.a", .unit = "record", .initial = 1024, .run = sharedPrevious },
         .{ .name = "shared.std.a", .unit = "record", .initial = 1024, .run = sharedStd },

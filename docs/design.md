@@ -23,8 +23,9 @@ hooks remain confined to the legacy JSON entry points.
 `parse`, `parseOwned`, and `parseLeaky` use the same descriptor and bounded
 context. `Parsed(T)` owns storage, never input or Io. Unescaped legal const spans
 may borrow only in `parse`; owned decoding copies every retained span. Failed
-owned acquisition rolls its arena back. Caller-arena acquisition is leaky until
-reset. Dynamic `Value` uses bounded codec access and preserves number lexemes,
+owned acquisition rolls its arena back. Caller-arena acquisition bounds requested allocations per operation and is
+leaky until reset; the caller owns its backing residency. Parsed owners and the
+push decoder additionally cap arena backing residency. Dynamic `Value` uses bounded codec access and preserves number lexemes,
 ordered keys, strings, arrays and null without lossy numeric conversion.
 
 Strict parsing rejects unknown fields unless opted into validated skipping and

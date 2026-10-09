@@ -11,7 +11,8 @@ ZON, CBOR, MessagePack and TOML are later work.
 `strand.json.parse(T, gpa, bytes, options)` returns `Parsed(T)`: plain const
 strings may borrow input until either input mutation/expiry or `deinit`.
 `parseOwned` copies retained spans and is independent of input. `parseLeaky`
-uses the caller's arena. Strict defaults reject unknown fields and all duplicate
+uses the caller's arena: requests are bounded per operation, while its backing
+residency and reset remain the caller's responsibility. Strict defaults reject unknown fields and all duplicate
 keys; ignored fields and Raw values are still fully checked and bounded.
 `json.Value` preserves numeric lexemes and object order. Decimal integers use
 checked decimal arithmetic; floating destinations round directly to their width,
@@ -38,7 +39,8 @@ state, and final unterminated records have an explicit acceptance policy.
 
 New JSON defaults are 16 MiB input/output, depth 128, 1,048,576 nodes/container
 items, 8 MiB strings, 64 KiB keys, 1,024 numeric bytes, 32 MiB requested/resident allocation
-and 128 Mi work units. Legacy `parseLine`, Reader/Writer, Raw, routing,
+and 128 Mi work units. The resident bound applies to package-owned arenas and
+the push decoder; caller-arena parsing meters requests. Legacy `parseLine`, Reader/Writer, Raw, routing,
 Versioned and checkpoint defaults and error sets remain unchanged. Legacy std
 hooks stay on their existing bridge and do not gain full bounded guarantees;
 strict operations require a common data codec instead.

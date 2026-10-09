@@ -46,6 +46,7 @@ pub fn parse(comptime T: type, gpa: std.mem.Allocator, input: []const u8, option
 pub fn parseOwned(comptime T: type, gpa: std.mem.Allocator, input: []const u8, options: ParseOptions) @typeInfo(@TypeOf(parseWith(T, .owned, gpa, input, options))).error_union.error_set!Parsed(T) {
     return parseWith(T, .owned, gpa, input, options);
 }
+/// Bounds requests per operation; caller-owned arena backing and reset are external.
 pub fn parseLeaky(comptime T: type, arena: std.mem.Allocator, input: []const u8, options: ParseOptions) @typeInfo(@TypeOf(Decode(T).run(@as(*core.Context, undefined), input))).error_union.error_set!T {
     if (input.len > options.limits.input_bytes) return error.InputLimit;
     var c = core.Context.init(arena, options.limits, .borrowed);

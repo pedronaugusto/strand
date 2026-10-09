@@ -188,54 +188,57 @@ pub fn peekNextTokenType(self: *Self) PeekError!TokenType {
 }
 
 pub fn next(self: *Self) NextError!Token {
+    return self.nextPrepared(try self.prepare());
+}
+
+/// Consume a kind returned by peekNextTokenType with no intervening operation.
+/// All grammar/state transitions remain here; preparation is not repeated.
+pub fn nextPrepared(self: *Self, kind: TokenType) NextError!Token {
     assert(self.cursor <= self.input.len);
     defer assert(self.cursor <= self.input.len);
     assert(self.value_start <= self.input.len);
-    while (true) {
-        switch (self.state) {
-            .string => return self.nextString(),
-            .string_escape => return self.nextStringEscape(),
-            else => {},
-        }
-
-        const kind = try self.prepare();
-        switch (kind) {
-            .object_begin => {
-                try self.push(.object);
-                self.cursor += 1;
-                self.state = .object_start;
-                return .object_begin;
-            },
-            .array_begin => {
-                try self.push(.array);
-                self.cursor += 1;
-                self.state = .array_start;
-                return .array_begin;
-            },
-            .object_end => {
-                if (self.pop() != .object) return error.SyntaxError;
-                self.cursor += 1;
-                self.state = .post_value;
-                return .object_end;
-            },
-            .array_end => {
-                if (self.pop() != .array) return error.SyntaxError;
-                self.cursor += 1;
-                self.state = .post_value;
-                return .array_end;
-            },
-            .string => {
-                self.string_is_object_key = self.state == .object_start or self.state == .object_post_comma;
-                self.cursor += 1;
-                self.value_start = self.cursor;
-                self.state = .string;
-            },
-            .number => return self.nextNumber(),
-            .true => return self.nextLiteral("true", .true),
-            .false => return self.nextLiteral("false", .false),
-            .null => return self.nextLiteral("null", .null),
-            .end_of_document => return .end_of_document,
-        }
+    switch (self.state) {
+        .string => return self.nextString(),
+        .string_escape => return self.nextStringEscape(),
+        else => {},
+    }
+    switch (kind) {
+        .object_begin => {
+            try self.push(.object);
+            self.cursor += 1;
+            self.state = .object_start;
+            return .object_begin;
+        },
+        .array_begin => {
+            try self.push(.array);
+            self.cursor += 1;
+            self.state = .array_start;
+            return .array_begin;
+        },
+        .object_end => {
+            if (self.pop() != .object) return error.SyntaxError;
+            self.cursor += 1;
+            self.state = .post_value;
+            return .object_end;
+        },
+        .array_end => {
+            if (self.pop() != .array) return error.SyntaxError;
+            self.cursor += 1;
+            self.state = .post_value;
+            return .array_end;
+        },
+        .string => {
+            self.string_is_object_key = self.state == .object_start or self.state == .object_post_comma;
+            self.cursor += 1;
+            self.value_start = self.cursor;
+            self.state = .string;
+            return self.nextString();
+        },
+        .number => return self.nextNumber(),
+        .true => return self.nextLiteral("true", .true),
+        .false => return self.nextLiteral("false", .false),
+        .null => return self.nextLiteral("null", .null),
+        .end_of_document => return .end_of_document,
     }
 }
 
@@ -489,11 +492,16 @@ pub fn nextAllocMax(self: *Self, gpa: Allocator, when: AllocWhen, max: usize) Al
         error.BufferUnderrun => unreachable,
         else => |e| return e,
     };
+    return self.nextAllocPrepared(gpa, kind, when, max);
+}
+
+/// Allocation assembly for an already prepared kind; same bounds/ownership.
+pub fn nextAllocPrepared(self: *Self, gpa: Allocator, kind: TokenType, when: AllocWhen, max: usize) AllocError!Token {
     switch (kind) {
         .number, .string => {
             var list: ValueList = .init(gpa);
             errdefer list.deinit();
-            const borrowed = self.allocNextIntoArrayListMax(&list, when, max) catch |err| switch (err) {
+            const borrowed = self.allocPreparedIntoArrayListMax(&list, kind, when, max) catch |err| switch (err) {
                 error.BufferUnderrun => unreachable,
                 else => |e| return e,
             };
@@ -505,7 +513,7 @@ pub fn nextAllocMax(self: *Self, gpa: Allocator, when: AllocWhen, max: usize) Al
             else
                 .{ .allocated_string = try list.toOwnedSlice() };
         },
-        else => return self.next() catch |err| switch (err) {
+        else => return self.nextPrepared(kind) catch |err| switch (err) {
             error.BufferUnderrun => unreachable,
             else => |e| return e,
         },
@@ -517,19 +525,26 @@ pub fn allocNextIntoArrayList(self: *Self, list: *ValueList, when: AllocWhen) Al
 }
 
 pub fn allocNextIntoArrayListMax(self: *Self, list: *ValueList, when: AllocWhen, max: usize) AllocIntoArrayListError!?[]const u8 {
-    while (true) switch (try self.next()) {
-        .partial_number, .partial_string => |slice| try append(list, slice, max),
-        .partial_string_escaped_1 => |buf| try append(list, &buf, max),
-        .partial_string_escaped_2 => |buf| try append(list, &buf, max),
-        .partial_string_escaped_3 => |buf| try append(list, &buf, max),
-        .partial_string_escaped_4 => |buf| try append(list, &buf, max),
-        .number, .string => |slice| {
-            if (when == .alloc_if_needed and list.items.len == 0) return slice;
-            try append(list, slice, max);
-            return null;
-        },
-        else => unreachable,
-    };
+    return self.allocPreparedIntoArrayListMax(list, try self.prepare(), when, max);
+}
+fn allocPreparedIntoArrayListMax(self: *Self, list: *ValueList, kind: TokenType, when: AllocWhen, max: usize) AllocIntoArrayListError!?[]const u8 {
+    var token = try self.nextPrepared(kind);
+    while (true) {
+        switch (token) {
+            .partial_number, .partial_string => |slice| try append(list, slice, max),
+            .partial_string_escaped_1 => |buf| try append(list, &buf, max),
+            .partial_string_escaped_2 => |buf| try append(list, &buf, max),
+            .partial_string_escaped_3 => |buf| try append(list, &buf, max),
+            .partial_string_escaped_4 => |buf| try append(list, &buf, max),
+            .number, .string => |slice| {
+                if (when == .alloc_if_needed and list.items.len == 0) return slice;
+                try append(list, slice, max);
+                return null;
+            },
+            else => unreachable,
+        }
+        token = try self.next();
+    }
 }
 
 fn append(list: *ValueList, slice: []const u8, max: usize) AllocError!void {

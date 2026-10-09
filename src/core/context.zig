@@ -87,12 +87,12 @@ pub const Context = struct {
     pub fn init(storage: std.mem.Allocator, limits: Limits, ownership: Ownership) Context {
         return .{ .storage = storage, .limits = limits, .ownership = ownership };
     }
-    pub fn enter(self: *Context) error{DepthLimit}!void {
+    pub inline fn enter(self: *Context) error{DepthLimit}!void {
         @setRuntimeSafety(true);
         if (self.depth >= self.limits.depth) return error.DepthLimit;
         self.depth += 1;
     }
-    pub fn leave(self: *Context) void {
+    pub inline fn leave(self: *Context) void {
         @setRuntimeSafety(true);
         self.depth -= 1;
     }
@@ -105,32 +105,32 @@ pub const Context = struct {
         std.debug.assert(self.hook_depth != 0);
         self.hook_depth -= 1;
     }
-    pub fn node(self: *Context) error{ItemLimit}!void {
+    pub inline fn node(self: *Context) error{ItemLimit}!void {
         @setRuntimeSafety(true);
         if (self.replaying) return;
         if (self.items >= self.limits.items) return error.ItemLimit;
         self.items += 1;
     }
-    pub fn count(self: *Context, n: usize) error{ItemLimit}!void {
+    pub inline fn count(self: *Context, n: usize) error{ItemLimit}!void {
         @setRuntimeSafety(true);
         if (n > self.limits.container_items or (!self.replaying and n > self.limits.items - self.items)) return error.ItemLimit;
     }
-    pub fn span(self: *Context, n: usize, key: bool) error{LengthLimit}!void {
+    pub inline fn span(self: *Context, n: usize, key: bool) error{LengthLimit}!void {
         if (n > if (key) self.limits.key_bytes else self.limits.string_bytes) return error.LengthLimit;
     }
-    pub fn chargeWork(self: *Context, n: usize) error{WorkLimit}!void {
+    pub inline fn chargeWork(self: *Context, n: usize) error{WorkLimit}!void {
         @setRuntimeSafety(true);
         if (n > self.limits.work - self.work) return error.WorkLimit;
         self.work += n;
     }
-    pub fn input(self: *Context, n: usize) error{ InputLimit, WorkLimit }!void {
+    pub inline fn input(self: *Context, n: usize) error{ InputLimit, WorkLimit }!void {
         @setRuntimeSafety(true);
         if (self.replaying) return self.chargeWork(n);
         if (n > self.limits.input_bytes - self.input_bytes) return error.InputLimit;
         self.input_bytes += n;
         try self.chargeWork(n);
     }
-    pub fn output(self: *Context, n: usize) error{ OutputLimit, WorkLimit }!void {
+    pub inline fn output(self: *Context, n: usize) error{ OutputLimit, WorkLimit }!void {
         @setRuntimeSafety(true);
         if (n > self.limits.output_bytes - self.output_bytes) return error.OutputLimit;
         self.output_bytes += n;

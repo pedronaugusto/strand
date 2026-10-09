@@ -66,7 +66,7 @@ pub fn next(self: *Self, c: *core.Context, request: core.Request) Error!core.Eve
         if (depth >= c.limits.depth) return error.DepthLimit;
         if (depth < self.marks.len) self.marks[depth] = self.key_count else self.extra_marks.append(c.allocator(), self.key_count) catch |err| return mapped(c, err);
     }
-    const token = self.scanner.nextAllocMax(c.allocator(), .alloc_if_needed, if (key) c.limits.key_bytes else c.limits.string_bytes) catch |err| return mapped(c, err);
+    const token = self.scanner.nextAllocPrepared(c.allocator(), kind, .alloc_if_needed, if (kind == .number) c.limits.numeric_bytes else if (key) c.limits.key_bytes else c.limits.string_bytes) catch |err| return mapped(c, err);
     return switch (token) {
         .object_begin => .{ .begin = .{ .kind = if (request.expected == .map) .map else .record } },
         .array_begin => .{ .begin = .{ .kind = .sequence } },

@@ -271,6 +271,13 @@ fn checkOptions(comptime T: type, comptime ownership: context.Ownership, comptim
     switch (@typeInfo(T)) {
         inline .pointer, .optional, .array, .vector => |i| checkOptions(i.child, ownership, next),
         .@"struct" => |i| {
+            const opt = options(T);
+            // Zig already guarantees unique source names. Only explicit field
+            // policy or casing can change them or introduce aliases/borrowing.
+            if (!@hasField(@TypeOf(opt), "fields") and !@hasField(@TypeOf(opt), "rename_all")) {
+                for (i.field_types) |F| checkOptions(F, ownership, next);
+                return;
+            }
             for (i.field_names, i.field_types) |name, F| {
                 const f = field(T, name);
                 if (ownership == .owned and f.borrow == .require) @compileError("owned decoding conflicts with borrow.require at " ++ name);

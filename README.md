@@ -184,18 +184,25 @@ rounds by default; `-Dcampaign=N` and `-Dseed=N` select a generated-input run. `
 build test --fuzz` runs the coverage-guided targets until stopped. CI also runs
 `zig build lint`.
 
-[CI](.github/workflows/ci.yml) has three tiers. The fast tier runs the source checks and
-the Debug suite with the examples on `ubuntu-latest`, and compiles the macOS and Windows
-test binaries. The merge tier also runs those binaries on `macos-latest` and
-`windows-latest`. The release tier runs Debug and ReleaseSafe on all three hosts,
-ReleaseFast on Ubuntu, ReleaseSmall compile-only, every cross target and
-ThreadSanitizer. The merge and release tiers add a 20,000-round property campaign in
-ReleaseSafe on Ubuntu, and run the Debug suite on Ubuntu with Zig master, a job that
-reports and never blocks.
+[CI](.github/workflows/ci.yml) has three tiers. Fast runs the source checks,
+Linux Debug tests and examples, and cross-target compilation. Merge adds the
+configured macOS/Windows SDK links and native Debug test replay. Release adds
+optimized configurations, full configured cross coverage and Linux ThreadSanitizer.
+Merge/release also try Zig master in a non-blocking job. The profile job refreshes
+recorded test durations; it does not execute a larger generated-input campaign.
+Run a larger campaign explicitly with `zig build test -Dcampaign=20000 -Doptimize=safe`.
+
+The full ReleaseSafe suite currently has an inherited failure in the legacy
+optional `@Vector(3, u128)` compatibility case on aarch64 macOS with Zig 0.17.
+The same case fails on preserved S1 `8575657`; its cause has not been isolated.
+S2's explicit 20,000-round ReleaseSafe run passed 363 of 364 tests, with that
+single failure. Required Debug/platform gates pass; a full Safe pass is not claimed.
 
 `zig build bench` times the benchmarks in [bench/](bench/) in ReleaseFast. `zig build
-test` runs them once with `--smoke`, over tiny inputs and without reading a clock; CI
-times nothing.
+test` runs them once with `--smoke`, over tiny inputs and without reading a clock.
+Regular correctness gates compile or smoke-run the comparison drivers. A manual
+workflow can opt into hosted observations with `indicative_timing`; variable
+wall-clock performance never gates correctness.
 
 `zig build check` compiles without running. CI uses it for `x86_64-linux-gnu`,
 `aarch64-linux-gnu`, `x86_64-linux-musl`, `x86_64-windows-gnu`, `aarch64-windows-gnu`,

@@ -2,8 +2,8 @@
 const std = @import("std");
 const shakedown = @import("shakedown");
 
-pub fn run(gpa: std.mem.Allocator, io: std.Io, writer: *std.Io.Writer, context: anytype, rows: anytype, metadata: shakedown.bench.Metadata, options: shakedown.bench.Options) shakedown.bench.RunError!void {
-    if (options.smoke) return shakedown.bench.run(gpa, io, writer, context, rows, metadata, options);
+pub fn run(comptime WorkloadError: type, gpa: std.mem.Allocator, io: std.Io, writer: *std.Io.Writer, context: anytype, rows: anytype, metadata: shakedown.bench.Metadata, options: shakedown.bench.Options) shakedown.bench.RunError(WorkloadError)!void {
+    if (options.smoke) return shakedown.bench.run(WorkloadError, gpa, io, writer, context, rows, metadata, options);
     if (options.samples == 0 or options.minimum.nanoseconds <= 0) return error.InvalidOptions;
     const resolution = (try std.Io.Clock.awake.resolution(io)).nanoseconds;
     if (resolution <= 0 or resolution > std.math.maxInt(u64)) return error.ClockUnavailable;
@@ -17,7 +17,7 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, writer: *std.Io.Writer, context: 
     for (rows, 0..) |row, index| {
         batches[index] = row.initial;
         for (0..options.warmup) |_| try row.run(context, row.initial);
-        while (try elapsed(io, context, row.run, batches[index]) < target) {
+        while (try elapsed(WorkloadError, io, context, row.run, batches[index]) < target) {
             if (batches[index] >= options.max_batch) return error.Unmeasurable;
             batches[index] += @min(batches[index], options.max_batch - batches[index]);
         }
@@ -25,7 +25,7 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, writer: *std.Io.Writer, context: 
     for (0..options.samples) |round| {
         for (0..rows.len) |slot| {
             const index = if (round % 2 == 0) slot else rows.len - 1 - slot;
-            const ns = try elapsed(io, context, rows[index].run, batches[index]);
+            const ns = try elapsed(WorkloadError, io, context, rows[index].run, batches[index]);
             if (ns <= 0) return error.NonMonotonicClock;
             samples[index * options.samples + round] = @as(f64, @floatFromInt(ns)) / @as(f64, @floatFromInt(batches[index]));
         }
@@ -50,7 +50,7 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io, writer: *std.Io.Writer, context: 
         });
     }
 }
-fn elapsed(io: std.Io, context: anytype, function: anytype, batch: u64) shakedown.bench.RunError!i96 {
+fn elapsed(comptime WorkloadError: type, io: std.Io, context: anytype, function: anytype, batch: u64) shakedown.bench.RunError(WorkloadError)!i96 {
     const start = std.Io.Timestamp.now(io, .awake);
     try function(context, batch);
     const ns = start.durationTo(.now(io, .awake)).nanoseconds;

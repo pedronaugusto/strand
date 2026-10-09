@@ -64,7 +64,7 @@ pub fn Cursor(comptime Backend: type) type {
             try self.context.chargeWork(event.begin.name.len);
             if (!std.unicode.utf8ValidateSlice(event.begin.name)) return error.InvalidUtf8;
             if (event.begin.len == null and !Backend.capabilities.indefinite_containers) return error.UnsupportedValue;
-            if (event.begin.kind != expected and !(expected == .tuple and event.begin.kind == .sequence) and !(expected == .record and event.begin.kind == .map)) return error.UnexpectedType;
+            if (event.begin.kind != expected and !(expected == .tuple and event.begin.kind == .sequence) and !(expected == .record and event.begin.kind == .map) and !(expected == .map and event.begin.kind == .record)) return error.UnexpectedType;
             try self.context.enter();
             errdefer self.context.leave();
             if (event.begin.len) |n| try self.context.count(n);
@@ -147,11 +147,19 @@ pub fn Cursor(comptime Backend: type) type {
                 },
                 .int => {
                     const event = try self.take();
+                    if (event == .number) {
+                        if (comptime @hasDecl(Backend, "parseInteger")) return Backend.parseInteger(T, event.number.bytes, self.context);
+                        return error.UnexpectedType;
+                    }
                     if (event != .integer) return error.UnexpectedType;
                     return self.integer(T, event.integer);
                 },
                 .float => {
                     const event = try self.take();
+                    if (event == .number) {
+                        if (comptime @hasDecl(Backend, "parseFloat")) return Backend.parseFloat(T, event.number.bytes, policy.exact, self.context);
+                        return error.UnexpectedType;
+                    }
                     if (event != .floating) return error.UnexpectedType;
                     // safe: float narrowing is the declared destination's rounding;
                     // overflow is explicitly rejected before publishing the result.
@@ -235,13 +243,14 @@ pub fn Cursor(comptime Backend: type) type {
             const i = @typeInfo(T).@"union";
             const opt = comptime descriptor.options(T);
             if (@hasField(@TypeOf(opt), "tag")) return self.tagged(T);
-            const header = try self.start(.variant);
+            const header = try self.start(if (Backend.capabilities.variant_record) .record else .variant);
             defer self.context.leave();
             if (header.len) |n| if (n != 1) return error.SyntaxError;
+            const variant_name = if (Backend.capabilities.variant_record) try self.key() else header.name;
             inline for (i.field_names, i.field_types) |name, F| {
                 const v = comptime descriptor.variant(T, name);
-                var matches = try self.equals(header.name, v.name);
-                inline for (v.aliases) |alias| matches = matches or try self.equals(header.name, alias);
+                var matches = try self.equals(variant_name, v.name);
+                inline for (v.aliases) |alias| matches = matches or try self.equals(variant_name, alias);
                 if (matches) {
                     const value = @unionInit(T, name, try self.read(F, .{ .name = name }));
                     try self.end();
@@ -306,12 +315,14 @@ pub fn Cursor(comptime Backend: type) type {
                     const value = if (@hasField(@TypeOf(opt), "content")) blk: {
                         const span = payload orelse return error.MissingField;
                         var backend = self.backend.replay(span.start, span.end);
+                        defer if (@hasDecl(Backend, "deinit")) backend.deinit();
                         break :blk try deserialize(F, &backend, self.context);
                     } else if (F == void) blk: {
                         if (count != 1) return error.UnknownField;
                         break :blk {};
                     } else blk: {
                         var backend = self.backend.replay(record_start, record_end);
+                        defer if (@hasDecl(Backend, "deinit")) backend.deinit();
                         var filtered: Filtered(Backend) = .{ .backend = &backend, .tag = opt.tag };
                         break :blk try deserialize(F, &filtered, self.context);
                     };
@@ -323,6 +334,7 @@ pub fn Cursor(comptime Backend: type) type {
                 if (F == void) return @unionInit(T, opt.other, {});
                 const span = payload orelse .{ .start = record_start, .end = record_end };
                 var backend = self.backend.replay(span.start, span.end);
+                defer if (@hasDecl(Backend, "deinit")) backend.deinit();
                 return @unionInit(T, opt.other, try deserialize(F, &backend, self.context));
             }
             return error.UnknownVariant;
@@ -542,6 +554,10 @@ pub fn Cursor(comptime Backend: type) type {
                 },
                 .scalar => |v| if (!std.unicode.utf8ValidCodepoint(v)) return error.InvalidUtf8,
                 .floating => |v| if (!Backend.capabilities.nonfinite_floats and !std.math.isFinite(v)) return error.UnsupportedValue,
+                .number => |n| {
+                    if (n.bytes.len > self.context.limits.numeric_bytes) return error.LengthLimit;
+                    try self.context.chargeWork(n.bytes.len);
+                },
                 .integer => |n| {
                     if (n.magnitude.len > self.context.limits.numeric_bytes) return error.LengthLimit;
                     try self.context.chargeWork(n.magnitude.len);
@@ -589,6 +605,18 @@ fn PolicyAccess(comptime Backend: type, comptime policy: descriptor.Field) type 
         complete: bool = true,
         pub const Error = ctx.DecodeError || Backend.Error;
         const Self = @This();
+        /// Inspection does not consume or expose the backend. The codec must
+        /// still consume exactly one value through bounded access.
+        pub fn peek(self: *Self) Error!model.Event {
+            return self.cursor.peek();
+        }
+        pub fn number(self: *Self) Error![]const u8 {
+            if (self.used) return error.CustomRejected;
+            self.used = true;
+            const event = try self.cursor.take();
+            if (event != .number) return error.UnexpectedType;
+            return self.cursor.context.retain(event.number.bytes, event.number.lifetime, policy.borrow);
+        }
         pub fn begin(self: *Self, kind: model.Kind) Error!PolicyCompoundAccess(Backend, policy) {
             if (self.used) return error.CustomRejected;
             self.used = true;
@@ -841,6 +869,14 @@ fn Filtered(comptime Backend: type) type {
         pub const Format = Backend.Format;
         pub const capabilities = Backend.capabilities;
         const Self = @This();
+        pub fn parseInteger(comptime T: type, spelling: []const u8, c: *ctx.Context) ctx.DecodeError!T {
+            if (comptime @hasDecl(Backend, "parseInteger")) return Backend.parseInteger(T, spelling, c);
+            return error.UnexpectedType;
+        }
+        pub fn parseFloat(comptime T: type, spelling: []const u8, exact: bool, c: *ctx.Context) ctx.DecodeError!T {
+            if (comptime @hasDecl(Backend, "parseFloat")) return Backend.parseFloat(T, spelling, exact, c);
+            return error.UnexpectedType;
+        }
         pub fn offset(self: *const Self) usize {
             return self.backend.offset();
         }

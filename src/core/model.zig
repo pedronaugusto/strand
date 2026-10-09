@@ -19,6 +19,8 @@ pub const Event = union(enum) {
     scalar: u21,
     integer: Integer,
     floating: f128,
+    /// Validated format numeric lexeme; conversion stays in its wire backend.
+    number: Span,
     text: Span,
     bytes: Span,
     none,

@@ -6,6 +6,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Independent JSON and JSON Lines build modules on the shared core; the root
+  remains a facade with its existing source, wire, error and ownership contracts.
+- Strict slice, owned and caller-arena JSON parsing, JSON-native numeric lexemes,
+  checked decimal integers, exact float policy, full wire limits and checked writes.
+- Push JSON Lines decoding with consumed counts, explicit final-record policy,
+  bounded persistent oversize recovery and independent retained owners.
+- An explicit bounded `parseStdValue` adapter that transfers one arena into the
+  standard dynamic owner, and checked standard Value writing with explicit scratch.
+- The complete pinned JSONTestSuite corpus and chunk/lifetime/limit tests.
+
 ### Core framework work in progress
 
 - Add the provisional std-only `strand.core` module with recursive descriptors,

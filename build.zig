@@ -15,18 +15,41 @@ pub fn build(b: *std.Build) !void {
 
     const airlock_dependency = b.dependency("airlock", .{ .target = target, .optimize = optimize });
     const airlock = airlock_dependency.module("airlock");
-    const module = b.addModule("strand", .{
-        .root_source_file = b.path("src/strand.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{.{ .name = "airlock", .module = airlock }},
-    });
-
-    // The core's build has no runtime import or link to durability or tooling.
     const core_module = b.addModule("strand.core", .{
         .root_source_file = b.path("src/core.zig"),
         .target = target,
         .optimize = optimize,
+    });
+    const mapping = b.createModule(.{ .root_source_file = b.path("src/core/compat.zig"), .target = target, .optimize = optimize });
+    const json_impl = b.createModule(.{
+        .root_source_file = b.path("src/json/api.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{ .{ .name = "strand.core", .module = core_module }, .{ .name = "mapping", .module = mapping } },
+    });
+    const json_module = b.addModule("strand.json", .{
+        .root_source_file = b.path("src/json.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "json", .module = json_impl }},
+    });
+    const jsonl_impl = b.createModule(.{
+        .root_source_file = b.path("src/jsonl/api.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{ .{ .name = "airlock", .module = airlock }, .{ .name = "json", .module = json_impl }, .{ .name = "strand.core", .module = core_module }, .{ .name = "strand.json", .module = json_module } },
+    });
+    const jsonl_module = b.addModule("strand.jsonl", .{
+        .root_source_file = b.path("src/jsonl.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "jsonl", .module = jsonl_impl }},
+    });
+    const module = b.addModule("strand", .{
+        .root_source_file = b.path("src/strand.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{ .{ .name = "strand.core", .module = core_module }, .{ .name = "strand.json", .module = json_module }, .{ .name = "strand.jsonl", .module = jsonl_module } },
     });
 
     // Everything below is strand's own: a project depending on strand
@@ -56,7 +79,7 @@ pub fn build(b: *std.Build) !void {
             .target = target,
             .optimize = optimize,
             .sanitize_thread = if (thread_sanitizer) true else null,
-            .imports = &.{.{ .name = "airlock", .module = airlock }},
+            .imports = &.{ .{ .name = "airlock", .module = airlock }, .{ .name = "strand.core", .module = core_module }, .{ .name = "json", .module = json_impl }, .{ .name = "jsonl", .module = jsonl_impl }, .{ .name = "strand.json", .module = json_module }, .{ .name = "strand.jsonl", .module = jsonl_module } },
         }),
     });
     // shakedown, and airlock's seam on it, are lazy and test-only: no
@@ -85,7 +108,12 @@ pub fn build(b: *std.Build) !void {
     test_options.addOption(u64, "seed", seed);
     tests.root_module.addOptions("build_options", test_options);
 
+    const json_tests = b.addTest(.{ .name = "json-module-tests", .root_module = json_impl });
+    const jsonl_tests = b.addTest(.{ .name = "jsonl-module-tests", .root_module = jsonl_impl });
+    jsonl_impl.addImport("airlock.testing", tests.root_module.import_table.get("airlock.testing").?);
     const test_step = b.step("test", "Run strand tests");
+    test_step.dependOn(&b.addRunArtifact(json_tests).step);
+    test_step.dependOn(&b.addRunArtifact(jsonl_tests).step);
     test_step.dependOn(&b.addRunArtifact(tests).step);
 
     const scratch_tests = b.addTest(.{
@@ -104,8 +132,22 @@ pub fn build(b: *std.Build) !void {
     // installs nothing, so `zig build` would otherwise do no work at all.
     const check_step = b.step("check", "Compile the tests and examples without running them");
     check_step.dependOn(&tests.step);
+    check_step.dependOn(&json_tests.step);
+    check_step.dependOn(&jsonl_tests.step);
     check_step.dependOn(&scratch_tests.step);
     b.getInstallStep().dependOn(check_step);
+
+    const json_consumer = b.addExecutable(.{
+        .name = "json-consumer",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("ci/json-consumer.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{ .{ .name = "strand.json", .module = json_module }, .{ .name = "strand.core", .module = core_module } },
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(json_consumer).step);
+    check_step.dependOn(&json_consumer.step);
 
     // A null optional or inactive union arm must not hide an unsupported
     // field type. The same gate applies to copying and freeing. Run these
@@ -123,7 +165,7 @@ pub fn build(b: *std.Build) !void {
                         .target = target,
                         .optimize = optimize,
                         .imports = &.{.{ .name = "strand.owned", .module = b.createModule(.{
-                            .root_source_file = b.path("src/owned.zig"),
+                            .root_source_file = b.path("src/jsonl/owned.zig"),
                             .target = target,
                             .optimize = optimize,
                         }) }},
@@ -210,6 +252,18 @@ pub fn build(b: *std.Build) !void {
             }),
         });
         baseline.root_module.addImport("shakedown", dependency.module("shakedown"));
+        const s2_bench = b.addExecutable(.{
+            .name = "strand-s2-bench",
+            .root_module = b.createModule(.{ .root_source_file = b.path("bench/s2.zig"), .target = target, .optimize = .fast, .imports = benchImports(b, target, .fast) }),
+        });
+        const s2_root = s2_bench.root_module.import_table.get("strand").?;
+        s2_bench.root_module.addImport("json", s2_root.import_table.get("strand.json").?.import_table.get("json").?);
+        s2_bench.root_module.addImport("shakedown", dependency.module("shakedown"));
+        b.step("s2-bench-build", "Compile explicit paired S2 observations").dependOn(&b.addInstallArtifact(s2_bench, .{}).step);
+        check_step.dependOn(&s2_bench.step);
+        const s2_smoke = b.addRunArtifact(s2_bench);
+        s2_smoke.addArg("--smoke");
+        test_step.dependOn(&s2_smoke.step);
         const baseline_source = b.option([]const u8, "baseline-source", "Manual observation only: previous main root source");
         const bench_module = baseline.root_module.import_table.get("strand").?;
         baseline.root_module.addImport("previous-main", if (baseline_source) |source| b.createModule(.{
@@ -218,7 +272,15 @@ pub fn build(b: *std.Build) !void {
             .optimize = .fast,
             .imports = &.{.{ .name = "airlock", .module = bench_module.import_table.get("airlock").? }},
         }) else bench_module);
-        const proof_module = b.createModule(.{ .root_source_file = b.path("src/core_test.zig"), .target = target, .optimize = .fast, .imports = &.{.{ .name = "shakedown", .module = dependency.module("shakedown") }} });
+        inline for (.{ "current", "previous" }) |which| {
+            const size_exe = b.addExecutable(.{
+                .name = "strand-size-" ++ which,
+                .root_module = b.createModule(.{ .root_source_file = b.path("bench/footprint.zig"), .target = target, .optimize = .fast, .imports = &.{.{ .name = "api", .module = if (comptime std.mem.eql(u8, which, "current")) bench_module else baseline.root_module.import_table.get("previous-main").? }} }),
+            });
+            b.step("size-" ++ which ++ "-build", "Compile the identical legacy footprint fixture").dependOn(&b.addInstallArtifact(size_exe, .{}).step);
+            check_step.dependOn(&size_exe.step);
+        }
+        const proof_module = b.createModule(.{ .root_source_file = b.path("src/core_test.zig"), .target = target, .optimize = .fast, .imports = &.{ .{ .name = "shakedown", .module = dependency.module("shakedown") }, .{ .name = "strand.core", .module = bench_module.import_table.get("strand.core").? } } });
         const core_bench = b.addExecutable(.{
             .name = "strand-core-bench",
             .root_module = b.createModule(.{
@@ -286,12 +348,13 @@ pub fn build(b: *std.Build) !void {
 /// Debug module would time the Debug module.
 fn benchImports(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize) []const std.Build.Module.Import {
     const airlock = b.dependency("airlock", .{ .target = target, .optimize = optimize }).module("airlock");
-    const strand = b.createModule(.{
-        .root_source_file = b.path("src/strand.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{.{ .name = "airlock", .module = airlock }},
-    });
+    const core_module = b.createModule(.{ .root_source_file = b.path("src/core.zig"), .target = target, .optimize = optimize });
+    const mapping = b.createModule(.{ .root_source_file = b.path("src/core/compat.zig"), .target = target, .optimize = optimize });
+    const json_impl = b.createModule(.{ .root_source_file = b.path("src/json/api.zig"), .target = target, .optimize = optimize, .imports = &.{ .{ .name = "strand.core", .module = core_module }, .{ .name = "mapping", .module = mapping } } });
+    const json_module = b.createModule(.{ .root_source_file = b.path("src/json.zig"), .target = target, .optimize = optimize, .imports = &.{.{ .name = "json", .module = json_impl }} });
+    const jsonl_impl = b.createModule(.{ .root_source_file = b.path("src/jsonl/api.zig"), .target = target, .optimize = optimize, .imports = &.{ .{ .name = "json", .module = json_impl }, .{ .name = "strand.core", .module = core_module }, .{ .name = "strand.json", .module = json_module }, .{ .name = "airlock", .module = airlock } } });
+    const jsonl_module = b.createModule(.{ .root_source_file = b.path("src/jsonl.zig"), .target = target, .optimize = optimize, .imports = &.{.{ .name = "jsonl", .module = jsonl_impl }} });
+    const strand = b.createModule(.{ .root_source_file = b.path("src/strand.zig"), .target = target, .optimize = optimize, .imports = &.{ .{ .name = "strand.core", .module = core_module }, .{ .name = "strand.json", .module = json_module }, .{ .name = "strand.jsonl", .module = jsonl_module }, .{ .name = "airlock", .module = airlock } } });
     return b.allocator.dupe(std.Build.Module.Import, &.{.{ .name = "strand", .module = strand }}) catch @panic("OOM");
 }
 

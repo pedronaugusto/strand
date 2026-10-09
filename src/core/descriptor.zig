@@ -5,6 +5,7 @@ pub const Support = enum { supported, conditional, unsupported };
 pub const MapKeys = enum { text_only, scalar, any };
 pub const Capabilities = struct {
     map_keys: MapKeys = .any,
+    variant_record: bool = false,
     unicode_scalar: bool = true,
     named_shapes: bool = true,
     nonfinite_floats: bool = true,
@@ -48,8 +49,45 @@ pub fn has(comptime T: type, comptime name: []const u8) bool {
         else => false,
     };
 }
-pub fn options(comptime T: type) if (has(T, "strand")) @TypeOf(T.strand) else @TypeOf(.{}) {
+fn declaredOptions(comptime T: type) if (has(T, "strand")) @TypeOf(T.strand) else @TypeOf(.{}) {
     return if (comptime has(T, "strand")) T.strand else .{};
+}
+fn Options(comptime T: type) type {
+    const Base = @TypeOf(declaredOptions(T));
+    if (!has(T, "jsonl_tag")) {
+        if (has(T, "jsonl_other")) @compileError("jsonl_other requires jsonl_tag; migrate both to strand.tag/other");
+        return Base;
+    }
+    if (@hasField(Base, "tag") or @hasField(Base, "content") or @hasField(Base, "other")) @compileError("conflicting jsonl_tag/jsonl_other and strand tag policy; migrate to strand.tag/other and remove legacy declarations");
+    const fields = @typeInfo(Base).@"struct";
+    const extra = if (has(T, "jsonl_other")) 2 else 1;
+    var names: [fields.field_names.len + extra][]const u8 = undefined;
+    var types: [names.len]type = undefined;
+    var attrs: [names.len]std.builtin.Type.Struct.FieldAttributes = @splat(.{});
+    for (fields.field_names, fields.field_types, fields.field_attrs, 0..) |name, F, attr, i| {
+        names[i] = name;
+        types[i] = F;
+        attrs[i] = attr;
+    }
+    names[fields.field_names.len] = "tag";
+    types[fields.field_names.len] = []const u8;
+    if (extra == 2) {
+        names[names.len - 1] = "other";
+        types[types.len - 1] = []const u8;
+    }
+    return @Struct(.auto, null, &names, &types, &attrs);
+}
+pub fn options(comptime T: type) Options(T) {
+    if (comptime !has(T, "jsonl_tag")) return declaredOptions(T);
+    var result: Options(T) = undefined;
+    const declared = declaredOptions(T);
+    inline for (@typeInfo(@TypeOf(declared)).@"struct".field_names) |name| @field(result, name) = @field(declared, name);
+    result.tag = T.jsonl_tag;
+    if (comptime has(T, "jsonl_other")) {
+        const tag_type = @typeInfo(T).@"union".tag_type orelse @compileError("jsonl_other requires a tagged union");
+        result.other = @tagName(@as(tag_type, T.jsonl_other));
+    }
+    return result;
 }
 pub fn field(comptime T: type, comptime name: []const u8) Field {
     const opt = options(T);
@@ -114,6 +152,7 @@ fn inspect(comptime T: type, comptime fmt: Capabilities, comptime seen: []const 
     }
     if ((has(T, "strandSerialize") or has(T, "strandDeserialize")) and containsResource(T, &.{})) return rejected(path, "data codec result cannot retain a resource");
     if (has(T, "strandSerialize") or has(T, "strandDeserialize")) return .{ .support = .conditional, .encode = has(T, "strandSerialize"), .decode = has(T, "strandDeserialize"), .path = path, .reason = "explicit data codec" };
+    if (has(T, "jsonParse") or has(T, "jsonStringify")) return rejected(path, "legacy JSON hooks require the legacy API or a strand data codec");
     if (has(T, "deinit")) return rejected(path, "resource owner requires an explicit data codec");
     return switch (@typeInfo(T)) {
         .bool, .void => .{},

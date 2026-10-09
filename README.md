@@ -1,15 +1,47 @@
 # strand
 
-strand's serialization framework is work in progress. The JSON Lines API below
-is implemented. The provisional std-only `strand.core` module adds type-declared
-field policy, semantic mapping, bounded allocation and traversal, and explicit
-borrowed or owned results. Its small reference backend exercises those contracts;
-it is a test format. See [the core design](docs/design.md) for supported types,
-ownership and backend obligations.
+strand provides a std-only serialization core and JSON codecs, with JSON Lines
+framing, readers, writers, tail and follow built above them. Zig 0.17.0 is required.
+The root API remains a facade for the existing JSON Lines contract.
 
-JSON and JSONL migration onto this core, ZON, CBOR, MessagePack and TOML belong to
-later phases and are not implemented here. Existing JSON Lines users continue to
-use the API below.
+The build exposes `strand.core`, `strand.json`, `strand.jsonl`, and `strand`.
+JSON and core have no durability import; JSONL uses airlock for sync and identity.
+ZON, CBOR, MessagePack and TOML are later work.
+
+`strand.json.parse(T, gpa, bytes, options)` returns `Parsed(T)`: plain const
+strings may borrow input until either input mutation/expiry or `deinit`.
+`parseOwned` copies retained spans and is independent of input. `parseLeaky`
+uses the caller's arena. Strict defaults reject unknown fields and all duplicate
+keys; ignored fields and Raw values are still fully checked and bounded.
+`json.Value` preserves numeric lexemes and object order. Decimal integers use
+checked decimal arithmetic; floating destinations round directly to their width,
+and a field's `.exact = true` rejects any inexact conversion.
+
+`json.parseStdValue(gpa, bytes, options)` is the explicit bounded standard
+Value adapter. It keeps std's integer/float/number_string precision policies and
+moves the core arena into a stable `std.json.Parsed(std.json.Value)` owner.
+Use its `deinit`; managed arrays retain a valid arena allocator. `json.write`
+accepts standard Value with caller-supplied scratch. Automatic core derivation
+continues to exclude allocator-bearing standard containers.
+
+`json.write(output, value, options)` uses the same core field/type policy.
+It streams: a failure can leave a prefix. Use a caller-owned fixed/allocating
+writer when publication must be transactional. Scratch for Raw validation is
+explicit in `WriteOptions.scratch`; ordinary fixed schemas need none. It rejects
+invalid text and nonfinite output. No canonical/JCS profile is claimed.
+
+`strand.jsonl.Decoder(T)` accepts chunks with `push` and returns a consumed-byte
+count plus `need_input`, `record`, or `failure`. Record views expire on the next
+push/finish/deinit; `keep` returns an independent core owner. Its default line
+bound is 1 MiB, recovery discards at most 16 MiB per push while keeping drain
+state, and final unterminated records have an explicit acceptance policy.
+
+New JSON defaults are 16 MiB input/output, depth 128, 1,048,576 nodes/container
+items, 8 MiB strings, 64 KiB keys, 1,024 numeric bytes, 32 MiB requested/resident allocation
+and 128 Mi work units. Legacy `parseLine`, Reader/Writer, Raw, routing,
+Versioned and checkpoint defaults and error sets remain unchanged. Legacy std
+hooks stay on their existing bridge and do not gain full bounded guarantees;
+strict operations require a common data codec instead.
 
 strand reads and writes typed JSON Lines in Zig. Records carry their line number and
 byte offset, and damaged lines can be refused or skipped while reading continues.

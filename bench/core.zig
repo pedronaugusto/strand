@@ -65,13 +65,13 @@ pub fn main(init: std.process.Init) !void {
     var cc: core.Context = .init(std.heap.smp_allocator, .{}, .borrowed);
     try core.serialize(context.value, &actual, &cc);
     if (!std.mem.eql(u8, expected.buffer[0..expected.used], actual.buffer[0..actual.used]) or hc.items != cc.items or hc.work != cc.work) return error.PolicyMismatch;
-    const rows = [_]shakedown.bench.Row(Context){
+    const rows = [_]shakedown.bench.Row(Context, core.EncodeError){
         .{ .name = "reference.hand.a", .unit = "record", .initial = 1024, .run = handRow },
         .{ .name = "reference.core.a", .unit = "record", .initial = 1024, .run = coreRow },
         .{ .name = "reference.hand.b", .unit = "record", .initial = 1024, .run = handRow },
         .{ .name = "reference.core.b", .unit = "record", .initial = 1024, .run = coreRow },
     };
     var output = std.Io.File.stdout().writerStreaming(init.io, &.{});
-    try paired.run(init.gpa, init.io, &output.interface, &context, &rows, .{ .commit = if (args.len > 1) args[1] else "working-tree" }, .{ .samples = 7, .minimum = .fromMilliseconds(100) });
+    try paired.run(core.EncodeError, init.gpa, init.io, &output.interface, &context, &rows, .{ .commit = if (args.len > 1) args[1] else "working-tree" }, .{ .samples = 7, .minimum = .fromMilliseconds(100) });
     try output.interface.flush();
 }

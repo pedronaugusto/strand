@@ -7,7 +7,7 @@
 const std = @import("std");
 const testing = std.testing;
 const strand = @import("../strand.zig");
-const codec = @import("../codec.zig");
+const codec = @import("json").codec_module;
 
 /// A non-exhaustive enum: a named value is written by name, any other by
 /// number, and both are read back.

@@ -1,8 +1,8 @@
 //! The decoder and the encoder held to `std.json`, value for value and byte
 //! for byte, over values of every shape a line carries — and where
 //! `std.json` has no answer because it panics, held to having one.
-const codec_module = @import("codec.zig");
-const parse_module = @import("parse.zig");
+const codec_module = @import("json").codec_module;
+const parse_module = @import("json").parse_module;
 const fixtures_module = @import("testing/fixtures.zig");
 
 const std = @import("std");

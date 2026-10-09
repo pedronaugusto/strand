@@ -1,7 +1,6 @@
 const shakedown = @import("shakedown");
 const std = @import("std");
-pub const core = @import("core.zig");
-const model = @import("core/model.zig");
+pub const core = @import("strand.core");
 
 test "S1 admission sees rejected inactive branches and recursive data" {
     const Node = struct {
@@ -481,7 +480,7 @@ test "S1 external internal adjacent tagged payloads round trip and never relax r
 
 test "S1 ordered generic maps and unicode scalar preserve meaning and ownership" {
     const Map = core.Pairs(u8, []const u8);
-    const entries = [_]model.Pair(u8, []const u8){ .{ .key = 1, .value = "one" }, .{ .key = 1, .value = "again" } };
+    const entries = [_]core.Pair(u8, []const u8){ .{ .key = 1, .value = "one" }, .{ .key = 1, .value = "again" } };
     var memory: [128]u8 = undefined;
     var out: Reference.Encoder = .{ .buffer = &memory };
     var c: core.Context = .init(std.testing.failing_allocator, .{}, .borrowed);
@@ -883,7 +882,7 @@ test "S1 explicit byte visits compose with codecs ownership and scalar key limit
     try core.serialize(borrowed.value, &out, &c);
     try std.testing.expectEqualSlices(u8, &input, memory[0..out.used]);
     c = .init(std.testing.failing_allocator, .{ .key_bytes = 1 }, .borrowed);
-    const values = [_]model.Pair(core.Bytes, u8){.{ .key = .{ .value = &.{ 0xff, 0 } }, .value = 1 }};
+    const values = [_]core.Pair(core.Bytes, u8){.{ .key = .{ .value = &.{ 0xff, 0 } }, .value = 1 }};
     out.used = 0;
     try std.testing.expectError(error.LengthLimit, core.serialize(core.Pairs(core.Bytes, u8){ .items = &values }, &out, &c));
     c = .init(std.testing.failing_allocator, .{ .key_bytes = 1 }, .borrowed);

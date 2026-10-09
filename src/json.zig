@@ -1,0 +1,22 @@
+//! JSON: bounded slice/owned APIs on the shared core, plus the legacy contract.
+const api = @import("json");
+pub const Format = api.Format;
+pub const capabilities = api.capabilities;
+pub const Raw = api.Raw;
+pub const Parsed = api.Parsed;
+pub const Value = api.Value;
+pub const ParseOptions = api.ParseOptions;
+pub const parse = api.parse;
+pub const parseStdValue = api.parseStdValue;
+pub const parseOwned = api.parseOwned;
+pub const parseLeaky = api.parseLeaky;
+pub const WriteOptions = api.WriteOptions;
+pub const write = api.write;
+pub const parseLine = api.parseLine;
+pub const LegacyParseOptions = api.LegacyParseOptions;
+pub const LegacyParseError = api.LegacyParseError;
+pub const LegacyRaw = api.LegacyRaw;
+pub const writeValue = api.writeValue;
+pub const writeObjectOpen = api.writeObjectOpen;
+pub const OpenObject = api.OpenObject;
+pub const ValueOptions = api.ValueOptions;

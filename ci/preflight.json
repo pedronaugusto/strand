@@ -3,7 +3,9 @@
     "src"
   ],
   "test_roots": [
-    "src/tests.zig"
+    "src/tests.zig",
+    "src/json/api.zig",
+    "src/jsonl/api.zig"
   ],
   "test_support": [
     "src/testing/**"
@@ -13,43 +15,43 @@
     "airlock.testing"
   ],
   "function_exceptions": {
-    "src/raw.zig:RawType": {
+    "src/json/raw.zig:RawType": {
       "lines": 143,
       "reason": "Existing implementation at adoption; this exact bound cannot grow and shrinks when the function is split."
     },
-    "src/decode.zig:Decoder": {
+    "src/json/decode.zig:Decoder": {
       "lines": 739,
       "reason": "Existing implementation at adoption; this exact bound cannot grow and shrinks when the function is split."
     },
-    "src/decode.zig:value": {
+    "src/json/decode.zig:value": {
       "lines": 130,
       "reason": "Existing implementation at adoption; this exact bound cannot grow and shrinks when the function is split."
     },
-    "src/encode.zig:Encoder": {
+    "src/json/encode.zig:Encoder": {
       "lines": 651,
       "reason": "Existing implementation at adoption; this exact bound cannot grow and shrinks when the function is split."
     },
-    "src/follow.zig:Follower": {
+    "src/jsonl/follow.zig:Follower": {
       "lines": 461,
       "reason": "Existing implementation at adoption; this exact bound cannot grow and shrinks when the function is split."
     },
-    "src/parse/line.zig:Parser": {
+    "src/json/parse/line.zig:Parser": {
       "lines": 283,
       "reason": "Existing implementation at adoption; this exact bound cannot grow and shrinks when the function is split."
     },
-    "src/reader.zig:Reader": {
+    "src/jsonl/reader.zig:Reader": {
       "lines": 396,
       "reason": "Existing implementation at adoption; this exact bound cannot grow and shrinks when the function is split."
     },
-    "src/tail.zig:Tail": {
+    "src/jsonl/tail.zig:Tail": {
       "lines": 489,
       "reason": "Existing implementation at adoption; this exact bound cannot grow and shrinks when the function is split."
     },
-    "src/versioned.zig:Versioned": {
+    "src/jsonl/versioned.zig:Versioned": {
       "lines": 130,
       "reason": "Existing implementation at adoption; this exact bound cannot grow and shrinks when the function is split."
     },
-    "src/writer.zig:Writer": {
+    "src/jsonl/writer.zig:Writer": {
       "lines": 390,
       "reason": "Existing implementation at adoption; this exact bound cannot grow and shrinks when the function is split."
     }

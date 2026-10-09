@@ -2,9 +2,9 @@
 //! introduce each declaration live beside it, in the file that declares it;
 //! these are the ones that need a stream, a malformed line, or a look at
 //! where memory came from.
-const work_module = @import("work.zig");
-const codec_module = @import("codec.zig");
-const parse_module = @import("parse.zig");
+const work_module = @import("json").work_module;
+const codec_module = @import("json").codec_module;
+const parse_module = @import("json").parse_module;
 
 const builtin = @import("builtin");
 const std = @import("std");

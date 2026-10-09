@@ -230,6 +230,9 @@ fn PolicyAccess(comptime Backend: type, comptime policy: descriptor.Field) type 
             for (values) |v| try emit(.{}, v, self.out, self.context, self.active);
             try self.out.end(self.context);
         }
+        pub fn chargeWork(self: *Self, n: usize) error{WorkLimit}!void {
+            return self.context.chargeWork(n);
+        }
         pub fn reject(self: *Self, code: u32) error{CustomRejected} {
             return self.context.reject(code);
         }

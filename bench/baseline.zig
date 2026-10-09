@@ -126,6 +126,40 @@ fn route(_: *Context, units: u64) !void {
     }
     std.mem.doNotOptimizeAway(sum);
 }
+
+fn sharedWrite(comptime Api: type, c: *Context, units: u64) !void {
+    const value: SharedEvent = .{ .id = std.math.maxInt(u64), .label = shared_input[prefix.len .. shared_input.len - shared_suffix.len], .data = .{ 1, 2 } };
+    var sum: usize = 0;
+    for (0..units) |_| {
+        var output = std.Io.Writer.fixed(&c.buffer);
+        try Api.writeLine(&output, value);
+        sum +%= output.buffered().len;
+        std.mem.doNotOptimizeAway(output.buffered());
+    }
+    std.mem.doNotOptimizeAway(sum);
+}
+fn writeCurrent(c: *Context, units: u64) !void {
+    return sharedWrite(strand, c, units);
+}
+fn writePrevious(c: *Context, units: u64) !void {
+    return sharedWrite(previous, c, units);
+}
+fn sharedRead(comptime Api: type, c: *Context, units: u64) !void {
+    var sum: usize = 0;
+    for (0..units) |_| {
+        var source = std.Io.Reader.fixed(shared_input ++ "\n");
+        var reader = Api.Reader(SharedEvent).init(c.gpa, &source, .{});
+        defer reader.deinit();
+        sum +%= (try reader.next()).?.value.label.len;
+    }
+    std.mem.doNotOptimizeAway(sum);
+}
+fn readerCurrent(c: *Context, units: u64) !void {
+    return sharedRead(strand, c, units);
+}
+fn readerPrevious(c: *Context, units: u64) !void {
+    return sharedRead(previous, c, units);
+}
 pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
     var c: Context = .{ .gpa = std.heap.smp_allocator, .arena = .init(std.heap.smp_allocator), .value = undefined };
@@ -136,7 +170,8 @@ pub fn main(init: std.process.Init) !void {
         !std.mem.eql(u8, current_value.label, previous_value.label) or
         !std.mem.eql(u8, current_value.data.bytes, previous_value.data.bytes)) return error.SemanticMismatch;
     c.value = try strand.parseLine(Event, c.arena.allocator(), input, .{});
-    const rows = [_]shakedown.bench.Row(Context){
+    const WorkError = strand.ParseLineError || std.json.ParseError(std.json.Scanner) || std.mem.Allocator.Error || std.Io.Writer.Error || strand.Reader(Event).NextError;
+    const rows = [_]shakedown.bench.Row(Context, WorkError){
         .{ .name = "paired.current.a", .unit = "record", .initial = 1024, .run = pairedCurrent },
         .{ .name = "paired.previous.a", .unit = "record", .initial = 1024, .run = pairedPrevious },
         .{ .name = "paired.std.a", .unit = "record", .initial = 1024, .run = parseStd },
@@ -155,8 +190,12 @@ pub fn main(init: std.process.Init) !void {
         .{ .name = "legacy.write.fixed.512", .unit = "record", .initial = 1024, .run = write },
         .{ .name = "legacy.reader.512", .unit = "record", .initial = 1024, .run = read },
         .{ .name = "legacy.routing.header.512", .unit = "record", .initial = 1024, .run = route },
+        .{ .name = "shared.write.current", .unit = "record", .initial = 1024, .run = writeCurrent },
+        .{ .name = "shared.write.previous", .unit = "record", .initial = 1024, .run = writePrevious },
+        .{ .name = "shared.reader.current", .unit = "record", .initial = 1024, .run = readerCurrent },
+        .{ .name = "shared.reader.previous", .unit = "record", .initial = 1024, .run = readerPrevious },
     };
     var output = std.Io.File.stdout().writerStreaming(init.io, &.{});
-    try paired.run(init.gpa, init.io, &output.interface, &c, &rows, .{ .commit = if (args.len > 1) args[1] else "working-tree" }, .{ .samples = 31, .minimum = .fromMilliseconds(100), .smoke = args.len > 1 and std.mem.eql(u8, args[1], "--smoke") });
+    try paired.run(WorkError, init.gpa, init.io, &output.interface, &c, &rows, .{ .commit = if (args.len > 1) args[1] else "working-tree" }, .{ .samples = 31, .minimum = .fromMilliseconds(100), .smoke = args.len > 1 and std.mem.eql(u8, args[1], "--smoke") });
     try output.interface.flush();
 }

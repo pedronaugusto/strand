@@ -4,7 +4,7 @@ const std = @import("std");
 
 pub const LimitError = error{ InputLimit, OutputLimit, DepthLimit, ItemLimit, LengthLimit, AllocationLimit, WorkLimit };
 pub const DecodeError = error{ InputLimit, DepthLimit, ItemLimit, LengthLimit, AllocationLimit, WorkLimit } || error{ SyntaxError, InvalidUtf8, UnexpectedType, MissingField, UnknownField, DuplicateField, UnknownVariant, NumberOutOfRange, InexactNumber, UnsupportedValue, BorrowUnavailable, CustomRejected, OutOfMemory };
-pub const EncodeError = LimitError || error{ InvalidRaw, InvalidUtf8, NumberOutOfRange, InexactNumber, UnsupportedValue, CycleDetected, CustomRejected, OutOfMemory };
+pub const EncodeError = LimitError || error{ DuplicateField, InvalidRaw, InvalidUtf8, NumberOutOfRange, InexactNumber, UnsupportedValue, CycleDetected, CustomRejected, OutOfMemory };
 pub const Lifetime = enum { borrowed, transient, owned };
 pub const Ownership = enum { borrowed, owned };
 pub const Borrow = enum { prefer, copy, require };
@@ -82,6 +82,7 @@ pub const Context = struct {
     acceptance: Acceptance = .{},
     /// Internal replay: wire nodes/bytes were already validated and charged.
     replaying: bool = false,
+    allocation_limited: bool = false,
 
     pub fn init(storage: std.mem.Allocator, limits: Limits, ownership: Ownership) Context {
         return .{ .storage = storage, .limits = limits, .ownership = ownership };
@@ -137,7 +138,7 @@ pub const Context = struct {
     }
     /// Each request is bounded before allocation. Arena backing capacity is also
     /// independently bounded by acquire's allocator; these two caps aren't added.
-    pub fn alloc(self: *Context, comptime T: type, n: usize) DecodeError![]T {
+    pub fn alloc(self: *Context, comptime T: type, n: usize) error{ AllocationLimit, OutOfMemory }![]T {
         @setRuntimeSafety(true);
         const bytes = std.math.mul(usize, @sizeOf(T), n) catch return error.AllocationLimit;
         if (bytes > self.limits.allocation_bytes - self.allocation_requested) return error.AllocationLimit;
@@ -147,7 +148,7 @@ pub const Context = struct {
     }
     /// Preserve actual pointer alignment/sentinel using typed allocation. The
     /// reservation includes sentinel storage and conservative alignment padding.
-    pub fn allocPointer(self: *Context, comptime P: type, n: usize) DecodeError!Mutable(P) {
+    pub fn allocPointer(self: *Context, comptime P: type, n: usize) error{ AllocationLimit, OutOfMemory }!Mutable(P) {
         @setRuntimeSafety(true);
         const info = @typeInfo(P).pointer;
         const sentinel = if (info.size == .slice) info.sentinel() else null;
@@ -160,6 +161,25 @@ pub const Context = struct {
         const memory = try self.storage.allocWithOptions(info.child, n, .fromByteUnits(alignment), sentinel);
         self.allocation_requested += bytes;
         return if (info.size == .one) &memory[0] else memory;
+    }
+    /// Temporary adapter for format scratch. It cannot outlive the operation.
+    /// No resize avoids uncharged growth; arena release remains the owner's.
+    pub fn allocator(self: *Context) std.mem.Allocator {
+        return .{ .ptr = self, .vtable = &.{ .alloc = scratchAllocate, .resize = std.mem.Allocator.noResize, .remap = std.mem.Allocator.noRemap, .free = scratchFree } };
+    }
+    fn scratchAllocate(raw: *anyopaque, n: usize, alignment: std.mem.Alignment, address: usize) ?[*]u8 {
+        const self: *Context = @ptrCast(@alignCast(raw)); // safe: allocator's pointer is its live Context.
+        if (n > self.limits.allocation_bytes - self.allocation_requested) {
+            self.allocation_limited = true;
+            return null;
+        }
+        const result = self.storage.rawAlloc(n, alignment, address) orelse return null;
+        self.allocation_requested += n;
+        return result;
+    }
+    fn scratchFree(raw: *anyopaque, memory: []u8, alignment: std.mem.Alignment, address: usize) void {
+        const self: *Context = @ptrCast(@alignCast(raw)); // safe: allocator's pointer is its live Context.
+        self.storage.rawFree(memory, alignment, address);
     }
     pub fn reject(self: *Context, code: u32) error{CustomRejected} {
         if (self.diagnostics) |d| d.custom_code = code;

@@ -6,6 +6,12 @@ const strand = @import("strand");
 const Event = struct { kind: []const u8 };
 
 pub fn main() void {
+    const json = strand.json;
+    const jsonl = strand.jsonl;
+    const core = strand.core;
+    comptime {
+        if (strand.Raw != json.LegacyRaw or strand.Reader(Event) != jsonl.Reader(Event) or json.Parsed(Event) != core.Parsed(Event)) @compileError("facades must retain nominal type identity");
+    }
     _ = &strand.Reader(Event).init;
     _ = &strand.Writer(Event).init;
 }

@@ -31,3 +31,7 @@ pub const codecs = @import("core/codecs.zig");
 pub const acquireWith = @import("core/owner.zig").acquireWith;
 pub const AcquisitionOptions = @import("core/owner.zig").AcquisitionOptions;
 pub const Bytes = @import("core/model.zig").Bytes;
+
+pub const Cursor = @import("core/decode.zig").Cursor;
+pub const Pair = @import("core/model.zig").Pair;
+pub const Backing = @import("core/context.zig").Backing;

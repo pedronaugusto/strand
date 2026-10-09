@@ -5,6 +5,14 @@ root `strand.core` declaration is its facade. Existing JSON Lines code continues
 to use the existing typed JSON implementation and `std.json` hooks. Core format
 adapters for JSON, JSONL, ZON, CBOR, MessagePack and TOML are later work.
 
+## Module boundaries
+
+`strand.core` builds independently beside the root module. Gantry checks its
+bounds, vocabulary/schema, mapping, ownership and facade layers in that order.
+The core imports only std and lower core layers. Each future format will have
+its own build module beside the root, above the core; JSONL framing and airlock
+remain above JSON. S1 adds no future-format placeholder or implementation.
+
 ## Mapping and schema policy
 
 `describe(T, capabilities)` inspects types without instantiating an operation.

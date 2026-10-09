@@ -2,16 +2,20 @@
 const gantry = @import("gantry");
 
 pub const layers: []const gantry.rules.Layer = &.{
-    .{ .name = "primitives", .patterns = &.{
-        "src/encode/Buffer.zig",
-        "src/core.zig",
-        "src/core/context.zig",
+    .{ .name = "core bounds", .patterns = &.{"src/core/context.zig"} },
+    .{ .name = "core vocabulary and schema", .patterns = &.{
         "src/core/model.zig",
-        "src/core/codecs.zig",
         "src/core/descriptor.zig",
-        "src/core/owner.zig",
+        "src/core/codecs.zig",
+    } },
+    .{ .name = "core mapping", .patterns = &.{
         "src/core/decode.zig",
         "src/core/encode.zig",
+    } },
+    .{ .name = "core ownership", .patterns = &.{"src/core/owner.zig"} },
+    .{ .name = "core public module", .patterns = &.{"src/core.zig"} },
+    .{ .name = "primitives", .patterns = &.{
+        "src/encode/Buffer.zig",
         "src/encode.zig",
         "src/indent.zig",
         "src/int.zig",

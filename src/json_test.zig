@@ -298,3 +298,70 @@ test "S2 fixed hundred-field schema needs no heap or caller scratch" {
     try std.testing.expectEqualDeep(value, owner.value);
     try std.testing.expectEqual(@as(usize, 0), owner.requested_peak);
 }
+
+test "S2 wide integers, exponents and direct IEEE destination rounding" {
+    var minimum = try json.parse(i128, std.testing.allocator, "-170141183460469231731687303715884105728.0", .{});
+    defer minimum.deinit();
+    try std.testing.expectEqual(std.math.minInt(i128), minimum.value);
+    var exponent = try json.parse(u128, std.testing.allocator, "3402823669209384634633746074317682114550e-1", .{});
+    defer exponent.deinit();
+    try std.testing.expectEqual(std.math.maxInt(u128), exponent.value);
+    var wide = try json.parse(f128, std.testing.allocator, "1267650600228229401496703205377", .{});
+    defer wide.deinit();
+    try std.testing.expectEqual(@as(f128, 0x10000000000000000000000001), wide.value);
+    const above_half: f128 = 1 + 0x1p-24 + 0x1p-54;
+    var memory: [256]u8 = undefined;
+    const spelling = try std.mem.print(&memory, "{d:.80}", .{above_half});
+    var rounded = try json.parse(f32, std.testing.allocator, spelling, .{});
+    defer rounded.deinit();
+    try std.testing.expectEqual(@as(f32, 1 + 0x1p-23), rounded.value);
+    try std.testing.expectEqual(@as(f32, 1), @as(f32, @floatCast(try std.fmt.parseFloat(f64, spelling))));
+    inline for (.{ f16, f32, f64, f128 }) |F| {
+        const Exact = struct {
+            n: F,
+            pub const strand = .{ .fields = .{ .n = .{ .exact = true } } };
+        };
+        var owner = try json.parse(Exact, std.testing.allocator, "{\"n\":0.5}", .{});
+        defer owner.deinit();
+        try std.testing.expectEqual(@as(F, 0.5), owner.value.n);
+        try std.testing.expectError(error.InexactNumber, json.parse(Exact, std.testing.allocator, "{\"n\":0.1}", .{}));
+    }
+}
+test "S2 push final and skip policies at every byte boundary" {
+    const input = "1\nnope\n2";
+    for (0..input.len + 1) |split| {
+        var decoder = jsonl.Decoder(u8).init(std.testing.allocator, .{ .on_malformed = .skip });
+        defer decoder.deinit();
+        var count: usize = 0;
+        for ([_][]const u8{ input[0..split], input[split..] }) |chunk| {
+            var rest = chunk;
+            while (rest.len != 0) {
+                const result = decoder.push(rest);
+                if (result.status == .failure) return result.status.failure;
+                if (result.status == .record) count += 1;
+                rest = rest[result.consumed..];
+            }
+        }
+        try std.testing.expectEqual(@as(usize, 1), count);
+        try std.testing.expectEqual(@as(u8, 2), decoder.finish().status.record.value);
+        try std.testing.expectEqual(@as(u64, 1), decoder.skipped);
+        try std.testing.expectEqual(error.Finished, decoder.push("3\n").status.failure);
+    }
+    var drop = jsonl.Decoder(u8).init(std.testing.allocator, .{ .final_record = .drop });
+    defer drop.deinit();
+    _ = drop.push("2");
+    try std.testing.expect(drop.finish().status == .need_input);
+}
+test "S2 warmed fixed push decoder makes no backing allocation" {
+    var counting: shakedown.alloc.Counting = .init(std.testing.allocator);
+    var no_resize: shakedown.alloc.NoResize = .init(counting.allocator());
+    var decoder = jsonl.Decoder(Generated).init(no_resize.allocator(), .{});
+    defer decoder.deinit();
+    const record = "{\"n\":9,\"text\":\"plain\"}\n";
+    try std.testing.expect(decoder.push(record).status == .record);
+    const allocations = counting.allocations;
+    const live = counting.live_bytes;
+    for (0..1000) |_| try std.testing.expect(decoder.push(record).status == .record);
+    try std.testing.expectEqual(allocations, counting.allocations);
+    try std.testing.expectEqual(live, counting.live_bytes);
+}

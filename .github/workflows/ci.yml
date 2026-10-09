@@ -131,7 +131,7 @@ jobs:
             for which in $order; do
               printf 'round=%s implementation=%s local_cache=cold global_cache=shared\n' "$round" "$which" >> "$RUNNER_TEMP/strand-observation/schema-cold.txt"
               TIMEFORMAT='real_seconds=%R user_seconds=%U system_seconds=%S'
-              { time zig build "schema-$which-build" --cache-dir ".zig-cache/schema-cold-$round-$which"; } 2>> "$RUNNER_TEMP/strand-observation/schema-cold.txt"
+              { time zig build "schema-$which-build" --cache-dir ".zig-cache/schema-cold-$GITHUB_RUN_ID-$round-$which"; } 2>> "$RUNNER_TEMP/strand-observation/schema-cold.txt"
             done
           done
       - name: Compile the identical-old-source control at the same call sites

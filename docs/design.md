@@ -208,7 +208,8 @@ following 1000 already-written records; follower waiting remains covered by
 controlled Clock tests. Tail's file is approximately 1 GiB (an integral number
 of 513-byte records). The ten distinct 100-field encoder comparison uses the
 same checked JSON backend and budgets on both sides. Its local compiler caches
-are cold; the global dependency cache is shared and build-runner/configuration
+are distinct per sample and CI run so restored caches cannot warm later runs;
+the global dependency cache is shared and build-runner/configuration
 time is included. File size and native text section size are distinct metrics.
 
 Raw rows, compiler/source pins, runner provenance, calibration and limitations

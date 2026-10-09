@@ -32,6 +32,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Breaking
 
+- S2 adds the `core.Event.number` lexeme alternative; exhaustive backend event
+  switches must handle it. `core.EncodeError` adds `DuplicateField` for checked
+  dynamic object keys. Existing root JSONL parse/write error sets are unchanged.
+
 - strand requires Zig 0.17.0.
 - `Follower` keeps no `std.Io`: `init(gpa, source, options)` takes none, and `next`, `checkpoint`, `truncated` and `deinit` take the `io` they block on. `resumeFrom(gpa, io, source, point, options)` takes `point` before `options`.
 - `Reader.resumeAt` and `LineReader.resumeAt` take `start` before `options`.
@@ -94,6 +98,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Every declaration the root module re-exports has a doc comment, and fields outside the API say `Private:`.
 
 ### Fixed
+
+- Push decoding accepts a BOM only at stream offset zero, including after
+  draining an oversized first record; every two-chunk split checks this edge.
 
 - `writeValue` and a bounded `Writer` write a non-exhaustive enum: a named value by name, any other by number, as `writeLine` does. Such an enum failed to compile on the buffered path.
 - `Tail.init` refuses a pipe or socket as `error.Streaming`, as documented; it read whatever the system reported as the stream's size.

@@ -79,7 +79,7 @@ pub fn Decoder(comptime T: type) type {
             if (terminated and self.options.crlf and bytes.len != 0 and bytes[bytes.len - 1] == '\r') bytes = bytes[0 .. bytes.len - 1];
             if (!self.bom_checked) {
                 self.bom_checked = true;
-                if (self.options.skip_bom and std.mem.startsWith(u8, bytes, "\xef\xbb\xbf")) {
+                if (self.options.skip_bom and self.record_offset == 0 and std.mem.startsWith(u8, bytes, "\xef\xbb\xbf")) {
                     bytes = bytes[3..];
                     self.record_offset += 3;
                 }

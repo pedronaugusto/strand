@@ -365,3 +365,34 @@ test "S2 warmed fixed push decoder makes no backing allocation" {
     try std.testing.expectEqual(allocations, counting.allocations);
     try std.testing.expectEqual(live, counting.live_bytes);
 }
+test "S2 push BOM stays at stream start after oversized recovery" {
+    const input = "222222222222222222222\n\xef\xbb\xbf2\n";
+    for (0..input.len + 1) |split| {
+        var no_resize: shakedown.alloc.NoResize = .init(std.testing.allocator);
+        var decoder = jsonl.Decoder(u8).init(no_resize.allocator(), .{ .max_line_bytes = 16 });
+        defer decoder.deinit();
+        var oversized: usize = 0;
+        var malformed: usize = 0;
+        for ([_][]const u8{ input[0..split], input[split..] }) |chunk| {
+            var rest = chunk;
+            while (rest.len != 0) {
+                const result = decoder.push(rest);
+                switch (result.status) {
+                    .failure => |err| switch (err) {
+                        error.LineTooLong => oversized += 1,
+                        error.SyntaxError => malformed += 1,
+                        else => return err,
+                    },
+                    .record => return error.UnexpectedRecord,
+                    .need_input => try std.testing.expect(result.consumed != 0),
+                }
+                rest = rest[result.consumed..];
+            }
+        }
+        try std.testing.expectEqual(@as(usize, 1), oversized);
+        try std.testing.expectEqual(@as(usize, 1), malformed);
+        try std.testing.expectEqual(@as(u64, 2), decoder.number);
+        try std.testing.expectEqual(@as(u64, 22), decoder.record_offset);
+        try std.testing.expectEqual(@as(u64, input.len), decoder.consumed);
+    }
+}

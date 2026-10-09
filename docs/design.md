@@ -50,7 +50,8 @@ caller-supplied; no global allocator is chosen. JCS is not exposed.
 
 `jsonl.Decoder` owns one bounded buffer and a reused caller-allocator arena,
 with one allocation cap over both, including arena backing overhead. Its push
-API frames physical LF records. Existing pull pretty/separator modes retain
+API frames physical LF records. BOM acceptance is restricted to stream offset
+zero even after oversized-record recovery. Existing pull pretty/separator modes retain
 their fused zero-copy specialization and unchanged public state.
 `push` reports consumption even for errors. Oversize enters drain state and
 cannot reinterpret a suffix as another record, including across calls. Recovery

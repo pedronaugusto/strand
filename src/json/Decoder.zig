@@ -9,7 +9,7 @@ pub const capabilities: core.Capabilities = .{ .map_keys = .text_only, .bytes = 
 pub const parseInteger = number.integer;
 pub const parseFloat = number.floating;
 scanner: Scanner,
-keys: [64][]const u8 = undefined,
+keys: [128][]const u8 = undefined,
 key_count: usize = 0,
 extra_keys: std.ArrayList([]const u8) = .empty,
 marks: [128]usize = undefined,

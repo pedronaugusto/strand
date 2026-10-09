@@ -154,6 +154,7 @@ test "S2 std Value bridge uses bounded context and standard numeric alternatives
     var owner = try json.parseStdValue(std.testing.allocator, "{\"n\":1e9999,\"a\":[1,0.5]}", .{});
     defer owner.deinit();
     try std.testing.expectEqualStrings("1e9999", owner.value.object.get("n").?.number_string);
+    try owner.value.object.getPtr("a").?.array.append(.{ .integer = 2 });
     var buffer: [128]u8 = undefined;
     var scratch: [8192]u8 = undefined;
     var output = std.Io.Writer.fixed(&buffer);
@@ -194,4 +195,106 @@ test "S2 push buffer and arena share the resident allocation cap" {
     const result = decoder.push("[\"a\\nb\"]\n");
     try std.testing.expectEqual(error.AllocationLimit, result.status.failure);
     try std.testing.expect(decoder.buffer.len + decoder.arena_resident_bytes <= 128);
+}
+
+test "S2 scalar and vector escape boundaries match standard ordinary JSON" {
+    var text: [128]u8 = undefined;
+    for (&text, 0..) |*byte, i| byte.* = @intCast(i); // safe: i is in 0..128.
+    for (0..text.len + 1) |length| {
+        var actual: [1024]u8 = undefined;
+        var expected: [1024]u8 = undefined;
+        var out = std.Io.Writer.fixed(&actual);
+        var standard = std.Io.Writer.fixed(&expected);
+        try json.write(&out, text[0..length], .{});
+        try std.json.Stringify.value(text[0..length], .{}, &standard);
+        try std.testing.expectEqualStrings(standard.buffered(), out.buffered());
+    }
+}
+test "S2 every strict limit at zero, exact boundary and one below" {
+    const core = @import("strand.core");
+    inline for (.{ "input_bytes", "items", "numeric_bytes", "work" }) |name| {
+        const boundary: usize = if (comptime std.mem.eql(u8, name, "work")) 3 else 1;
+        for ([_]usize{ 0, boundary - 1, boundary }) |limit| {
+            var limits: core.Limits = .{};
+            @field(limits, name) = limit;
+            const parsed = json.parse(u8, std.testing.allocator, "1", .{ .limits = limits });
+            if (limit == boundary) {
+                var owner = try parsed;
+                owner.deinit();
+            } else if (parsed) |result| {
+                var owner = result;
+                owner.deinit();
+                return error.TestUnexpectedResult;
+            } else |err| try std.testing.expect(err == error.InputLimit or err == error.ItemLimit or err == error.LengthLimit or err == error.WorkLimit);
+        }
+    }
+    for ([_]usize{ 0, 1, 2 }) |limit| {
+        if (limit == 2) {
+            var owner = try json.parse(json.Raw, std.testing.allocator, "[[1,2]]", .{ .limits = .{ .depth = limit, .container_items = limit } });
+            owner.deinit();
+            var text = try json.parse([]const u8, std.testing.allocator, "\"ab\"", .{ .limits = .{ .string_bytes = limit } });
+            text.deinit();
+            var key = try json.parse(struct {}, std.testing.allocator, "{\"ab\":1}", .{ .ignore_unknown_fields = true, .limits = .{ .key_bytes = limit } });
+            key.deinit();
+        } else {
+            try std.testing.expectError(error.DepthLimit, json.parse(json.Raw, std.testing.allocator, "[[1,2]]", .{ .limits = .{ .depth = limit } }));
+            try std.testing.expectError(error.ItemLimit, json.parse(json.Raw, std.testing.allocator, "[1,2]", .{ .limits = .{ .container_items = limit } }));
+            try std.testing.expectError(error.LengthLimit, json.parse([]const u8, std.testing.allocator, "\"ab\"", .{ .limits = .{ .string_bytes = limit } }));
+            try std.testing.expectError(error.LengthLimit, json.parse(struct {}, std.testing.allocator, "{\"ab\":1}", .{ .ignore_unknown_fields = true, .limits = .{ .key_bytes = limit } }));
+        }
+    }
+    var memory: [8]u8 = undefined;
+    for ([_]usize{ 0, 2, 3 }) |limit| {
+        var output = std.Io.Writer.fixed(&memory);
+        if (limit == 3) try json.write(&output, @as(u8, 123), .{ .limits = .{ .output_bytes = limit } }) else try std.testing.expectError(error.OutputLimit, json.write(&output, @as(u8, 123), .{ .limits = .{ .output_bytes = limit } }));
+    }
+}
+const Generated = struct { n: u64, text: []const u8 };
+fn generatedJson(_: void, case: *shakedown.Case) anyerror!void {
+    const labels = [_][]const u8{ "plain", "a\nb", "say \"yes\"", "λ", "" };
+    const value: Generated = .{ .n = shakedown.gen.int(case.source, u64), .text = shakedown.gen.oneOf(case.source, []const u8, &labels) };
+    var memory: [256]u8 = undefined;
+    var output = std.Io.Writer.fixed(&memory);
+    try json.write(&output, value, .{});
+    var parsed = try json.parseOwned(Generated, std.testing.allocator, output.buffered(), .{});
+    defer parsed.deinit();
+    try std.testing.expectEqualDeep(value, parsed.value);
+    var decoder = jsonl.Decoder(Generated).init(std.testing.allocator, .{});
+    defer decoder.deinit();
+    var rest = output.buffered();
+    while (rest.len != 0) {
+        const size = @min(rest.len, 1 + shakedown.gen.int(case.source, u8) % 7);
+        const result = decoder.push(rest[0..size]);
+        if (result.status == .failure) return result.status.failure;
+        try std.testing.expectEqual(size, result.consumed);
+        rest = rest[size..];
+    }
+    const record = decoder.push("\n");
+    if (record.status == .failure) return record.status.failure;
+    try std.testing.expectEqualDeep(value, record.status.record.value);
+}
+test "S2 generated common JSON round trip and arbitrary chunk partitions" {
+    try shakedown.check(std.testing.allocator, {}, generatedJson, .{ .cases = 512, .seed = 0x737472616e645332 });
+}
+
+fn HundredFields() type {
+    @setEvalBranchQuota(1_000_000);
+    var names: [100][]const u8 = undefined;
+    var types: [100]type = @splat(u8);
+    const attrs: [100]std.builtin.Type.Struct.FieldAttributes = @splat(.{});
+    for (&names, 0..) |*name, i| name.* = std.fmt.comptimePrint("f{d}", .{i});
+    _ = &types;
+    return @Struct(.auto, null, &names, &types, &attrs);
+}
+test "S2 fixed hundred-field schema needs no heap or caller scratch" {
+    const T = HundredFields();
+    var value: T = undefined;
+    inline for (@typeInfo(T).@"struct".field_names) |name| @field(value, name) = 1;
+    var memory: [4096]u8 = undefined;
+    var output = std.Io.Writer.fixed(&memory);
+    try json.write(&output, value, .{});
+    var owner = try json.parse(T, std.testing.failing_allocator, output.buffered(), .{});
+    defer owner.deinit();
+    try std.testing.expectEqualDeep(value, owner.value);
+    try std.testing.expectEqual(@as(usize, 0), owner.requested_peak);
 }

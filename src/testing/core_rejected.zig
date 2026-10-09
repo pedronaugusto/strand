@@ -25,6 +25,9 @@ const Secret = struct {
 pub const UnboundedHook = struct {
     pub fn strandSerialize(_: UnboundedHook, _: anytype) anyerror!void {}
 };
+pub const Legacy = struct {
+    pub fn jsonStringify(_: Legacy, _: anytype) error{}!void {}
+};
 pub export fn rejected() void {
     var backend: Backend = .{};
     var c: core.Context = .init(std.testing.failing_allocator, .{}, .borrowed);
@@ -58,6 +61,17 @@ pub export fn rejected() void {
             core.serialize(T{ .data = .{ .x = 1 } }, &backend, &c) catch unreachable;
         },
         7 => core.serialize(UnboundedHook{}, &backend, &c) catch unreachable,
+        8 => {
+            core.serialize(Legacy{}, &backend, &c) catch unreachable;
+        },
+        9 => {
+            const Mixed = union(enum) {
+                a,
+                pub const jsonl_tag = "kind";
+                pub const strand = .{ .tag = "type" };
+            };
+            core.serialize(@as(Mixed, .a), &backend, &c) catch unreachable;
+        },
         else => unreachable,
     }
 }

@@ -831,6 +831,7 @@ fn cloneField(comptime T: type, comptime policy: descriptor.Field, value: T, c: 
 }
 
 fn Errors(comptime T: type, comptime Backend: type) type {
+    @setEvalBranchQuota(1_000_000);
     return ctx.DecodeError || Backend.Error || HookErrors(T, Backend, &.{});
 }
 fn HookErrors(comptime T: type, comptime Backend: type, comptime seen: []const type) type {

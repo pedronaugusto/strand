@@ -124,6 +124,16 @@ jobs:
           ./zig-out/bin/strand-baseline "$GITHUB_SHA" > "$RUNNER_TEMP/strand-observation/baseline.jsonl"
           ./zig-out/bin/strand-core-bench "$GITHUB_SHA" > "$RUNNER_TEMP/strand-observation/core.jsonl"
           ./zig-out/bin/strand-s2-bench "$GITHUB_SHA" > "$RUNNER_TEMP/strand-observation/s2.jsonl"
+      - name: Cold local-cache ten-schema build pairs
+        run: |
+          for round in 1 2 3; do
+            if [ "$round" = 2 ]; then order="hand core"; else order="core hand"; fi
+            for which in $order; do
+              printf 'round=%s implementation=%s local_cache=cold global_cache=shared\n' "$round" "$which" >> "$RUNNER_TEMP/strand-observation/schema-cold.txt"
+              TIMEFORMAT='real_seconds=%R user_seconds=%U system_seconds=%S'
+              { time zig build "schema-$which-build" --cache-dir ".zig-cache/schema-cold-$round-$which"; } 2>> "$RUNNER_TEMP/strand-observation/schema-cold.txt"
+            done
+          done
       - name: Compile the identical-old-source control at the same call sites
         run: |
           git fetch --no-tags --depth=1 origin 857565788e597fdf91a82505349e9dc95b81ecd8
@@ -141,11 +151,11 @@ jobs:
       - name: Identical legacy fixture size
         run: |
           if [ "$RUNNER_OS" = macOS ]; then
-            size ./zig-out/bin/strand-size-current ./zig-out/bin/strand-size-previous > "$RUNNER_TEMP/strand-observation/size.txt"
+            size ./zig-out/bin/strand-size-current ./zig-out/bin/strand-size-previous ./zig-out/bin/strand-schema-core ./zig-out/bin/strand-schema-hand > "$RUNNER_TEMP/strand-observation/size.txt"
           elif [ "$RUNNER_OS" = Linux ]; then
-            size ./zig-out/bin/strand-size-current ./zig-out/bin/strand-size-previous > "$RUNNER_TEMP/strand-observation/size.txt"
+            size ./zig-out/bin/strand-size-current ./zig-out/bin/strand-size-previous ./zig-out/bin/strand-schema-core ./zig-out/bin/strand-schema-hand > "$RUNNER_TEMP/strand-observation/size.txt"
           else
-            wc -c ./zig-out/bin/strand-size-current.exe ./zig-out/bin/strand-size-previous.exe > "$RUNNER_TEMP/strand-observation/size.txt"
+            wc -c ./zig-out/bin/strand-size-current.exe ./zig-out/bin/strand-size-previous.exe ./zig-out/bin/strand-schema-core.exe ./zig-out/bin/strand-schema-hand.exe > "$RUNNER_TEMP/strand-observation/size.txt"
           fi
       - uses: actions/upload-artifact@v4
         if: always()

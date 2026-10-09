@@ -181,3 +181,37 @@ main's source at the current module's paths. That identical-source control keeps
 the module names, nominal schemas and call sites unchanged. A slowdown reproduced
 by that control is measurement specialization/layout bias, not a source regression.
 Keep all interleaved samples and disclose both candidate and control spreads.
+
+## S2 validation scope
+
+The pinned JSONTestSuite has 95 required accepts, 188 required refusals and 35
+implementation-policy inputs, with no omitted input. Compatibility tests freeze
+S1 root declarations and replay its existing byte/error/Raw/checkpoint, FaultIo
+and Clock cases. The unchanged Chronicle main fixture compiles and executes
+against this local package without changing the published consumer pin.
+Independent consumer builds check that importing all public modules preserves
+nominal owner types; a pure JSON consumer imports no durability module.
+
+Fixed 100-field schemas parse and write with a failing allocator and zero
+requested allocation. Managed standard Value arrays are tested after the
+adapter returns, including append, and all allocation-failure sites are swept
+with NoResize. Generated typed round trips and chunk partitions use shakedown.
+The JSON writer reuses the scanner's vector string-boundary primitive; derived
+records rely on checked schema uniqueness, while dynamic maps still check keys.
+
+Manual runtime rows alternate order for 31 rounds after calibration. Reported
+p99 values are percentiles of batch means, not individual record latency. The
+legacy pairs cover parsing, writing, reading, routing, resident tail(1000) and
+following 1000 already-written records; follower waiting remains covered by
+controlled Clock tests. Tail's file is approximately 1 GiB (an integral number
+of 513-byte records). The ten distinct 100-field encoder comparison uses the
+same checked JSON backend and budgets on both sides. Its local compiler caches
+are cold; the global dependency cache is shared and build-runner/configuration
+time is included. File size and native text section size are distinct metrics.
+
+Raw rows, compiler/source pins, runner provenance, calibration and limitations
+are retained in [private trials](https://github.com/pedronaugusto/trials/tree/main/strand/s2).
+These observations do not certify controlled per-record latency, the full broad
+corpus, matched Rust/Go/SIMD rival wins or hardened fuzz/sanitizer coverage.
+There is no best-of-kind claim or canonical JSON profile. Those proof obligations
+remain explicit; later format or external-consumer work is outside this batch.

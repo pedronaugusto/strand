@@ -18,7 +18,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   standard dynamic owner, and checked standard Value writing with explicit scratch.
 - The complete pinned JSONTestSuite corpus and chunk/lifetime/limit tests.
 
-### Core framework work in progress
+### Core framework
 
 - Add the provisional std-only `strand.core` module with recursive descriptors,
   type-declared options, immediate semantic mapping and bounded arena owners.

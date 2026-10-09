@@ -4,6 +4,7 @@ const strand = @import("strand");
 const previous = @import("previous-main");
 const shakedown = @import("shakedown");
 const paired = @import("paired.zig");
+const Scratch = @import("bench_scratch.zig").Scratch;
 const Event = struct { id: u64, label: []const u8, data: strand.Raw };
 const prefix = "{\"id\":18446744073709551615,\"label\":\"";
 const suffix = "\",\"data\":[1,true]}";
@@ -11,7 +12,7 @@ const input = prefix ++ @as([512 - prefix.len - suffix.len]u8, @splat('a')) ++ s
 comptime {
     std.debug.assert(input.len == 512);
 }
-const Context = struct { gpa: std.mem.Allocator, arena: std.heap.ArenaAllocator, value: Event, buffer: [1024]u8 = undefined };
+const Context = struct { io: std.Io, file: std.Io.File, gpa: std.mem.Allocator, arena: std.heap.ArenaAllocator, value: Event, buffer: [1024]u8 = undefined };
 fn parseBorrowed(c: *Context, units: u64) !void {
     var sum: u64 = 0;
     for (0..units) |_| {
@@ -160,9 +161,78 @@ fn readerCurrent(c: *Context, units: u64) !void {
 fn readerPrevious(c: *Context, units: u64) !void {
     return sharedRead(previous, c, units);
 }
+fn routing(comptime Api: type, _: *Context, units: u64) !void {
+    var sum: u64 = 0;
+    for (0..units) |_| {
+        const v = Api.leadingIntMembers(struct { id: u64 }, input).?;
+        sum +%= v.value.id +% v.end;
+        std.mem.doNotOptimizeAway(v);
+    }
+    std.mem.doNotOptimizeAway(sum);
+}
+fn routeCurrent(c: *Context, units: u64) !void {
+    return routing(strand, c, units);
+}
+fn routePrevious(c: *Context, units: u64) !void {
+    return routing(previous, c, units);
+}
+fn tailRows(comptime Api: type, c: *Context, units: u64) !void {
+    var sum: usize = 0;
+    var buffer: [65536]u8 = undefined;
+    for (0..units) |_| {
+        _ = c.arena.reset(.retain_capacity);
+        var source = c.file.reader(c.io, &buffer);
+        var tail = try Api.Tail(SharedEvent).init(c.gpa, &source, .{});
+        defer tail.deinit();
+        const last = try tail.last(c.arena.allocator(), 1000);
+        if (last.len != 1000) return error.SemanticMismatch;
+        sum +%= last[0].label.len;
+        std.mem.doNotOptimizeAway(last);
+    }
+    std.mem.doNotOptimizeAway(sum);
+}
+fn tailCurrent(c: *Context, units: u64) !void {
+    return tailRows(strand, c, units);
+}
+fn tailPrevious(c: *Context, units: u64) !void {
+    return tailRows(previous, c, units);
+}
+fn followRows(comptime Api: type, c: *Context, units: u64) !void {
+    var sum: usize = 0;
+    var buffer: [65536]u8 = undefined;
+    for (0..units) |_| {
+        var source = c.file.reader(c.io, &buffer);
+        try source.seekTo(0);
+        var follower = Api.Follower(SharedEvent).init(c.gpa, &source, .{});
+        defer follower.deinit(c.io);
+        for (0..1000) |_| sum +%= (try follower.next(c.io)).value.label.len;
+    }
+    std.mem.doNotOptimizeAway(sum);
+}
+fn followCurrent(c: *Context, units: u64) !void {
+    return followRows(strand, c, units);
+}
+fn followPrevious(c: *Context, units: u64) !void {
+    return followRows(previous, c, units);
+}
+fn prepare(io: std.Io, smoke: bool) !Scratch {
+    var scratch = try Scratch.init(io, "");
+    errdefer scratch.deinit(io);
+    const file = try scratch.scratch.dir.createFile(io, "log.jsonl", .{});
+    defer file.close(io);
+    var buffer: [65536]u8 = undefined;
+    var writer = file.writer(io, &buffer);
+    const count: usize = if (smoke) 1000 else (1 << 30) / (shared_input.len + 1);
+    for (0..count) |_| try writer.interface.writeAll(shared_input ++ "\n");
+    try writer.interface.flush();
+    return scratch;
+}
 pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
-    var c: Context = .{ .gpa = std.heap.smp_allocator, .arena = .init(std.heap.smp_allocator), .value = undefined };
+    const smoke = args.len > 1 and std.mem.eql(u8, args[1], "--smoke");
+    var scratch = try prepare(init.io, smoke);
+    defer scratch.deinit(init.io);
+    var c: Context = .{ .io = init.io, .file = scratch.file, .gpa = std.heap.smp_allocator, .arena = .init(std.heap.smp_allocator), .value = undefined };
     defer c.arena.deinit();
     const current_value = try strand.parseLine(PairedEvent(strand.Raw), c.arena.allocator(), input, .{});
     const previous_value = try previous.parseLine(PairedEvent(previous.Raw), c.arena.allocator(), input, .{});
@@ -170,7 +240,7 @@ pub fn main(init: std.process.Init) !void {
         !std.mem.eql(u8, current_value.label, previous_value.label) or
         !std.mem.eql(u8, current_value.data.bytes, previous_value.data.bytes)) return error.SemanticMismatch;
     c.value = try strand.parseLine(Event, c.arena.allocator(), input, .{});
-    const WorkError = strand.ParseLineError || std.json.ParseError(std.json.Scanner) || std.mem.Allocator.Error || std.Io.Writer.Error || strand.Reader(Event).NextError;
+    const WorkError = strand.ParseLineError || std.json.ParseError(std.json.Scanner) || std.mem.Allocator.Error || std.Io.Writer.Error || strand.Reader(Event).NextError || strand.Tail(SharedEvent).InitError || strand.Tail(SharedEvent).NextError || strand.Follower(SharedEvent).NextError || std.Io.File.Reader.SeekError || error{SemanticMismatch};
     const rows = [_]shakedown.bench.Row(Context, WorkError){
         .{ .name = "paired.current.a", .unit = "record", .initial = 1024, .run = pairedCurrent },
         .{ .name = "paired.previous.a", .unit = "record", .initial = 1024, .run = pairedPrevious },
@@ -194,8 +264,14 @@ pub fn main(init: std.process.Init) !void {
         .{ .name = "shared.write.previous", .unit = "record", .initial = 1024, .run = writePrevious },
         .{ .name = "shared.reader.current", .unit = "record", .initial = 1024, .run = readerCurrent },
         .{ .name = "shared.reader.previous", .unit = "record", .initial = 1024, .run = readerPrevious },
+        .{ .name = "shared.routing.current", .unit = "record", .initial = 1024, .run = routeCurrent },
+        .{ .name = "shared.routing.previous", .unit = "record", .initial = 1024, .run = routePrevious },
+        .{ .name = "shared.tail.current", .unit = "1000_records", .initial = 1, .run = tailCurrent },
+        .{ .name = "shared.tail.previous", .unit = "1000_records", .initial = 1, .run = tailPrevious },
+        .{ .name = "shared.follow.current", .unit = "1000_records", .initial = 1, .run = followCurrent },
+        .{ .name = "shared.follow.previous", .unit = "1000_records", .initial = 1, .run = followPrevious },
     };
     var output = std.Io.File.stdout().writerStreaming(init.io, &.{});
-    try paired.run(WorkError, init.gpa, init.io, &output.interface, &c, &rows, .{ .commit = if (args.len > 1) args[1] else "working-tree" }, .{ .samples = 31, .minimum = .fromMilliseconds(100), .smoke = args.len > 1 and std.mem.eql(u8, args[1], "--smoke") });
+    try paired.run(WorkError, init.gpa, init.io, &output.interface, &c, &rows, .{ .commit = if (args.len > 1) args[1] else "working-tree" }, .{ .samples = 31, .minimum = .fromMilliseconds(100), .smoke = smoke });
     try output.interface.flush();
 }

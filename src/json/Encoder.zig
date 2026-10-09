@@ -1,6 +1,7 @@
 //! JSON wire emission. Shape and field policy belong to core.
 const std = @import("std");
 const core = @import("strand.core");
+const Scanner = @import("Scanner.zig");
 const Decoder = @import("Decoder.zig");
 pub const Format = Decoder.Format;
 pub const capabilities = Decoder.capabilities;
@@ -10,10 +11,10 @@ writer: *std.Io.Writer,
 frames: [128]Frame = undefined,
 extra: std.ArrayList(Frame) = .empty,
 depth: usize = 0,
-keys: [64][]const u8 = undefined,
+keys: [128][]const u8 = undefined,
 extra_keys: std.ArrayList([]const u8) = .empty,
 key_count: usize = 0,
-const Frame = struct { object: bool, key_start: usize, first: bool = true, value_pending: bool = false };
+const Frame = struct { object: bool, check_duplicates: bool, key_start: usize, first: bool = true, value_pending: bool = false };
 const Self = @This();
 fn frame(self: *Self) *Frame {
     const i = self.depth - 1;
@@ -37,7 +38,11 @@ fn before(self: *Self, c: *core.Context) Error!void {
 fn quoted(self: *Self, spelling: []const u8, c: *core.Context) Error!void {
     try self.write("\"", c);
     var from: usize = 0;
-    for (spelling, 0..) |byte, i| {
+    while (from < spelling.len) {
+        const i = from + Scanner.stringSpecial(spelling[from..]).at;
+        try self.write(spelling[from..i], c);
+        if (i == spelling.len) break;
+        const byte = spelling[i];
         const escape: ?[]const u8 = switch (byte) {
             '"' => "\\\"",
             '\\' => "\\\\",
@@ -49,18 +54,14 @@ fn quoted(self: *Self, spelling: []const u8, c: *core.Context) Error!void {
             else => null,
         };
         if (escape) |escaped| {
-            try self.write(spelling[from..i], c);
             try self.write(escaped, c);
-            from = i + 1;
-        } else if (byte < 0x20) {
-            try self.write(spelling[from..i], c);
+        } else {
             var buffer: [6]u8 = undefined;
             const escaped = std.mem.print(&buffer, "\\u00{x:0>2}", .{byte}) catch unreachable; // unreachable: a six-byte escape fits exactly.
             try self.write(escaped, c);
-            from = i + 1;
         }
+        from = i + 1;
     }
-    try self.write(spelling[from..], c);
     try self.write("\"", c);
 }
 pub fn boolean(self: *Self, value: bool, c: *core.Context) Error!void {
@@ -84,7 +85,7 @@ pub fn floating(self: *Self, value: anytype, c: *core.Context) Error!void {
 }
 pub fn text(self: *Self, value: []const u8, c: *core.Context) Error!void {
     const is_key = self.depth != 0 and self.frame().object and !self.frame().value_pending;
-    if (is_key) {
+    if (is_key and self.frame().check_duplicates) {
         for (self.frame().key_start..self.key_count) |i| {
             const prior = if (i < self.keys.len) self.keys[i] else self.extra_keys.items[i - self.keys.len];
             try c.chargeWork(@min(value.len, prior.len));
@@ -115,7 +116,7 @@ pub fn begin(self: *Self, kind: core.Kind, name: []const u8, _: usize, c: *core.
     try self.before(c);
     const object = kind == .record or kind == .map or kind == .variant;
     try self.write(if (object) "{" else "[", c);
-    if (self.depth < self.frames.len) self.frames[self.depth] = .{ .object = object, .key_start = self.key_count } else try self.extra.append(c.allocator(), .{ .object = object, .key_start = self.key_count });
+    if (self.depth < self.frames.len) self.frames[self.depth] = .{ .object = object, .check_duplicates = kind == .map, .key_start = self.key_count } else try self.extra.append(c.allocator(), .{ .object = object, .check_duplicates = kind == .map, .key_start = self.key_count });
     self.depth += 1;
     if (kind == .variant) try self.key(name, c);
 }

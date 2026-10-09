@@ -108,9 +108,19 @@ pub fn build(b: *std.Build) !void {
     test_options.addOption(u64, "seed", seed);
     tests.root_module.addOptions("build_options", test_options);
 
-    const json_tests = b.addTest(.{ .name = "json-module-tests", .root_module = json_impl });
-    const jsonl_tests = b.addTest(.{ .name = "jsonl-module-tests", .root_module = jsonl_impl });
-    jsonl_impl.addImport("airlock.testing", tests.root_module.import_table.get("airlock.testing").?);
+    const json_tests = b.addTest(.{ .name = "json-module-tests", .root_module = b.createModule(.{
+        .root_source_file = b.path("src/json/api.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{ .{ .name = "strand.core", .module = core_module }, .{ .name = "mapping", .module = mapping } },
+    }) });
+    const jsonl_tests = b.addTest(.{ .name = "jsonl-module-tests", .root_module = b.createModule(.{
+        .root_source_file = b.path("src/jsonl/api.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{ .{ .name = "airlock", .module = airlock }, .{ .name = "json", .module = json_impl }, .{ .name = "strand.core", .module = core_module }, .{ .name = "strand.json", .module = json_module } },
+    }) });
+    if (tests.root_module.import_table.get("airlock.testing")) |seam| jsonl_tests.root_module.addImport("airlock.testing", seam);
     const test_step = b.step("test", "Run strand tests");
     test_step.dependOn(&b.addRunArtifact(json_tests).step);
     test_step.dependOn(&b.addRunArtifact(jsonl_tests).step);
@@ -181,9 +191,10 @@ pub fn build(b: *std.Build) !void {
 
     if (test_filter == null or std.mem.find(u8, "S1", test_filter.?) != null) {
         const expected = [_][]const u8{
-            "error: : resource or secret is not automatic data", "error: wire alias collision at left",               "error: owned decoding conflicts with borrow.require at label",
-            "error: : explicit data codec",                      "error: : resource or secret is not automatic data", "error: : pointer has no safe data meaning",
-            "error: tag collides with payload alias",            "error: data codecs require a named error set",
+            "error: : resource or secret is not automatic data",                                                                          "error: wire alias collision at left",               "error: owned decoding conflicts with borrow.require at label",
+            "error: : explicit data codec",                                                                                               "error: : resource or secret is not automatic data", "error: : pointer has no safe data meaning",
+            "error: tag collides with payload alias",                                                                                     "error: data codecs require a named error set",      "error: : legacy JSON hooks require the legacy API or a strand data codec",
+            "error: conflicting jsonl_tag/jsonl_other and strand tag policy; migrate to strand.tag/other and remove legacy declarations",
         };
         for (expected, 0..) |message, case| {
             const rejection_options = b.addOptions();
@@ -264,6 +275,18 @@ pub fn build(b: *std.Build) !void {
         const s2_smoke = b.addRunArtifact(s2_bench);
         s2_smoke.addArg("--smoke");
         test_step.dependOn(&s2_smoke.step);
+        inline for (.{ "core", "hand" }) |which| {
+            const schema_options = b.addOptions();
+            schema_options.addOption(bool, "common", comptime std.mem.eql(u8, which, "core"));
+            const schema = b.addExecutable(.{
+                .name = "strand-schema-" ++ which,
+                .root_module = b.createModule(.{ .root_source_file = b.path("bench/schema.zig"), .target = target, .optimize = .fast, .imports = &.{ .{ .name = "strand.core", .module = s2_root.import_table.get("strand.core").? }, .{ .name = "json", .module = s2_bench.root_module.import_table.get("json").? } } }),
+            });
+            schema.root_module.addOptions("schema_options", schema_options);
+            b.step("schema-" ++ which ++ "-build", "Compile ten 100-field checked JSON encoders").dependOn(&b.addInstallArtifact(schema, .{}).step);
+            check_step.dependOn(&schema.step);
+            test_step.dependOn(&b.addRunArtifact(schema).step);
+        }
         const baseline_source = b.option([]const u8, "baseline-source", "Manual observation only: previous main root source");
         const bench_module = baseline.root_module.import_table.get("strand").?;
         baseline.root_module.addImport("previous-main", if (baseline_source) |source| b.createModule(.{
@@ -298,6 +321,9 @@ pub fn build(b: *std.Build) !void {
         const install = b.addInstallArtifact(baseline, .{});
         b.step("baseline-build", "Compile the manual legacy timing driver").dependOn(&install.step);
         check_step.dependOn(&baseline.step);
+        const baseline_smoke = b.addRunArtifact(baseline);
+        baseline_smoke.addArg("--smoke");
+        test_step.dependOn(&baseline_smoke.step);
     } else |err| needed = err;
 
     const bench_tests = b.addTest(.{

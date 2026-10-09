@@ -273,6 +273,7 @@ fn PolicyAccess(comptime Backend: type, comptime policy: descriptor.Field) type 
 }
 
 fn Errors(comptime T: type, comptime Backend: type) type {
+    @setEvalBranchQuota(1_000_000);
     return ctx.EncodeError || Backend.Error || HookErrors(T, Backend, &.{});
 }
 fn HookErrors(comptime T: type, comptime Backend: type, comptime seen: []const type) type {

@@ -35,6 +35,10 @@ pub fn internal(comptime U: type) ?Internal(U) {
                 @compileError(@typeName(U) ++ " declares jsonl_other without jsonl_tag");
             return null;
         }
+        if (@hasDecl(U, "strand")) {
+            const Policy = @TypeOf(U.strand);
+            if (@hasField(Policy, "tag") or @hasField(Policy, "content") or @hasField(Policy, "other")) @compileError("conflicting jsonl_tag/jsonl_other and strand tag policy; migrate to strand.tag/other and remove legacy declarations");
+        }
         const info = @typeInfo(U).@"union";
         if (info.tag_type == null)
             @compileError(@typeName(U) ++ " declares jsonl_tag but is not a tagged union");

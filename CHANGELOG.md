@@ -99,6 +99,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Caller-arena JSON parsing resets diagnostic format/path/offset before each
+  operation, including input-limit refusal, matching owned and borrowed parsing.
+
 - Push decoding accepts a BOM only at stream offset zero, including after
   draining an oversized first record; every two-chunk split checks this edge.
 

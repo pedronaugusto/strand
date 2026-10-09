@@ -1,3 +1,4 @@
+const core = @import("strand.core");
 const shakedown = @import("shakedown");
 const jsonl = @import("strand.jsonl");
 const std = @import("std");
@@ -211,7 +212,6 @@ test "S2 scalar and vector escape boundaries match standard ordinary JSON" {
     }
 }
 test "S2 every strict limit at zero, exact boundary and one below" {
-    const core = @import("strand.core");
     inline for (.{ "input_bytes", "items", "numeric_bytes", "work" }) |name| {
         const boundary: usize = if (comptime std.mem.eql(u8, name, "work")) 3 else 1;
         for ([_]usize{ 0, boundary - 1, boundary }) |limit| {
@@ -395,4 +395,26 @@ test "S2 push BOM stays at stream start after oversized recovery" {
         try std.testing.expectEqual(@as(u64, 22), decoder.record_offset);
         try std.testing.expectEqual(@as(u64, input.len), decoder.consumed);
     }
+}
+test "S2 caller-arena JSON diagnostics reset across operations and early limits" {
+    const T = struct { id: u8 };
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    var diagnostics: core.Diagnostics = .{ .format = "stale" };
+    const options: json.ParseOptions = .{ .diagnostics = &diagnostics };
+    try std.testing.expectError(error.UnknownField, json.parseLeaky(T, arena.allocator(), "{\"old\":1}", options));
+    try std.testing.expectEqualStrings("json", diagnostics.format);
+    try std.testing.expectEqual(@as(usize, 1), diagnostics.count);
+    const value = try json.parseLeaky(T, arena.allocator(), "{\"id\":2}", options);
+    try std.testing.expectEqual(@as(u8, 2), value.id);
+    try std.testing.expectEqual(@as(usize, 0), diagnostics.count);
+    try std.testing.expectEqual(@as(usize, 0), diagnostics.used);
+    try std.testing.expectError(error.UnknownField, json.parseLeaky(T, arena.allocator(), "{\"again\":1}", options));
+    var limited = options;
+    limited.limits.input_bytes = 0;
+    try std.testing.expectError(error.InputLimit, json.parseLeaky(T, arena.allocator(), "{}", limited));
+    try std.testing.expectEqualStrings("json", diagnostics.format);
+    try std.testing.expectEqual(@as(usize, 0), diagnostics.count);
+    try std.testing.expectEqual(@as(usize, 0), diagnostics.used);
+    try std.testing.expectEqual(@as(usize, 0), diagnostics.offset);
 }

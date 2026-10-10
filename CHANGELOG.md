@@ -26,10 +26,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     `emit_null_optional_fields` and `escape_unicode` are gone. Writing checks text as
     UTF-8 and refuses what is not, where a Zig string that was not UTF-8 was written
     as an array of numbers.
-  - `Raw` is `json.Raw`, `core.Raw(json.Format)`: its `bytes`, checked when read and
-    written back as they came. `Raw.null`, `Raw.parse` and `Raw.encode` are gone:
-    `.{ .bytes = "null" }`, `json.parseLeaky(T, arena, raw.bytes, options)` and
-    `json.write` into an allocating writer.
+  - `Raw` is `json.Raw`: its `bytes`, checked when read and written back as they came.
+    `Raw.null`, `Raw.encode` and `Raw.parse` stay on it; `encode(gpa, value, options)`
+    takes a `json.WriteOptions` and `parse(raw, T, arena, options)` a `json.ParseOptions`,
+    and their errors are `json.WriteError` and `json.ParseError`.
   - `copyOwned` and `freeOwned` are `core.clone`, a checked, bounded copy in an owner of
     its own. `Reader.keep`, `Tail.keep` and `Follower.keep` return `core.Parsed(T)`, and
     `Decoder.keep(gpa, record)` takes the allocator and the record; `Tail.last(gpa, n)`

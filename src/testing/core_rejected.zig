@@ -25,8 +25,8 @@ const Secret = struct {
 pub const UnboundedHook = struct {
     pub fn strandSerialize(_: UnboundedHook, _: anytype) anyerror!void {}
 };
-pub const Legacy = struct {
-    pub fn jsonStringify(_: Legacy, _: anytype) error{}!void {}
+pub const StdHooks = struct {
+    pub fn jsonStringify(_: StdHooks, _: anytype) error{}!void {}
 };
 pub export fn rejected() void {
     var backend: Backend = .{};
@@ -62,7 +62,7 @@ pub export fn rejected() void {
         },
         7 => core.serialize(UnboundedHook{}, &backend, &c) catch unreachable,
         8 => {
-            core.serialize(Legacy{}, &backend, &c) catch unreachable;
+            core.serialize(StdHooks{}, &backend, &c) catch unreachable;
         },
         else => unreachable,
     }

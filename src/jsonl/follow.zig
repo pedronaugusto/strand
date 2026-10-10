@@ -296,7 +296,7 @@ const shared = struct {
     /// between runs can write it with this package and read it back with
     /// it — a registry of checkpoints is a JSON Lines file like any
     /// other. A checkpoint in the old inode/volume shape is refused by
-    /// `parseLine` with `error.MissingField`. Start a new follower from
+    /// `json.parse` with `error.UnknownField`. Start a new follower from
     /// the beginning, or seek to a position the caller chooses.
     pub const Checkpoint = struct {
         /// What the file being read is, under `Options.identity`. A

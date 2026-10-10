@@ -75,3 +75,35 @@ test "a Raw is written on one line whatever line breaks it holds" {
     try testing.expectEqualStrings("[1, 2,  3]", (try reader.next()).?.value.data.bytes);
     try testing.expectEqual(@as(?jsonl.Line(Mark), null), try reader.next());
 }
+
+test "a Raw has a null of its own, is made from a value, and is read as a type" {
+    const Mark = struct { kind: []const u8, data: Raw = .null };
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const mark = try json.parseLeaky(Mark, a, "{\"kind\":\"k\"}", .{});
+    try testing.expectEqualStrings("null", mark.data.bytes);
+
+    // Made from any value the core writes, in one allocation of exactly its length.
+    const made = try Raw.encode(testing.allocator, .{ .who = @as([]const u8, "ada"), .n = @as(u8, 3), .nest = [_]u8{ 1, 2 } }, .{});
+    defer testing.allocator.free(made.bytes);
+    try testing.expectEqualStrings("{\"who\":\"ada\",\"n\":3,\"nest\":[1,2]}", made.bytes);
+
+    // And read back as whatever it is wanted as.
+    const Data = struct { who: []const u8, n: u8, nest: [2]u8 };
+    const data = try made.parse(Data, a, .{});
+    try testing.expectEqualStrings("ada", data.who);
+    try testing.expectEqual(@as(u8, 3), data.n);
+    try testing.expectError(error.UnexpectedType, made.parse(struct { who: u8 }, a, .{ .ignore_unknown_fields = true }));
+
+    // A value nested past a fixed stack's frames is made on the allocator it is given.
+    var deep: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer deep.deinit();
+    try deep.writer.splatByteAll('[', 120);
+    try deep.writer.splatByteAll(']', 120);
+    const big = try json.parseLeaky(json.Value, a, deep.written(), .{});
+    const kept = try Raw.encode(testing.allocator, big, .{});
+    defer testing.allocator.free(kept.bytes);
+    try testing.expectEqualStrings(deep.written(), kept.bytes);
+}

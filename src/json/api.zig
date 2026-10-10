@@ -12,8 +12,40 @@ const work = @import("work.zig");
 pub const Format = WireDecoder.Format;
 pub const capabilities = WireDecoder.capabilities;
 /// One JSON value kept as its bytes: checked when it is read, written back as
-/// it came, and parsed when it is wanted.
-pub const Raw = core.Raw(Format);
+/// it came, and parsed when it is wanted. A carried payload, a request handed
+/// on, the part of a record a reader only routes.
+pub const Raw = struct {
+    /// One complete JSON value, with nothing before or after it.
+    bytes: []const u8,
+
+    pub const strandRawFormat = Format;
+    pub const strand = .{ .fields = .{ .bytes = .{ .as = .bytes } } };
+    /// JSON `null`, as a default: `data: strand.json.Raw = .null`.
+    pub const @"null": Raw = .{ .bytes = "null" };
+
+    pub fn strandDeserialize(access: anytype) @TypeOf(access.*).Error!Raw {
+        return .{ .bytes = try access.raw(Format) };
+    }
+    pub fn strandSerialize(self: Raw, access: anytype) @TypeOf(access.*).Error!void {
+        try access.raw(Format, self.bytes);
+    }
+
+    /// `value` written by `write`, as a `Raw` on `gpa`. The bytes are one
+    /// allocation of exactly their length: `gpa.free(raw.bytes)` returns it.
+    pub fn encode(gpa: std.mem.Allocator, value: anytype, options: WriteOptions) (WriteError(@TypeOf(value)) || std.mem.Allocator.Error)!Raw {
+        var out: std.Io.Writer.Allocating = .init(gpa);
+        defer out.deinit();
+        _ = emitOn(gpa, &out.writer, value, options, false) catch |err| return if (err == error.WriteFailed) error.OutOfMemory else err;
+        return .{ .bytes = try out.toOwnedSlice() };
+    }
+
+    /// The value, as a `T`: `parseLeaky` over the bytes, with its options and its
+    /// ownership. Strings with no escape point into `raw.bytes`, so they live as
+    /// long as those do.
+    pub fn parse(raw: Raw, comptime T: type, arena: std.mem.Allocator, options: ParseOptions) ParseError(T)!T {
+        return parseLeaky(T, arena, raw.bytes, options);
+    }
+};
 pub const Parsed = core.Parsed;
 pub const Value = @import("Value.zig").Value;
 pub const ParseOptions = struct {
@@ -155,7 +187,11 @@ fn unit(whitespace: Whitespace) []const u8 {
 /// closing brace, and whether it has members is returned.
 fn emit(output: *std.Io.Writer, value: anytype, options: WriteOptions, open: bool) WriteError(@TypeOf(value))!bool {
     var fixed: std.heap.FixedBufferAllocator = .init(options.scratch);
-    var c = core.Context.init(fixed.allocator(), options.limits, .borrowed);
+    return emitOn(fixed.allocator(), output, value, options, open);
+}
+/// `emit` with `storage` for what writing needs beyond the stack.
+fn emitOn(storage: std.mem.Allocator, output: *std.Io.Writer, value: anytype, options: WriteOptions, open: bool) WriteError(@TypeOf(value))!bool {
+    var c = core.Context.init(storage, options.limits, .borrowed);
     c.acceptance.reject_duplicates = true;
     var encoder: WireEncoder = undefined;
     encoder.init(output);

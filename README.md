@@ -97,7 +97,9 @@ in a destination that drains: write into a fixed or allocating writer first wher
 nothing must reach the sink unless all of it does. `writeObjectOpen` writes a
 struct but for its closing brace, for a member computed over the bytes before it,
 such as a checksum. `json.Raw` is one JSON value kept as its bytes: checked when it
-is read, written back as it came.
+is read, written back as it came (a line break between its tokens as a space, so a
+record stays a line), `Raw.null` as a default, `Raw.encode` to make one from a value
+and `raw.parse(T, arena, options)` to read one as a type.
 
 A line can be routed without parsing it: `kindOf` reads its first key, `tagOf` the
 arm of a union it holds, `memberOf` and `memberStringOf` one member wherever it

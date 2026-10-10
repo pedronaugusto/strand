@@ -16,7 +16,7 @@ const descriptor = @import("../core/descriptor.zig");
 /// Ownership: the result points into `line`.
 ///
 /// `null` means: not an object, an object with no keys, or a first key
-/// containing a `\` escape, which this function does not decode (`parseLine`
+/// containing a `\` escape, which this function does not decode (`json.parseLeaky`
 /// decodes it correctly; this is a peek, not a parser). The rest of the line
 /// is not looked at, so a `kindOf` that answers is not a claim that the line
 /// is valid JSON.
@@ -106,7 +106,7 @@ fn scalar(value: []const u8) bool {
 /// The member `name` of the object on `line` as the text of its string:
 /// `memberOf` without the quotes. `null` for anything `memberOf` answers
 /// `null` for, for a value that is not a string, and for a string written
-/// with a `\` escape, which this does not decode (`parseLine` does).
+/// with a `\` escape, which this does not decode (`json.parseLeaky` does).
 ///
 /// Ownership: the result points into `line`.
 pub fn memberStringOf(line: []const u8, name: []const u8) ?[]const u8 {

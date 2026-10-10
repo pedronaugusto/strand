@@ -789,3 +789,4 @@ test "a direct decoder allocation failure is not retried as a parse refusal" {
     try testing.expectError(error.OutOfMemory, strand.parseLine([]const u8, failing, "\"escaped\\ttext\"", .{}));
     try testing.expectEqual(@as(u64, 1), fio.count(.alloc));
 }
+// ci-time: a comment, so that the run after the first is warm and the sources have changed

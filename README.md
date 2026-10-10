@@ -92,7 +92,8 @@ memory and 128 Mi units of work; `ParseOptions.limits` raises or lowers them.
 reads into `std.json.Value` under the same limits.
 
 `strand.json.write(output, value, options)` writes checked JSON, minified or
-indented. Output is published a stage at a time, so a failure can leave a prefix
+indented. A null optional is written as `null`, or left off with `.nulls = .omit`
+(one field says the same for itself with `.omit = .null_value`). Output is published a stage at a time, so a failure can leave a prefix
 in a destination that drains: write into a fixed or allocating writer first where
 nothing must reach the sink unless all of it does. `writeObjectOpen` writes a
 struct but for its closing brace, for a member computed over the bytes before it,

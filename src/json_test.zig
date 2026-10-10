@@ -453,3 +453,22 @@ test "a float is written in its shortest spelling, an exponent where decimals wo
         try std.testing.expectEqual(case[0], try json.parseLeaky(f64, arena.allocator(), out.buffered(), .{}));
     }
 }
+
+test "a write can leave every null optional off its record" {
+    const Event = struct { kind: []const u8, note: ?[]const u8 = null, inner: struct { n: ?u8 = null, m: u8 = 1 } = .{} };
+    var buffer: [128]u8 = undefined;
+    var output = std.Io.Writer.fixed(&buffer);
+    try json.write(&output, Event{ .kind = "k" }, .{});
+    try std.testing.expectEqualStrings("{\"kind\":\"k\",\"note\":null,\"inner\":{\"n\":null,\"m\":1}}", output.buffered());
+    output = std.Io.Writer.fixed(&buffer);
+    try json.write(&output, Event{ .kind = "k" }, .{ .nulls = .omit });
+    try std.testing.expectEqualStrings("{\"kind\":\"k\",\"inner\":{\"m\":1}}", output.buffered());
+    output = std.Io.Writer.fixed(&buffer);
+    try json.write(&output, Event{ .kind = "k", .note = "x" }, .{ .nulls = .omit });
+    try std.testing.expectEqualStrings("{\"kind\":\"k\",\"note\":\"x\",\"inner\":{\"m\":1}}", output.buffered());
+    // A tuple keeps its positions, which a null in it holds.
+    const Pair = struct { ?u8, u8 };
+    output = std.Io.Writer.fixed(&buffer);
+    try json.write(&output, Pair{ null, 1 }, .{ .nulls = .omit });
+    try std.testing.expectEqualStrings("[null,1]", output.buffered());
+}

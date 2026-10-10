@@ -110,6 +110,9 @@ pub const Context = struct {
     /// Internal replay: wire nodes/bytes were already validated and charged.
     replaying: bool = false,
     allocation_limited: bool = false,
+    /// Writing: an optional field that is null is left out of its record, whatever
+    /// its type's own policy says.
+    omit_nulls: bool = false,
 
     pub fn init(storage: std.mem.Allocator, limits: Limits, ownership: Ownership) Context {
         return .{

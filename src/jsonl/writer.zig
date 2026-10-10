@@ -22,6 +22,9 @@ const shared = struct {
         /// Scratch for checking a `json.Raw` and converting a
         /// `std.json.Value`; a fixed schema needs none.
         scratch: []u8 = &.{},
+        /// What a null optional field is, written or left out; see
+        /// `json.WriteOptions.nulls`.
+        nulls: json.WriteOptions.Nulls = .write,
         /// See `Format`. `.pretty` writes a record over several lines,
         /// which only a reader in `.pretty` mode reads back.
         format: Format = .minified,
@@ -366,6 +369,7 @@ pub fn Writer(comptime T: type) type {
             return .{
                 .limits = self.options.limits,
                 .scratch = self.options.scratch,
+                .nulls = self.options.nulls,
                 .whitespace = switch (self.options.format) {
                     .minified => .minified,
                     .pretty => .indent_2,

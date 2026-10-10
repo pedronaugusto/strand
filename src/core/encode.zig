@@ -164,6 +164,10 @@ fn omit(comptime T: type, comptime name: []const u8, value: T, c: *ctx.Context) 
     const policy = comptime descriptor.field(T, name);
     if (policy.skip_encode) return true;
     const declared = comptime descriptor.fieldOptions(T, name);
+    // A tuple keeps its positions, a null in it included.
+    if (c.omit_nulls and comptime !@typeInfo(T).@"struct".is_tuple and @typeInfo(@FieldType(T, name)) == .optional and !@hasField(@TypeOf(declared), "codec")) {
+        if (@field(value, name) == null) return true;
+    }
     if (@hasField(@TypeOf(declared), "omit_if")) return declared.omit_if(@field(value, name));
     return switch (policy.omit) {
         .never => false,

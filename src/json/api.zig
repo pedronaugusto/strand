@@ -155,6 +155,11 @@ pub const WriteOptions = struct {
     /// fixed schema needs none.
     scratch: []u8 = &.{},
     whitespace: Whitespace = .minified,
+    /// What a null optional field is: written as `null`, or left out of its
+    /// record. A log that is read by a reader with defaults is smaller left out,
+    /// and a field can say the same for itself with `.omit = .null_value`.
+    nulls: Nulls = .write,
+    pub const Nulls = enum { write, omit };
 };
 /// Everything writing a `T` can fail with.
 pub fn WriteError(comptime T: type) type {
@@ -193,6 +198,7 @@ fn emit(output: *std.Io.Writer, value: anytype, options: WriteOptions, open: boo
 fn emitOn(storage: std.mem.Allocator, output: *std.Io.Writer, value: anytype, options: WriteOptions, open: bool) WriteError(@TypeOf(value))!bool {
     var c = core.Context.init(storage, options.limits, .borrowed);
     c.acceptance.reject_duplicates = true;
+    c.omit_nulls = options.nulls == .omit;
     var encoder: WireEncoder = undefined;
     encoder.init(output);
     encoder.open_root = open;

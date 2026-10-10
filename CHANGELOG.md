@@ -22,8 +22,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - `writeLine` and `writeValue(output, value, ValueOptions)` are `jsonl.Writer` and
     `json.write(output, value, json.WriteOptions)`; `writeObjectOpen` and `OpenObject`
     are `json.writeObjectOpen` and `json.OpenObject`. An optional that is null is
-    written as `null` unless its field declares `.omit = .null_value`;
-    `emit_null_optional_fields` and `escape_unicode` are gone. Writing checks text as
+    written as `null` unless its field declares `.omit = .null_value` or the write
+    says `.nulls = .omit` (`emit_null_optional_fields = false`, whose default was the
+    reverse); `escape_unicode` is gone. Writing checks text as
     UTF-8 and refuses what is not, where a Zig string that was not UTF-8 was written
     as an array of numbers.
   - `Raw` is `json.Raw`: its `bytes`, checked when read and written back as they came.
@@ -41,7 +42,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     `strand.json`.
   - `Reader.Options` and `Tail.Options` take `parse: json.ParseOptions` in place of
     `ignore_unknown_fields`, `duplicate_fields` and `max_depth`; `Fault.err` is
-    `?core.DecodeError`. `Writer.Options` takes `limits` and `scratch` in place of
+    `?core.DecodeError`. `Writer.Options` takes `limits`, `scratch` and `nulls` in place of
     `emit_null_optional_fields` and `escape_unicode`, and `Writer(T).Error` is
     `json.WriteError(T)` with `SyncFailed`, `LineTooLong` and `OutOfMemory`.
   - A union tagged inside its object declares `pub const strand = .{ .tag = "type",

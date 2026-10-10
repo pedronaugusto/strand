@@ -4,6 +4,7 @@
 //! keeps them in sync. A bound belongs to the caller measuring these bytes.
 
 const std = @import("std");
+const aegis = @import("aegis");
 
 const Self = @This();
 
@@ -75,10 +76,10 @@ fn drain(writer: *std.Io.Writer, data: []const []const u8, splat: usize) std.Io.
         writer.end += bytes.len;
     }
     const pattern = data[data.len - 1];
-    const total = std.math.mul(usize, pattern.len, splat) catch {
+    const total = (aegis.int.Checked(usize).init(pattern.len).mul(splat) catch {
         self.allocation_failed = true;
         return error.WriteFailed;
-    };
+    }).raw();
     try self.grow(total);
     switch (pattern.len) {
         0 => {},

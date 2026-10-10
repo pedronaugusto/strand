@@ -30,6 +30,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Give the manual Raw comparison equal schema specialization and call-site reuse
   on both revisions, with a semantic equality check before timing.
 
+### Fixed
+
+- `Versioned` returned a `null` optional vector field for a record whose payload held a
+  48-byte vector such as `@Vector(3, u128)` in an optional, in ReleaseSafe and ReleaseFast
+  on aarch64 macOS. Zig 0.17.0 miscompiles such an optional; the envelope now keeps its
+  payload as a value and a flag.
+
 ### Breaking
 
 - S2 adds the `core.Event.number` lexeme alternative; exhaustive backend event

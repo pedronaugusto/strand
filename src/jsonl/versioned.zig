@@ -113,7 +113,12 @@ pub fn Versioned(comptime T: type) type {
             if (.object_begin != try source.next()) return error.UnexpectedToken;
 
             var from: ?u32 = null;
-            var parsed: ?T = null;
+            // The payload is held as a value and a flag, not a `?T`: Zig
+            // 0.17.0 on aarch64 miscompiles an optional whose payload holds a
+            // 48-byte vector such as `@Vector(3, u128)`, and this function
+            // would hand the caller `null` where the line said otherwise.
+            var parsed: T = undefined;
+            var have_parsed = false;
             var stashed: ?std.json.Value = null;
 
             while (true) {
@@ -138,7 +143,7 @@ pub fn Versioned(comptime T: type) type {
                     };
                     from = try typed_parse.inner(u32, arena, source, options);
                 } else if (std.mem.eql(u8, key, data_key)) {
-                    if (parsed != null or stashed != null) switch (options.duplicate_field_behavior) {
+                    if (have_parsed or stashed != null) switch (options.duplicate_field_behavior) {
                         .@"error" => return error.DuplicateField,
                         .use_first => {
                             try source.skipValue();
@@ -147,10 +152,11 @@ pub fn Versioned(comptime T: type) type {
                         .use_last => {},
                     };
                     if (options.duplicate_field_behavior == .use_last) {
-                        parsed = null;
+                        have_parsed = false;
                         stashed = try std.json.innerParse(std.json.Value, arena, source, options);
                     } else if (from != null and from.? == current) {
                         parsed = try typed_parse.inner(T, arena, source, options);
+                        have_parsed = true;
                     } else {
                         stashed = try std.json.innerParse(std.json.Value, arena, source, options);
                     }
@@ -162,7 +168,7 @@ pub fn Versioned(comptime T: type) type {
             }
 
             const version = from orelse unstamped;
-            if (parsed) |value| return .{ .value = value, .from = version };
+            if (have_parsed) return .{ .value = parsed, .from = version };
             const data = stashed orelse return error.MissingField;
             if (version == current) {
                 return .{

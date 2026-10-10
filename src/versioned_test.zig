@@ -388,3 +388,28 @@ test "a versioned log followed as it grows is migrated the same way" {
     try testing.expectEqual(@as(u32, 4), late.value.value.count);
     try testing.expectEqual(@as(u64, 4), late.number);
 }
+
+/// 48 bytes of vector: the size Zig 0.17.0 on aarch64 miscompiles inside an
+/// optional, which an envelope must not turn into a missing payload.
+const Wide48 = struct {
+    item: struct { note: ?@Vector(3, u128) },
+
+    pub const jsonl_version: u32 = 1;
+};
+
+test "a payload holding a 48-byte vector comes back whole from the envelope" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const note: [3]u128 = .{ 1, 2, 3 };
+    const data = "{\"item\":{\"note\":[1,2,3]}}";
+    for ([_][]const u8{
+        "{\"v\":1,\"data\":" ++ data ++ "}",
+        "{\"data\":" ++ data ++ ",\"v\":1}",
+    }) |line| {
+        for ([_]strand.DuplicateFields{ .@"error", .use_last }) |duplicates| {
+            const result = try strand.parseLine(Versioned(Wide48), a, line, .{ .duplicate_fields = duplicates });
+            try testing.expectEqual(note, @as([3]u128, result.value.item.note orelse return error.TestUnexpectedResult));
+        }
+    }
+}

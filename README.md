@@ -192,11 +192,12 @@ Merge/release also try Zig master in a non-blocking job. The profile job refresh
 recorded test durations; it does not execute a larger generated-input campaign.
 Run a larger campaign explicitly with `zig build test -Dcampaign=20000 -Doptimize=safe`.
 
-The full ReleaseSafe suite currently has an inherited failure in the legacy
-optional `@Vector(3, u128)` compatibility case on aarch64 macOS with Zig 0.17.
-The same case fails on preserved S1 `8575657`; its cause has not been isolated.
-S2's explicit 20,000-round ReleaseSafe run passed 363 of 364 tests, with that
-single failure. Required Debug/platform gates pass; a full Safe pass is not claimed.
+Zig 0.17.0 on aarch64 macOS miscompiles a vector whose size is not a power of two,
+such as `@Vector(3, u128)` (48 bytes), held in an optional or in an aggregate inside
+one: in ReleaseSafe and ReleaseFast the payload can read back as `null`, Debug is
+right. It shows without strand in a dozen lines. `Versioned` keeps its payload as a
+value and a flag so that a record with such a field survives it, and the tests compare
+these vectors as arrays. Types you hold in an optional yourself are yours to check.
 
 `zig build bench` times the benchmarks in [bench/](bench/) in ReleaseFast. `zig build
 test` runs them once with `--smoke`, over tiny inputs and without reading a clock.

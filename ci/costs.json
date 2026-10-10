@@ -1,0 +1,28 @@
+{
+  "phases": {
+    "benchmarks aarch64-linux-gnu": 21.86,
+    "benchmarks aarch64-macos": 15.61,
+    "benchmarks aarch64-windows-gnu": 16.10,
+    "benchmarks x86_64-linux-gnu": 22.96,
+    "benchmarks x86_64-linux-musl": 22.72,
+    "benchmarks x86_64-macos": 14.58,
+    "benchmarks x86_64-windows-gnu": 29.95,
+    "compile aarch64-linux-gnu": 73.42,
+    "compile aarch64-macos": 66.42,
+    "compile aarch64-windows-gnu": 73.08,
+    "compile x86_64-linux-gnu": 91.96,
+    "compile x86_64-linux-musl": 125.76,
+    "compile x86_64-macos": 49.70,
+    "compile x86_64-windows-gnu": 92.35,
+    "configure the build": 0.35,
+    "documentation": 0.00,
+    "glint": 2.22,
+    "namespace layout": 0.00,
+    "package paths": 0.00,
+    "test imports": 0.26,
+    "zig build check-consumer": 98.16,
+    "zig build ci": 128.16,
+    "zig build ci-run": 60.93,
+    "zig build lint": 105.75
+  }
+}

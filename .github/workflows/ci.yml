@@ -10,7 +10,7 @@ on:
         options: [fast, merge, release]
         default: fast
       indicative_timing:
-        description: Explicit manual hosted own/std/previous-main timing observations
+        description: Explicit manual hosted own/std timing observations
         type: boolean
         default: false
       status-only:
@@ -74,24 +74,18 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
         with:
-          ref: 857565788e597fdf91a82505349e9dc95b81ecd8
-          path: .zig-cache/previous-main
-          sparse-checkout: src
-      - uses: actions/checkout@v4
-        with:
           repository: pedronaugusto/preflight
           ref: e3d81b9e477c1c690f1ce03506511935d16035c3
           path: .preflight
       - uses: ./.preflight/.github/actions/setup
       - name: Compile paired manual observations without timing
-        run: zig build baseline-build core-bench-build s2-bench-build size-current-build size-previous-build -Dbaseline-source=.zig-cache/previous-main/src/strand.zig
+        run: zig build core-bench-build s2-bench-build
       - name: Record compiler and provenance in the CI run
         run: |
           mkdir -p "$RUNNER_TEMP/strand-observation"
           zig env
           uname -a
           git rev-parse HEAD
-          git -C .zig-cache/previous-main rev-parse HEAD
       - name: Linux CPU and memory
         if: runner.os == 'Linux'
         run: |
@@ -109,19 +103,16 @@ jobs:
       - name: Explicit manual paired Linux timings
         if: runner.os == 'Linux'
         run: |
-          taskset -c 0 ./zig-out/bin/strand-baseline "$GITHUB_SHA" > "$RUNNER_TEMP/strand-observation/baseline.jsonl"
           taskset -c 0 ./zig-out/bin/strand-core-bench "$GITHUB_SHA" > "$RUNNER_TEMP/strand-observation/core.jsonl"
           taskset -c 0 ./zig-out/bin/strand-s2-bench "$GITHUB_SHA" > "$RUNNER_TEMP/strand-observation/s2.jsonl"
       - name: Explicit manual paired Windows timings
         if: runner.os == 'Windows'
         run: |
-          ./zig-out/bin/strand-baseline.exe "$GITHUB_SHA" > "$RUNNER_TEMP/strand-observation/baseline.jsonl"
           ./zig-out/bin/strand-core-bench.exe "$GITHUB_SHA" > "$RUNNER_TEMP/strand-observation/core.jsonl"
           ./zig-out/bin/strand-s2-bench.exe "$GITHUB_SHA" > "$RUNNER_TEMP/strand-observation/s2.jsonl"
       - name: Explicit manual paired macOS timings
         if: runner.os == 'macOS'
         run: |
-          ./zig-out/bin/strand-baseline "$GITHUB_SHA" > "$RUNNER_TEMP/strand-observation/baseline.jsonl"
           ./zig-out/bin/strand-core-bench "$GITHUB_SHA" > "$RUNNER_TEMP/strand-observation/core.jsonl"
           ./zig-out/bin/strand-s2-bench "$GITHUB_SHA" > "$RUNNER_TEMP/strand-observation/s2.jsonl"
       - name: Cold local-cache ten-schema build pairs
@@ -134,28 +125,12 @@ jobs:
               { time zig build "schema-$which-build" --cache-dir ".zig-cache/schema-cold-$GITHUB_RUN_ID-$round-$which"; } 2>> "$RUNNER_TEMP/strand-observation/schema-cold.txt"
             done
           done
-      - name: Compile the identical-old-source control at the same call sites
+      - name: Ten-schema encoder size
         run: |
-          git fetch --no-tags --depth=1 origin 857565788e597fdf91a82505349e9dc95b81ecd8
-          git checkout 857565788e597fdf91a82505349e9dc95b81ecd8 -- src
-          zig build baseline-build -Dbaseline-source=.zig-cache/previous-main/src/strand.zig
-      - name: Measure the identical-old-source control
-        run: |
-          if [ "$RUNNER_OS" = Linux ]; then
-            taskset -c 0 ./zig-out/bin/strand-baseline 857565788e597fdf91a82505349e9dc95b81ecd8 > "$RUNNER_TEMP/strand-observation/control.jsonl"
-          elif [ "$RUNNER_OS" = Windows ]; then
-            ./zig-out/bin/strand-baseline.exe 857565788e597fdf91a82505349e9dc95b81ecd8 > "$RUNNER_TEMP/strand-observation/control.jsonl"
+          if [ "$RUNNER_OS" = Windows ]; then
+            wc -c ./zig-out/bin/strand-schema-core.exe ./zig-out/bin/strand-schema-hand.exe > "$RUNNER_TEMP/strand-observation/size.txt"
           else
-            ./zig-out/bin/strand-baseline 857565788e597fdf91a82505349e9dc95b81ecd8 > "$RUNNER_TEMP/strand-observation/control.jsonl"
-          fi
-      - name: Identical legacy fixture size
-        run: |
-          if [ "$RUNNER_OS" = macOS ]; then
-            size ./zig-out/bin/strand-size-current ./zig-out/bin/strand-size-previous ./zig-out/bin/strand-schema-core ./zig-out/bin/strand-schema-hand > "$RUNNER_TEMP/strand-observation/size.txt"
-          elif [ "$RUNNER_OS" = Linux ]; then
-            size ./zig-out/bin/strand-size-current ./zig-out/bin/strand-size-previous ./zig-out/bin/strand-schema-core ./zig-out/bin/strand-schema-hand > "$RUNNER_TEMP/strand-observation/size.txt"
-          else
-            wc -c ./zig-out/bin/strand-size-current.exe ./zig-out/bin/strand-size-previous.exe ./zig-out/bin/strand-schema-core.exe ./zig-out/bin/strand-schema-hand.exe > "$RUNNER_TEMP/strand-observation/size.txt"
+            size ./zig-out/bin/strand-schema-core ./zig-out/bin/strand-schema-hand > "$RUNNER_TEMP/strand-observation/size.txt"
           fi
       - uses: actions/upload-artifact@v4
         if: always()

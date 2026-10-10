@@ -35,27 +35,27 @@ fn MemberNames(comptime T: type) type {
     @setEvalBranchQuota(100_000);
     const i = @typeInfo(T).@"struct";
     var n = 0;
-    for (i.field_names, i.field_attrs) |name, attrs| if (!attrs.@"comptime") {
+    for (i.field_names) |name| {
         n += 1 + descriptor.field(T, name).aliases.len;
-    };
+    }
     var list: [n][]const u8 = undefined;
     var owners: [n]usize = undefined;
     var after: [i.field_names.len]usize = @splat(0);
     var k = 0;
-    for (i.field_names, i.field_attrs, 0..) |name, attrs, index| if (!attrs.@"comptime") {
+    for (i.field_names, 0..) |name, index| {
         list[k] = descriptor.field(T, name).name;
         owners[k] = index;
         k += 1;
-    };
+    }
     const primaries = k;
     for (0..primaries) |p| after[owners[p]] = (p + 1) % primaries;
-    for (i.field_names, i.field_attrs, 0..) |name, attrs, index| if (!attrs.@"comptime") {
+    for (i.field_names, 0..) |name, index| {
         for (descriptor.field(T, name).aliases) |alias| {
             list[k] = alias;
             owners[k] = index;
             k += 1;
         }
-    };
+    }
     const frozen_list = list;
     const frozen_owners = owners;
     const frozen_after = after;
@@ -91,6 +91,9 @@ const Ignored = struct {
         self.len += 1;
     }
 };
+
+/// Where a value lies in the input, to be replayed.
+const Region = struct { start: usize, end: usize };
 
 /// What a backend's `replay` starts: itself, or what a wrapper wraps.
 fn Replayed(comptime Backend: type) type {
@@ -205,11 +208,24 @@ pub fn Cursor(comptime Backend: type) type {
                 if (self.context.diagnostics) |d| d.offset = self.backend.offset();
                 return err;
             };
-            if (result != null) {
-                if (self.first_event and self.context.depth == 0 and !Backend.capabilities.scalar_roots) return error.UnsupportedValue;
-                self.first_event = false;
-            }
+            if (result != null) try self.directDone();
             return result;
+        }
+        /// An integer read and converted by the backend in one pass, as
+        /// `direct` reads a value.
+        inline fn directInteger(self: *Self, comptime T: type) Error!?T {
+            if (self.pending != null) return null;
+            if (self.context.diagnostics) |d| d.offset = self.backend.offset();
+            const result = self.backend.integer(T, self.context) catch |err| {
+                if (self.context.diagnostics) |d| d.offset = self.backend.offset();
+                return err;
+            };
+            if (result != null) try self.directDone();
+            return result;
+        }
+        inline fn directDone(self: *Self) Error!void {
+            if (self.first_event and self.context.depth == 0 and !Backend.capabilities.scalar_roots) return error.UnsupportedValue;
+            self.first_event = false;
         }
         /// The key of the next member of the record being read, or `null`
         /// where it closes, the close taken. A format that reads a key and
@@ -311,6 +327,9 @@ pub fn Cursor(comptime Backend: type) type {
         }
         fn readInteger(self: *Self, comptime T: type) Error!T {
             @setRuntimeSafety(true);
+            if (comptime @hasDecl(Backend, "integer")) {
+                if (try self.directInteger(T)) |value| return value;
+            }
             if (comptime @hasDecl(Backend, "number") and @hasDecl(Backend, "parseInteger")) {
                 if (try self.direct("number")) |lexeme| return Backend.parseInteger(T, lexeme, self.context);
             }
@@ -422,11 +441,13 @@ pub fn Cursor(comptime Backend: type) type {
                 },
                 .@"enum" => |i| {
                     const name = try self.symbolValue();
+                    // Matched against the type's names in one pass, charged
+                    // once: the names are a constant set.
+                    try self.context.chargeWork(name.len);
                     inline for (i.field_names) |variant| {
                         const v = comptime descriptor.variant(T, variant);
-                        var matches = try self.equals(name, v.name);
-                        inline for (v.aliases) |alias| matches = matches or try self.equals(name, alias);
-                        if (matches) return @field(T, variant);
+                        if (spelled(name, v.name)) return @field(T, variant);
+                        inline for (v.aliases) |alias| if (spelled(name, alias)) return @field(T, variant);
                     }
                     return error.UnknownVariant;
                 },
@@ -472,7 +493,7 @@ pub fn Cursor(comptime Backend: type) type {
             var entered = true;
             defer if (entered) self.context.leave();
             var tag: ?[]const u8 = null;
-            var payload: ?struct { start: usize, end: usize } = null;
+            var payload: ?Region = null;
             var count: usize = 0;
             while (!try self.atEnd()) {
                 if (count >= self.context.limits.container_items) return error.ItemLimit;
@@ -514,7 +535,10 @@ pub fn Cursor(comptime Backend: type) type {
                         defer if (@hasDecl(Backend, "deinit")) backend.deinit();
                         break :blk try deserialize(F, &backend, self.context);
                     } else if (F == void) blk: {
-                        if (count != 1) return error.UnknownField;
+                        // An arm with nothing in it has no field for another
+                        // member: an unknown one, refused or passed over.
+                        const unknown: descriptor.Unknown = if (self.context.acceptance.reject_unknown_fields) .reject else if (@hasField(@TypeOf(opt), "unknown_fields")) opt.unknown_fields else .ignore;
+                        if (count != 1 and unknown == .reject) return error.UnknownField;
                         break :blk {};
                     } else blk: {
                         var backend: Replayed(Backend) = undefined;
@@ -529,7 +553,7 @@ pub fn Cursor(comptime Backend: type) type {
             if (@hasField(@TypeOf(opt), "other")) {
                 const F = @FieldType(T, opt.other);
                 if (F == void) return @unionInit(T, opt.other, {});
-                const span = payload orelse .{ .start = record_start, .end = record_end };
+                const span: Region = payload orelse .{ .start = record_start, .end = record_end };
                 var backend: Replayed(Backend) = undefined;
                 self.backend.replay(&backend, span.start, span.end);
                 defer if (@hasDecl(Backend, "deinit")) backend.deinit();
@@ -580,12 +604,15 @@ pub fn Cursor(comptime Backend: type) type {
         /// A name the format spells apart from text where it can: an enum's.
         fn symbolValue(self: *Self) Error![]const u8 {
             self.request = .{ .expected = .symbol };
-            const event = try self.take();
-            if (event != .text) return error.UnexpectedType;
-            try self.context.span(event.text.bytes.len, false);
-            try self.context.chargeWork(event.text.bytes.len);
-            if (!validText(Backend, event.text.bytes)) return error.InvalidUtf8;
-            return event.text.bytes;
+            const direct_text = if (comptime @hasDecl(Backend, "text")) try self.direct("text") else null;
+            const span = direct_text orelse switch (try self.take()) {
+                .text => |s| s,
+                else => return error.UnexpectedType,
+            };
+            try self.context.span(span.bytes.len, false);
+            try self.context.chargeWork(span.bytes.len);
+            if (!validText(Backend, span.bytes)) return error.InvalidUtf8;
+            return span.bytes;
         }
         fn keyValue(self: *Self) Error![]const u8 {
             return (try self.keySpan()).bytes;
@@ -650,7 +677,7 @@ pub fn Cursor(comptime Backend: type) type {
             }
             return values[0..initialized];
         }
-        fn readField(self: *Self, comptime T: type, comptime name: []const u8) Errors(T, Backend)!@FieldType(T, name) {
+        inline fn readField(self: *Self, comptime T: type, comptime name: []const u8) Errors(T, Backend)!@FieldType(T, name) {
             const declared = comptime descriptor.fieldOptions(T, name);
             const value = if (@hasField(@TypeOf(declared), "codec")) blk: {
                 try self.context.node();
@@ -676,29 +703,44 @@ pub fn Cursor(comptime Backend: type) type {
             var ignored: Ignored = .{};
             var pairs: usize = 0;
             var hint: usize = 0;
+            // The diagnostics an operation keeps are fixed for its length.
+            const diagnostics = self.context.diagnostics;
             while (try self.recordMember(T, hint)) |entry| {
                 const name = entry.name;
-                try self.context.count(1);
+                // The key's node was counted as it was read; the container's
+                // own bound is the pairs it holds.
                 if (pairs >= self.context.limits.container_items) return error.ItemLimit;
                 pairs += 1;
                 if (entry.field) |found| switch (found) {
                     inline 0...@max(i.field_names.len, 1) - 1 => |index| {
-                        // Only a declared field that is not `comptime` is named.
-                        if (comptime index >= i.field_names.len or i.field_attrs[index].@"comptime") unreachable;
+                        // Only a declared field is named.
+                        if (comptime index >= i.field_names.len) unreachable;
                         hint = comptime MemberNames(T).next[index];
                         const field_name = i.field_names[index];
                         const f = comptime descriptor.field(T, field_name);
                         if (seen[index] and duplicates == .reject) {
-                            if (self.context.diagnostics) |d| d.field(field_name);
+                            if (diagnostics) |d| d.field(field_name);
                             return error.DuplicateField;
                         }
-                        if (f.skip_decode or (seen[index] and duplicates == .first)) {
+                        if (comptime i.field_attrs[index].@"comptime") {
+                            // A constant of the type: the member, when it is
+                            // there, holds that value or the record is not one.
+                            const F = i.field_types[index];
+                            const found_value = try self.read(F, f);
+                            if (!descriptor.same(F, found_value, @field(@as(T, undefined), field_name))) {
+                                if (diagnostics) |d| d.field(field_name);
+                                return error.UnexpectedType;
+                            }
+                            seen[index] = true;
+                        } else if (f.skip_decode or (seen[index] and duplicates == .first)) {
                             try self.skip();
-                        } else {
-                            const mark: ctx.Diagnostics.Checkpoint = if (self.context.diagnostics) |d| d.checkpoint() else .none;
-                            if (self.context.diagnostics) |d| d.field(field_name);
+                        } else if (diagnostics) |d| {
+                            const mark = d.checkpoint();
+                            d.field(field_name);
                             @field(value, field_name) = try self.readField(T, field_name);
-                            if (self.context.diagnostics) |d| d.restore(mark);
+                            d.restore(mark);
+                        } else {
+                            @field(value, field_name) = try self.readField(T, field_name);
                         }
                         seen[index] = !f.skip_decode;
                     },
@@ -1164,6 +1206,35 @@ fn PolicyCompoundAccess(comptime Backend: type, comptime policy: descriptor.Fiel
             self.key_pending = false;
             self.count += 1;
             return self.access.cursor.read(T, field_policy);
+        }
+        /// Where a member's value lies, checked and passed over, to be read
+        /// later by `readHeld`: a value whose type depends on a member that
+        /// comes after it.
+        pub const Held = struct { start: usize, end: usize };
+        /// Passes over the next member's value, checked and counted as any
+        /// value is, and says where it lies.
+        pub fn hold(self: *Self) Error!Held {
+            if (!self.live or ((self.header.kind == .map or self.header.kind == .record) and !self.key_pending)) return error.CustomRejected;
+            if (self.count >= policy.max_len) return error.LengthLimit;
+            if (self.count >= self.access.cursor.context.limits.container_items) return error.ItemLimit;
+            self.key_pending = false;
+            self.count += 1;
+            const cursor = self.access.cursor;
+            const start = if (cursor.pending != null) cursor.pending_start else cursor.backend.offset();
+            try cursor.skip();
+            return .{ .start = start, .end = cursor.backend.offset() };
+        }
+        /// A held value, read as a `T`. Its bytes and nodes were counted when
+        /// it was held; reading it again costs work and allocation only.
+        pub fn readHeld(self: *Self, comptime T: type, held: Held) Errors(T, Backend)!T {
+            const cursor = self.access.cursor;
+            const was_replaying = cursor.context.replaying;
+            cursor.context.replaying = true;
+            defer cursor.context.replaying = was_replaying;
+            var backend: Replayed(Backend) = undefined;
+            cursor.backend.replay(&backend, held.start, held.end);
+            defer if (@hasDecl(Replayed(Backend), "deinit")) backend.deinit();
+            return deserialize(T, &backend, cursor.context);
         }
         pub fn finish(self: *Self) Error!void {
             if (!self.live or self.key_pending) return error.CustomRejected;

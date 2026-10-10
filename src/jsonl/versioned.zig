@@ -17,15 +17,13 @@
 //! which returns the record in today's shape; a reader that meets today's
 //! version parses straight into `T` with the borrow rule intact.
 //!
-//! `Versioned(T)` is an ordinary `std.json` type — it has `jsonParse` and
-//! `jsonStringify` — so it composes with everything else here:
-//! `Reader(Versioned(Event))`, `Writer(Versioned(Event))`,
-//! `Tail(Versioned(Event))`, `Follower(Versioned(Event))`.
+//! `Versioned(T)` is an ordinary type to the core, with a codec of its own, so
+//! it composes with everything else here: `Reader(Versioned(Event))`,
+//! `Writer(Versioned(Event))`, `Tail(Versioned(Event))`,
+//! `Follower(Versioned(Event))`, and `json.parse` of one.
 
 const std = @import("std");
-const Allocator = std.mem.Allocator;
-const typed_parse = @import("../json/api.zig").parse_module;
-const from_value = @import("../json/api.zig").from_value_module;
+const core = @import("../core.zig");
 
 /// The envelope's two keys. Short, because they are on every line.
 const version_key = "v";
@@ -41,12 +39,13 @@ const data_key = "data";
 ///
 /// `T` may declare:
 ///
-/// * `pub fn jsonlMigrate(arena: Allocator, from: u32, data: std.json.Value)
-///   std.json.ParseFromValueError!T` — how to read a version that is not this
-///   one. `payloadOf` is the usual first line of it: parse `data` as the old
-///   shape, then build today's out of it. A version the hook does not know is
-///   for the hook to refuse, or to represent — see "Arms added over time" in
-///   README.md.
+/// * `pub fn jsonlMigrate(from: u32, payload: anytype) @TypeOf(payload.*).Error!T`
+///   — how to read a version that is not this one. `payload.read(Old)` reads
+///   the payload as an older shape, and `payload.alloc` takes storage for
+///   what today's shape holds beyond it; both are bounded as the rest of the
+///   line is. A version the hook does not know is for the hook to refuse,
+///   with `error.UnknownVariant` or a code of its own through
+///   `payload.reject`, or to represent.
 /// * `pub const jsonl_version_unstamped: u32` — what a line with no `v` on it
 ///   is taken to be. Defaults to 0, which no `jsonl_version` should ever be,
 ///   so an unstamped line reaches `jsonlMigrate` as `from = 0` and is
@@ -54,13 +53,10 @@ const data_key = "data";
 ///   sets this to the version that log was.
 ///
 /// Every field of `T` belongs inside `data`, including fields named `v` or
-/// `data`. Only the envelope's own `v` selects the schema version.
+/// `data`. Only the envelope's own `v` selects the schema version. The
+/// envelope's keys are refused when repeated, and any other key is refused.
 pub fn Versioned(comptime T: type) type {
-    comptime {
-        checkShape(T);
-        std.debug.assert(!std.mem.eql(u8, version_key, data_key));
-        std.debug.assert(@sizeOf(u32) == 4);
-    }
+    comptime checkShape(T);
     return struct {
         /// The record, in the shape this build understands. A line from an
         /// older version has already been through `T.jsonlMigrate` by the
@@ -79,10 +75,7 @@ pub fn Versioned(comptime T: type) type {
 
         /// The version a line with no `v` is taken to be. See
         /// `T.jsonl_version_unstamped`.
-        pub const unstamped: u32 = if (@hasDecl(T, "jsonl_version_unstamped"))
-            T.jsonl_version_unstamped
-        else
-            0;
+        pub const unstamped: u32 = if (@hasDecl(T, "jsonl_version_unstamped")) T.jsonl_version_unstamped else 0;
 
         /// True when this record reached its current shape through
         /// `T.jsonlMigrate` rather than by being written in it.
@@ -90,28 +83,32 @@ pub fn Versioned(comptime T: type) type {
             return self.from != current;
         }
 
-        /// Reads the envelope. Called by `std.json`; see `Reader`.
+        fn Compound(comptime Access: type) type {
+            return @typeInfo(@TypeOf(@as(*Access, undefined).begin(.record))).error_union.payload;
+        }
+        fn ReadError(comptime Access: type) type {
+            const C = Compound(Access);
+            return @typeInfo(@TypeOf(@as(*C, undefined).element(T))).error_union.error_set ||
+                @typeInfo(@TypeOf(@as(*C, undefined).readHeld(T, undefined))).error_union.error_set ||
+                @typeInfo(@TypeOf(@as(*C, undefined).key([]const u8))).error_union.error_set;
+        }
+
+        /// Reads the envelope.
         ///
         /// The two keys are read in whatever order the line puts them, but
-        /// `v` before `data` — the order this package writes — is the order
+        /// `v` before `data`, the order this package writes, is the order
         /// that costs nothing: the version is known by the time `data` is
         /// reached, so the payload is parsed straight into `T` and its
         /// strings still borrow from the line. A line that puts `data` first
-        /// is held as a `std.json.Value` until `v` turns up, which allocates
-        /// and copies; it is read correctly either way.
+        /// has its payload checked and passed over, then read where it lies
+        /// once `v` is known; it is read correctly either way.
         ///
-        /// `error.UnknownField` is what a version this build cannot read
-        /// comes back as, when `T` declares no `jsonlMigrate` or the line
-        /// carries a key that is neither `v` nor `data` under
-        /// `ignore_unknown_fields = false`. Through a `Reader` that is
+        /// A version this build cannot read is `error.UnknownVariant` when
+        /// `T` declares no `jsonlMigrate`. Through a `Reader` that is
         /// `error.MalformedLine`, with the line number on the reader.
-        pub fn jsonParse(
-            arena: Allocator,
-            source: anytype,
-            options: std.json.ParseOptions,
-        ) std.json.ParseError(@TypeOf(source.*))!Self {
-            if (.object_begin != try source.next()) return error.UnexpectedToken;
-
+        pub fn strandDeserialize(access: anytype) ReadError(@TypeOf(access.*))!Self {
+            var record = try access.begin(.record);
+            defer record.abort();
             var from: ?u32 = null;
             // The payload is held as a value and a flag, not a `?T`: Zig
             // 0.17.0 on aarch64 miscompiles an optional whose payload holds a
@@ -119,108 +116,88 @@ pub fn Versioned(comptime T: type) type {
             // would hand the caller `null` where the line said otherwise.
             var parsed: T = undefined;
             var have_parsed = false;
-            var stashed: ?std.json.Value = null;
-
-            while (true) {
-                const key = switch (try source.nextAllocMax(
-                    arena,
-                    .alloc_if_needed,
-                    options.max_value_len.?,
-                )) {
-                    inline .string, .allocated_string => |slice| slice,
-                    .object_end => break,
-                    else => return error.UnexpectedToken,
-                };
-
+            var held: ?@TypeOf(record).Held = null;
+            while (try record.hasNext()) {
+                const key = try record.key([]const u8);
                 if (std.mem.eql(u8, key, version_key)) {
-                    if (from != null) switch (options.duplicate_field_behavior) {
-                        .@"error" => return error.DuplicateField,
-                        .use_first => {
-                            try source.skipValue();
-                            continue;
-                        },
-                        .use_last => {},
-                    };
-                    from = try typed_parse.inner(u32, arena, source, options);
+                    if (from != null) return error.DuplicateField;
+                    from = try record.element(u32);
                 } else if (std.mem.eql(u8, key, data_key)) {
-                    if (have_parsed or stashed != null) switch (options.duplicate_field_behavior) {
-                        .@"error" => return error.DuplicateField,
-                        .use_first => {
-                            try source.skipValue();
-                            continue;
-                        },
-                        .use_last => {},
-                    };
-                    if (options.duplicate_field_behavior == .use_last) {
-                        have_parsed = false;
-                        stashed = try std.json.innerParse(std.json.Value, arena, source, options);
-                    } else if (from != null and from.? == current) {
-                        parsed = try typed_parse.inner(T, arena, source, options);
+                    if (have_parsed or held != null) return error.DuplicateField;
+                    if (from == current) {
+                        parsed = try record.element(T);
                         have_parsed = true;
-                    } else {
-                        stashed = try std.json.innerParse(std.json.Value, arena, source, options);
-                    }
-                } else if (options.ignore_unknown_fields) {
-                    try source.skipValue();
-                } else {
-                    return error.UnknownField;
-                }
+                    } else held = try record.hold();
+                } else return error.UnknownField;
             }
-
             const version = from orelse unstamped;
-            if (have_parsed) return .{ .value = parsed, .from = version };
-            const data = stashed orelse return error.MissingField;
-            if (version == current) {
-                return .{
-                    .value = try from_value.parseFromValue(T, arena, data, options),
-                    .from = version,
-                };
+            if (have_parsed) {
+                try record.finish();
+                return .{ .value = parsed, .from = version };
             }
-            if (!@hasDecl(T, "jsonlMigrate")) return error.UnknownField;
-            return .{ .value = try T.jsonlMigrate(arena, version, data), .from = version };
+            const data = held orelse return error.MissingField;
+            const value = if (version == current) try record.readHeld(T, data) else migrated: {
+                if (!@hasDecl(T, "jsonlMigrate")) return error.UnknownVariant;
+                var payload: Payload(@TypeOf(record)) = .{ .record = &record, .held = data };
+                break :migrated T.jsonlMigrate(version, &payload) catch |err| return payload.failure(err);
+            };
+            try record.finish();
+            return .{ .value = value, .from = version };
         }
 
-        /// Writes the envelope. Called by `std.json`; see `Writer`.
+        /// Writes the envelope.
         ///
         /// Always stamps `current`, never `from`: `value` is in today's shape
         /// whatever shape the line it came from was in, so writing it back
         /// under an older version would be a lie about its contents.
-        pub fn jsonStringify(self: Self, jw: anytype) !void {
-            try jw.beginObject();
-            try jw.objectField(version_key);
-            try jw.write(current);
-            try jw.objectField(data_key);
-            try jw.write(self.value);
-            try jw.endObject();
+        pub fn strandSerialize(self: Self, access: anytype) @typeInfo(@TypeOf(access.write(Envelope{ .v = current, .data = self.value }))).error_union.error_set!void {
+            try access.write(Envelope{ .v = current, .data = self.value });
         }
+        const Envelope = struct { v: u32, data: T };
     };
 }
 
-/// `data` parsed as an older shape, for use inside a `jsonlMigrate` hook.
-///
-/// `std.json.parseFromValueLeaky` with unknown fields ignored, except that a
-/// number it would panic on casting into one of `Old`'s integers is
-/// `error.Overflow`: 2^64 into a `u64`, for one.
-/// Byte vectors accept strings and arrays, matching std.json's encoding.
-/// Arrays and vectors compose with the reflected shapes, and an earlier
-/// field's conversion error is returned before any later integer overflow.
-///
-/// Ownership: `std.json`'s leaky contract — allocations land on `arena`,
-/// which in a hook is the arena the line is being parsed on, and the result
-/// lives exactly as long as the rest of the line's value does.
-pub fn payloadOf(
-    comptime Old: type,
-    arena: Allocator,
-    data: std.json.Value,
-) std.json.ParseFromValueError!Old {
-    return from_value.parseFromValue(Old, arena, data, .{ .ignore_unknown_fields = true });
+/// An older payload, as a `jsonlMigrate` hook sees it.
+pub fn Payload(comptime Record: type) type {
+    return struct {
+        record: *Record,
+        held: Record.Held,
+        /// What the hook may fail with: the parse's own errors, a code of its
+        /// own included through `reject`.
+        pub const Error = core.DecodeError;
+        const Self = @This();
+
+        /// The payload as an older shape: parsed where it lies on the line,
+        /// under the line's own limits, strings borrowed as the line's are.
+        pub fn read(self: *Self, comptime Old: type) Error!Old {
+            return self.record.readHeld(Old, self.held) catch |err| self.failure(err);
+        }
+
+        /// Storage for today's shape, bounded as the line's own is.
+        pub fn alloc(self: *Self, comptime U: type, n: usize) Error![]U {
+            return self.record.access.alloc(U, n);
+        }
+
+        /// Refuses the payload with a code of the hook's own, which a reader's
+        /// diagnostics carry as `custom_code`.
+        pub fn reject(self: *Self, code: u32) error{CustomRejected} {
+            return self.record.access.reject(code);
+        }
+
+        fn failure(_: *const Self, err: anyerror) Error {
+            inline for (@typeInfo(Error).error_set.error_names.?) |name| {
+                if (err == @field(anyerror, name)) return @field(Error, name);
+            }
+            return error.CustomRejected;
+        }
+    };
 }
 
 /// What `Versioned` requires of `T`, checked where the mistake is made.
 fn checkShape(comptime T: type) void {
     const name = @typeName(T);
     if (!@hasDecl(T, "jsonl_version")) {
-        @compileError("strand.Versioned(" ++ name ++ ") needs `pub const jsonl_version: u32` on " ++ name);
+        @compileError("strand.jsonl.Versioned(" ++ name ++ ") needs `pub const jsonl_version: u32` on " ++ name);
     }
     if (@TypeOf(T.jsonl_version) != u32 and @TypeOf(T.jsonl_version) != comptime_int) {
         @compileError(name ++ ".jsonl_version must be a u32");
@@ -229,10 +206,3 @@ fn checkShape(comptime T: type) void {
         @compileError(name ++ ".jsonl_version must not be 0: 0 is what a line with no version is");
     }
 }
-
-//=========================================================================
-// Tests. The scenario is one type through three versions, which is the only
-// way to show that a migration is a migration.
-//=========================================================================
-
-const testing = std.testing;

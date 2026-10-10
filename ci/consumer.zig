@@ -10,8 +10,8 @@ pub fn main() void {
     const jsonl = strand.jsonl;
     const core = strand.core;
     comptime {
-        if (strand.Raw != json.LegacyRaw or strand.Reader(Event) != jsonl.Reader(Event) or json.Parsed(Event) != core.Parsed(Event)) @compileError("facades must retain nominal type identity");
+        if (json.Raw != core.Raw(json.Format) or json.Parsed(Event) != core.Parsed(Event)) @compileError("facades must retain nominal type identity");
     }
-    _ = &strand.Reader(Event).init;
-    _ = &strand.Writer(Event).init;
+    _ = &jsonl.Reader(Event).init;
+    _ = &jsonl.Writer(Event).init;
 }

@@ -1,36 +1,31 @@
 # Serialization core and JSON formats
 
-Strand is one build module, `strand`. `strand.core`, `strand.json`, `strand.jsonl`
-and `strand.zon` are namespaces of it, and the root keeps the JSON Lines names as a
-declaration-only facade. A separate build module buys something only where it keeps
-dependencies from users who do not need that part, or keeps a part from linking
-something. Here it bought neither: the parts need the same two packages, aegis for the
-core's checked work and airlock for JSONL's sync and file identity, so every user
-fetches both whichever part they take; nothing is linked; and Zig's lazy analysis
-leaves out whatever a program does not name, so a program that names only `strand.json`
-analyses no JSON Lines or airlock code (`ci/json-consumer.zig` is that program).
-A module per part had a cost of its own: a source file belongs to one module, so every
-part needed a private implementation module beside its public one, and a test or
-benchmark that reached below the facade needed yet another root.
+Strand is one build module, `strand`, whose namespaces are `strand.core`,
+`strand.json`, `strand.jsonl` and `strand.zon`; the root names only those four.
+There is one API per thing: JSON is parsed and written by `strand.json` alone,
+and JSON Lines is framing around it, not a codec of its own. A separate build
+module buys something only where it keeps dependencies from users who do not need
+that part, or keeps a part from linking something. Here it bought neither: the
+parts need the same two packages, aegis for the core's checked work and airlock
+for JSONL's sync and file identity, so every user fetches both whichever part
+they take; nothing is linked; and Zig's lazy analysis leaves out whatever a
+program does not name, so a program that names only `strand.json` analyses no
+JSON Lines or airlock code (`ci/json-consumer.zig` is that program).
 
 The layering inside the module is Gantry's, checked at file level by `ci/layers.zig`:
 every source has one named layer and imports only downward. Core and JSON import no
-airlock; JSONL owns that unchanged durability edge. Test/tool dependencies remain lazy
+airlock; JSONL owns that durability edge. Test/tool dependencies remain lazy
 and outside the module.
 
 ## Module boundaries
 
 Bounds → semantic vocabulary/schema → mapping → ownership → core facade → JSON
-wire/syntax → JSON API/facade → framing/schema → streams → tail/follow → JSONL
-API/facade → root. ZON sits beside JSON on the core, wire/syntax → ZON API/facade,
-and imports neither JSON nor JSONL. The historical mapping policy is a core specialization over
-format-supplied wire primitives for reading, preserving its in-place hot path;
-writing stays in the JSON module, the one format that uses it, because routing
-it through the core cost the legacy writer 3% on an M3 and about 10% on an M1.
-Bounded mapping consumes immediate events, including JSON number
-lexemes; it requires no DOM or token tape. JSONL framing shares its line/drain
-boundary decision between the pull path and push decoder. std's historical
-hooks remain confined to the legacy JSON entry points.
+text primitives → JSON wire → JSON API/facade → JSONL schema and records →
+framing → streams → tail/follow → JSONL API/facade → root. ZON sits beside JSON
+on the core, wire/syntax → ZON API/facade, and imports neither JSON nor JSONL.
+Mapping consumes immediate events, including JSON number lexemes; it requires no
+DOM or token tape. JSONL framing shares its line/drain boundary decision between
+the pull reader and the push decoder, and both parse a record with `json`.
 
 ## JSON APIs and guarantees
 
@@ -42,13 +37,14 @@ leaky until reset; the caller owns its backing residency. Parsed owners and the
 push decoder additionally cap arena backing residency. Dynamic `Value` uses bounded codec access and preserves number lexemes,
 ordered keys, strings, arrays and null without lossy numeric conversion.
 
-Strict parsing rejects unknown fields unless opted into validated skipping and
+Parsing rejects unknown fields unless opted into validated skipping and
 rejects duplicate wire keys, including unknown/skipped keys. Wire limits also
 cover Raw and custom bounded access. Decimal integer conversion has no float
 intermediate, and float rounding is directly to the requested destination.
 Exact conversion compares decimal and binary rationals with budgeted big
-integers. Legacy std hooks are refused by strict derivation unless a common
-codec defines the type's bounded data meaning.
+integers. A type with `std.json`'s `jsonParse` or `jsonStringify` is refused when
+it is compiled: its meaning belongs in a strand data codec, which every format
+then honours.
 
 `json.parseStdValue(gpa, bytes, options)` is the explicit bounded standard
 Value adapter. It keeps std's integer/float/number_string precision policies and
@@ -57,31 +53,59 @@ Use its `deinit`; managed arrays retain a valid arena allocator. `json.write`
 accepts standard Value with caller-supplied scratch. Automatic core derivation
 continues to exclude allocator-bearing standard containers.
 
-`write` streams checked ordinary JSON and can publish a prefix before a sink,
-value or limit failure. A caller-owned output buffer provides transactional
-publication. Output, escapes and Raw validation are charged. Scratch is
-caller-supplied; no global allocator is chosen. JCS is not exposed.
+`write` writes checked JSON, minified or indented, and can publish a prefix
+before a sink, value or limit failure: output is staged in the writer's own
+unused buffer and published a stage at a time, so a value that fits there and
+fails leaves nothing, and a caller-owned output buffer provides transactional
+publication whatever the size. Output, escapes and Raw validation are charged.
+Scratch is caller-supplied; no global allocator is chosen. JCS is not exposed.
+`writeObjectOpen` leaves a struct's closing brace unwritten, for members the
+caller computes over the bytes so far.
+
+The routing readers (`kindOf`, `tagOf`, `memberOf`, `memberStringOf`,
+`leadingIntMembers`, `indexOfControl`) look at a line's bytes without parsing it.
+They allocate nothing and answer with views into the line; an answer is not a
+claim that the line is valid. `tagOf` reads the same `strand` declaration the
+parse does: a `tag` member, the arms' names and aliases, and `other`.
+
+## JSON Lines on the core
+
+`jsonl.Reader` frames a line with `LineReader` and parses it with
+`json.parseLeaky` on its per-line arena, under `Options.parse`. A refused parse is
+`MalformedLine`, with the parse's error in `lines.fault.err` and its place found
+by parsing the line again with diagnostics on, so a good line pays nothing for
+them. A pretty record is parsed where it lies in the input's buffer when it can be
+(`json` reads a value from the front of some bytes and says where it ended);
+otherwise its lines are joined as far as a scan follows its value, then parsed
+once. `Tail` parses the same way backwards, and `Tail.last` copies the lines into
+one owner and parses them there. `keep` on every reader is `core.clone`: checked,
+bounded and owned.
+
+`jsonl.Writer` writes each record with `json.write` into the destination's unused
+buffer and publishes it whole; a bounded writer encodes into owned scratch and
+measures before publishing. `Versioned(T)` is a type with a data codec of its
+own: `{"v":N,"data":...}`, the payload parsed straight into `T` when `v` comes
+first and is current, and otherwise held where it lies and read once `v` is known,
+by `T` or by the type's `jsonlMigrate` as an older shape.
 
 `jsonl.Decoder` owns one bounded buffer and a reused caller-allocator arena,
 with one allocation cap over both, including arena backing overhead. Its push
 API frames physical LF records. BOM acceptance is restricted to stream offset
-zero even after oversized-record recovery. Existing pull pretty/separator modes retain
-their fused zero-copy specialization and unchanged public state.
+zero even after oversized-record recovery.
 `push` reports consumption even for errors. Oversize enters drain state and
 cannot reinterpret a suffix as another record, including across calls. Recovery
 is capped independently of payload; zero is a zero-byte budget. Records expire
 at the next advancing call. `keep` acquires an independent owner. `finish`
 accepts, requires, or drops an unterminated final record according to policy.
 
-The legacy root retains its actual defaults, std hook signatures, writer-only
-errors, Raw span offsets, declaration-order/null-omission bytes, routing,
-Versioned migrations and airlock checkpoint identity fields/widths. These
-operations do not silently inherit strict limits or policy.
+Checkpoints keep airlock's file identity, `{volume:u64,file:u128}`, with those
+field names and widths: a follower's checkpoint is a wire format.
 
 ## Evidence
 
-Existing tests continue with only mechanical import changes. The pinned
-MIT-licensed JSONTestSuite corpus runs all y/n/i inputs in CI. Grammar mode
+The JSON Lines behaviour the earlier codec was tested for (framing, offsets,
+resumes, separators, pretty records, sync policies, tail and follow) is tested on
+the one API. The pinned MIT-licensed JSONTestSuite corpus runs all y/n/i inputs in CI. Grammar mode
 permits duplicates; strict rejection has separate tests. Numeric i cases retain
 lexemes; invalid encodings and lone surrogates reject. Bounds, exact arithmetic,
 truncations, every small framing split, independent lifetimes and allocation
@@ -152,8 +176,9 @@ is an `err.Context` of closed frames, so a field name that the input chose is es
 text, never raw bytes. `Parsed` keeps its own liveness check, which is always on; an
 `own.Owned` tracks use only in Debug. `input.Untrusted` has no place where the parser
 is the boundary and nothing else sees the raw bytes, and it refuses a parse whose
-result is the bytes' own type, such as a string. Legacy facade types keep their
-plain `u64` and `usize` counts: they are the compatibility surface.
+result is the bytes' own type, such as a string. The JSON Lines readers keep
+plain `u64` and `usize` counts for lines, offsets and skips: they are positions in
+a stream, not budgets.
 
 Limits cover input/output bytes, wire depth and independently capped hook
 delegation depth, total and per-container items, text/key
@@ -197,8 +222,7 @@ callback violating this contract.
 Diagnostics use fixed inline field/index storage and copy unknown names. Overflow
 marks the path truncated. Common mapping supplies offsets and expected kinds;
 text backends supply format identity and line/column when available. No input
-fragment is logged. Legacy JSON hooks retain their existing allocation and limit
-contract; exposing the core does not strengthen legacy hooks implicitly.
+fragment is logged.
 
 ## ZON
 
@@ -241,52 +265,29 @@ float is rounded to its width once, from its decimal digits, where `std.zon` rou
 `f128` first. What strand accepts and `std.zon` does not: integers of any width, and
 a document of any size, within the limits.
 
-## Manual comparison protocol
+## Format accelerators
 
-The legacy Raw driver gives both revisions an isolated schema from the same type
-factory and equal parse call-site reuse. Reusing a current-only schema in other
-workloads changes its inlining opportunities and invalidates the comparison.
-Both sides parse the same input with the same options, compiler and build mode,
-and check result equality before interleaved timing. Legacy standalone workloads
-retain their own schema. Timings are manual observations, not CI acceptance tests.
+A format may answer the core's most common requests without building an event:
+`memberOf` reads a record's next key and matches it against the names the
+schema spells, looking first for the one a writer that keeps declaration order
+puts next, quotes and all, where it lies; `open` opens a container of the
+expected kind; `number` and `text` read one kind of value. Each returns `null`
+for anything else, which the event path then reads and refuses or takes, so an
+accelerator changes no outcome, only its cost. A format that checks text as UTF-8
+while it reads or writes it says so (`utf8_text`, `validates_text`), and mapping
+does not look at the bytes again. A typed record's keys are checked by mapping,
+with `seen` flags for known fields and a short list for ignored ones; the format
+remembers keys only where mapping cannot, in maps and skipped values.
 
-Hosted observations also rebuild the same driver after restoring the previous
-main's source at the current module's paths. That identical-source control keeps
-the module names, nominal schemas and call sites unchanged. A slowdown reproduced
-by that control is measurement specialization/layout bias, not a source regression.
-Keep all interleaved samples and disclose both candidate and control spreads.
+Decoders and encoders are built in place, field by field: their frames and keys
+are kilobytes a struct literal would build elsewhere and copy.
 
-## S2 validation scope
+## Measurements
 
-The pinned JSONTestSuite has 95 required accepts, 188 required refusals and 35
-implementation-policy inputs, with no omitted input. Compatibility tests freeze
-S1 root declarations and replay its existing byte/error/Raw/checkpoint, FaultIo
-and Clock cases. The unchanged Chronicle main fixture compiles and executes
-against this local package without changing the published consumer pin.
-The consumer build checks that the namespaces share nominal owner types; a pure JSON
-consumer names no durability code.
-
-Fixed 100-field schemas parse and write with a failing allocator and zero
-requested allocation. Managed standard Value arrays are tested after the
-adapter returns, including append, and all allocation-failure sites are swept
-with NoResize. Generated typed round trips and chunk partitions use shakedown.
-The JSON writer reuses the scanner's vector string-boundary primitive; derived
-records rely on checked schema uniqueness, while dynamic maps still check keys.
-
-Manual runtime rows alternate order for 31 rounds after calibration. Reported
-p99 values are percentiles of batch means, not individual record latency. The
-legacy pairs cover parsing, writing, reading, routing, resident tail(1000) and
-following 1000 already-written records; follower waiting remains covered by
-controlled Clock tests. Tail's file is approximately 1 GiB (an integral number
-of 513-byte records). The ten distinct 100-field encoder comparison uses the
-same checked JSON backend and budgets on both sides. Its local compiler caches
-are distinct per sample and CI run so restored caches cannot warm later runs;
-the global dependency cache is shared and build-runner/configuration
-time is included. File size and native text section size are distinct metrics.
-
-Raw rows, compiler/source pins, runner provenance, calibration and limitations
-are retained in [private trials](https://github.com/pedronaugusto/trials/tree/main/strand/s2).
-These observations do not certify controlled per-record latency, the full broad
-corpus, matched Rust/Go/SIMD rival wins or hardened fuzz/sanitizer coverage.
-There is no best-of-kind claim or canonical JSON profile. Those proof obligations
-remain explicit; later format or external-consumer work is outside this batch.
+Timings are manual observations in private trials, never CI acceptance tests. The
+repository's own drivers are `bench/bench.zig` (JSON Lines write, read, tail,
+follow, carried values, syncs), `bench/s2.zig` (JSON parse and write against
+`std.json`), `bench/zon.zig`, `bench/schema.zig` (ten 100-field encoders against
+hand-written ones) and `bench/core.zig` (the reference backend). Earlier releases'
+rows and the comparison against them are in
+[private trials](https://github.com/pedronaugusto/trials/tree/main/strand).

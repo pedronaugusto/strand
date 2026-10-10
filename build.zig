@@ -119,41 +119,33 @@ pub fn build(b: *std.Build) !void {
     check_step.dependOn(&json_consumer.step);
 
     // A null optional or inactive union arm must not hide an unsupported
-    // field type. The same gate applies to copying and freeing. Run these
-    // with the ownership tests, and in the full and compile-only suites.
+    // field type from a checked copy. Run these with the ownership tests,
+    // and in the full and compile-only suites.
     if (test_filter == null or std.mem.find(u8, "owned", test_filter.?) != null) {
-        for (0..17) |case| {
-            for ([_]bool{ false, true }) |free_only| {
-                const rejection_options = b.addOptions();
-                rejection_options.addOption(usize, "case", case);
-                rejection_options.addOption(bool, "free_only", free_only);
-                const rejected = b.addObject(.{
-                    .name = b.fmt("owned-rejected-{d}-{s}", .{ case, if (free_only) "free" else "copy" }),
-                    .root_module = b.createModule(.{
-                        .root_source_file = b.path("src/testing/owned_rejected.zig"),
-                        .target = target,
-                        .optimize = optimize,
-                        .imports = &.{.{ .name = "strand.owned", .module = b.createModule(.{
-                            .root_source_file = b.path("src/jsonl/owned.zig"),
-                            .target = target,
-                            .optimize = optimize,
-                        }) }},
-                    }),
-                });
-                rejected.root_module.addOptions("rejection_options", rejection_options);
-                rejected.expect_errors = .{ .contains = "cannot be copied by copyOwned" };
-                test_step.dependOn(&rejected.step);
-                check_step.dependOn(&rejected.step);
-            }
+        for (clone_rejections, 0..) |message, case| {
+            const rejection_options = b.addOptions();
+            rejection_options.addOption(usize, "case", case);
+            const rejected = b.addObject(.{
+                .name = b.fmt("clone-rejected-{d}", .{case}),
+                .root_module = b.createModule(.{
+                    .root_source_file = b.path("src/testing/clone_rejected.zig"),
+                    .target = target,
+                    .optimize = optimize,
+                    .imports = &.{.{ .name = "strand", .module = module }},
+                }),
+            });
+            rejected.root_module.addOptions("rejection_options", rejection_options);
+            rejected.expect_errors = .{ .contains = message };
+            test_step.dependOn(&rejected.step);
+            check_step.dependOn(&rejected.step);
         }
     }
 
     if (test_filter == null or std.mem.find(u8, "S1", test_filter.?) != null) {
         const expected = [_][]const u8{
-            "error: : resource or secret is not automatic data",                                                                          "error: wire alias collision at left",               "error: owned decoding conflicts with borrow.require at label",
-            "error: : explicit data codec",                                                                                               "error: : resource or secret is not automatic data", "error: : pointer has no safe data meaning",
-            "error: tag collides with payload alias",                                                                                     "error: data codecs require a named error set",      "error: : legacy JSON hooks require the legacy API or a strand data codec",
-            "error: conflicting jsonl_tag/jsonl_other and strand tag policy; migrate to strand.tag/other and remove legacy declarations",
+            "error: : resource or secret is not automatic data", "error: wire alias collision at left",               "error: owned decoding conflicts with borrow.require at label",
+            "error: : explicit data codec",                      "error: : resource or secret is not automatic data", "error: : pointer has no safe data meaning",
+            "error: tag collides with payload alias",            "error: data codecs require a named error set",      "error: : std.json hooks are not read here; declare strandDeserialize and strandSerialize",
         };
         for (expected, 0..) |message, case| {
             const rejection_options = b.addOptions();
@@ -220,21 +212,13 @@ pub fn build(b: *std.Build) !void {
 
     // Explicit manual measurement, compiled without timing by the check graph.
     if (b.dependencyLazy("shakedown", .{ .target = target, .optimize = bench_mode })) |dependency| {
-        const baseline = b.addExecutable(.{
-            .name = "strand-baseline",
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("bench/baseline.zig"),
-                .target = target,
-                .optimize = bench_mode,
-                .imports = benchImports(b, target, bench_mode),
-            }),
-        });
-        baseline.root_module.addImport("shakedown", dependency.module("shakedown"));
         const s2_bench = b.addExecutable(.{
             .name = "strand-s2-bench",
             .root_module = b.createModule(.{ .root_source_file = b.path("bench/s2.zig"), .target = target, .optimize = bench_mode, .imports = &.{.{ .name = "seam", .module = benchSeam(b, target, bench_mode) }} }),
         });
         s2_bench.root_module.addImport("shakedown", dependency.module("shakedown"));
+        const prof = b.addExecutable(.{ .name = "strand-prof", .root_module = b.createModule(.{ .root_source_file = .{ .cwd_relative = "/private/tmp/claude-501/-Users-gusto-work-tycho/bafb8972-fd4d-4df5-a8ec-13a1c661e738/scratchpad/prof.zig" }, .target = target, .optimize = bench_mode, .imports = &.{.{ .name = "seam", .module = s2_bench.root_module.import_table.get("seam").? }} }) });
+        b.step("prof-build", "x").dependOn(&b.addInstallArtifact(prof, .{}).step);
         b.step("s2-bench-build", "Compile explicit paired S2 observations").dependOn(&b.addInstallArtifact(s2_bench, .{}).step);
         check_step.dependOn(&s2_bench.step);
         const zon_bench = b.addExecutable(.{
@@ -262,23 +246,7 @@ pub fn build(b: *std.Build) !void {
             check_step.dependOn(&schema.step);
             test_step.dependOn(&b.addRunArtifact(schema).step);
         }
-        const baseline_source = b.option([]const u8, "baseline-source", "Manual observation only: previous main root source");
-        const bench_module = baseline.root_module.import_table.get("strand").?;
-        baseline.root_module.addImport("previous-main", if (baseline_source) |source| b.createModule(.{
-            .root_source_file = .{ .cwd_relative = source },
-            .target = target,
-            .optimize = bench_mode,
-            .imports = &.{ .{ .name = "aegis", .module = bench_module.import_table.get("aegis").? }, .{ .name = "airlock", .module = bench_module.import_table.get("airlock").? } },
-        }) else bench_module);
-        inline for (.{ "current", "previous" }) |which| {
-            const size_exe = b.addExecutable(.{
-                .name = "strand-size-" ++ which,
-                .root_module = b.createModule(.{ .root_source_file = b.path("bench/footprint.zig"), .target = target, .optimize = bench_mode, .imports = &.{.{ .name = "api", .module = if (comptime std.mem.eql(u8, which, "current")) bench_module else baseline.root_module.import_table.get("previous-main").? }} }),
-            });
-            b.step("size-" ++ which ++ "-build", "Compile the identical legacy footprint fixture").dependOn(&b.addInstallArtifact(size_exe, .{}).step);
-            check_step.dependOn(&size_exe.step);
-        }
-        const proof_module = b.createModule(.{ .root_source_file = b.path("src/core_test.zig"), .target = target, .optimize = bench_mode, .imports = &.{ .{ .name = "shakedown", .module = dependency.module("shakedown") }, .{ .name = "aegis", .module = bench_module.import_table.get("aegis").? } } });
+        const proof_module = b.createModule(.{ .root_source_file = b.path("src/core_test.zig"), .target = target, .optimize = bench_mode, .imports = &.{ .{ .name = "shakedown", .module = dependency.module("shakedown") }, .{ .name = "aegis", .module = b.dependency("aegis", .{ .target = target, .optimize = bench_mode }).module("aegis") } } });
         const core_bench = b.addExecutable(.{
             .name = "strand-core-bench",
             .root_module = b.createModule(.{
@@ -293,12 +261,6 @@ pub fn build(b: *std.Build) !void {
         });
         b.step("core-bench-build", "Compile paired manual reference observations").dependOn(&b.addInstallArtifact(core_bench, .{}).step);
         check_step.dependOn(&core_bench.step);
-        const install = b.addInstallArtifact(baseline, .{});
-        b.step("baseline-build", "Compile the manual legacy timing driver").dependOn(&install.step);
-        check_step.dependOn(&baseline.step);
-        const baseline_smoke = b.addRunArtifact(baseline);
-        baseline_smoke.addArg("--smoke");
-        test_step.dependOn(&baseline_smoke.step);
     } else |err| needed = err;
 
     const bench_tests = b.addTest(.{
@@ -374,3 +336,20 @@ const example_sources = [_][]const u8{
 };
 
 // Build-only tooling belongs to a root invocation, never a consumer's dependency graph.
+
+/// What a checked copy of each type in src/testing/clone_rejected.zig is
+/// refused with, in case order.
+const clone_rejections = [_][]const u8{
+    "error: : pointer has no safe data meaning",
+    "error: : pointer has no safe data meaning",
+    "error: : type has no automatic data meaning",
+    "error: : untagged union has no active member witness",
+    "error: .unsafe: pointer has no safe data meaning",
+    "error: : pointer has no safe data meaning",
+    "error: : type has no automatic data meaning",
+    "error: : type has no automatic data meaning",
+    "error: checked clone excludes resources",
+    "error: : pointer has no safe data meaning",
+    "error: : pointer has no safe data meaning",
+    "error: .unsafe: pointer-containing sentinel cannot change ownership",
+};

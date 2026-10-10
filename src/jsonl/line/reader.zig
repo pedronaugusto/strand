@@ -1,8 +1,7 @@
 //! `LineReader`: a `*std.Io.Reader` as a stream of lines, framed and
 //! bounded, with nothing parsed.
 const framing = @import("../framing.zig");
-const codec_module = @import("../../json/api.zig").codec_module;
-const member_scan_module = @import("../../json/api.zig").member_scan_module;
+const member_scan_module = @import("../../json/member_scan.zig");
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -15,10 +14,10 @@ const bom = line_mod.bom;
 const trimCr = line_mod.trimCr;
 const isBlank = line_mod.isBlank;
 
-pub const Raw = codec_module.Raw;
+const Raw = @import("../../json/api.zig").Raw;
 const MemberScan = member_scan_module.MemberScan;
 
-const control = @import("../../json/api.zig").control_module;
+const control = @import("../../json/control.zig");
 const indexOfControl = control.indexOfControl;
 const firstControlOrTerminator = control.firstControlOrTerminator;
 
@@ -68,7 +67,7 @@ pub const LineReader = struct {
     /// here too, so there is one count for the stream.
     skipped: u64 = 0,
     /// What was last refused, and why: the line number, the offset in the
-    /// line, and the `std.json` error when a `Reader` above this one got as
+    /// line, and the parse error when a `Reader` above this one got as
     /// far as parsing it. See `Fault`. It is the last such line, whether it
     /// was reported or skipped; `fault.line` is 0 until there has been one.
     fault: Fault = .{},
@@ -173,7 +172,7 @@ pub const LineReader = struct {
         require_terminator: bool = false,
         /// When true, a UTF-8 byte-order mark at the very start of the stream
         /// is not part of the first line. Editors and Windows tooling put one
-        /// there; `std.json` has no idea what it is.
+        /// there; JSON has no place for one.
         skip_bom: bool = true,
         /// When true, a `\r` in front of the `\n` that ends a line is part of
         /// the terminator and not of the line, so a file written on Windows

@@ -11,9 +11,13 @@ pub const Error = core.EncodeError || std.Io.Writer.Error;
 /// byte, and only a run that has one is checked.
 pub const validates_text = true;
 writer: *std.Io.Writer,
+/// The containers open, the value at the root first: `top` is the one being
+/// written into, and a key written in it waits for its value in `key_written`.
 frames: [128]Frame,
 extra: std.ArrayList(Frame),
 depth: usize,
+top: *Frame,
+key_written: bool,
 keys: [128][]const u8,
 extra_keys: std.ArrayList([]const u8),
 key_count: usize,
@@ -22,7 +26,11 @@ key_count: usize,
 stage: []u8,
 staged: usize,
 local: [512]u8,
-const Frame = struct { object: bool, check_duplicates: bool, key_start: usize, first: bool = true, value_pending: bool = false };
+/// Whether an object at the top is left open, its closing brace unwritten,
+/// for members the caller adds; and, once it is, whether it has any.
+open_root: bool,
+root_members: bool,
+const Frame = struct { object: bool, check_duplicates: bool, key_start: usize, first: bool = true };
 const Self = @This();
 /// Starts `self` over `writer`, built where it lies, field by field: its frames,
 /// keys and stage are kilobytes a struct literal would build elsewhere and copy.
@@ -30,8 +38,13 @@ pub fn init(self: *Self, writer: *std.Io.Writer) void {
     self.writer = writer;
     self.extra = .empty;
     self.depth = 0;
+    self.frames[0] = .{ .object = false, .check_duplicates = false, .key_start = 0 };
+    self.top = &self.frames[0];
+    self.key_written = false;
     self.extra_keys = .empty;
     self.key_count = 0;
+    self.open_root = false;
+    self.root_members = false;
     self.restage();
 }
 pub fn deinit(self: *Self, c: *core.Context) void {
@@ -39,9 +52,8 @@ pub fn deinit(self: *Self, c: *core.Context) void {
     self.extra_keys.deinit(c.allocator());
     self.* = undefined;
 }
-fn frame(self: *Self) *Frame {
-    const i = self.depth - 1;
-    return if (i < self.frames.len) &self.frames[i] else &self.extra.items[i - self.frames.len];
+fn frame(self: *Self, depth: usize) *Frame {
+    return if (depth < self.frames.len) &self.frames[depth] else &self.extra.items[depth - self.frames.len];
 }
 fn restage(self: *Self) void {
     const free = self.writer.unusedCapacitySlice();
@@ -55,7 +67,7 @@ fn restage(self: *Self) void {
 /// that end is the writer's until then, so a refused stage leaves nothing.
 inline fn put(self: *Self, data: []const u8, c: *core.Context) Error!void {
     if (data.len <= self.stage.len - self.staged) {
-        @memcpy(self.stage[self.staged..][0..data.len], data);
+        strings.copy(self.stage[self.staged..].ptr, data);
         self.staged += data.len;
         return;
     }
@@ -82,16 +94,16 @@ pub fn flush(self: *Self, c: *core.Context) Error!void {
     } else try self.writer.writeAll(self.local[0..n]);
     self.restage();
 }
-fn before(self: *Self, c: *core.Context) Error!void {
-    if (self.depth == 0) return;
-    const f = self.frame();
-    if (f.object and f.value_pending) {
-        f.value_pending = false;
+/// What comes before a value or a key: nothing after a key, a comma after
+/// another member.
+inline fn before(self: *Self, c: *core.Context) Error!void {
+    if (self.key_written) {
+        self.key_written = false;
         return;
     }
+    const f = self.top;
     if (!f.first) try self.put(",", c);
     f.first = false;
-    if (f.object) f.value_pending = true;
 }
 fn quoted(self: *Self, spelling: []const u8, c: *core.Context) Error!void {
     // A string with nothing to escape is one piece when the stage has room.
@@ -100,7 +112,7 @@ fn quoted(self: *Self, spelling: []const u8, c: *core.Context) Error!void {
         if (found.at == spelling.len) {
             if (found.non_ascii and !std.unicode.utf8ValidateSlice(spelling)) return error.InvalidUtf8;
             self.stage[self.staged] = '"';
-            @memcpy(self.stage[self.staged + 1 ..][0..spelling.len], spelling);
+            strings.copy(self.stage[self.staged + 1 ..].ptr, spelling);
             self.stage[self.staged + 1 + spelling.len] = '"';
             self.staged += spelling.len + 2;
             return;
@@ -145,22 +157,27 @@ pub fn boolean(self: *Self, value: bool, c: *core.Context) Error!void {
 pub fn integer(self: *Self, value: anytype, c: *core.Context) Error!void {
     const bits = @typeInfo(@TypeOf(value)).int.bits;
     var buffer: [bits / 3 + 3]u8 = undefined;
-    const spelling = buffer[0..std.fmt.printInt(&buffer, value, 10, .lower, .{})];
+    const spelling = if (bits <= 128) strings.decimal(&buffer, value) else buffer[0..std.fmt.printInt(&buffer, value, 10, .lower, .{})];
     if (spelling.len > c.limits.numeric_bytes) return error.LengthLimit;
     try self.before(c);
     try self.put(spelling, c);
 }
+/// The shortest spelling that reads back as the same number: in decimals
+/// where they are few, as JavaScript writes a number, and with an exponent
+/// below 1e-7 and from 1e21, where decimals run to hundreds of digits.
 pub fn floating(self: *Self, value: anytype, c: *core.Context) Error!void {
     var buffer: [128]u8 = undefined;
-    const spelling = std.mem.print(&buffer, "{}", .{value}) catch return error.NumberOutOfRange;
+    const magnitude = @abs(value);
+    const decimals = magnitude == 0 or (magnitude >= 1e-7 and magnitude < 1e21);
+    const spelling = (if (decimals) std.mem.print(&buffer, "{}", .{value}) else std.mem.print(&buffer, "{e}", .{value})) catch return error.NumberOutOfRange;
     if (spelling.len > c.limits.numeric_bytes) return error.LengthLimit;
     try self.before(c);
     try self.put(spelling, c);
 }
 pub fn text(self: *Self, value: []const u8, c: *core.Context) Error!void {
-    const is_key = self.depth != 0 and self.frame().object and !self.frame().value_pending;
-    if (is_key and self.frame().check_duplicates) {
-        for (self.frame().key_start..self.key_count) |i| {
+    const is_key = self.top.object and !self.key_written;
+    if (is_key and self.top.check_duplicates) {
+        for (self.top.key_start..self.key_count) |i| {
             const prior = if (i < self.keys.len) self.keys[i] else self.extra_keys.items[i - self.keys.len];
             try c.chargeWork(@min(value.len, prior.len));
             if (std.mem.eql(u8, value, prior)) return error.DuplicateField;
@@ -170,22 +187,32 @@ pub fn text(self: *Self, value: []const u8, c: *core.Context) Error!void {
     }
     try self.before(c);
     try self.quoted(value, c);
-    if (is_key) try self.put(":", c);
+    if (is_key) {
+        try self.put(":", c);
+        self.key_written = true;
+    }
 }
 pub const key = text;
+/// A name the type spells when it is compiled, such as an enum's: quoted then,
+/// written now as one piece.
+pub fn symbol(self: *Self, comptime name: []const u8, c: *core.Context) Error!void {
+    try self.before(c);
+    try self.put(comptime "\"" ++ escapedName(name) ++ "\"", c);
+}
 /// A field of a struct, whose name is a constant: `"name":` in one piece, with
 /// the comma that separates it from the member before.
 pub fn field(self: *Self, comptime name: []const u8, c: *core.Context) Error!void {
-    const f = self.frame();
-    if (!f.object or f.check_duplicates or f.value_pending) return self.key(name, c);
+    const f = self.top;
+    if (!f.object or f.check_duplicates or self.key_written) return self.key(name, c);
     const piece = comptime "\"" ++ escapedName(name) ++ "\":";
     if (f.first) {
         f.first = false;
         try self.put(piece, c);
     } else try self.put("," ++ piece, c);
-    f.value_pending = true;
+    self.key_written = true;
 }
-fn escapedName(comptime name: []const u8) []const u8 {
+/// A constant name as a JSON string body: what a key spelled from it holds.
+pub fn escapedName(comptime name: []const u8) []const u8 {
     comptime var result: []const u8 = "";
     inline for (name) |byte| result = result ++ switch (byte) {
         '"' => "\\\"",
@@ -212,21 +239,32 @@ pub fn nullValue(self: *Self, c: *core.Context) Error!void {
     try self.before(c);
     try self.put("null", c);
 }
-pub const unit = nullValue;
+/// Nothing, such as an arm of a union that holds nothing: an empty object,
+/// as JSON spells it.
+pub fn unit(self: *Self, c: *core.Context) Error!void {
+    try self.before(c);
+    try self.put("{}", c);
+}
 pub fn begin(self: *Self, kind: core.Kind, name: []const u8, _: usize, c: *core.Context) Error!void {
     try self.before(c);
     const object = kind == .record or kind == .map or kind == .variant;
     try self.put(if (object) "{" else "[", c);
-    if (self.depth < self.frames.len) self.frames[self.depth] = .{ .object = object, .check_duplicates = kind == .map, .key_start = self.key_count } else try self.extra.append(c.allocator(), .{ .object = object, .check_duplicates = kind == .map, .key_start = self.key_count });
-    self.depth += 1;
+    const entry: Frame = .{ .object = object, .check_duplicates = kind == .map, .key_start = self.key_count };
+    const depth = self.depth + 1;
+    if (depth < self.frames.len) self.frames[depth] = entry else try self.extra.append(c.allocator(), entry);
+    self.depth = depth;
+    self.top = self.frame(depth);
     if (kind == .variant) try self.key(name, c);
 }
 pub fn end(self: *Self, c: *core.Context) Error!void {
-    const f = self.frame().*;
-    if (f.object and f.value_pending) return error.CustomRejected;
-    try self.put(if (f.object) "}" else "]", c);
-    if (self.depth > self.frames.len) _ = self.extra.pop();
+    const f = self.top.*;
+    if (f.object and self.key_written) return error.CustomRejected;
+    if (self.depth == 1 and f.object and self.open_root) {
+        self.root_members = !f.first;
+    } else try self.put(if (f.object) "}" else "]", c);
+    if (self.depth >= self.frames.len) _ = self.extra.pop();
     self.depth -= 1;
+    self.top = self.frame(self.depth);
     self.key_count = f.key_start;
     self.extra_keys.shrinkRetainingCapacity(self.key_count - @min(self.key_count, self.keys.len));
 }
@@ -234,6 +272,7 @@ pub fn validateRaw(_: *Self, payload: []const u8, c: *core.Context) Error!void {
     c.input(payload.len) catch |err| return encodeError(err);
     var decoder: Decoder = undefined;
     decoder.init(c, payload);
+    decoder.checking = true;
     defer decoder.deinit();
     var cursor: core.Cursor(Decoder) = .{ .backend = &decoder, .context = c };
     cursor.skip() catch |err| return encodeError(err);
@@ -245,7 +284,16 @@ fn encodeError(err: core.DecodeError) core.EncodeError {
         else => error.InvalidRaw,
     };
 }
+/// A checked value's bytes. A line break in one is only ever between two
+/// tokens, where a space is the same JSON, so it is written as one: a value
+/// written on one line stays on one line, which a JSON Lines record needs.
 pub fn raw(self: *Self, payload: []const u8, c: *core.Context) Error!void {
     try self.before(c);
-    try self.put(payload, c);
+    var rest = payload;
+    while (std.mem.findAny(u8, rest, "\r\n")) |at| {
+        try self.put(rest[0..at], c);
+        try self.put(" ", c);
+        rest = rest[at + 1 ..];
+    }
+    try self.put(rest, c);
 }

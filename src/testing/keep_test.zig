@@ -3,9 +3,11 @@ const std = @import("std");
 const testing = std.testing;
 const shakedown = @import("shakedown");
 const strand = @import("../strand.zig");
+const json = strand.json;
+const jsonl = strand.jsonl;
 const Fixture = fixtures_module.Fixture;
 
-// A hook's output depends on state outside the JSON. Keeping the result
+// A codec's result depends on state outside the JSON. Keeping the result
 // must preserve the decision already made, even if that state changes.
 pub const Stateful = struct {
     text: []const u8,
@@ -17,16 +19,20 @@ pub const Stateful = struct {
 
     const Wire = struct { text: []const u8, count: u32 };
 
-    pub fn jsonParse(allocator: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) !Stateful {
+    pub fn strandDeserialize(access: anytype) @typeInfo(@TypeOf(access.read(Wire))).error_union.error_set!Stateful {
         calls += 1;
-        const wire = try std.json.innerParse(Wire, allocator, source, options);
+        const wire = try access.read(Wire);
         return .{ .text = wire.text, .count = wire.count + offset };
     }
 
-    pub fn jsonlMigrate(allocator: std.mem.Allocator, from: u32, data: std.json.Value) std.json.ParseFromValueError!Stateful {
-        if (from != 1) return error.UnknownField;
+    pub fn strandSerialize(self: Stateful, access: anytype) @typeInfo(@TypeOf(access.write(Wire{ .text = self.text, .count = self.count }))).error_union.error_set!void {
+        try access.write(Wire{ .text = self.text, .count = self.count });
+    }
+
+    pub fn jsonlMigrate(from: u32, payload: anytype) @TypeOf(payload.*).Error!Stateful {
+        if (from != 1) return error.UnknownVariant;
         calls += 1;
-        const wire = try strand.payloadOf(Wire, allocator, data);
+        const wire = try payload.read(Wire);
         return .{ .text = wire.text, .count = wire.count + offset };
     }
 };
@@ -34,7 +40,7 @@ pub const Stateful = struct {
 const Direction = enum { reader, tail, follower };
 
 fn keepParsed(comptime direction: Direction) !void {
-    const T = strand.Versioned(Stateful);
+    const T = jsonl.Versioned(Stateful);
     for ([_]u32{ 1, 2 }) |version| {
         Stateful.offset = 7;
         Stateful.calls = 0;
@@ -44,12 +50,12 @@ fn keepParsed(comptime direction: Direction) !void {
         var fixture = try Fixture.init(bytes.written(), 8);
         defer fixture.deinit();
 
-        var kept: T = undefined;
+        var kept: strand.core.Parsed(T) = undefined;
         {
             var reader = switch (direction) {
-                .reader => strand.Reader(T).init(testing.allocator, &fixture.reader.interface, .{}),
-                .tail => try strand.Tail(T).init(testing.allocator, &fixture.reader, .{ .block_bytes = 4 }),
-                .follower => strand.Follower(T).init(testing.allocator, &fixture.reader, .{}),
+                .reader => jsonl.Reader(T).init(testing.allocator, &fixture.reader.interface, .{}),
+                .tail => try jsonl.Tail(T).init(testing.allocator, &fixture.reader, .{ .block_bytes = 4 }),
+                .follower => jsonl.Follower(T).init(testing.allocator, &fixture.reader, .{}),
             };
             defer if (direction == .follower) reader.deinit(testing.io) else reader.deinit();
             var line = switch (direction) {
@@ -64,18 +70,17 @@ fn keepParsed(comptime direction: Direction) !void {
             line.value.value.text = &edited;
             line.value.value.count += 1;
             Stateful.offset = 1000;
-            const result: std.mem.Allocator.Error!T = reader.keep(testing.allocator, line);
-            kept = try result;
-            errdefer strand.freeOwned(testing.allocator, kept);
+            kept = try reader.keep(testing.allocator, line);
+            errdefer kept.deinit();
             try testing.expectEqual(@as(usize, 1), Stateful.calls);
-            try testing.expect(kept.value.text.ptr != line.value.value.text.ptr);
+            try testing.expect(kept.value.value.text.ptr != line.value.value.text.ptr);
             @memset(&edited, 'x');
         }
-        defer strand.freeOwned(testing.allocator, kept);
-        try testing.expectEqualStrings("edited\tvalue", kept.value.text);
-        try testing.expectEqual(@as(u32, 11), kept.value.count);
-        try testing.expectEqual(version, kept.from);
-        try testing.expectEqual(version == 1, kept.migrated());
+        defer kept.deinit();
+        try testing.expectEqualStrings("edited\tvalue", kept.value.value.text);
+        try testing.expectEqual(@as(u32, 11), kept.value.value.count);
+        try testing.expectEqual(version, kept.value.from);
+        try testing.expectEqual(version == 1, kept.value.migrated());
     }
 }
 
@@ -94,53 +99,35 @@ test "Follower keep preserves edits and stateful parsing and migration" {
 pub const LastData = struct {
     text: []const u8,
     fallback: []const u8 = "default",
-    raw: strand.Raw,
-    dynamic: std.json.Value,
-
-    var shared: [5]u8 = undefined;
-    var calls: usize = 0;
-
-    pub fn jsonParse(a: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) !LastData {
-        calls += 1;
-        const wire = try std.json.innerParse(struct { text: [5]u8, raw: strand.Raw, dynamic: std.json.Value }, a, source, options);
-        shared = wire.text;
-        return .{ .text = &shared, .raw = wire.raw, .dynamic = wire.dynamic };
-    }
+    raw: json.Raw,
+    dynamic: json.Value,
 };
 
 fn lastOwned(a: std.mem.Allocator) !void {
-    LastData.calls = 0;
     var fixture = try Fixture.init(
-        "{\"text\":\"first\",\"raw\":{ \"n\": 1 },\"dynamic\":{\"key\":[\"one\"]}}\n" ++
+        "{\"text\":\"fir\\u0073t\",\"raw\":{ \"n\": 1 },\"dynamic\":{\"key\":[\"one\"]}}\n" ++
             "{\"text\":\"later\",\"raw\":[ 2 ],\"dynamic\":{\"key\":[\"two\"]}}\n",
         8,
     );
     defer fixture.deinit();
-    var batch: []LastData = undefined;
+    var batch: strand.core.Parsed([]LastData) = undefined;
     {
-        var tail = try strand.Tail(LastData).init(testing.allocator, &fixture.reader, .{ .block_bytes = 4 });
+        var tail = try jsonl.Tail(LastData).init(testing.allocator, &fixture.reader, .{ .block_bytes = 4 });
         defer tail.deinit();
         batch = try tail.last(a, 3);
     }
-    defer {
-        for (batch) |value| strand.freeOwned(a, value);
-        a.free(batch);
-    }
-    try testing.expectEqual(@as(usize, 2), LastData.calls);
-    try testing.expectEqual(@as(usize, 2), batch.len);
-    try testing.expect(batch[0].text.ptr != &LastData.shared);
-    try testing.expect(batch[0].fallback.ptr != @as([]const u8, "default").ptr);
-    @memset(&LastData.shared, 'x');
-    try testing.expectEqualStrings("first", batch[0].text);
-    try testing.expectEqualStrings("later", batch[1].text);
-    try testing.expectEqualStrings("default", batch[0].fallback);
-    try testing.expectEqualStrings("{ \"n\": 1 }", batch[0].raw.bytes);
-    try testing.expectEqualStrings("[ 2 ]", batch[1].raw.bytes);
-    try testing.expectEqualStrings("one", batch[0].dynamic.object.get("key").?.array.items[0].string);
-    try testing.expectEqualStrings("two", batch[1].dynamic.object.get("key").?.array.items[0].string);
+    defer batch.deinit();
+    try testing.expectEqual(@as(usize, 2), batch.value.len);
+    try testing.expectEqualStrings("first", batch.value[0].text);
+    try testing.expectEqualStrings("later", batch.value[1].text);
+    try testing.expectEqualStrings("default", batch.value[0].fallback);
+    try testing.expectEqualStrings("{ \"n\": 1 }", batch.value[0].raw.bytes);
+    try testing.expectEqualStrings("[ 2 ]", batch.value[1].raw.bytes);
+    try testing.expectEqualStrings("one", batch.value[0].dynamic.object[0].value.array[0].string);
+    try testing.expectEqualStrings("two", batch.value[1].dynamic.object[0].value.array[0].string);
 }
 
-test "Tail last owns hook references defaults Raw and dynamic values" {
+test "Tail last owns defaults, Raw and dynamic values" {
     try lastOwned(testing.allocator);
 }
 
@@ -150,15 +137,15 @@ test "Tail last releases every partial owned batch on allocation failure" {
 }
 
 test "Tail last reports only NextError" {
-    const result_type = @typeInfo(@TypeOf(strand.Tail(LastData).last)).@"fn".return_type.?;
+    const result_type = @typeInfo(@TypeOf(jsonl.Tail(LastData).last)).@"fn".return_type.?;
     const error_set = @typeInfo(result_type).error_union.error_set;
-    try testing.expect(error_set == strand.Tail(LastData).NextError);
+    try testing.expect(error_set == jsonl.Tail(LastData).NextError);
 }
 
 test "Tail last releases owned values when a later line is malformed" {
     var fixture = try Fixture.init("broken\n{\"text\":\"later\",\"raw\":[2],\"dynamic\":{}}\n", 8);
     defer fixture.deinit();
-    var tail = try strand.Tail(LastData).init(testing.allocator, &fixture.reader, .{});
+    var tail = try jsonl.Tail(LastData).init(testing.allocator, &fixture.reader, .{});
     defer tail.deinit();
     try testing.expectError(error.MalformedLine, tail.last(testing.allocator, 2));
 }

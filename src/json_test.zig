@@ -85,7 +85,7 @@ test "S2 JSONL every chunk boundary and independent keep" {
                     .record => |record| {
                         count += 1;
                         try std.testing.expectEqualStrings(if (count == 1) "a\nç" else "b", record.value.text);
-                        var saved = try decoder.keep(record.value);
+                        var saved = try decoder.keep(std.testing.allocator, record);
                         defer saved.deinit();
                         try std.testing.expectEqualStrings(record.value.text, saved.value.text);
                     },
@@ -132,7 +132,7 @@ fn decoderAllocationSweep(gpa: std.mem.Allocator) !void {
     const last = decoder.push("b\"}\n");
     if (last.status == .failure) return last.status.failure;
     try std.testing.expect(last.status == .record);
-    var saved = try decoder.keep(last.status.record.value);
+    var saved = try decoder.keep(no_resize.allocator(), last.status.record);
     defer saved.deinit();
 }
 test "S2 NoResize rollback across every JSON and decoder allocation" {
@@ -166,13 +166,12 @@ test "S2 std Value bridge uses bounded context and standard numeric alternatives
     try std.testing.expectError(error.AllocationLimit, json.parseStdValue(std.testing.allocator, "[1]", .{ .limits = .{ .allocation_bytes = 0 } }));
 }
 
-test "S2 legacy internal tag normalizes into common descriptor" {
+test "a union tagged inside its object reads its tag anywhere and writes it first" {
     const U = union(enum) {
         a: struct { n: u8 },
         b,
         other,
-        pub const jsonl_tag = "kind";
-        pub const jsonl_other = .other;
+        pub const strand = .{ .tag = "kind", .other = "other" };
     };
     var owner = try json.parse(U, std.testing.allocator, "{\"n\":3,\"kind\":\"a\"}", .{});
     defer owner.deinit();
@@ -415,4 +414,42 @@ test "S2 caller-arena JSON diagnostics reset across operations and early limits"
     try std.testing.expectEqualStrings("json", diagnostics.format);
     try std.testing.expectEqual(@as(usize, 0), diagnostics.path.len);
     try std.testing.expectEqual(@as(usize, 0), diagnostics.offset);
+}
+test "a struct's comptime fields are written, and read back only as the constants they are" {
+    var buffer: [128]u8 = undefined;
+    var out = std.Io.Writer.fixed(&buffer);
+    const seq: u64 = 7;
+    try json.write(&out, .{ .fmt = @as(u32, 1), .kind = "open", .seq = seq }, .{});
+    try std.testing.expectEqualStrings("{\"fmt\":1,\"kind\":\"open\",\"seq\":7}", out.buffered());
+    out = std.Io.Writer.fixed(&buffer);
+    try json.write(&out, .{ 1, "two" }, .{});
+    try std.testing.expectEqualStrings("[1,\"two\"]", out.buffered());
+
+    const Document = struct { comptime fmt: u32 = 1, seq: u64 };
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    try std.testing.expectEqual(@as(u64, 7), (try json.parseLeaky(Document, arena.allocator(), "{\"fmt\":1,\"seq\":7}", .{})).seq);
+    try std.testing.expectEqual(@as(u64, 7), (try json.parseLeaky(Document, arena.allocator(), "{\"seq\":7}", .{})).seq);
+    try std.testing.expectError(error.UnexpectedType, json.parseLeaky(Document, arena.allocator(), "{\"fmt\":2,\"seq\":7}", .{}));
+}
+
+test "a float is written in its shortest spelling, an exponent where decimals would run long" {
+    var buffer: [64]u8 = undefined;
+    const cases = [_]struct { f64, []const u8 }{
+        .{ 1.5, "1.5" },
+        .{ 0.1, "0.1" },
+        .{ 1e300, "1e300" },
+        .{ 5e-324, "5e-324" },
+        .{ -2.5e-8, "-2.5e-8" },
+        .{ 123456789, "123456789" },
+        .{ 0, "0" },
+    };
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    for (cases) |case| {
+        var out = std.Io.Writer.fixed(&buffer);
+        try json.write(&out, case[0], .{});
+        try std.testing.expectEqualStrings(case[1], out.buffered());
+        try std.testing.expectEqual(case[0], try json.parseLeaky(f64, arena.allocator(), out.buffered(), .{}));
+    }
 }

@@ -531,6 +531,28 @@ test "S1 checked clone separates input lifetime preserves fixed shape and rolls 
     try std.testing.expectError(error.AllocationLimit, core.clone(std.testing.allocator, @as([]const u8, "too long"), .{ .allocation_bytes = 1 }));
     try std.testing.expectError(error.LengthLimit, core.clone(std.testing.allocator, @as([]const u8, "too long"), .{ .string_bytes = 1 }));
 }
+test "a checked clone onto a caller's arena is bounded per copy and independent of its source" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    var bytes = [_]u8{ 'o', 'k' };
+    const value: struct { text: []const u8, items: []const u16 } = .{ .text = &bytes, .items = &.{ 1, 2, 3 } };
+    const copy = try core.cloneLeaky(arena.allocator(), value, .{});
+    bytes[0] = 'x';
+    try std.testing.expectEqualStrings("ok", copy.text);
+    try std.testing.expectEqualSlices(u16, &.{ 1, 2, 3 }, copy.items);
+    try std.testing.expectError(error.LengthLimit, core.cloneLeaky(arena.allocator(), @as([]const u8, "too long"), .{ .string_bytes = 1 }));
+    try std.testing.expectError(error.AllocationLimit, core.cloneLeaky(arena.allocator(), @as([]const u8, "too long"), .{ .allocation_bytes = 1 }));
+}
+test "an adopted arena is released by its owner" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    const items = try arena.allocator().dupe(u32, &.{ 7, 8 });
+    var owner = core.adopt([]u32, std.testing.allocator, &arena, items);
+    // The arena handed its storage over and holds nothing now.
+    try std.testing.expectEqual(@as(usize, 0), arena.queryCapacity());
+    try std.testing.expectEqualSlices(u32, &.{ 7, 8 }, owner.value);
+    try std.testing.expect(owner.allocator_resident_bytes >= 8);
+    owner.deinit();
+}
 fn leakySweep(gpa: std.mem.Allocator) !void {
     var arena: std.heap.ArenaAllocator = .init(gpa);
     defer arena.deinit();

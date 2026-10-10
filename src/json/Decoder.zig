@@ -41,6 +41,11 @@ extra_keys: std.ArrayList([]const u8),
 key_count: usize,
 reject_duplicates: bool,
 root_done: bool,
+/// Whether the input is only being checked, as a value about to be written
+/// as it is: a string with an escape in it is checked and its length
+/// counted, and not unescaped, since nothing will read it; keys are told
+/// apart by what they spell, escapes read as they go.
+checking: bool,
 const Self = @This();
 
 /// Starts `self` over `bytes`, which the caller has charged to `c.input`. It
@@ -60,6 +65,7 @@ fn begin(self: *Self, bytes: []const u8, at: usize, allocator: std.mem.Allocator
     self.key_count = 0;
     self.reject_duplicates = reject_duplicates;
     self.root_done = false;
+    self.checking = false;
 }
 pub fn deinit(self: *Self) void {
     self.extra.deinit(self.allocator);
@@ -113,7 +119,7 @@ inline fn frame(self: *Self) *Frame {
     const i = self.depth - 1;
     return if (i < self.frames.len) &self.frames[i] else &self.extra.items[i - self.frames.len];
 }
-fn push(self: *Self, c: *core.Context, object: bool, check_keys: bool) Error!void {
+inline fn push(self: *Self, c: *core.Context, object: bool, check_keys: bool) Error!void {
     if (self.depth >= c.limits.depth) return error.DepthLimit;
     const entry: Frame = .{ .object = object, .check_keys = check_keys, .state = .first, .key_start = self.key_count };
     if (self.depth < self.frames.len) self.frames[self.depth] = entry else self.extra.append(self.allocator, entry) catch |err| return failure(c, err);
@@ -138,8 +144,9 @@ fn remember(self: *Self, c: *core.Context, name: []const u8) Error!void {
     const from = self.frame().key_start;
     for (from..self.key_count) |i| {
         const prior = if (i < self.keys.len) self.keys[i] else self.extra_keys.items[i - self.keys.len];
-        try c.chargeWork(@min(name.len, prior.len));
-        if (std.mem.eql(u8, name, prior)) return error.DuplicateField;
+        try c.chargeWork(@max(name.len, prior.len));
+        const same = if (self.checking) sameText(name, prior) else std.mem.eql(u8, name, prior);
+        if (same) return error.DuplicateField;
     }
     if (self.key_count < self.keys.len) self.keys[self.key_count] = name else self.extra_keys.append(self.allocator, name) catch |err| return failure(c, err);
     self.key_count += 1;
@@ -271,8 +278,27 @@ pub inline fn memberOf(self: *Self, c: *core.Context, comptime names: []const []
 /// time: a short one is compared a byte at a time with no call.
 inline fn startsWith(bytes: []const u8, comptime prefix: []const u8) bool {
     if (prefix.len > 24) return std.mem.eql(u8, bytes[0..prefix.len], prefix);
+    // A word at a time where the bytes run that far, masked to the prefix.
+    if (bytes.len >= 8 and prefix.len <= 16) {
+        const head = comptime wordOf(prefix[0..@min(prefix.len, 8)]);
+        if (std.mem.readInt(u64, bytes[0..8], .little) & head.mask != head.bits) return false;
+        if (prefix.len <= 8) return true;
+        if (bytes.len >= 16) {
+            const tail = comptime wordOf(prefix[8..]);
+            return std.mem.readInt(u64, bytes[8..16], .little) & tail.mask == tail.bits;
+        }
+        inline for (prefix[8..], 8..) |b, k| if (bytes[k] != b) return false;
+        return true;
+    }
     inline for (prefix, 0..) |b, k| if (bytes[k] != b) return false;
     return true;
+}
+/// Up to eight bytes as a little-endian word, and the mask of the bytes there.
+fn wordOf(comptime bytes: []const u8) struct { bits: u64, mask: u64 } {
+    var bits: u64 = 0;
+    for (bytes, 0..) |b, k| bits |= @as(u64, b) << @intCast(k * 8);
+    const mask: u64 = if (bytes.len == 8) ~@as(u64, 0) else (@as(u64, 1) << @intCast(bytes.len * 8)) - 1;
+    return .{ .bits = bits, .mask = mask };
 }
 
 /// A name as a key spelled with no escape, quotes included; `null` for one
@@ -347,9 +373,51 @@ pub inline fn number(self: *Self, c: *core.Context) Error!?[]const u8 {
     return self.input[from..end];
 }
 
+/// The next value if it is an integer spelled with digits alone that fits
+/// `T`, read and converted in the one pass; `null`, with nothing read, for any
+/// other value, which the lexeme path reads and converts or refuses.
+pub inline fn integer(self: *Self, comptime T: type, c: *core.Context) Error!?T {
+    const bits = @typeInfo(T).int.bits;
+    if (bits == 0 or bits > 64) return null;
+    if (!try self.toValue()) return null;
+    const bytes = self.input;
+    var at = self.at;
+    const negative = at < bytes.len and bytes[at] == '-';
+    if (negative) at += 1;
+    const first = at;
+    var magnitude: u64 = 0;
+    // Nineteen digits always fit the accumulator.
+    while (at < bytes.len and at - first < 19) : (at += 1) {
+        const digit = bytes[at] -% '0';
+        if (digit > 9) break;
+        magnitude = magnitude * 10 + digit;
+    }
+    const digits = at - first;
+    if (digits == 0 or (bytes[first] == '0' and digits > 1)) return null;
+    if (at < bytes.len) switch (bytes[at]) {
+        '0'...'9', '.', 'e', 'E' => return null,
+        else => {},
+    };
+    if (digits > c.limits.numeric_bytes) return null;
+    const result: T = if (@typeInfo(T).int.signedness == .unsigned) result: {
+        if (negative and magnitude != 0) return null;
+        break :result std.math.cast(T, magnitude) orelse return null;
+    } else result: {
+        if (negative) {
+            if (magnitude > @as(u64, 1) << (bits - 1)) return null;
+            break :result @intCast(-@as(i65, magnitude)); // safe: at most the magnitude of the signed minimum.
+        }
+        break :result std.math.cast(T, magnitude) orelse return null;
+    };
+    try c.chargeWork(at - self.at);
+    self.reading();
+    self.finish(at);
+    return result;
+}
+
 /// The next value if it is a string, read; `null`, with nothing read, if it is
 /// anything else.
-pub fn text(self: *Self, c: *core.Context) Error!?core.Span {
+pub inline fn text(self: *Self, c: *core.Context) Error!?core.Span {
     if (!try self.toValue()) return null;
     if (try self.byte() != '"') return null;
     self.reading();
@@ -359,6 +427,16 @@ pub fn text(self: *Self, c: *core.Context) Error!?core.Span {
 fn value(self: *Self, c: *core.Context, request: core.Request) Error!core.Event {
     switch (try self.byte()) {
         '{' => {
+            // Nothing, such as an arm of a union that holds nothing, is an
+            // empty object.
+            if (request.expected == .unit) {
+                const inside = space(self.input, self.at + 1);
+                if (inside < self.input.len and self.input[inside] == '}') {
+                    self.finish(inside + 1);
+                    self.ended();
+                    return .unit;
+                }
+            }
             try self.push(c, true, self.reject_duplicates and request.expected != .record);
             self.finish(self.at + 1);
             return .{ .begin = .{ .kind = if (request.expected == .map) .map else .record } };
@@ -375,7 +453,7 @@ fn value(self: *Self, c: *core.Context, request: core.Request) Error!core.Event 
         },
         't' => return self.word("true", .{ .boolean = true }),
         'f' => return self.word("false", .{ .boolean = false }),
-        'n' => return self.word("null", if (request.expected == .unit) .unit else .none),
+        'n' => return self.word("null", .none),
         '-', '0'...'9' => {
             const start = self.at;
             const end = try numberEnd(self.input, start);
@@ -412,12 +490,71 @@ inline fn string(self: *Self, c: *core.Context, is_key: bool) Error!core.Span {
     }
     const end = try strings.end(body);
     const escaped = body[0..end.at];
+    if (self.checking) {
+        try c.span(unescapedLength(escaped), is_key);
+        self.finish(start + end.at + 1);
+        return .{ .bytes = escaped, .lifetime = .borrowed };
+    }
     // Nothing is shorter unescaped, so the escaped length bounds the copy.
     const storage = try c.alloc(u8, escaped.len);
     const n = strings.unescape(escaped, storage);
     try c.span(n, is_key);
     self.finish(start + end.at + 1);
     return .{ .bytes = storage[0..n], .lifetime = .owned };
+}
+
+/// Whether two string bodies `strings.end` has checked spell the same text,
+/// however each is escaped: compared a byte of text at a time, with nothing
+/// unescaped anywhere.
+fn sameText(a: []const u8, b: []const u8) bool {
+    var left: TextBytes = .{ .rest = a };
+    var right: TextBytes = .{ .rest = b };
+    while (true) {
+        const x = left.next();
+        if (x != right.next()) return false;
+        if (x == null) return true;
+    }
+}
+
+/// The text a checked string body spells, a byte at a time.
+const TextBytes = struct {
+    rest: []const u8,
+    pending: [4]u8 = undefined,
+    len: usize = 0,
+    at: usize = 0,
+
+    fn next(self: *TextBytes) ?u8 {
+        if (self.at < self.len) {
+            self.at += 1;
+            return self.pending[self.at - 1];
+        }
+        if (self.rest.len == 0) return null;
+        if (self.rest[0] != '\\') {
+            defer self.rest = self.rest[1..];
+            return self.rest[0];
+        }
+        // unreachable: `strings.end` checked every escape in this body.
+        const e = strings.escape(self.rest[1..]) catch unreachable;
+        // unreachable: an escape decodes to a Unicode scalar, never a surrogate half.
+        self.len = std.unicode.utf8Encode(e.scalar, &self.pending) catch unreachable;
+        self.at = 1;
+        self.rest = self.rest[1 + e.len ..];
+        return self.pending[0];
+    }
+};
+
+/// How long the body of a string `strings.end` has checked is once unescaped.
+fn unescapedLength(escaped: []const u8) usize {
+    var n: usize = 0;
+    var from: usize = 0;
+    while (std.mem.findScalarPos(u8, escaped, from, '\\')) |slash| {
+        // unreachable: `strings.end` checked every escape in this body.
+        const e = strings.escape(escaped[slash + 1 ..]) catch unreachable;
+        // unreachable: an escape decodes to a Unicode scalar, never a surrogate half.
+        n += slash - from + (std.unicode.utf8CodepointSequenceLength(e.scalar) catch unreachable);
+        from = slash + 1 + e.len;
+    }
+    return n + escaped.len - from;
 }
 
 /// Where the number that starts at `start` ends; its grammar is checked.

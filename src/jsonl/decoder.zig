@@ -44,9 +44,11 @@ pub fn Decoder(comptime T: type) type {
             self.gpa.free(self.buffer);
             self.* = undefined;
         }
-        /// Returned value/bytes expire on the next push, finish, or deinit.
-        pub fn keep(self: *Self, value: T) core.DecodeError!core.Parsed(T) {
-            return core.clone(self.gpa, value, self.options.parse.limits);
+        /// A copy of a record's value and all its storage, in an owner of its
+        /// own on `gpa`: a record's value and bytes expire on the next push,
+        /// finish, or deinit, and this outlives them. See `Reader.keep`.
+        pub fn keep(self: *Self, gpa: std.mem.Allocator, kept: line.Line(T)) core.DecodeError!core.Parsed(T) {
+            return core.clone(gpa, kept.value, self.options.parse.limits);
         }
         fn advance(self: *Self) void {
             if (self.ready) {

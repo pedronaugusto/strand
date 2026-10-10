@@ -1,16 +1,17 @@
-//! The behaviour of `strand` spelled out as scenarios. The short tests that
+//! The behaviour of JSON Lines spelled out as scenarios. The short tests that
 //! introduce each declaration live beside it, in the file that declares it;
 //! these are the ones that need a stream, a malformed line, or a look at
 //! where memory came from.
-const work_module = @import("json/api.zig").work_module;
-const codec_module = @import("json/api.zig").codec_module;
-const parse_module = @import("json/api.zig").parse_module;
+const work_module = @import("json/work.zig");
 
 const builtin = @import("builtin");
 const std = @import("std");
 const testing = std.testing;
 const shakedown = @import("shakedown");
 const strand = @import("strand.zig");
+const core = strand.core;
+const json = strand.json;
+const jsonl = strand.jsonl;
 const fixtures = @import("testing/fixtures.zig");
 const seam = @import("airlock.testing");
 const Seam = seam.Seam;
@@ -23,11 +24,17 @@ const Event = struct {
     level: enum { debug, info, warn, err } = .info,
     note: ?[]const u8 = null,
     tags: []const []const u8 = &.{},
-    span: struct { id: u32, parent: ?u32 = null } = .{ .id = 0 },
+    span: struct {
+        id: u32,
+        parent: ?u32 = null,
+        pub const strand = .{ .fields = .{ .parent = .{ .omit = .null_value } } };
+    } = .{ .id = 0 },
+    /// A note that is not there is not written.
+    pub const strand = .{ .fields = .{ .note = .{ .omit = .null_value } } };
 };
 
-/// A line of a protocol: `std.json` writes and reads a tagged union as a
-/// one-key object naming the arm.
+/// A line of a protocol: a tagged union is written and read as a one-key
+/// object naming the arm.
 const Message = union(enum) {
     hello: struct { version: u8 },
     ping: u64,
@@ -40,16 +47,17 @@ fn readAll(
     comptime T: type,
     arena: std.mem.Allocator,
     input: []const u8,
-    options: strand.Reader(T).Options,
+    options: jsonl.Reader(T).Options,
 ) !std.ArrayList(T) {
     var source: std.Io.Reader = .fixed(input);
-    var reader: strand.Reader(T) = .init(testing.allocator, &source, options);
+    var reader: jsonl.Reader(T) = .init(testing.allocator, &source, options);
     defer reader.deinit();
 
     var out: std.ArrayList(T) = .empty;
     errdefer out.deinit(testing.allocator);
     while (try reader.next()) |line| {
-        try out.append(testing.allocator, try reader.keep(arena, line));
+        // Kept in an owner on the arena, which the batch outlives with.
+        try out.append(testing.allocator, (try reader.keep(arena, line)).value);
     }
     return out;
 }
@@ -66,7 +74,7 @@ test "round trip: what the writer writes, the reader reads" {
 
     var out: std.Io.Writer.Allocating = .init(testing.allocator);
     defer out.deinit();
-    var writer: strand.Writer(Event) = .init(&out.writer, .{});
+    var writer: jsonl.Writer(Event) = .init(&out.writer, .{});
     for (events) |event| try writer.write(event);
 
     try testing.expectEqual(@as(u64, 3), writer.count);
@@ -97,16 +105,16 @@ test "round trip: tagged unions" {
 
     var out: std.Io.Writer.Allocating = .init(testing.allocator);
     defer out.deinit();
-    var writer: strand.Writer(Message) = .init(&out.writer, .{});
+    var writer: jsonl.Writer(Message) = .init(&out.writer, .{});
     try writer.write(.{ .hello = .{ .version = 3 } });
     try writer.write(.{ .ping = 99 });
     try writer.write(.{ .goodbye = .{ .reason = "done" } });
 
     // The tag of each line is readable without parsing it.
-    var it = strand.lines(out.written());
-    try testing.expectEqual(.hello, strand.tagOf(Message, it.next().?.line).?);
-    try testing.expectEqual(.ping, strand.tagOf(Message, it.next().?.line).?);
-    try testing.expectEqual(.goodbye, strand.tagOf(Message, it.next().?.line).?);
+    var it = jsonl.lines(out.written());
+    try testing.expectEqual(.hello, json.tagOf(Message, it.next().?.line).?);
+    try testing.expectEqual(.ping, json.tagOf(Message, it.next().?.line).?);
+    try testing.expectEqual(.goodbye, json.tagOf(Message, it.next().?.line).?);
 
     var parsed = try readAll(Message, arena.allocator(), out.written(), .{});
     defer parsed.deinit(testing.allocator);
@@ -115,7 +123,7 @@ test "round trip: tagged unions" {
     try testing.expectEqualStrings("done", parsed.items[2].goodbye.reason);
 }
 
-test "recursive pointer schemas use the standard JSON extension path" {
+test "a recursive pointer schema is written and read back" {
     const Node = struct {
         pub const Self = @This();
         value: u8,
@@ -125,18 +133,18 @@ test "recursive pointer schemas use the standard JSON extension path" {
 
     var out: std.Io.Writer.Allocating = .init(testing.allocator);
     defer out.deinit();
-    var writer: strand.Writer(Node) = .init(&out.writer, .{});
+    var writer: jsonl.Writer(Node) = .init(&out.writer, .{});
     try writer.write(node);
 
     var source: std.Io.Reader = .fixed(out.written());
-    var reader: strand.Reader(Node) = .init(testing.allocator, &source, .{});
+    var reader: jsonl.Reader(Node) = .init(testing.allocator, &source, .{});
     defer reader.deinit();
     const decoded = (try reader.next()).?.value;
     try testing.expectEqual(@as(u8, 7), decoded.value);
     try testing.expectEqual(@as(?*Node, null), decoded.next);
 }
 
-test "unknown fields are ignored, missing fields take their defaults" {
+test "unknown fields are refused unless ignored, missing fields take their defaults" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
 
@@ -145,7 +153,7 @@ test "unknown fields are ignored, missing fields take their defaults" {
         \\{"kind":"open"}
         \\
     ;
-    var parsed = try readAll(Event, arena.allocator(), input, .{});
+    var parsed = try readAll(Event, arena.allocator(), input, .{ .parse = .{ .ignore_unknown_fields = true } });
     defer parsed.deinit(testing.allocator);
 
     try testing.expectEqual(@as(usize, 2), parsed.items.len);
@@ -155,9 +163,9 @@ test "unknown fields are ignored, missing fields take their defaults" {
     try testing.expectEqual(@as(usize, 0), parsed.items[1].tags.len);
     try testing.expectEqual(@as(u32, 0), parsed.items[1].span.id);
 
-    // With the option off, the same line is a hard error.
+    // By default, the same line is a hard error.
     var strict: std.Io.Reader = .fixed(input);
-    var reader: strand.Reader(Event) = .init(testing.allocator, &strict, .{ .ignore_unknown_fields = false });
+    var reader: jsonl.Reader(Event) = .init(testing.allocator, &strict, .{});
     defer reader.deinit();
     try testing.expectError(error.MalformedLine, reader.next());
     try testing.expectEqual(error.UnknownField, reader.lines.fault.err.?);
@@ -172,7 +180,7 @@ test "a malformed line is reported by number, and the stream survives it" {
     ;
 
     var source: std.Io.Reader = .fixed(input);
-    var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{});
+    var reader: jsonl.Reader(Event) = .init(testing.allocator, &source, .{});
     defer reader.deinit();
 
     try testing.expectEqualStrings("first", (try reader.next()).?.value.kind);
@@ -184,7 +192,7 @@ test "a malformed line is reported by number, and the stream survives it" {
     const third = (try reader.next()).?;
     try testing.expectEqualStrings("third", third.value.kind);
     try testing.expectEqual(@as(u64, 3), third.number);
-    try testing.expectEqual(@as(?strand.Line(Event), null), try reader.next());
+    try testing.expectEqual(@as(?jsonl.Line(Event), null), try reader.next());
 }
 
 test "a malformed line says where in it the parse gave up" {
@@ -197,7 +205,7 @@ test "a malformed line says where in it the parse gave up" {
     ;
 
     var source: std.Io.Reader = .fixed(input);
-    var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{});
+    var reader: jsonl.Reader(Event) = .init(testing.allocator, &source, .{});
     defer reader.deinit();
 
     // The brace that turned out to be where a key had to be.
@@ -211,7 +219,7 @@ test "a malformed line says where in it the parse gave up" {
 
     // A line cut off at its end has nowhere further to point than its end.
     try testing.expectError(error.MalformedLine, reader.next());
-    try testing.expectEqual(error.UnexpectedEndOfInput, reader.lines.fault.err.?);
+    try testing.expectEqual(error.SyntaxError, reader.lines.fault.err.?);
     try testing.expectEqual(@as(?usize, 14), reader.lines.fault.offset);
 
     // And a good line clears none of it and reports none of it.
@@ -222,14 +230,14 @@ test "a malformed line says where in it the parse gave up" {
 
 test "an over-long line has no offset in it to report" {
     var source: std.Io.Reader = .fixed("{\"kind\":\"far too long for this\"}\n{\"kind\":\"ok\"}\n");
-    var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{ .max_line_bytes = 8 });
+    var reader: jsonl.Reader(Event) = .init(testing.allocator, &source, .{ .max_line_bytes = 8 });
     defer reader.deinit();
 
     // The line never reached `std.json`, so there is nothing to have a
     // place in: an invented one would be worse than none.
     try testing.expectError(error.LineTooLong, reader.next());
     try testing.expectEqual(@as(?usize, null), reader.lines.fault.offset);
-    try testing.expectEqual(@as(?strand.ParseLineError, null), reader.lines.fault.err);
+    try testing.expectEqual(@as(?core.DecodeError, null), reader.lines.fault.err);
 }
 
 test "on_malformed = .skip passes over the bad line" {
@@ -241,7 +249,7 @@ test "on_malformed = .skip passes over the bad line" {
     ;
 
     var source: std.Io.Reader = .fixed(input);
-    var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{ .on_malformed = .skip });
+    var reader: jsonl.Reader(Event) = .init(testing.allocator, &source, .{ .on_malformed = .skip });
     defer reader.deinit();
 
     try testing.expectEqualStrings("first", (try reader.next()).?.value.kind);
@@ -257,18 +265,18 @@ test "the last line needs no newline, and blank lines do not break numbering" {
     const input = "{\"kind\":\"first\"}\n\n   \n{\"kind\":\"last\"}";
 
     var source: std.Io.Reader = .fixed(input);
-    var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{});
+    var reader: jsonl.Reader(Event) = .init(testing.allocator, &source, .{});
     defer reader.deinit();
 
     try testing.expectEqual(@as(u64, 1), (try reader.next()).?.number);
     const last = (try reader.next()).?;
     try testing.expectEqualStrings("last", last.value.kind);
     try testing.expectEqual(@as(u64, 4), last.number);
-    try testing.expectEqual(@as(?strand.Line(Event), null), try reader.next());
+    try testing.expectEqual(@as(?jsonl.Line(Event), null), try reader.next());
 
     // Without skip_blank a blank line is a line, and it is not a `T`.
     var strict: std.Io.Reader = .fixed(input);
-    var keeper: strand.Reader(Event) = .init(testing.allocator, &strict, .{ .skip_blank = false });
+    var keeper: jsonl.Reader(Event) = .init(testing.allocator, &strict, .{ .skip_blank = false });
     defer keeper.deinit();
     _ = try keeper.next();
     try testing.expectError(error.MalformedLine, keeper.next());
@@ -279,7 +287,7 @@ test "CRLF is tolerated, and the terminator is not part of the line" {
     const input = "{\"kind\":\"first\"}\r\n{\"kind\":\"second\"}\r\n";
 
     var source: std.Io.Reader = .fixed(input);
-    var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{});
+    var reader: jsonl.Reader(Event) = .init(testing.allocator, &source, .{});
     defer reader.deinit();
 
     const first = (try reader.next()).?;
@@ -290,7 +298,7 @@ test "CRLF is tolerated, and the terminator is not part of the line" {
     // whether it stands alone in the middle of a line or doubles up before
     // the one that does end it.
     var stray: std.Io.Reader = .fixed("{\"kind\":\"a\rb\"}\n{\"kind\":\"c\"}\r\r\n");
-    var strays: strand.Reader(Event) = .init(testing.allocator, &stray, .{});
+    var strays: jsonl.Reader(Event) = .init(testing.allocator, &stray, .{});
     defer strays.deinit();
     try testing.expectError(error.ControlByte, strays.next());
     try testing.expectEqual(@as(u64, 1), strays.lines.fault.line);
@@ -309,14 +317,14 @@ test "max_line_bytes is enforced, and the reader continues after the long line" 
     ;
 
     var source: std.Io.Reader = .fixed(input);
-    var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{ .max_line_bytes = 32 });
+    var reader: jsonl.Reader(Event) = .init(testing.allocator, &source, .{ .max_line_bytes = 32 });
     defer reader.deinit();
 
     try testing.expectEqualStrings("short", (try reader.next()).?.value.kind);
     try testing.expectError(error.LineTooLong, reader.next());
     try testing.expectEqual(@as(u64, 2), reader.lines.fault.line);
     // No parse was attempted, so there is no parse error to report.
-    try testing.expectEqual(@as(?strand.ParseLineError, null), reader.lines.fault.err);
+    try testing.expectEqual(@as(?core.DecodeError, null), reader.lines.fault.err);
 
     const third = (try reader.next()).?;
     try testing.expectEqualStrings("short again", third.value.kind);
@@ -326,12 +334,12 @@ test "max_line_bytes is enforced, and the reader continues after the long line" 
     const exact = "{\"kind\":\"0123456789012345\"}";
     try testing.expectEqual(@as(usize, 27), exact.len);
     var tight: std.Io.Reader = .fixed(exact);
-    var strict: strand.Reader(Event) = .init(testing.allocator, &tight, .{ .max_line_bytes = exact.len });
+    var strict: jsonl.Reader(Event) = .init(testing.allocator, &tight, .{ .max_line_bytes = exact.len });
     defer strict.deinit();
     try testing.expectEqualStrings("0123456789012345", (try strict.next()).?.value.kind);
 
     var tighter: std.Io.Reader = .fixed(exact);
-    var too_strict: strand.Reader(Event) = .init(testing.allocator, &tighter, .{ .max_line_bytes = exact.len - 1 });
+    var too_strict: jsonl.Reader(Event) = .init(testing.allocator, &tighter, .{ .max_line_bytes = exact.len - 1 });
     defer too_strict.deinit();
     try testing.expectError(error.LineTooLong, too_strict.next());
 }
@@ -357,7 +365,7 @@ test "a line reader answers a line past its bound and reads on" {
     {
         var socket: fixtures.Chunked = .init(bytes, buffer, 4096);
         const bound = 64 * 1024;
-        var lines: strand.LineReader = .init(testing.allocator, &socket.interface, .{ .max_line_bytes = bound });
+        var lines: jsonl.LineReader = .init(testing.allocator, &socket.interface, .{ .max_line_bytes = bound });
         defer lines.deinit();
 
         try testing.expectEqualStrings("{\"kind\":\"before\"}", (try lines.next()).?.line);
@@ -369,7 +377,7 @@ test "a line reader answers a line past its bound and reads on" {
         try testing.expectEqualStrings("{\"kind\":\"after\"}", after.line);
         try testing.expectEqual(@as(u64, 3), after.number);
         try testing.expectEqual(@as(u64, third_at), after.offset);
-        try testing.expectEqual(@as(?strand.RawLine, null), try lines.next());
+        try testing.expectEqual(@as(?jsonl.RawLine, null), try lines.next());
         try testing.expect(lines.line_buf.writer.buffer.len <= 2 * bound);
     }
 
@@ -377,7 +385,7 @@ test "a line reader answers a line past its bound and reads on" {
     // reads it arrived in.
     {
         var socket: fixtures.Chunked = .init(bytes, buffer, 4096);
-        var lines: strand.LineReader = .init(testing.allocator, &socket.interface, .{ .max_line_bytes = 16 << 20 });
+        var lines: jsonl.LineReader = .init(testing.allocator, &socket.interface, .{ .max_line_bytes = 16 << 20 });
         defer lines.deinit();
 
         _ = (try lines.next()).?;
@@ -406,15 +414,16 @@ test "a line past the bound keeps the member it is answered under" {
         "{\"id\":8,\"s\":\"" ++ @as([113]u8, @splat('y')) ++ "\"}\r\n" ++
         "{\"id\":9,\"s\":\"" ++ @as([114]u8, @splat('y')) ++ "\"}\r\n" ++
         "{\"id\":7,\"method\":\"ping\"}\n";
-    const Request = struct { id: ?strand.Raw = null, method: []const u8 = "" };
+    const Request = struct { id: ?json.Raw = null, method: []const u8 = "" };
 
     // Through a buffer the long lines straddle, and one that holds them whole.
     inline for (.{ 16, 4096 }) |buffer_len| {
         var buffer: [buffer_len]u8 = undefined;
         var stream = fixtures.Chunked.init(input, &buffer, 7);
-        var requests: strand.Reader(Request) = .init(testing.allocator, &stream.interface, .{
+        var requests: jsonl.Reader(Request) = .init(testing.allocator, &stream.interface, .{
             .max_line_bytes = 128,
             .oversized_member = "id",
+            .parse = .{ .ignore_unknown_fields = true },
         });
         defer requests.deinit();
 
@@ -422,7 +431,7 @@ test "a line past the bound keeps the member it is answered under" {
         try testing.expectError(error.LineTooLong, requests.next());
         try testing.expectEqualStrings("\"a\\\"b\"", requests.lines.oversizedMember().?.bytes);
         try testing.expectError(error.LineTooLong, requests.next());
-        try testing.expectEqual(@as(?strand.Raw, null), requests.lines.oversizedMember());
+        try testing.expectEqual(@as(?json.Raw, null), requests.lines.oversizedMember());
         try testing.expectError(error.LineTooLong, requests.next());
         try testing.expectEqualStrings("-12", requests.lines.oversizedMember().?.bytes);
         try testing.expectEqualStrings("8", (try requests.next()).?.value.id.?.bytes);
@@ -437,90 +446,67 @@ test "a line past the bound keeps the member it is answered under" {
 
     // Not asked for, nothing is kept.
     var whole: std.Io.Reader = .fixed(input);
-    var lines: strand.LineReader = .init(testing.allocator, &whole, .{ .max_line_bytes = 128 });
+    var lines: jsonl.LineReader = .init(testing.allocator, &whole, .{ .max_line_bytes = 128 });
     defer lines.deinit();
     _ = try lines.next();
     try testing.expectError(error.LineTooLong, lines.next());
-    try testing.expectEqual(@as(?strand.Raw, null), lines.oversizedMember());
+    try testing.expectEqual(@as(?json.Raw, null), lines.oversizedMember());
 }
 
 test "an object written open is the value's bytes, members added, then closed" {
     // A record that carries a checksum over the bytes in front of it: the
-    // struct's members as `std.json` writes them, one more, and the brace.
+    // struct's members as `json.write` writes them, one more, and the brace.
     const Envelope = struct { seq: u64, at: i64, note: ?[]const u8, @"we\"ird": u8 = 1, ev: struct { kind: []const u8 } };
     const values = [_]Envelope{
         .{ .seq = 7, .at = -3, .note = null, .ev = .{ .kind = "open" } },
         .{ .seq = std.math.maxInt(u64), .at = std.math.minInt(i64), .note = "\u{e9}\n\"", .ev = .{ .kind = "" } },
     };
     for (values) |value| {
-        inline for (.{ true, false }) |emit_null| {
-            inline for (.{ true, false }) |escape_unicode| {
-                const options: strand.ValueOptions = .{ .emit_null_optional_fields = emit_null, .escape_unicode = escape_unicode };
-                var want: std.Io.Writer.Allocating = .init(testing.allocator);
-                defer want.deinit();
-                try std.json.Stringify.value(value, .{ .emit_null_optional_fields = emit_null, .escape_unicode = escape_unicode }, &want.writer);
-                const before = want.written()[0 .. want.written().len - 1];
-                // Into room to spare, and into a writer with none.
-                inline for (.{ 4096, 0 }) |room| {
-                    var out: std.Io.Writer.Allocating = try .initCapacity(testing.allocator, room);
-                    defer out.deinit();
-                    var object = try strand.writeObjectOpen(&out.writer, value, options);
-                    try testing.expectEqualStrings(before, out.written());
-                    try testing.expect(!object.empty);
-                    try object.member("c", @as(u32, 4_000_000_000));
-                    try object.close();
-                    const after = try testing.allocator.print("{s},\"c\":4000000000}}", .{before});
-                    defer testing.allocator.free(after);
-                    try testing.expectEqualStrings(after, out.written());
-                }
-            }
-        }
-    }
-
-    // A field `std.json` writes for itself is written by it, and the rest
-    // as ever.
-    const Spelled = struct {
-        pub const Self = @This();
-        n: u8,
-        pub fn jsonStringify(self: Self, jw: anytype) !void {
-            try jw.print("\"n={d}\"", .{self.n});
-        }
-    };
-    const Mixed = struct { seq: u64, f: f64, way: Spelled, value: std.json.Value, none: ?u8 = null };
-    const mixed: Mixed = .{ .seq = 3, .f = 0.1, .way = .{ .n = 9 }, .value = .{ .bool = true } };
-    inline for (.{ true, false }) |emit_null| {
         var want: std.Io.Writer.Allocating = .init(testing.allocator);
         defer want.deinit();
-        try std.json.Stringify.value(mixed, .{ .emit_null_optional_fields = emit_null }, &want.writer);
-        var got: std.Io.Writer.Allocating = .init(testing.allocator);
-        defer got.deinit();
-        var object = try strand.writeObjectOpen(&got.writer, mixed, .{ .emit_null_optional_fields = emit_null });
-        try testing.expectEqualStrings(want.written()[0 .. want.written().len - 1], got.written());
-        try object.close();
-        try testing.expectEqualStrings(want.written(), got.written());
+        try json.write(&want.writer, value, .{});
+        const before = want.written()[0 .. want.written().len - 1];
+        // Into room to spare, and into a writer with none.
+        inline for (.{ 4096, 0 }) |room| {
+            var out: std.Io.Writer.Allocating = try .initCapacity(testing.allocator, room);
+            defer out.deinit();
+            var object = try json.writeObjectOpen(&out.writer, value, .{});
+            try testing.expectEqualStrings(before, out.written());
+            try testing.expect(!object.empty);
+            try object.member("c", @as(u32, 4_000_000_000));
+            try object.close();
+            const after = try testing.allocator.print("{s},\"c\":4000000000}}", .{before});
+            defer testing.allocator.free(after);
+            try testing.expectEqualStrings(after, out.written());
+        }
     }
 
     // An object with nothing written yet takes its first member bare.
     var out: std.Io.Writer.Allocating = .init(testing.allocator);
     defer out.deinit();
-    var empty = try strand.writeObjectOpen(&out.writer, struct { note: ?u8 = null }{}, .{});
+    const Lean = struct {
+        note: ?u8 = null,
+        pub const strand = .{ .fields = .{ .note = .{ .omit = .null_value } } };
+    };
+    var empty = try json.writeObjectOpen(&out.writer, Lean{}, .{});
     try testing.expect(empty.empty);
     try empty.member("c", @as(u8, 1));
-    try empty.member("d\"", "x");
+    try empty.member("d\"", @as([]const u8, "x"));
     try empty.close();
     try testing.expectEqualStrings("{\"c\":1,\"d\\\"\":\"x\"}", out.written());
 
     // And the integers in front of the rest come back off the bytes.
     out.clearRetainingCapacity();
     const Head = struct { seq: u64, at: i64 };
-    var record = try strand.writeObjectOpen(&out.writer, .{ .seq = @as(u64, 42), .at = @as(i64, -1), .ev = "x" }, .{});
+    const Line = struct { seq: u64, at: i64, ev: []const u8 };
+    var record = try json.writeObjectOpen(&out.writer, Line{ .seq = 42, .at = -1, .ev = "x" }, .{});
     try record.close();
-    const head = strand.leadingIntMembers(Head, out.written()).?;
+    const head = json.leadingIntMembers(Head, out.written()).?;
     try testing.expectEqual(Head{ .seq = 42, .at = -1 }, head.value);
     try testing.expectEqualStrings(",\"ev\":\"x\"}", out.written()[head.end..]);
 }
 
-test "leadingIntMembers reads what writeValue writes" {
+test "leadingIntMembers reads what write writes" {
     const Envelope = struct { seq: u64, at: i64, v: u32, p: u8 };
     var prng: std.Random.DefaultPrng = .init(0x1ead_1e7);
     const random = prng.random();
@@ -528,8 +514,8 @@ test "leadingIntMembers reads what writeValue writes" {
         const want: Envelope = .{ .seq = random.int(u64), .at = random.int(i64), .v = random.int(u32), .p = random.int(u8) };
         var buffer: [256]u8 = undefined;
         var out: std.Io.Writer = .fixed(&buffer);
-        try strand.writeValue(&out, want, .{});
-        const got = strand.leadingIntMembers(Envelope, out.buffered()).?;
+        try json.write(&out, want, .{});
+        const got = json.leadingIntMembers(Envelope, out.buffered()).?;
         try testing.expectEqual(want, got.value);
         try testing.expectEqual(out.buffered().len - 1, got.end);
     }
@@ -539,14 +525,14 @@ test "a line reader puts an unfinished record back and reads it once it is finis
     var fixture = try fixtures.Fixture.init("{\"kind\":\"one\"}\n{\"kind\":", 64);
     defer fixture.deinit();
 
-    var lines: strand.LineReader = .init(testing.allocator, &fixture.reader.interface, .{
+    var lines: jsonl.LineReader = .init(testing.allocator, &fixture.reader.interface, .{
         .require_terminator = true,
     });
     defer lines.deinit();
 
     try testing.expectEqualStrings("{\"kind\":\"one\"}", (try lines.next()).?.line);
     // Half a record is not a line, and where it began is where to read again.
-    try testing.expectEqual(@as(?strand.RawLine, null), try lines.next());
+    try testing.expectEqual(@as(?jsonl.RawLine, null), try lines.next());
     const unfinished = lines.recordStart();
     try testing.expectEqual(@as(u64, "{\"kind\":\"one\"}\n".len), unfinished.offset);
     try testing.expectEqual(@as(u64, 1), unfinished.lines_before);
@@ -569,7 +555,7 @@ test "a line reader says when the stream ended inside a record" {
 
         // Unfinished: bytes and no terminator after them.
         var cut = fixtures.Chunked.init("{\"a\":1}\n{\"b\":", &buffer, 2);
-        var lines: strand.LineReader = .init(testing.allocator, &cut.interface, .{ .require_terminator = true });
+        var lines: jsonl.LineReader = .init(testing.allocator, &cut.interface, .{ .require_terminator = true });
         defer lines.deinit();
         try testing.expectEqualStrings("{\"a\":1}", (try lines.next()).?.line);
         try testing.expect(!lines.unfinished);
@@ -579,7 +565,7 @@ test "a line reader says when the stream ended inside a record" {
 
         // Finished: the end of the stream at a line boundary.
         var whole = fixtures.Chunked.init("{\"a\":1}\n", &buffer, 2);
-        var at_end: strand.LineReader = .init(testing.allocator, &whole.interface, .{ .require_terminator = true });
+        var at_end: jsonl.LineReader = .init(testing.allocator, &whole.interface, .{ .require_terminator = true });
         defer at_end.deinit();
         _ = try at_end.next();
         try testing.expectEqual(null, try at_end.next());
@@ -587,13 +573,13 @@ test "a line reader says when the stream ended inside a record" {
 
         // Past the bound, with the stream ending inside the line and not.
         var long_cut = fixtures.Chunked.init("{}\nxxxxxxxxxxxx", &buffer, 2);
-        var over: strand.LineReader = .init(testing.allocator, &long_cut.interface, .{ .require_terminator = true, .max_line_bytes = 4 });
+        var over: jsonl.LineReader = .init(testing.allocator, &long_cut.interface, .{ .require_terminator = true, .max_line_bytes = 4 });
         defer over.deinit();
         _ = try over.next();
         try testing.expectError(error.LineTooLong, over.next());
         try testing.expect(over.unfinished);
         var long_whole = fixtures.Chunked.init("xxxxxxxxxxxx\n{}\n", &buffer, 2);
-        var over_whole: strand.LineReader = .init(testing.allocator, &long_whole.interface, .{ .require_terminator = true, .max_line_bytes = 4 });
+        var over_whole: jsonl.LineReader = .init(testing.allocator, &long_whole.interface, .{ .require_terminator = true, .max_line_bytes = 4 });
         defer over_whole.deinit();
         try testing.expectError(error.LineTooLong, over_whole.next());
         try testing.expect(!over_whole.unfinished);
@@ -608,7 +594,7 @@ test "without crlf a carriage return is a byte of the line" {
 
         // Kept, where a line is checked byte for byte.
         var kept = fixtures.Chunked.init(input, &buffer, 2);
-        var lines: strand.LineReader = .init(testing.allocator, &kept.interface, .{ .crlf = false, .reject_control_bytes = false });
+        var lines: jsonl.LineReader = .init(testing.allocator, &kept.interface, .{ .crlf = false, .reject_control_bytes = false });
         defer lines.deinit();
         const first = (try lines.next()).?;
         try testing.expectEqualStrings("{\"a\":1}\r", first.line);
@@ -618,14 +604,14 @@ test "without crlf a carriage return is a byte of the line" {
 
         // And a raw control byte, where those are refused.
         var refused = fixtures.Chunked.init(input, &buffer, 2);
-        var strict: strand.LineReader = .init(testing.allocator, &refused.interface, .{ .crlf = false });
+        var strict: jsonl.LineReader = .init(testing.allocator, &refused.interface, .{ .crlf = false });
         defer strict.deinit();
         try testing.expectError(error.ControlByte, strict.next());
         try testing.expectEqualStrings("{\"b\":2}", (try strict.next()).?.line);
 
         // The bound counts it.
         var bound = fixtures.Chunked.init(input, &buffer, 2);
-        var tight: strand.LineReader = .init(testing.allocator, &bound.interface, .{ .crlf = false, .reject_control_bytes = false, .max_line_bytes = 7 });
+        var tight: jsonl.LineReader = .init(testing.allocator, &bound.interface, .{ .crlf = false, .reject_control_bytes = false, .max_line_bytes = 7 });
         defer tight.deinit();
         try testing.expectError(error.LineTooLong, tight.next());
     }
@@ -636,7 +622,7 @@ test "a file read backwards ends where it is told to, and gives its lines as byt
     const bytes = "{\"a\":1}\nnot json\r\n{\"c\":3}\n\x00\x00\x00\x00";
     var fixture = try fixtures.Fixture.init(bytes, 64);
     defer fixture.deinit();
-    var tail: strand.Tail(strand.Raw) = try .init(testing.allocator, &fixture.reader, .{
+    var tail: jsonl.Tail(json.Raw) = try .init(testing.allocator, &fixture.reader, .{
         .end = bytes.len - 4,
         .crlf = false,
         .reject_control_bytes = false,
@@ -654,7 +640,7 @@ test "a file read backwards ends where it is told to, and gives its lines as byt
     try testing.expectEqual(null, try tail.prevRaw());
 
     // An end past the file is a file shorter than it was said to be.
-    var past: strand.Tail(strand.Raw) = try .init(testing.allocator, &fixture.reader, .{ .end = bytes.len + 1 });
+    var past: jsonl.Tail(json.Raw) = try .init(testing.allocator, &fixture.reader, .{ .end = bytes.len + 1 });
     defer past.deinit();
     try testing.expectError(error.Truncated, past.prevRaw());
 }
@@ -662,7 +648,7 @@ test "a file read backwards ends where it is told to, and gives its lines as byt
 test "the line bound excludes a CRLF terminator" {
     {
         var source: std.Io.Reader = .fixed("{}\r\n");
-        var reader: strand.Reader(std.json.Value) = .init(testing.allocator, &source, .{
+        var reader: jsonl.Reader(json.Value) = .init(testing.allocator, &source, .{
             .max_line_bytes = 2,
         });
         defer reader.deinit();
@@ -671,7 +657,7 @@ test "the line bound excludes a CRLF terminator" {
 
     var buffer: [2]u8 = undefined;
     var chunked: fixtures.Chunked = .init("{}\r\n", &buffer, 1);
-    var streamed: strand.Reader(std.json.Value) = .init(testing.allocator, &chunked.interface, .{
+    var streamed: jsonl.Reader(json.Value) = .init(testing.allocator, &chunked.interface, .{
         .max_line_bytes = 2,
     });
     defer streamed.deinit();
@@ -686,7 +672,7 @@ test "strings borrow from the line when they can, and are copied when they canno
     ;
 
     var source: std.Io.Reader = .fixed(input);
-    var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{});
+    var reader: jsonl.Reader(Event) = .init(testing.allocator, &source, .{});
     defer reader.deinit();
 
     const plain = (try reader.next()).?;
@@ -717,7 +703,7 @@ test "a line already in the stream's buffer is framed where it lies" {
     // never written to at all.
     {
         var source: std.Io.Reader = .fixed(input);
-        var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{});
+        var reader: jsonl.Reader(Event) = .init(testing.allocator, &source, .{});
         defer reader.deinit();
 
         var seen: usize = 0;
@@ -734,7 +720,7 @@ test "a line already in the stream's buffer is framed where it lies" {
     const buffer = try testing.allocator.alloc(u8, 32);
     defer testing.allocator.free(buffer);
     var chunked: fixtures.Chunked = .init(input, buffer, 32);
-    var reader: strand.Reader(Event) = .init(testing.allocator, &chunked.interface, .{});
+    var reader: jsonl.Reader(Event) = .init(testing.allocator, &chunked.interface, .{});
     defer reader.deinit();
 
     var framed: usize = 0;
@@ -768,20 +754,23 @@ test "keep is what makes a value outlive its line" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
 
+    var owner: core.Parsed(Event) = undefined;
+    defer owner.deinit();
     var kept: Event = undefined;
     {
         var source: std.Io.Reader = .fixed(input);
-        var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{});
+        var reader: jsonl.Reader(Event) = .init(testing.allocator, &source, .{});
         defer reader.deinit();
 
         const first = (try reader.next()).?;
-        kept = try reader.keep(arena.allocator(), first);
+        owner = try reader.keep(testing.allocator, first);
+        kept = owner.value;
         // The copy borrows neither the line buffer nor anything in it.
         try testing.expect(!within(kept.kind, first.line));
 
         // Read on: the line the value came from is gone by now.
         _ = try reader.next();
-        try testing.expectEqual(@as(?strand.Line(Event), null), try reader.next());
+        try testing.expectEqual(@as(?jsonl.Line(Event), null), try reader.next());
     }
 
     // The reader is deinitialized and the kept value is still whole.
@@ -791,18 +780,18 @@ test "keep is what makes a value outlive its line" {
 
 test "kindOf and tagOf answer null rather than guess" {
     // An escaped key is not decoded, and saying so is the contract.
-    try testing.expectEqual(@as(?[]const u8, null), strand.kindOf("{\"ki\\u006ed\":1}"));
-    try testing.expectEqual(@as(?std.meta.Tag(Message), null), strand.tagOf(Message, "{\"pi\\u006eg\":1}"));
+    try testing.expectEqual(@as(?[]const u8, null), json.kindOf("{\"ki\\u006ed\":1}"));
+    try testing.expectEqual(@as(?std.meta.Tag(Message), null), json.tagOf(Message, "{\"pi\\u006eg\":1}"));
     // Neither is anything that is not a one-key object.
-    try testing.expectEqual(@as(?[]const u8, null), strand.kindOf("[{\"kind\":1}]"));
-    try testing.expectEqual(@as(?[]const u8, null), strand.kindOf("null"));
-    try testing.expectEqual(@as(?[]const u8, null), strand.kindOf("42"));
-    try testing.expectEqual(@as(?[]const u8, null), strand.kindOf("\"kind\""));
-    try testing.expectEqual(@as(?[]const u8, null), strand.kindOf(""));
-    try testing.expectEqual(@as(?[]const u8, null), strand.kindOf("{\"unterminated"));
-    try testing.expectEqual(@as(?[]const u8, null), strand.kindOf("{\"kind\"}"));
+    try testing.expectEqual(@as(?[]const u8, null), json.kindOf("[{\"kind\":1}]"));
+    try testing.expectEqual(@as(?[]const u8, null), json.kindOf("null"));
+    try testing.expectEqual(@as(?[]const u8, null), json.kindOf("42"));
+    try testing.expectEqual(@as(?[]const u8, null), json.kindOf("\"kind\""));
+    try testing.expectEqual(@as(?[]const u8, null), json.kindOf(""));
+    try testing.expectEqual(@as(?[]const u8, null), json.kindOf("{\"unterminated"));
+    try testing.expectEqual(@as(?[]const u8, null), json.kindOf("{\"kind\"}"));
     // An empty key is a key.
-    try testing.expectEqualStrings("", strand.kindOf("{\"\":1}").?);
+    try testing.expectEqualStrings("", json.kindOf("{\"\":1}").?);
 }
 
 test "a long stream costs what one line costs" {
@@ -810,13 +799,13 @@ test "a long stream costs what one line costs" {
 
     var input: std.Io.Writer.Allocating = .init(testing.allocator);
     defer input.deinit();
-    var writer: strand.Writer(Event) = .init(&input.writer, .{});
+    var writer: jsonl.Writer(Event) = .init(&input.writer, .{});
     for (0..line_count) |i| {
         try writer.write(.{ .kind = "tick", .at = i, .tags = &.{"generated"} });
     }
 
     var source: std.Io.Reader = .fixed(input.written());
-    var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{});
+    var reader: jsonl.Reader(Event) = .init(testing.allocator, &source, .{});
     defer reader.deinit();
 
     var seen: u64 = 0;
@@ -833,7 +822,7 @@ test "a long stream costs what one line costs" {
     try testing.expect(reader.arena.queryCapacity() < 64 * 1024);
 }
 
-test "parseLine and lines: the buffer already in memory" {
+test "parseLeaky and lines: the buffer already in memory" {
     const buffer =
         \\{"kind":"open"}
         \\{"kind":"close"}
@@ -843,9 +832,9 @@ test "parseLine and lines: the buffer already in memory" {
     defer arena.deinit();
 
     var count: usize = 0;
-    var it = strand.lines(buffer);
+    var it = jsonl.lines(buffer);
     while (it.next()) |line| : (count += 1) {
-        const event = try strand.parseLine(Event, arena.allocator(), line.line, .{});
+        const event = try json.parseLeaky(Event, arena.allocator(), line.line, .{});
         try testing.expectEqual(line.number, count + 1);
         try testing.expect(event.kind.len > 0);
         // Nothing was copied: the field is a view into the original buffer.
@@ -854,35 +843,28 @@ test "parseLine and lines: the buffer already in memory" {
     try testing.expectEqual(@as(usize, 2), count);
 }
 
-test "parseLine with copy_strings borrows nothing" {
-    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
-    defer arena.deinit();
-
+test "parseOwned borrows nothing" {
     const line = "{\"kind\":\"open\"}";
-    const event = try strand.parseLine(Event, arena.allocator(), line, .{ .copy_strings = true });
-    try testing.expectEqualStrings("open", event.kind);
-    try testing.expect(!within(event.kind, line));
-}
-
-test "parseLine rejects a trailing line terminator" {
-    try testing.expectError(error.SyntaxError, strand.parseLine(bool, testing.allocator, "true\n", .{}));
-    try testing.expectError(error.SyntaxError, strand.parseLine(bool, testing.allocator, "true\r\n", .{}));
+    var event = try json.parseOwned(Event, testing.allocator, line, .{});
+    defer event.deinit();
+    try testing.expectEqualStrings("open", event.value.kind);
+    try testing.expect(!within(event.value.kind, line));
 }
 
 test "large unsigned integers accept exponent notation" {
-    const value = try strand.parseLine(u128, testing.allocator, "2e38", .{});
+    const value = try json.parseLeaky(u128, testing.allocator, "2e38", .{});
     try testing.expectEqual(@as(u128, 200_000_000_000_000_000_000_000_000_000_000_000_000), value);
 
-    var diagnostics: strand.Diagnostics = .{};
-    const diagnosed = try strand.parseLine(u128, testing.allocator, "2e38", .{ .diagnostics = &diagnostics });
+    var diagnostics: core.Diagnostics = .{};
+    const diagnosed = try json.parseLeaky(u128, testing.allocator, "2e38", .{ .diagnostics = &diagnostics });
     try testing.expectEqual(value, diagnosed);
 }
 
 test "an empty stream is a stream" {
     var source: std.Io.Reader = .fixed("");
-    var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{});
+    var reader: jsonl.Reader(Event) = .init(testing.allocator, &source, .{});
     defer reader.deinit();
-    try testing.expectEqual(@as(?strand.Line(Event), null), try reader.next());
+    try testing.expectEqual(@as(?jsonl.Line(Event), null), try reader.next());
     try testing.expectEqual(@as(u64, 0), reader.lines.number);
 }
 
@@ -890,7 +872,7 @@ test "a byte-order mark belongs to the file, not to its first line" {
     const input = "\xEF\xBB\xBF{\"kind\":\"first\"}\n{\"kind\":\"second\"}\n";
 
     var source: std.Io.Reader = .fixed(input);
-    var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{});
+    var reader: jsonl.Reader(Event) = .init(testing.allocator, &source, .{});
     defer reader.deinit();
 
     const first = (try reader.next()).?;
@@ -901,12 +883,12 @@ test "a byte-order mark belongs to the file, not to its first line" {
 
     // With the option off, `std.json` is shown the mark and says so.
     var marked: std.Io.Reader = .fixed(input);
-    var strict: strand.Reader(Event) = .init(testing.allocator, &marked, .{ .skip_bom = false });
+    var strict: jsonl.Reader(Event) = .init(testing.allocator, &marked, .{ .skip_bom = false });
     defer strict.deinit();
     try testing.expectError(error.MalformedLine, strict.next());
 
     // `lines` agrees with the reader about where the first line starts.
-    var it = strand.lines(input);
+    var it = jsonl.lines(input);
     try testing.expectEqualStrings("{\"kind\":\"first\"}", it.next().?.line);
 }
 
@@ -914,7 +896,7 @@ test "a control byte is a damaged line, named by number and offset" {
     const input = "{\"kind\":\"first\"}\n{\"kind\":\"se\x00cond\"}\n{\"kind\":\"third\"}\n";
 
     var source: std.Io.Reader = .fixed(input);
-    var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{});
+    var reader: jsonl.Reader(Event) = .init(testing.allocator, &source, .{});
     defer reader.deinit();
 
     try testing.expectEqualStrings("first", (try reader.next()).?.value.kind);
@@ -922,7 +904,7 @@ test "a control byte is a damaged line, named by number and offset" {
     try testing.expectEqual(@as(u64, 2), reader.lines.fault.line);
     try testing.expectEqual(@as(?usize, 11), reader.lines.fault.offset);
     // It never reached `std.json`, so there is nothing of `std.json`'s to say.
-    try testing.expectEqual(@as(?strand.ParseLineError, null), reader.lines.fault.err);
+    try testing.expectEqual(@as(?core.DecodeError, null), reader.lines.fault.err);
     // And the stream is where it was: the next line is the next line.
     const third = (try reader.next()).?;
     try testing.expectEqualStrings("third", third.value.kind);
@@ -930,7 +912,7 @@ test "a control byte is a damaged line, named by number and offset" {
 
     // Skipping treats it the way it treats any other line it cannot use.
     var skipping: std.Io.Reader = .fixed(input);
-    var skipper: strand.Reader(Event) = .init(testing.allocator, &skipping, .{ .on_malformed = .skip });
+    var skipper: jsonl.Reader(Event) = .init(testing.allocator, &skipping, .{ .on_malformed = .skip });
     defer skipper.deinit();
     try testing.expectEqualStrings("first", (try skipper.next()).?.value.kind);
     try testing.expectEqualStrings("third", (try skipper.next()).?.value.kind);
@@ -938,7 +920,7 @@ test "a control byte is a damaged line, named by number and offset" {
     // With the scan off the line is still refused, but by `std.json`, which
     // has no idea what it was looking at.
     var raw: std.Io.Reader = .fixed(input);
-    var tolerant: strand.Reader(Event) = .init(testing.allocator, &raw, .{ .reject_control_bytes = false });
+    var tolerant: jsonl.Reader(Event) = .init(testing.allocator, &raw, .{ .reject_control_bytes = false });
     defer tolerant.deinit();
     _ = try tolerant.next();
     try testing.expectError(error.MalformedLine, tolerant.next());
@@ -946,7 +928,7 @@ test "a control byte is a damaged line, named by number and offset" {
 
     // A tab is whitespace to JSON, so it is not damage.
     var tabbed: std.Io.Reader = .fixed("{\"kind\":\t\"fine\"}\n");
-    var tabs: strand.Reader(Event) = .init(testing.allocator, &tabbed, .{});
+    var tabs: jsonl.Reader(Event) = .init(testing.allocator, &tabbed, .{});
     defer tabs.deinit();
     try testing.expectEqualStrings("fine", (try tabs.next()).?.value.kind);
 }
@@ -959,14 +941,14 @@ test "pretty: a record written over several lines is read back as one" {
 
     var out: std.Io.Writer.Allocating = .init(testing.allocator);
     defer out.deinit();
-    var writer: strand.Writer(Event) = .init(&out.writer, .{ .format = .pretty });
+    var writer: jsonl.Writer(Event) = .init(&out.writer, .{ .format = .pretty });
     try writer.writeAll(&events);
 
     // It really is more than one line per record.
     try testing.expect(std.mem.count(u8, out.written(), "\n") > events.len);
 
     var source: std.Io.Reader = .fixed(out.written());
-    var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{ .format = .pretty });
+    var reader: jsonl.Reader(Event) = .init(testing.allocator, &source, .{ .format = .pretty });
     defer reader.deinit();
 
     const first = (try reader.next()).?;
@@ -979,21 +961,21 @@ test "pretty: a record written over several lines is read back as one" {
     const second = (try reader.next()).?;
     try testing.expectEqualStrings("close", second.value.kind);
     try testing.expectEqual(@as(u32, 7), second.value.span.id);
-    try testing.expectEqual(@as(?strand.Line(Event), null), try reader.next());
+    try testing.expectEqual(@as(?jsonl.Line(Event), null), try reader.next());
 
     // A `.pretty` reader reads a minified stream too: a record that parses on
     // its first line never asks for a second.
     var minified: std.Io.Writer.Allocating = .init(testing.allocator);
     defer minified.deinit();
-    var plain: strand.Writer(Event) = .init(&minified.writer, .{});
+    var plain: jsonl.Writer(Event) = .init(&minified.writer, .{});
     try plain.writeAll(&events);
 
     var flat: std.Io.Reader = .fixed(minified.written());
-    var tolerant: strand.Reader(Event) = .init(testing.allocator, &flat, .{ .format = .pretty });
+    var tolerant: jsonl.Reader(Event) = .init(testing.allocator, &flat, .{ .format = .pretty });
     defer tolerant.deinit();
     try testing.expectEqual(@as(u64, 1), (try tolerant.next()).?.number);
     try testing.expectEqual(@as(u64, 2), (try tolerant.next()).?.number);
-    try testing.expectEqual(@as(?strand.Line(Event), null), try tolerant.next());
+    try testing.expectEqual(@as(?jsonl.Line(Event), null), try tolerant.next());
 }
 
 test "pretty: a record is parsed once its value ends, not once per line" {
@@ -1008,7 +990,7 @@ test "pretty: a record is parsed once its value ends, not once per line" {
         const record_len = std.mem.find(u8, out.written(), "\n}\n").? + 2;
 
         var source: std.Io.Reader = .fixed(out.written());
-        var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{ .format = .pretty });
+        var reader: jsonl.Reader(Event) = .init(testing.allocator, &source, .{ .format = .pretty });
         defer reader.deinit();
         var counts: work.Counts = .{};
         work.observe(&counts);
@@ -1034,7 +1016,7 @@ test "pretty: a record whole in the buffer is parsed where it lies, once" {
     const work = work_module;
     const input = "{\n  \"kind\": \"open\",\n  \"tags\": [\n    \"a\"\n  ]\n}\n\n{\"kind\":\"flat\"}   \n{\n\"kind\": \"last\"}\n";
     var source: std.Io.Reader = .fixed(input);
-    var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{ .format = .pretty });
+    var reader: jsonl.Reader(Event) = .init(testing.allocator, &source, .{ .format = .pretty });
     defer reader.deinit();
     var counts: work.Counts = .{};
     work.observe(&counts);
@@ -1058,7 +1040,7 @@ test "pretty: a record whole in the buffer is parsed where it lies, once" {
     try testing.expectEqualStrings("last", last.value.kind);
     try testing.expectEqual(@as(u64, 9), last.number);
     try testing.expectEqual(@as(u64, 10), reader.lines.number);
-    try testing.expectEqual(@as(?strand.Line(Event), null), try reader.next());
+    try testing.expectEqual(@as(?jsonl.Line(Event), null), try reader.next());
     try testing.expectEqual(@as(u64, input.len), reader.lines.consumed);
 }
 
@@ -1072,7 +1054,7 @@ test "pretty: a record that is JSON but not a T is one malformed record" {
         \\
     ;
     var source: std.Io.Reader = .fixed(input);
-    var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{
+    var reader: jsonl.Reader(Event) = .init(testing.allocator, &source, .{
         .format = .pretty,
         .on_malformed = .skip,
     });
@@ -1085,7 +1067,7 @@ test "pretty: a record that is JSON but not a T is one malformed record" {
     try testing.expectEqual(@as(u64, 5), next.number);
     try testing.expectEqual(@as(u64, 1), reader.lines.skipped);
     try testing.expectEqual(@as(u64, 1), reader.lines.fault.line);
-    try testing.expectEqual(error.UnexpectedToken, reader.lines.fault.err.?);
+    try testing.expectEqual(error.UnexpectedType, reader.lines.fault.err.?);
 }
 
 test "pretty: a record that never finishes is one malformed record" {
@@ -1094,14 +1076,14 @@ test "pretty: a record that never finishes is one malformed record" {
         \\  "kind": "truncated",
     ;
     var source: std.Io.Reader = .fixed(input);
-    var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{ .format = .pretty });
+    var reader: jsonl.Reader(Event) = .init(testing.allocator, &source, .{ .format = .pretty });
     defer reader.deinit();
 
     try testing.expectError(error.MalformedLine, reader.next());
     // Blamed on the line it began on, not the one it ran out on.
     try testing.expectEqual(@as(u64, 1), reader.lines.fault.line);
-    try testing.expectEqual(error.UnexpectedEndOfInput, reader.lines.fault.err.?);
-    try testing.expectEqual(@as(?strand.Line(Event), null), try reader.next());
+    try testing.expectEqual(error.SyntaxError, reader.lines.fault.err.?);
+    try testing.expectEqual(@as(?jsonl.Line(Event), null), try reader.next());
 }
 
 test "pretty: a terminated prefix remains unfinished when a terminator is required" {
@@ -1111,13 +1093,13 @@ test "pretty: a terminated prefix remains unfinished when a terminator is requir
         \\
     ;
     var source: std.Io.Reader = .fixed(input);
-    var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{
+    var reader: jsonl.Reader(Event) = .init(testing.allocator, &source, .{
         .format = .pretty,
         .require_terminator = true,
     });
     defer reader.deinit();
 
-    try testing.expectEqual(@as(?strand.Line(Event), null), try reader.next());
+    try testing.expectEqual(@as(?jsonl.Line(Event), null), try reader.next());
 }
 
 test "pretty: a control byte on a joined line is what the reader says it is" {
@@ -1128,7 +1110,7 @@ test "pretty: a control byte on a joined line is what the reader says it is" {
     const input = "{\n\"kind\":\"a\x00\"}\n{\"kind\":\"b\"}\n";
 
     var source: std.Io.Reader = .fixed(input);
-    var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{
+    var reader: jsonl.Reader(Event) = .init(testing.allocator, &source, .{
         .format = .pretty,
         .on_malformed = .skip,
     });
@@ -1143,18 +1125,18 @@ test "pretty: a control byte on a joined line is what the reader says it is" {
     // Where in the joined record the byte is: past the `{`, past the `\n`
     // that joined the two, and nine bytes into the line that carried it.
     try testing.expectEqual(@as(?usize, 11), reader.lines.fault.offset);
-    try testing.expectEqual(@as(?strand.ParseLineError, null), reader.lines.fault.err);
+    try testing.expectEqual(@as(?core.DecodeError, null), reader.lines.fault.err);
 }
 
 test "pretty: the bound is on the record, not on one of its lines" {
     var out: std.Io.Writer.Allocating = .init(testing.allocator);
     defer out.deinit();
-    var writer: strand.Writer(Event) = .init(&out.writer, .{ .format = .pretty });
+    var writer: jsonl.Writer(Event) = .init(&out.writer, .{ .format = .pretty });
     try writer.write(.{ .kind = "open", .at = 1, .tags = &.{ "a", "b", "c" } });
     try writer.write(.{ .kind = "after", .at = 2 });
 
     var source: std.Io.Reader = .fixed(out.written());
-    var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{
+    var reader: jsonl.Reader(Event) = .init(testing.allocator, &source, .{
         .format = .pretty,
         // Every physical line of the record fits; the record does not.
         .max_line_bytes = 24,
@@ -1172,12 +1154,12 @@ test "writeAll writes the batch and counts it" {
 
     var batched: std.Io.Writer.Allocating = .init(testing.allocator);
     defer batched.deinit();
-    var batch: strand.Writer(Event) = .init(&batched.writer, .{});
+    var batch: jsonl.Writer(Event) = .init(&batched.writer, .{});
     try batch.writeAll(&events);
 
     var looped: std.Io.Writer.Allocating = .init(testing.allocator);
     defer looped.deinit();
-    var loop: strand.Writer(Event) = .init(&looped.writer, .{});
+    var loop: jsonl.Writer(Event) = .init(&looped.writer, .{});
     for (events) |event| try loop.write(event);
 
     // The same bytes and the same count: it is the loop, not another format.
@@ -1186,26 +1168,28 @@ test "writeAll writes the batch and counts it" {
     try testing.expectEqual(@as(u64, 3), batch.count);
 }
 
-/// A field whose `jsonStringify` gives up partway: after `pad` bytes of
-/// string when `fail` is set.
+/// A field whose codec gives up partway: after `pad` bytes of string when
+/// `fail` is set.
 pub const Partial = struct {
     fail: bool,
     pad: usize = 0,
 
-    pub fn jsonStringify(self: Partial, jw: *std.json.Stringify) !void {
-        try jw.beginObject();
-        if (self.pad != 0) {
-            try jw.objectField("pad");
-            try jw.beginWriteRaw();
-            try jw.writer.writeByte('"');
-            try jw.writer.splatByteAll('x', self.pad);
-            try jw.writer.writeByte('"');
-            jw.endWriteRaw();
+    const xs: [8192]u8 = @splat('x');
+    pub const Ok = struct {
+        fail: bool,
+        pub fn strandSerialize(self: Ok, access: anytype) @TypeOf(access.*).Error!void {
+            if (self.fail) return error.CustomRejected;
+            try access.write(true);
         }
-        try jw.objectField("ok");
-        if (self.fail) return error.WriteFailed;
-        try jw.write(true);
-        try jw.endObject();
+    };
+    const Shape = struct {
+        pad: ?[]const u8,
+        ok: Ok,
+        pub const strand = .{ .fields = .{ .pad = .{ .omit = .null_value } } };
+    };
+
+    pub fn strandSerialize(self: Partial, access: anytype) @TypeOf(access.*).Error!void {
+        try access.write(Shape{ .pad = if (self.pad == 0) null else xs[0..self.pad], .ok = .{ .fail = self.fail } });
     }
 };
 pub const WithPartial = struct { kind: []const u8, p: Partial };
@@ -1213,10 +1197,10 @@ pub const WithPartial = struct { kind: []const u8, p: Partial };
 test "a record that fails partway leaves nothing behind" {
     var out: std.Io.Writer.Allocating = try .initCapacity(testing.allocator, 256);
     defer out.deinit();
-    for ([_]strand.Format{ .minified, .pretty }) |format| {
+    for ([_]jsonl.Format{ .minified, .pretty }) |format| {
         out.clearRetainingCapacity();
-        var log: strand.Writer(WithPartial) = .init(&out.writer, .{ .format = format });
-        try testing.expectError(error.WriteFailed, log.write(.{ .kind = "a", .p = .{ .fail = true } }));
+        var log: jsonl.Writer(WithPartial) = .init(&out.writer, .{ .format = format });
+        try testing.expectError(error.CustomRejected, log.write(.{ .kind = "a", .p = .{ .fail = true } }));
         try testing.expectEqual(@as(usize, 0), out.written().len);
         try log.write(.{ .kind = "b", .p = .{ .fail = false } });
         try testing.expectEqual(@as(u64, 1), log.count);
@@ -1229,17 +1213,18 @@ test "a record torn in the destination does not take the next one with it" {
     for ([_]bool{ false, true }) |separated| {
         var out: std.Io.Writer.Allocating = try .initCapacity(testing.allocator, 16);
         defer out.deinit();
-        var log: strand.Writer(WithPartial) = .init(&out.writer, .{ .record_separator = separated });
+        var log: jsonl.Writer(WithPartial) = .init(&out.writer, .{ .record_separator = separated });
         // Longer than the destination's buffer, so its head is handed over
         // before it fails.
-        try testing.expectError(error.WriteFailed, log.write(.{ .kind = "a", .p = .{ .fail = true, .pad = 4096 } }));
+        try testing.expectError(error.CustomRejected, log.write(.{ .kind = "a", .p = .{ .fail = true, .pad = 4096 } }));
         try testing.expect(out.written().len > 0);
         try log.write(.{ .kind = "b", .p = .{ .fail = false } });
 
         var source: std.Io.Reader = .fixed(out.written());
-        var reader: strand.Reader(struct { kind: []const u8 }) = .init(testing.allocator, &source, .{
+        var reader: jsonl.Reader(struct { kind: []const u8 }) = .init(testing.allocator, &source, .{
             .record_separator = separated,
             .on_malformed = .skip,
+            .parse = .{ .ignore_unknown_fields = true },
         });
         defer reader.deinit();
         try testing.expectEqualStrings("b", (try reader.next()).?.value.kind);
@@ -1264,7 +1249,7 @@ test "write escapes every terminator that could break the framing" {
     for (hostile) |raw| {
         var out: std.Io.Writer.Allocating = .init(testing.allocator);
         defer out.deinit();
-        var writer: strand.Writer(Event) = .init(&out.writer, .{});
+        var writer: jsonl.Writer(Event) = .init(&out.writer, .{});
         try writer.write(.{ .kind = raw, .at = 1, .note = raw });
 
         // One record, one line: the only `\n` is the one the writer added.
@@ -1273,17 +1258,17 @@ test "write escapes every terminator that could break the framing" {
         // And no raw control byte survived into the line either.
         try testing.expectEqual(
             @as(?usize, null),
-            strand.indexOfControl(out.written()[0 .. out.written().len - 1]),
+            json.indexOfControl(out.written()[0 .. out.written().len - 1]),
         );
 
         // Which means it reads back as what went in.
         var source: std.Io.Reader = .fixed(out.written());
-        var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{});
+        var reader: jsonl.Reader(Event) = .init(testing.allocator, &source, .{});
         defer reader.deinit();
         const line = (try reader.next()).?;
         try testing.expectEqualStrings(raw, line.value.kind);
         try testing.expectEqualStrings(raw, line.value.note.?);
-        try testing.expectEqual(@as(?strand.Line(Event), null), try reader.next());
+        try testing.expectEqual(@as(?jsonl.Line(Event), null), try reader.next());
     }
 }
 
@@ -1291,17 +1276,17 @@ test "require_terminator: an unfinished last line is not a line" {
     const input = "{\"kind\":\"whole\"}\n{\"kind\":\"hal";
 
     var source: std.Io.Reader = .fixed(input);
-    var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{ .require_terminator = true });
+    var reader: jsonl.Reader(Event) = .init(testing.allocator, &source, .{ .require_terminator = true });
     defer reader.deinit();
 
     try testing.expectEqualStrings("whole", (try reader.next()).?.value.kind);
-    try testing.expectEqual(@as(?strand.Line(Event), null), try reader.next());
+    try testing.expectEqual(@as(?jsonl.Line(Event), null), try reader.next());
     // The half-written line was not counted, so a follower can read it again.
     try testing.expectEqual(@as(u64, 1), reader.lines.number);
 
     // Without the option, the same bytes are a line, and a bad one.
     var again: std.Io.Reader = .fixed(input);
-    var plain: strand.Reader(Event) = .init(testing.allocator, &again, .{});
+    var plain: jsonl.Reader(Event) = .init(testing.allocator, &again, .{});
     defer plain.deinit();
     _ = try plain.next();
     try testing.expectError(error.MalformedLine, plain.next());
@@ -1319,14 +1304,14 @@ test "a long stream stops allocating once its buffers have grown" {
 
     var input: std.Io.Writer.Allocating = .init(testing.allocator);
     defer input.deinit();
-    var writer: strand.Writer(Event) = .init(&input.writer, .{});
+    var writer: jsonl.Writer(Event) = .init(&input.writer, .{});
     for (0..line_count) |i| {
         try writer.write(.{ .kind = "tick", .at = i, .tags = &.{ "generated", "here" } });
     }
 
     var counting: shakedown.alloc.Counting = .init(testing.allocator);
     var source: std.Io.Reader = .fixed(input.written());
-    var reader: strand.Reader(Event) = .init(counting.allocator(), &source, .{});
+    var reader: jsonl.Reader(Event) = .init(counting.allocator(), &source, .{});
     defer reader.deinit();
 
     // The first thousand lines are where the line buffer and the arena reach
@@ -1354,7 +1339,7 @@ test "a very large line is read without copying its strings" {
     try input.writer.writeAll("\",\"at\":1}\n{\"kind\":\"after\"}\n");
 
     var source: std.Io.Reader = .fixed(input.written());
-    var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{
+    var reader: jsonl.Reader(Event) = .init(testing.allocator, &source, .{
         .max_line_bytes = payload_len + 1024,
     });
     defer reader.deinit();
@@ -1386,7 +1371,7 @@ test "a line knows the byte offset it began at" {
         "{\"kind\":\"third\"}";
 
     var source: std.Io.Reader = .fixed(input);
-    var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{});
+    var reader: jsonl.Reader(Event) = .init(testing.allocator, &source, .{});
     defer reader.deinit();
 
     var seen: usize = 0;
@@ -1411,7 +1396,7 @@ test "an offset names the line a reader refused" {
         \\
     ;
     var source: std.Io.Reader = .fixed(input);
-    var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{});
+    var reader: jsonl.Reader(Event) = .init(testing.allocator, &source, .{});
     defer reader.deinit();
 
     _ = (try reader.next()).?;
@@ -1424,7 +1409,7 @@ test "an offset names the line a reader refused" {
 
     // And an over-long line, which never reaches `std.json` at all.
     var long: std.Io.Reader = .fixed("{\"kind\":\"x\"}\n{\"kind\":\"" ++ @as([200]u8, @splat('y')) ++ "\"}\n{\"kind\":\"z\"}\n");
-    var bounded: strand.Reader(Event) = .init(testing.allocator, &long, .{ .max_line_bytes = 64 });
+    var bounded: jsonl.Reader(Event) = .init(testing.allocator, &long, .{ .max_line_bytes = 64 });
     defer bounded.deinit();
     _ = (try bounded.next()).?;
     try testing.expectError(error.LineTooLong, bounded.next());
@@ -1435,7 +1420,7 @@ test "an offset names the line a reader refused" {
 test "an offset is what turns a line number into a place to seek back to" {
     var input: std.Io.Writer.Allocating = .init(testing.allocator);
     defer input.deinit();
-    var writer: strand.Writer(Event) = .init(&input.writer, .{});
+    var writer: jsonl.Writer(Event) = .init(&input.writer, .{});
     for (0..500) |i| try writer.write(.{ .kind = "tick", .at = i });
 
     // Read the whole stream once, remembering where every tenth line was.
@@ -1443,7 +1428,7 @@ test "an offset is what turns a line number into a place to seek back to" {
     defer offsets.deinit(testing.allocator);
     {
         var source: std.Io.Reader = .fixed(input.written());
-        var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{});
+        var reader: jsonl.Reader(Event) = .init(testing.allocator, &source, .{});
         defer reader.deinit();
         while (try reader.next()) |line| {
             if (line.number % 10 == 0) try offsets.append(testing.allocator, line.offset);
@@ -1454,7 +1439,7 @@ test "an offset is what turns a line number into a place to seek back to" {
     // An index of fifty entries is enough to start a reader anywhere.
     for (offsets.items, 1..) |offset, tenth| {
         var source: std.Io.Reader = .fixed(input.written()[@intCast(offset)..]);
-        var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{});
+        var reader: jsonl.Reader(Event) = .init(testing.allocator, &source, .{});
         defer reader.deinit();
         const line = (try reader.next()).?;
         try testing.expectEqual(@as(u64, tenth * 10 - 1), line.value.at);
@@ -1468,7 +1453,7 @@ test "a reader resumed at an offset carries the line number with it" {
     defer input.deinit();
     // A mark, so that the first line does not begin where the file does.
     try input.writer.writeAll("\xEF\xBB\xBF");
-    var writer: strand.Writer(Event) = .init(&input.writer, .{});
+    var writer: jsonl.Writer(Event) = .init(&input.writer, .{});
     for (0..500) |i| try writer.write(.{ .kind = "tick", .at = i });
 
     // The index: every tenth line, as a place and as a number.
@@ -1477,7 +1462,7 @@ test "a reader resumed at an offset carries the line number with it" {
     defer index.deinit(testing.allocator);
     {
         var source: std.Io.Reader = .fixed(input.written());
-        var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{});
+        var reader: jsonl.Reader(Event) = .init(testing.allocator, &source, .{});
         defer reader.deinit();
         while (try reader.next()) |line| {
             if (line.number % 10 == 0) try index.append(testing.allocator, .{
@@ -1493,7 +1478,7 @@ test "a reader resumed at an offset carries the line number with it" {
     // its own offset, and every line after it under the next ones.
     for (index.items) |mark| {
         var source: std.Io.Reader = .fixed(input.written()[@intCast(mark.offset)..]);
-        var reader: strand.Reader(Event) = .resumeAt(testing.allocator, &source, .{
+        var reader: jsonl.Reader(Event) = .resumeAt(testing.allocator, &source, .{
             .offset = mark.offset,
             .lines_before = mark.number - 1,
         }, .{});
@@ -1518,12 +1503,12 @@ test "a reader resumed at an offset carries the line number with it" {
 
     // Resumed at the end, there is nothing left and the count still holds.
     var empty: std.Io.Reader = .fixed("");
-    var done: strand.Reader(Event) = .resumeAt(testing.allocator, &empty, .{
+    var done: jsonl.Reader(Event) = .resumeAt(testing.allocator, &empty, .{
         .offset = input.written().len,
         .lines_before = 500,
     }, .{});
     defer done.deinit();
-    try testing.expectEqual(@as(?strand.Line(Event), null), try done.next());
+    try testing.expectEqual(@as(?jsonl.Line(Event), null), try done.next());
     try testing.expectEqual(@as(u64, 500), done.lines.number);
 }
 
@@ -1534,7 +1519,7 @@ test "a resumed reader does not eat three bytes looking for a mark" {
     const offset = std.mem.findScalar(u8, input, '\n').? + 1;
 
     var source: std.Io.Reader = .fixed(input[offset..]);
-    var reader: strand.Reader(Event) = .resumeAt(testing.allocator, &source, .{
+    var reader: jsonl.Reader(Event) = .resumeAt(testing.allocator, &source, .{
         .offset = offset,
         .lines_before = 1,
     }, .{});
@@ -1557,7 +1542,7 @@ test "skipped counts the lines a tolerant reader lost" {
         \\
     ;
     var source: std.Io.Reader = .fixed(input);
-    var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{ .on_malformed = .skip });
+    var reader: jsonl.Reader(Event) = .init(testing.allocator, &source, .{ .on_malformed = .skip });
     defer reader.deinit();
 
     var seen: usize = 0;
@@ -1569,7 +1554,7 @@ test "skipped counts the lines a tolerant reader lost" {
 
     // A control byte is counted the same way.
     var damaged: std.Io.Reader = .fixed("{\"kind\":\"a\x00\"}\n{\"kind\":\"b\"}\n");
-    var tolerant: strand.Reader(Event) = .init(testing.allocator, &damaged, .{ .on_malformed = .skip });
+    var tolerant: jsonl.Reader(Event) = .init(testing.allocator, &damaged, .{ .on_malformed = .skip });
     defer tolerant.deinit();
     try testing.expectEqualStrings("b", (try tolerant.next()).?.value.kind);
     try testing.expectEqual(@as(u64, 1), tolerant.lines.skipped);
@@ -1582,23 +1567,28 @@ test "skipped counts the lines a tolerant reader lost" {
 test "a repeated key is refused, kept first or kept last, as asked" {
     const line = "{\"kind\":\"first\",\"at\":1,\"kind\":\"second\"}\n";
 
-    for ([_]struct { strand.DuplicateFields, ?[]const u8 }{
-        .{ .@"error", null },
-        .{ .use_first, "first" },
-        .{ .use_last, "second" },
-    }) |case| {
+    // Refused by default, whatever the type says.
+    {
         var source: std.Io.Reader = .fixed(line);
-        var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{
-            .duplicate_fields = case[0],
+        var reader: jsonl.Reader(Event) = .init(testing.allocator, &source, .{});
+        defer reader.deinit();
+        try testing.expectError(error.MalformedLine, reader.next());
+        try testing.expectEqual(error.DuplicateField, reader.lines.fault.err.?);
+    }
+
+    // A type that keeps one says which, and the reader lets it.
+    inline for (.{ .{ .first, "first" }, .{ .last, "second" } }) |case| {
+        const Keeping = struct {
+            kind: []const u8,
+            at: u64 = 0,
+            pub const strand = .{ .duplicates = case[0] };
+        };
+        var source: std.Io.Reader = .fixed(line);
+        var reader: jsonl.Reader(Keeping) = .init(testing.allocator, &source, .{
+            .parse = .{ .reject_duplicates = false },
         });
         defer reader.deinit();
-
-        if (case[1]) |want| {
-            try testing.expectEqualStrings(want, (try reader.next()).?.value.kind);
-        } else {
-            try testing.expectError(error.MalformedLine, reader.next());
-            try testing.expectEqual(error.DuplicateField, reader.lines.fault.err.?);
-        }
+        try testing.expectEqualStrings(case[1], (try reader.next()).?.value.kind);
     }
 }
 
@@ -1615,17 +1605,17 @@ test "a separated stream says where every record begins" {
 
     var out: std.Io.Writer.Allocating = .init(testing.allocator);
     defer out.deinit();
-    var log: strand.Writer(Event) = .init(&out.writer, .{ .record_separator = true });
+    var log: jsonl.Writer(Event) = .init(&out.writer, .{ .record_separator = true });
     try log.writeAll(&events);
 
     // One byte per record, in front of it, and the rest is the line it
     // would have been.
-    try testing.expectEqual(@as(usize, 3), std.mem.count(u8, out.written(), &.{strand.separator}));
+    try testing.expectEqual(@as(usize, 3), std.mem.count(u8, out.written(), &.{jsonl.separator}));
     try testing.expectEqual(@as(u8, 0x1e), out.written()[0]);
     try testing.expect(std.mem.startsWith(u8, out.written()[1..], "{\"kind\":\"open\""));
 
     var source: std.Io.Reader = .fixed(out.written());
-    var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{
+    var reader: jsonl.Reader(Event) = .init(testing.allocator, &source, .{
         .record_separator = true,
     });
     defer reader.deinit();
@@ -1635,13 +1625,13 @@ test "a separated stream says where every record begins" {
         try testing.expectEqualStrings(want.kind, line.value.kind);
         // The line is the record and not the byte in front of it; the
         // offset is where the record begins, which is that byte.
-        try testing.expectEqual(@as(u8, strand.separator), out.written()[@intCast(line.offset)]);
+        try testing.expectEqual(@as(u8, jsonl.separator), out.written()[@intCast(line.offset)]);
         try testing.expectEqualStrings(
             line.line,
             out.written()[@intCast(line.offset + 1)..][0..line.line.len],
         );
     }
-    try testing.expectEqual(@as(?strand.Line(Event), null), try reader.next());
+    try testing.expectEqual(@as(?jsonl.Line(Event), null), try reader.next());
 }
 
 test "a torn record is what a separator makes visible" {
@@ -1655,7 +1645,7 @@ test "a torn record is what a separator makes visible" {
         "\x1e{\"kind\":\"third\"}\n";
 
     var source: std.Io.Reader = .fixed(input);
-    var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{
+    var reader: jsonl.Reader(Event) = .init(testing.allocator, &source, .{
         .record_separator = true,
     });
     defer reader.deinit();
@@ -1666,17 +1656,17 @@ test "a torn record is what a separator makes visible" {
     // read: that is the whole of what the separator buys.
     const second = (try reader.next()).?;
     try testing.expectEqualStrings("second", second.value.kind);
-    try testing.expectEqual(@as(u8, strand.separator), input[@intCast(second.offset)]);
+    try testing.expectEqual(@as(u8, jsonl.separator), input[@intCast(second.offset)]);
 
     // And a line carrying no record is not a malformed record: it is a line
     // with nothing on it that this reader was promised.
     try testing.expectError(error.MissingSeparator, reader.next());
     try testing.expectEqual(@as(u64, 3), reader.lines.fault.line);
-    try testing.expectEqual(@as(?strand.ParseLineError, null), reader.lines.fault.err);
+    try testing.expectEqual(@as(?core.DecodeError, null), reader.lines.fault.err);
 
     // The stream is not lost: the next line is read as usual.
     try testing.expectEqualStrings("third", (try reader.next()).?.value.kind);
-    try testing.expectEqual(@as(?strand.Line(Event), null), try reader.next());
+    try testing.expectEqual(@as(?jsonl.Line(Event), null), try reader.next());
 }
 
 test "a torn record followed by a whole one on its line loses only itself" {
@@ -1686,12 +1676,12 @@ test "a torn record followed by a whole one on its line loses only itself" {
         "\x1e{\"kind\":\"a\"}\n" ++
         "\x1e{\"kind\":\"to\x1e{\"kind\":\"b\"}\n" ++
         "\x1e{\"kind\":\"c\"}\n";
-    for ([_]@FieldType(strand.LineReader.Options, "on_malformed"){ .skip, .fail }) |policy| {
+    for ([_]@FieldType(jsonl.LineReader.Options, "on_malformed"){ .skip, .fail }) |policy| {
         for ([_]bool{ false, true }) |streamed| {
             var buffer: [5]u8 = undefined;
             var chunked: fixtures.Chunked = .init(input, &buffer, 2);
             var fixed: std.Io.Reader = .fixed(input);
-            var reader: strand.Reader(Event) = .init(testing.allocator, if (streamed) &chunked.interface else &fixed, .{
+            var reader: jsonl.Reader(Event) = .init(testing.allocator, if (streamed) &chunked.interface else &fixed, .{
                 .record_separator = true,
                 .on_malformed = policy,
                 .max_line_bytes = 16,
@@ -1702,11 +1692,11 @@ test "a torn record followed by a whole one on its line loses only itself" {
             const b = (try reader.next()).?;
             try testing.expectEqualStrings("b", b.value.kind);
             try testing.expectEqual(@as(u64, 2), b.number);
-            try testing.expectEqual(@as(u64, std.mem.findScalarLast(u8, input[0..40], strand.separator).?), b.offset);
+            try testing.expectEqual(@as(u64, std.mem.findScalarLast(u8, input[0..40], jsonl.separator).?), b.offset);
             try testing.expectEqual(@as(u64, 1), reader.lines.skipped);
             try testing.expectEqual(@as(u64, 2), reader.lines.fault.line);
             try testing.expectEqualStrings("c", (try reader.next()).?.value.kind);
-            try testing.expectEqual(@as(?strand.Line(Event), null), try reader.next());
+            try testing.expectEqual(@as(?jsonl.Line(Event), null), try reader.next());
         }
     }
 }
@@ -1717,7 +1707,7 @@ test "a torn record longer than the bound does not refuse the record after it" {
         var buffer: [7]u8 = undefined;
         var chunked: fixtures.Chunked = .init(input, &buffer, 3);
         var fixed: std.Io.Reader = .fixed(input);
-        var lines: strand.LineReader = .init(testing.allocator, if (streamed) &chunked.interface else &fixed, .{
+        var lines: jsonl.LineReader = .init(testing.allocator, if (streamed) &chunked.interface else &fixed, .{
             .record_separator = true,
             .max_line_bytes = 16,
         });
@@ -1728,7 +1718,7 @@ test "a torn record longer than the bound does not refuse the record after it" {
         try testing.expectEqual(@as(u64, input.len - "\x1e{\"kind\":\"b\"}\n".len), b.offset);
         // The long record and the empty one between the two separators.
         try testing.expectEqual(@as(u64, 2), lines.skipped);
-        try testing.expectEqual(@as(?strand.RawLine, null), try lines.next());
+        try testing.expectEqual(@as(?jsonl.RawLine, null), try lines.next());
     }
 }
 
@@ -1740,7 +1730,7 @@ test "a torn prefix does not count against a separated record's bound" {
 
     {
         var source: std.Io.Reader = .fixed(input.written());
-        var reader: strand.Reader(std.json.Value) = .init(testing.allocator, &source, .{
+        var reader: jsonl.Reader(json.Value) = .init(testing.allocator, &source, .{
             .record_separator = true,
             .max_line_bytes = 2,
         });
@@ -1750,7 +1740,7 @@ test "a torn prefix does not count against a separated record's bound" {
 
     var buffer: [7]u8 = undefined;
     var chunked: fixtures.Chunked = .init(input.written(), &buffer, 3);
-    var streamed: strand.Reader(std.json.Value) = .init(testing.allocator, &chunked.interface, .{
+    var streamed: jsonl.Reader(json.Value) = .init(testing.allocator, &chunked.interface, .{
         .record_separator = true,
         .max_line_bytes = 2,
     });
@@ -1764,7 +1754,7 @@ test "a separated framing failure keeps the record start" {
         var buffer: [3]u8 = undefined;
         var chunked: fixtures.Chunked = .init(input, &buffer, 1);
         var fixed: std.Io.Reader = .fixed(input);
-        var lines: strand.LineReader = .init(testing.allocator, if (streamed) &chunked.interface else &fixed, .{
+        var lines: jsonl.LineReader = .init(testing.allocator, if (streamed) &chunked.interface else &fixed, .{
             .record_separator = true,
             .max_line_bytes = 2,
         });
@@ -1784,13 +1774,13 @@ test "a separated framing failure keeps the record start" {
 test "a separator is a decision both ends make" {
     var out: std.Io.Writer.Allocating = .init(testing.allocator);
     defer out.deinit();
-    var log: strand.Writer(Event) = .init(&out.writer, .{ .record_separator = true });
+    var log: jsonl.Writer(Event) = .init(&out.writer, .{ .record_separator = true });
     try log.write(.{ .kind = "open", .at = 1 });
 
     // To a reader that was not told, the separator is a raw control byte,
     // which is what it is.
     var source: std.Io.Reader = .fixed(out.written());
-    var plain: strand.Reader(Event) = .init(testing.allocator, &source, .{});
+    var plain: jsonl.Reader(Event) = .init(testing.allocator, &source, .{});
     defer plain.deinit();
     try testing.expectError(error.ControlByte, plain.next());
     try testing.expectEqual(@as(?usize, 0), plain.lines.fault.offset);
@@ -1798,7 +1788,7 @@ test "a separator is a decision both ends make" {
     // And a stream with no separators on it is nothing but torn records to
     // a reader that was told there would be.
     var unseparated: std.Io.Reader = .fixed("{\"kind\":\"open\"}\n");
-    var expectant: strand.Reader(Event) = .init(testing.allocator, &unseparated, .{
+    var expectant: jsonl.Reader(Event) = .init(testing.allocator, &unseparated, .{
         .record_separator = true,
     });
     defer expectant.deinit();
@@ -1820,11 +1810,11 @@ test "a writer can be held to the bound its readers are held to" {
     {
         var out: std.Io.Writer.Allocating = .init(testing.allocator);
         defer out.deinit();
-        var log: strand.Writer(Event) = .init(&out.writer, .{});
+        var log: jsonl.Writer(Event) = .init(&out.writer, .{});
         try log.write(large);
 
         var source: std.Io.Reader = .fixed(out.written());
-        var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{
+        var reader: jsonl.Reader(Event) = .init(testing.allocator, &source, .{
             .max_line_bytes = bound,
         });
         defer reader.deinit();
@@ -1835,7 +1825,7 @@ test "a writer can be held to the bound its readers are held to" {
     // is written: the log is left where the record before it left it.
     var out: std.Io.Writer.Allocating = .init(testing.allocator);
     defer out.deinit();
-    var log: strand.Writer(Event) = .initBounded(testing.allocator, &out.writer, bound, .{});
+    var log: jsonl.Writer(Event) = .initBounded(testing.allocator, &out.writer, bound, .{});
     defer log.deinit();
 
     try log.write(small);
@@ -1852,11 +1842,11 @@ test "a writer can be held to the bound its readers are held to" {
     try testing.expectEqual(@as(u64, 2), log.count);
 
     var source: std.Io.Reader = .fixed(out.written());
-    var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{ .max_line_bytes = bound });
+    var reader: jsonl.Reader(Event) = .init(testing.allocator, &source, .{ .max_line_bytes = bound });
     defer reader.deinit();
     try testing.expectEqualStrings("open", (try reader.next()).?.value.kind);
     try testing.expectEqualStrings("close", (try reader.next()).?.value.kind);
-    try testing.expectEqual(@as(?strand.Line(Event), null), try reader.next());
+    try testing.expectEqual(@as(?jsonl.Line(Event), null), try reader.next());
 }
 
 test "the bound is on the record, whatever shape it is written in" {
@@ -1866,13 +1856,13 @@ test "the bound is on the record, whatever shape it is written in" {
 
     var minified: std.Io.Writer.Allocating = .init(testing.allocator);
     defer minified.deinit();
-    var lean: strand.Writer(Event) = .initBounded(testing.allocator, &minified.writer, 1 << 20, .{});
+    var lean: jsonl.Writer(Event) = .initBounded(testing.allocator, &minified.writer, 1 << 20, .{});
     defer lean.deinit();
     try lean.write(event);
 
     var out: std.Io.Writer.Allocating = .init(testing.allocator);
     defer out.deinit();
-    var wide: strand.Writer(Event) = .initBounded(testing.allocator, &out.writer, minified.written().len, .{
+    var wide: jsonl.Writer(Event) = .initBounded(testing.allocator, &out.writer, minified.written().len, .{
         .format = .pretty,
     });
     defer wide.deinit();
@@ -1881,82 +1871,46 @@ test "the bound is on the record, whatever shape it is written in" {
 }
 
 //=========================================================================
-// The two encoding options, which had no test between them.
+// How a record spells its fields.
 //=========================================================================
-
-test "escape_unicode writes a line with nothing but ASCII on it" {
-    const event: Event = .{ .kind = "café \u{1f600}", .at = 1, .note = "naïve" };
-
-    var plain: std.Io.Writer.Allocating = .init(testing.allocator);
-    defer plain.deinit();
-    var as_written: strand.Writer(Event) = .init(&plain.writer, .{});
-    try as_written.write(event);
-    // The default writes the characters themselves, which is what a log a
-    // person reads wants.
-    try testing.expect(std.mem.find(u8, plain.written(), "café") != null);
-
-    var escaped: std.Io.Writer.Allocating = .init(testing.allocator);
-    defer escaped.deinit();
-    var as_ascii: strand.Writer(Event) = .init(&escaped.writer, .{ .escape_unicode = true });
-    try as_ascii.write(event);
-
-    for (escaped.written()) |byte| try testing.expect(byte < 0x80);
-    try testing.expect(std.mem.find(u8, escaped.written(), "caf\\u00e9") != null);
-    // A character outside the basic plane is a surrogate pair, which is how
-    // JSON spells one.
-    try testing.expect(std.mem.find(u8, escaped.written(), "\\ud83d\\ude00") != null);
-
-    // Either way it reads back as the same value.
-    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
-    defer arena.deinit();
-    for ([_][]const u8{ plain.written(), escaped.written() }) |bytes| {
-        var parsed = try readAll(Event, arena.allocator(), bytes, .{});
-        defer parsed.deinit(testing.allocator);
-        try testing.expectEqual(@as(usize, 1), parsed.items.len);
-        try testing.expectEqualStrings(event.kind, parsed.items[0].kind);
-        try testing.expectEqualStrings(event.note.?, parsed.items[0].note.?);
-    }
-}
 
 test "quoted Zig field names use JSON escaping" {
     const Odd = struct { @"quote\"slash\\é": u8 };
     const value: Odd = .{ .@"quote\"slash\\é" = 7 };
 
-    inline for (.{ false, true }) |escape_unicode| {
-        var actual: std.Io.Writer.Allocating = .init(testing.allocator);
-        defer actual.deinit();
-        var writer: strand.Writer(Odd) = .init(&actual.writer, .{ .escape_unicode = escape_unicode });
-        try writer.write(value);
+    var actual: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer actual.deinit();
+    var writer: jsonl.Writer(Odd) = .init(&actual.writer, .{});
+    try writer.write(value);
+    try testing.expectEqualStrings("{\"quote\\\"slash\\\\é\":7}\n", actual.written());
 
-        var expected: std.Io.Writer.Allocating = .init(testing.allocator);
-        defer expected.deinit();
-        try std.json.Stringify.value(value, .{ .escape_unicode = escape_unicode }, &expected.writer);
-        try expected.writer.writeByte('\n');
-        try testing.expectEqualStrings(expected.written(), actual.written());
-    }
+    var source: std.Io.Reader = .fixed(actual.written());
+    var reader: jsonl.Reader(Odd) = .init(testing.allocator, &source, .{});
+    defer reader.deinit();
+    try testing.expectEqual(@as(u8, 7), (try reader.next()).?.value.@"quote\"slash\\é");
 }
 
-test "emit_null_optional_fields writes the field rather than leaving it out" {
-    const event: Event = .{ .kind = "open", .at = 1 };
+test "a null optional is written as null unless its field leaves it out" {
+    const Full = struct { kind: []const u8, note: ?[]const u8 = null };
 
     var left_out: std.Io.Writer.Allocating = .init(testing.allocator);
     defer left_out.deinit();
-    var lean: strand.Writer(Event) = .init(&left_out.writer, .{});
-    try lean.write(event);
+    var lean: jsonl.Writer(Event) = .init(&left_out.writer, .{});
+    try lean.write(.{ .kind = "open", .at = 1 });
     try testing.expectEqual(@as(?usize, null), std.mem.find(u8, left_out.written(), "note"));
 
     var written_out: std.Io.Writer.Allocating = .init(testing.allocator);
     defer written_out.deinit();
-    var full: strand.Writer(Event) = .init(&written_out.writer, .{ .emit_null_optional_fields = true });
-    try full.write(event);
-    try testing.expect(std.mem.find(u8, written_out.written(), "\"note\":null") != null);
+    var full: jsonl.Writer(Full) = .init(&written_out.writer, .{});
+    try full.write(.{ .kind = "open" });
+    try testing.expectEqualStrings("{\"kind\":\"open\",\"note\":null}\n", written_out.written());
 
     // A reader that defaults its missing fields reads both as the same
-    // value, which is why leaving them out is the default.
+    // value.
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
     for ([_][]const u8{ left_out.written(), written_out.written() }) |bytes| {
-        var parsed = try readAll(Event, arena.allocator(), bytes, .{});
+        var parsed = try readAll(Event, arena.allocator(), bytes, .{ .parse = .{ .ignore_unknown_fields = true } });
         defer parsed.deinit(testing.allocator);
         try testing.expectEqual(@as(?[]const u8, null), parsed.items[0].note);
         try testing.expectEqualStrings("open", parsed.items[0].kind);
@@ -1969,12 +1923,12 @@ test "null tuple elements keep their positions" {
 
     var out: std.Io.Writer.Allocating = .init(testing.allocator);
     defer out.deinit();
-    var writer: strand.Writer(Pair) = .init(&out.writer, .{});
+    var writer: jsonl.Writer(Pair) = .init(&out.writer, .{});
     try writer.write(pair);
     try testing.expectEqualStrings("[null,1]\n", out.written());
 
     var source: std.Io.Reader = .fixed(out.written());
-    var reader: strand.Reader(Pair) = .init(testing.allocator, &source, .{});
+    var reader: jsonl.Reader(Pair) = .init(testing.allocator, &source, .{});
     defer reader.deinit();
     const decoded = (try reader.next()).?.value;
     try testing.expectEqual(@as(?u8, null), decoded[0]);
@@ -2026,7 +1980,7 @@ test "a flush policy is how often the destination is asked to drain" {
         .{ .kind = "three", .at = 3 },
     };
 
-    for ([_]struct { @FieldType(strand.Writer(Event).Options, "flush"), usize }{
+    for ([_]struct { @FieldType(jsonl.Writer(Event).Options, "flush"), usize }{
         .{ .never, 0 },
         .{ .per_record, 3 },
         .{ .per_batch, 1 },
@@ -2035,7 +1989,7 @@ test "a flush policy is how often the destination is asked to drain" {
         var sink: Draining = .init(&buffer);
         defer sink.deinit();
 
-        var log: strand.Writer(Event) = .init(&sink.interface, .{ .flush = case[0] });
+        var log: jsonl.Writer(Event) = .init(&sink.interface, .{ .flush = case[0] });
         try log.writeAll(&events);
         try testing.expectEqual(case[1], sink.flushes);
 
@@ -2066,7 +2020,7 @@ test "a count is how often a stream of records drains" {
     // Three at a time, whether they arrive one at a time or in a batch: the
     // third and the sixth records drain, and the seventh is still in the
     // buffer afterwards.
-    var log: strand.Writer(Event) = .init(&sink.interface, .{ .flush = .{ .per_records = 3 } });
+    var log: jsonl.Writer(Event) = .init(&sink.interface, .{ .flush = .{ .per_records = 3 } });
     try log.write(events[0]);
     try log.write(events[1]);
     try testing.expectEqual(@as(usize, 0), sink.flushes);
@@ -2091,7 +2045,7 @@ test "a count is how often a stream of records reaches the disk" {
 
     var buffer: [4096]u8 = undefined;
     var file_writer = file.writer(testing.io, &buffer);
-    var log: strand.Writer(Event) = .initFile(&file_writer, .{ .sync = .{ .per_records = 2 } });
+    var log: jsonl.Writer(Event) = .initFile(&file_writer, .{ .sync = .{ .per_records = 2 } });
 
     // A sync drains first, so the file's length moves at every second
     // record and at no other.
@@ -2109,7 +2063,7 @@ test "a count is how often a stream of records reaches the disk" {
     var read_buffer: [4096]u8 = undefined;
     var file_reader = file.reader(testing.io, &read_buffer);
     try file_reader.seekTo(0);
-    var reader: strand.Reader(Event) = .init(testing.allocator, &file_reader.interface, .{});
+    var reader: jsonl.Reader(Event) = .init(testing.allocator, &file_reader.interface, .{});
     defer reader.deinit();
     var seen: usize = 0;
     while (try reader.next()) |_| seen += 1;
@@ -2130,7 +2084,7 @@ test "a sync policy drains the destination before it asks the file" {
 
     // `.flush` is never, so nothing but the sync can have drained it — and
     // a sync of a file that has not been given the bytes syncs nothing.
-    var log: strand.Writer(Event) = .initFile(&file_writer, .{ .sync = .per_record });
+    var log: jsonl.Writer(Event) = .initFile(&file_writer, .{ .sync = .per_record });
     const record = "{\"kind\":\"one\",\"at\":1,\"level\":\"info\",\"tags\":[],\"span\":{\"id\":0}}\n".len;
     try log.write(.{ .kind = "one", .at = 1 });
     try testing.expectEqual(@as(u64, record), try file.length(testing.io));
@@ -2142,11 +2096,11 @@ test "a sync policy drains the destination before it asks the file" {
     var read_buffer: [4096]u8 = undefined;
     var file_reader = file.reader(testing.io, &read_buffer);
     try file_reader.seekTo(0);
-    var reader: strand.Reader(Event) = .init(testing.allocator, &file_reader.interface, .{});
+    var reader: jsonl.Reader(Event) = .init(testing.allocator, &file_reader.interface, .{});
     defer reader.deinit();
     try testing.expectEqualStrings("one", (try reader.next()).?.value.kind);
     try testing.expectEqualStrings("two", (try reader.next()).?.value.kind);
-    try testing.expectEqual(@as(?strand.Line(Event), null), try reader.next());
+    try testing.expectEqual(@as(?jsonl.Line(Event), null), try reader.next());
 }
 
 test "a flush and a sync are also things to ask for one at a time" {
@@ -2160,7 +2114,7 @@ test "a flush and a sync are also things to ask for one at a time" {
 
     // Nothing is drained by policy here, so the only thing that can move
     // the end of the file is the call that says to.
-    var log: strand.Writer(Event) = .initFile(&file_writer, .{});
+    var log: jsonl.Writer(Event) = .initFile(&file_writer, .{});
     try log.write(.{ .kind = "one", .at = 1 });
     try log.write(.{ .kind = "two", .at = 2 });
     try testing.expectEqual(@as(u64, 0), try file.length(testing.io));
@@ -2181,7 +2135,7 @@ test "a flush and a sync are also things to ask for one at a time" {
     var read_buffer: [4096]u8 = undefined;
     var file_reader = file.reader(testing.io, &read_buffer);
     try file_reader.seekTo(0);
-    var reader: strand.Reader(Event) = .init(testing.allocator, &file_reader.interface, .{});
+    var reader: jsonl.Reader(Event) = .init(testing.allocator, &file_reader.interface, .{});
     defer reader.deinit();
     var seen: usize = 0;
     while (try reader.next()) |_| seen += 1;
@@ -2192,7 +2146,7 @@ test "a sync asked for by hand still needs a file" {
     var out: std.Io.Writer.Allocating = .init(testing.allocator);
     defer out.deinit();
 
-    var log: strand.Writer(Event) = .init(&out.writer, .{});
+    var log: jsonl.Writer(Event) = .init(&out.writer, .{});
     // A flush of a destination that is not a file is an ordinary drain.
     try log.write(.{ .kind = "one", .at = 1 });
     try log.flush();
@@ -2211,7 +2165,7 @@ test "a per-batch sync is once for the batch and not once for the record" {
 
     var buffer: [4096]u8 = undefined;
     var file_writer = file.writer(testing.io, &buffer);
-    var log: strand.Writer(Event) = .initFile(&file_writer, .{ .sync = .per_batch });
+    var log: jsonl.Writer(Event) = .initFile(&file_writer, .{ .sync = .per_batch });
 
     // A plain `write` under `.per_batch` neither drains nor syncs, so the
     // record is still in this program's buffer and the file is empty.
@@ -2230,7 +2184,7 @@ test "a per-batch sync is once for the batch and not once for the record" {
     var read_buffer: [4096]u8 = undefined;
     var file_reader = file.reader(testing.io, &read_buffer);
     try file_reader.seekTo(0);
-    var reader: strand.Reader(Event) = .init(testing.allocator, &file_reader.interface, .{});
+    var reader: jsonl.Reader(Event) = .init(testing.allocator, &file_reader.interface, .{});
     defer reader.deinit();
     var seen: usize = 0;
     while (try reader.next()) |_| seen += 1;
@@ -2250,14 +2204,14 @@ test "a record synced per record costs one data sync, and a batch one for the ba
     // second call for the directory, nothing the level does not need.
     var buffer: [4096]u8 = undefined;
     var file_writer = file.writer(io, &buffer);
-    var log: strand.Writer(Event) = .initFile(&file_writer, .{ .sync = .per_record });
+    var log: jsonl.Writer(Event) = .initFile(&file_writer, .{ .sync = .per_record });
     try log.write(.{ .kind = "one", .at = 1 });
     try log.write(.{ .kind = "two", .at = 2 });
     try log.write(.{ .kind = "three", .at = 3 });
     try testing.expectEqual(@as(u32, 3), hooked.syncs());
     try testing.expectEqual(@as(u32, 3), hooked.count(seam.data_sync));
 
-    var batched: strand.Writer(Event) = .initFile(&file_writer, .{ .sync = .per_batch });
+    var batched: jsonl.Writer(Event) = .initFile(&file_writer, .{ .sync = .per_batch });
     try batched.writeAll(&.{ .{ .kind = "four", .at = 4 }, .{ .kind = "five", .at = 5 } });
     try testing.expectEqual(@as(u32, 4), hooked.syncs());
 }
@@ -2275,22 +2229,22 @@ test "a writer says what its syncs reached, and a filesystem that declines the c
 
     var buffer: [4096]u8 = undefined;
     var file_writer = file.writer(io, &buffer);
-    var log: strand.Writer(Event) = .initFile(&file_writer, .{ .sync = .per_record });
-    try testing.expectEqual(strand.Reached.none, log.reached);
+    var log: jsonl.Writer(Event) = .initFile(&file_writer, .{ .sync = .per_record });
+    try testing.expectEqual(jsonl.Reached.none, log.reached);
     try log.write(.{ .kind = "one", .at = 1 });
-    try testing.expectEqual(strand.Reached.expected(.data), log.reached);
+    try testing.expectEqual(jsonl.Reached.expected(.data), log.reached);
     try testing.expect(log.reached.atLeast(.data));
 
     // Declined is not failed: the writer carries on, on the strongest call
     // left, and says what that reached — on macOS the plain `fsync`, which
     // the drive may still hold in its cache; elsewhere the full sync.
     try log.write(.{ .kind = "two", .at = 2 });
-    const degraded: strand.Reached = if (builtin.target.os.tag.isDarwin()) .written else .full;
+    const degraded: jsonl.Reached = if (builtin.target.os.tag.isDarwin()) .written else .full;
     try testing.expectEqual(degraded, log.reached);
     try testing.expect(!log.sync_failed);
 
     try log.write(.{ .kind = "three", .at = 3 });
-    try testing.expectEqual(strand.Reached.expected(.data), log.reached);
+    try testing.expectEqual(jsonl.Reached.expected(.data), log.reached);
 }
 
 test "a sync that fails stops the writer, and nothing is synced after it" {
@@ -2304,7 +2258,7 @@ test "a sync that fails stops the writer, and nothing is synced after it" {
 
     var buffer: [4096]u8 = undefined;
     var file_writer = file.writer(io, &buffer);
-    var log: strand.Writer(Event) = .initFile(&file_writer, .{ .sync = .per_record });
+    var log: jsonl.Writer(Event) = .initFile(&file_writer, .{ .sync = .per_record });
     try log.write(.{ .kind = "one", .at = 1 });
     // The disk lost the second record: that is the writer's last word.
     try testing.expectError(error.SyncFailed, log.write(.{ .kind = "two", .at = 2 }));
@@ -2323,7 +2277,7 @@ test "a sync policy with no file to sync says so rather than pretending" {
     // `init` refuses this combination outright; a writer assembled by hand
     // reports it on the first record rather than silently writing a log
     // that is not as durable as it was asked to be.
-    var log: strand.Writer(Event) = .{
+    var log: jsonl.Writer(Event) = .{
         .output = &out.writer,
         .file = null,
         .options = .{ .sync = .per_record },
@@ -2337,7 +2291,7 @@ test "a writer whose sync has failed is not written to again" {
     var out: std.Io.Writer.Allocating = .init(testing.allocator);
     defer out.deinit();
 
-    var log: strand.Writer(Event) = .{
+    var log: jsonl.Writer(Event) = .{
         .output = &out.writer,
         .file = null,
         .options = .{ .sync = .per_record },
@@ -2377,41 +2331,32 @@ test "invalid UTF-8 in a line is a malformed line, and the stream survives it" {
         try buf.writer.writeAll("\n{\"kind\":\"after\"}\n");
 
         var source: std.Io.Reader = .fixed(buf.written());
-        var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{});
+        var reader: jsonl.Reader(Event) = .init(testing.allocator, &source, .{});
         defer reader.deinit();
 
         try testing.expectError(error.MalformedLine, reader.next());
         try testing.expectEqual(@as(u64, 1), reader.lines.fault.line);
-        // `std.json` validates UTF-8 itself, so this is a syntax error and
-        // not a second opinion of this package's.
+        // The decoder checks UTF-8 as it finds a string's end, so this is a
+        // syntax error of the text, not a second opinion afterwards.
         try testing.expectEqual(error.SyntaxError, reader.lines.fault.err.?);
         // And the line after it is read, because a bad line is one line.
         try testing.expectEqualStrings("after", (try reader.next()).?.value.kind);
     }
 }
 
-test "a Zig string that is not UTF-8 is not written as a JSON string" {
-    // `std.json.Stringify` writes a `[]const u8` as a JSON string only when
-    // it is valid UTF-8, and as an array of byte values when it is not. That
-    // is the one case where a value written by `Writer` does not read back as
-    // the same value, and it is worth pinning: a log of arbitrary bytes wants
-    // a base64 or hex field, not a Zig string.
+test "a Zig string that is not UTF-8 is refused, not written" {
+    // A JSON string is UTF-8 by definition, so bytes that are not are no
+    // string: the record is refused before any of it is written, and a log
+    // of arbitrary bytes declares the field `.as = .bytes` with a codec.
     var out: std.Io.Writer.Allocating = .init(testing.allocator);
     defer out.deinit();
-    try strand.writeLine(&out.writer, .{ .kind = @as([]const u8, "\xff\xfe"), .at = @as(u64, 1) });
-    try testing.expectEqualStrings("{\"kind\":[255,254],\"at\":1}\n", out.written());
-
-    // The framing holds either way: it is still one line.
-    try testing.expectEqual(@as(usize, 1), std.mem.count(u8, out.written(), "\n"));
-
-    // Read back by this package the bytes survive, because `std.json` reads
-    // an array of numbers into a `[]const u8` field. Read back by anything
-    // else the field is an array and not a string, which is why a log of
-    // arbitrary bytes should encode them rather than rely on this.
-    var source: std.Io.Reader = .fixed(out.written());
-    var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{});
-    defer reader.deinit();
-    try testing.expectEqualStrings("\xff\xfe", (try reader.next()).?.value.kind);
+    var writer: jsonl.Writer(struct { kind: []const u8, at: u64 }) = .init(&out.writer, .{});
+    try testing.expectError(error.InvalidUtf8, writer.write(.{ .kind = "\xff\xfe", .at = 1 }));
+    try testing.expectEqual(@as(usize, 0), out.written().len);
+    try testing.expectEqual(@as(u64, 0), writer.count);
+    // And the writer is still a writer.
+    try writer.write(.{ .kind = "ok", .at = 2 });
+    try testing.expectEqualStrings("{\"kind\":\"ok\",\"at\":2}\n", out.written());
 }
 
 //=========================================================================
@@ -2419,25 +2364,23 @@ test "a Zig string that is not UTF-8 is not written as a JSON string" {
 //=========================================================================
 
 /// A record that writes itself: two fields flattened into one string, which
-/// is the shape a `jsonStringify` method usually exists for.
+/// is the shape a codec of its own usually exists for.
 pub const Packed = struct {
-    pub const Self = Packed;
     host: []const u8,
     port: u16,
 
-    pub fn jsonStringify(self: Self, jw: anytype) !void {
-        try jw.beginObject();
-        try jw.objectField("addr");
-        try jw.print("\"{s}:{d}\"", .{ self.host, self.port });
-        try jw.endObject();
+    pub fn strandSerialize(self: Packed, access: anytype) @TypeOf(access.*).Error!void {
+        var buffer: [128]u8 = undefined;
+        const addr = std.mem.print(&buffer, "{s}:{d}", .{ self.host, self.port }) catch return error.CustomRejected;
+        try access.write(struct { addr: []const u8 }{ .addr = addr });
     }
 };
 
-test "a record with its own jsonStringify is written through it, one line per record" {
+test "a record with a codec of its own is written through it, one line per record" {
     var out: std.Io.Writer.Allocating = .init(testing.allocator);
     defer out.deinit();
 
-    var log: strand.Writer(Packed) = .init(&out.writer, .{});
+    var log: jsonl.Writer(Packed) = .init(&out.writer, .{});
     try log.writeAll(&.{
         .{ .host = "localhost", .port = 8080 },
         .{ .host = "example", .port = 443 },
@@ -2452,13 +2395,19 @@ test "a record with its own jsonStringify is written through it, one line per re
     // One line per record, and the lines read back.
     const Addr = struct { addr: []const u8 };
     var source: std.Io.Reader = .fixed(out.written());
-    var reader: strand.Reader(Addr) = .init(testing.allocator, &source, .{});
+    var reader: jsonl.Reader(Addr) = .init(testing.allocator, &source, .{});
     defer reader.deinit();
     try testing.expectEqualStrings("localhost:8080", (try reader.next()).?.value.addr);
     try testing.expectEqualStrings("example:443", (try reader.next()).?.value.addr);
 }
 
-test "a schemaless line is a std.json.Value like any other type" {
+/// The value of `name` in a dynamic object, or `null`.
+fn member(value: json.Value, name: []const u8) ?json.Value {
+    for (value.object) |m| if (std.mem.eql(u8, m.key, name)) return m.value;
+    return null;
+}
+
+test "a schemaless line is a json.Value like any other type" {
     const input =
         \\{"kind":"open","at":1}
         \\[1,2,3]
@@ -2466,20 +2415,19 @@ test "a schemaless line is a std.json.Value like any other type" {
         \\
     ;
     var source: std.Io.Reader = .fixed(input);
-    var reader: strand.Reader(std.json.Value) = .init(testing.allocator, &source, .{});
+    var reader: jsonl.Reader(json.Value) = .init(testing.allocator, &source, .{});
     defer reader.deinit();
 
-    try testing.expectEqualStrings("open", (try reader.next()).?.value.object.get("kind").?.string);
-    try testing.expectEqual(@as(usize, 3), (try reader.next()).?.value.array.items.len);
+    try testing.expectEqualStrings("open", member((try reader.next()).?.value, "kind").?.string);
+    try testing.expectEqual(@as(usize, 3), (try reader.next()).?.value.array.len);
     const deep = (try reader.next()).?;
-    try testing.expect(deep.value.object.get("deep").?.object.get("nested").?.object.get("thing").?.bool);
-    try testing.expectEqual(@as(?strand.Line(std.json.Value), null), try reader.next());
+    try testing.expect(member(member(member(deep.value, "deep").?, "nested").?, "thing").?.boolean);
+    try testing.expectEqual(@as(?jsonl.Line(json.Value), null), try reader.next());
 }
 
-test "a schemaless line is bounded by max_line_bytes and not by the stack" {
-    // `std.json` parses a `Value` with a heap stack rather than by recursing,
-    // so the only bound on how deep a line may nest is how long it may be —
-    // which is `max_line_bytes`, the bound this reader already has.
+test "a schemaless line nested past the depth limit is one refused line, not a crash" {
+    // A dynamic value is read by recursion, so how deep a line may nest is
+    // the parse's depth limit, checked before each level is entered.
     const depth = 50_000;
 
     var input: std.Io.Writer.Allocating = .init(testing.allocator);
@@ -2489,30 +2437,30 @@ test "a schemaless line is bounded by max_line_bytes and not by the stack" {
     try input.writer.writeAll("\n{\"after\":1}\n");
 
     var source: std.Io.Reader = .fixed(input.written());
-    var reader: strand.Reader(std.json.Value) = .init(testing.allocator, &source, .{
+    var reader: jsonl.Reader(json.Value) = .init(testing.allocator, &source, .{
         .max_line_bytes = 4 * depth,
     });
     defer reader.deinit();
-
-    var value = (try reader.next()).?.value;
-    var measured: usize = 0;
-    while (value == .array and value.array.items.len == 1) : (measured += 1) value = value.array.items[0];
-    try testing.expectEqual(@as(usize, depth - 1), measured);
-    try testing.expectEqualStrings("after", (try reader.next()).?.line[2..7]);
-
-    // The same line, past the bound, is one refused line rather than a crash.
-    var again: std.Io.Reader = .fixed(input.written());
-    var bounded: strand.Reader(std.json.Value) = .init(testing.allocator, &again, .{
-        .max_line_bytes = 1024,
-    });
-    defer bounded.deinit();
-    try testing.expectError(error.LineTooLong, bounded.next());
+    try testing.expectError(error.MalformedLine, reader.next());
+    try testing.expectEqual(error.DepthLimit, reader.lines.fault.err.?);
     // Refused, not fatal: the line after the deep one is still read.
-    try testing.expectEqual(@as(usize, 1), (try bounded.next()).?.value.object.count());
-    try testing.expectEqual(@as(?strand.Line(std.json.Value), null), try bounded.next());
+    try testing.expectEqual(@as(usize, 1), (try reader.next()).?.value.object.len);
+    try testing.expectEqual(@as(?jsonl.Line(json.Value), null), try reader.next());
+
+    // Within the limit, the same nesting is read whole.
+    var shallow: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer shallow.deinit();
+    try shallow.writer.splatByteAll('[', 100);
+    try shallow.writer.splatByteAll(']', 100);
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    var value = try json.parseLeaky(json.Value, arena.allocator(), shallow.written(), .{});
+    var measured: usize = 0;
+    while (value == .array and value.array.len == 1) : (measured += 1) value = value.array[0];
+    try testing.expectEqual(@as(usize, 99), measured);
 }
 
-test "a deeply nested unknown field is ignored without using the call stack" {
+test "a deeply nested unknown field is refused at the depth limit, not by the call stack" {
     const depth = 50_000;
     var input: std.Io.Writer.Allocating = .init(testing.allocator);
     defer input.deinit();
@@ -2522,9 +2470,10 @@ test "a deeply nested unknown field is ignored without using the call stack" {
     try input.writer.splatByteAll(']', depth);
     try input.writer.writeByte('}');
 
-    const Parsed = struct { kind: []const u8 };
-    const parsed = try strand.parseLine(Parsed, testing.allocator, input.written(), .{});
-    try testing.expectEqualStrings("x", parsed.kind);
+    const Kind = struct { kind: []const u8 };
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    try testing.expectError(error.DepthLimit, json.parseLeaky(Kind, arena.allocator(), input.written(), .{ .ignore_unknown_fields = true }));
 }
 
 //=========================================================================
@@ -2551,7 +2500,7 @@ test "a reader that routes its own lines parses only the ones it wants" {
     }
     {
         var source: std.Io.Reader = .fixed(input);
-        var reader: strand.Reader(std.json.Value) = .init(testing.allocator, &source, .{});
+        var reader: jsonl.Reader(json.Value) = .init(testing.allocator, &source, .{});
         defer reader.deinit();
         while (try reader.next()) |line| try all.append(testing.allocator, .{
             .line = try testing.allocator.dupe(u8, line.line),
@@ -2565,7 +2514,7 @@ test "a reader that routes its own lines parses only the ones it wants" {
     // the two lines that are worth parsing and nothing else.
     var counting: shakedown.alloc.Counting = .init(testing.allocator);
     var source: std.Io.Reader = .fixed(input);
-    var reader: strand.Reader(Message) = .init(counting.allocator(), &source, .{});
+    var reader: jsonl.Reader(Message) = .init(counting.allocator(), &source, .{});
     defer reader.deinit();
 
     var seen: usize = 0;
@@ -2577,7 +2526,7 @@ test "a reader that routes its own lines parses only the ones it wants" {
         try testing.expectEqual(want.number, raw.number);
         try testing.expectEqual(want.offset, raw.offset);
 
-        if (strand.tagOf(Message, raw.line) != .hello) {
+        if (json.tagOf(Message, raw.line) != .hello) {
             // A line that is only looked at costs nothing at all: the
             // allocator is not touched between one parse and the next.
             if (after_first) |count| try testing.expectEqual(count, grown(&counting));
@@ -2601,10 +2550,10 @@ test "lines and nextRaw place a line in the same way" {
     const input = "\xEF\xBB\xBF{\"kind\":\"a\"}\r\n{\"kind\":\"b\"}\n{\"kind\":\"c\"}";
 
     var source: std.Io.Reader = .fixed(input);
-    var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{});
+    var reader: jsonl.Reader(Event) = .init(testing.allocator, &source, .{});
     defer reader.deinit();
 
-    var it = strand.lines(input);
+    var it = jsonl.lines(input);
     while (it.next()) |want| {
         const raw = (try reader.nextRaw()).?;
         try testing.expectEqualStrings(want.line, raw.line);
@@ -2616,7 +2565,7 @@ test "lines and nextRaw place a line in the same way" {
             input[@intCast(want.offset)..][0..want.line.len],
         );
     }
-    try testing.expectEqual(@as(?strand.RawLine, null), try reader.nextRaw());
+    try testing.expectEqual(@as(?jsonl.RawLine, null), try reader.nextRaw());
 }
 
 //=========================================================================
@@ -2640,7 +2589,7 @@ test "a non-seekable stream is read under the same guarantees as a file" {
             defer testing.allocator.free(buffer);
 
             var trickle: fixtures.Chunked = .init(input, buffer, chunk);
-            var reader: strand.Reader(Event) = .init(testing.allocator, &trickle.interface, .{
+            var reader: jsonl.Reader(Event) = .init(testing.allocator, &trickle.interface, .{
                 .on_malformed = .skip,
             });
             defer reader.deinit();
@@ -2671,12 +2620,14 @@ test "a non-seekable stream is read under the same guarantees as a file" {
 /// list of them, one that may be absent, and one inside a union arm.
 const Carried = struct {
     kind: []const u8,
-    data: strand.Raw = .null,
-    rest: []const strand.Raw = &.{},
-    maybe: ?strand.Raw = null,
-    inner: struct { at: u64 = 0, payload: strand.Raw = .null } = .{},
-    route: union(enum) { local: u32, onward: strand.Raw } = .{ .local = 0 },
+    data: json.Raw = null_raw,
+    rest: []const json.Raw = &.{},
+    maybe: ?json.Raw = null,
+    inner: struct { at: u64 = 0, payload: json.Raw = null_raw } = .{},
+    route: union(enum) { local: u32, onward: json.Raw } = .{ .local = 0 },
+    pub const strand = .{ .fields = .{ .maybe = .{ .omit = .null_value } } };
 };
+const null_raw: json.Raw = .{ .bytes = "null" };
 
 test "a raw value is read and written back byte for byte" {
     // Whitespace inside a value is the value's; a line written by this
@@ -2688,12 +2639,12 @@ test "a raw value is read and written back byte for byte" {
         \\
     ;
     var source: std.Io.Reader = .fixed(input);
-    var reader: strand.Reader(Carried) = .init(testing.allocator, &source, .{});
+    var reader: jsonl.Reader(Carried) = .init(testing.allocator, &source, .{});
     defer reader.deinit();
 
     var out: std.Io.Writer.Allocating = .init(testing.allocator);
     defer out.deinit();
-    var writer: strand.Writer(Carried) = .init(&out.writer, .{});
+    var writer: jsonl.Writer(Carried) = .init(&out.writer, .{});
 
     const first = (try reader.next()).?;
     try testing.expectEqualStrings("{ \"who\" : \"ada\",  \"n\": [1, 2.50, -0e+1] }", first.value.data.bytes);
@@ -2708,7 +2659,7 @@ test "a raw value is read and written back byte for byte" {
     // A JSON null is a value like any other; for an optional it is absent.
     const second = (try reader.next()).?;
     try testing.expectEqualStrings("null", second.value.data.bytes);
-    try testing.expectEqual(@as(?strand.Raw, null), second.value.maybe);
+    try testing.expectEqual(@as(?json.Raw, null), second.value.maybe);
     try writer.write(second.value);
 
     // A number is its digits, however many there are.
@@ -2721,12 +2672,13 @@ test "a raw value is read and written back byte for byte" {
     // defaults, so write the same records from the same defaults.
     var expected: std.Io.Writer.Allocating = .init(testing.allocator);
     defer expected.deinit();
-    var it = strand.lines(input);
+    var expected_writer: jsonl.Writer(Carried) = .init(&expected.writer, .{});
+    var it = jsonl.lines(input);
     while (it.next()) |line| {
         if (line.line.len == 0) continue;
         var arena: std.heap.ArenaAllocator = .init(testing.allocator);
         defer arena.deinit();
-        try strand.writeLine(&expected.writer, try strand.parseLine(Carried, arena.allocator(), line.line, .{}));
+        try expected_writer.write(try json.parseLeaky(Carried, arena.allocator(), line.line, .{}));
     }
     try testing.expectEqualStrings(expected.written(), out.written());
     // The first line has every field, so it is its own bytes exactly.
@@ -2742,38 +2694,37 @@ test "a raw value borrows from its line as a string does, and keep copies it" {
     defer arena.deinit();
 
     var source: std.Io.Reader = .fixed(input);
-    var reader: strand.Reader(Carried) = .init(testing.allocator, &source, .{});
+    var reader: jsonl.Reader(Carried) = .init(testing.allocator, &source, .{});
     defer reader.deinit();
     const line = (try reader.next()).?;
     try testing.expect(within(line.value.data.bytes, line.line));
     try testing.expect(within(line.value.rest[0].bytes, line.line));
 
-    const kept = try reader.keep(arena.allocator(), line);
+    var owner = try reader.keep(testing.allocator, line);
+    defer owner.deinit();
+    const kept = owner.value;
     try testing.expect(!within(kept.data.bytes, line.line));
     try testing.expectEqualStrings("{\"x\":[1,2,3]}", kept.data.bytes);
     try testing.expectEqualStrings("\"y\"", kept.rest[0].bytes);
 
-    const copied = try strand.parseLine(Carried, arena.allocator(), input[0 .. input.len - 1], .{ .copy_strings = true });
-    try testing.expect(!within(copied.data.bytes, input));
+    var copied = try json.parseOwned(Carried, testing.allocator, input[0 .. input.len - 1], .{});
+    defer copied.deinit();
+    try testing.expect(!within(copied.value.data.bytes, input));
 
     // Read later, as whatever the reader wants it to be, borrowing from the
     // raw bytes rather than the line.
     const X = struct { x: bool };
-    try testing.expectError(error.UnexpectedToken, kept.data.parse(X, arena.allocator(), .{}));
+    try testing.expectError(error.UnexpectedType, json.parseLeaky(X, arena.allocator(), kept.data.bytes, .{}));
     const Xs = struct { x: []const u32 };
-    try testing.expectEqual(@as(u32, 3), (try kept.data.parse(Xs, arena.allocator(), .{})).x[2]);
+    try testing.expectEqual(@as(u32, 3), (try json.parseLeaky(Xs, arena.allocator(), kept.data.bytes, .{})).x[2]);
 }
 
-test "a malformed raw value is a malformed line, under the error std.json gives it" {
-    // Each of these is refused as `std.json` refuses the same line with a
-    // `std.json.Value` where the `Raw` is, and the stream carries on.
-    const Mirror = struct {
-        kind: []const u8,
-        data: std.json.Value = .null,
-    };
+test "a malformed raw value is a malformed line, and the stream carries on" {
+    // A raw value is checked as any value is: each of these is refused, as
+    // a parse of the same value into a dynamic `json.Value` refuses it.
     const Held = struct {
         kind: []const u8,
-        data: strand.Raw = .null,
+        data: json.Raw = null_raw,
     };
     const bad = [_][]const u8{
         "{\"kind\":\"a\",\"data\":}",
@@ -2790,21 +2741,25 @@ test "a malformed raw value is a malformed line, under the error std.json gives 
         "{\"kind\":\"a\",\"data\":[[[",
         "{\"kind\":\"a\",\"data\":1",
     };
+    const Mirror = struct {
+        kind: []const u8,
+        data: json.Value = .null_value,
+    };
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
 
     var input: std.ArrayList(u8) = .empty;
     for (bad) |line| {
-        const want = std.json.parseFromSliceLeaky(Mirror, arena.allocator(), line, .{});
+        const want = json.parseLeaky(Mirror, arena.allocator(), line, .{});
         try testing.expect(std.meta.isError(want));
         const want_err = if (want) |_| unreachable else |err| err;
-        try testing.expectError(want_err, strand.parseLine(Held, arena.allocator(), line, .{}));
+        try testing.expectError(want_err, json.parseLeaky(Held, arena.allocator(), line, .{}));
         try input.appendSlice(arena.allocator(), line);
         try input.appendSlice(arena.allocator(), "\n{\"kind\":\"good\"}\n");
     }
 
     var source: std.Io.Reader = .fixed(input.items);
-    var reader: strand.Reader(Held) = .init(testing.allocator, &source, .{});
+    var reader: jsonl.Reader(Held) = .init(testing.allocator, &source, .{});
     defer reader.deinit();
     for (bad, 0..) |_, i| {
         try testing.expectError(error.MalformedLine, reader.next());
@@ -2812,67 +2767,48 @@ test "a malformed raw value is a malformed line, under the error std.json gives 
         try testing.expect(reader.lines.fault.err != null);
         try testing.expectEqualStrings("good", (try reader.next()).?.value.kind);
     }
-    try testing.expectEqual(@as(?strand.Line(Held), null), try reader.next());
-}
-
-test "a type holding a raw value stays on the direct path both ways" {
-    // The point of the type: a `std.json.Value` in the same place sends the
-    // whole line to the token parser.
-    const decode = codec_module.decode;
-    const encode = codec_module.encode;
-    try testing.expect(comptime decode.supports(Carried));
-    try testing.expect(comptime encode.supports(Carried));
-    try testing.expect(comptime decode.supports(strand.Raw));
-    try testing.expect(comptime encode.supports(strand.Raw));
-    const Valued = struct { kind: []const u8, data: std.json.Value = .null };
-    try testing.expect(!comptime decode.supports(Valued));
-    try testing.expect(!comptime encode.supports(Valued));
+    try testing.expectEqual(@as(?jsonl.Line(Held), null), try reader.next());
 }
 
 test "a raw value is written as one line whatever its bytes hold" {
-    const Held = struct { data: strand.Raw };
+    const Held = struct { data: json.Raw };
     const value: Held = .{ .data = .{ .bytes = "{\n  \"who\": \"\u{e9}\u{1f600}\",\r\n  \"n\": 1\n}" } };
 
     // Minified: a line break is a space, and the value means what it meant.
     const line = "{\"data\":{   \"who\": \"\u{e9}\u{1f600}\",    \"n\": 1 }}\n";
     try expectWritten(Held, value, .{}, line);
-    // Under escape_unicode, nothing but ASCII.
-    try expectWritten(Held, value, .{ .escape_unicode = true }, "{\"data\":{   \"who\": \"\\u00e9\\ud83d\\ude00\",    \"n\": 1 }}\n");
-    // A value with nothing to change is its bytes, in either mode.
-    try expectWritten(Held, .{ .data = .{ .bytes = "[1,  \"x\"]" } }, .{ .escape_unicode = true }, "{\"data\":[1,  \"x\"]}\n");
+    // A value with nothing to change is its bytes.
+    try expectWritten(Held, .{ .data = .{ .bytes = "[1,  \"x\"]" } }, .{}, "{\"data\":[1,  \"x\"]}\n");
 
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
 
     // The minified line reads back to the same value.
-    const back = try strand.parseLine(Held, arena.allocator(), line[0 .. line.len - 1], .{});
+    const back = try json.parseLeaky(Held, arena.allocator(), line[0 .. line.len - 1], .{});
     const Who = struct { who: []const u8, n: u8 };
-    try testing.expectEqualStrings("\u{e9}\u{1f600}", (try back.data.parse(Who, arena.allocator(), .{})).who);
+    try testing.expectEqualStrings("\u{e9}\u{1f600}", (try json.parseLeaky(Who, arena.allocator(), back.data.bytes, .{})).who);
 
-    // Pretty: written as it is, not re-indented, and read back by a pretty
-    // reader, which takes `\r\n` for a terminator as every reader here does.
+    // Pretty: laid out with the rest of the record, and read back by a
+    // pretty reader as the same value.
     var pretty: std.Io.Writer.Allocating = .init(arena.allocator());
-    var pretty_writer: strand.Writer(Held) = .init(&pretty.writer, .{ .format = .pretty });
+    var pretty_writer: jsonl.Writer(Held) = .init(&pretty.writer, .{ .format = .pretty });
     try pretty_writer.write(value);
-    try testing.expect(std.mem.find(u8, pretty.written(), value.data.bytes) != null);
     var source: std.Io.Reader = .fixed(pretty.written());
-    var reader: strand.Reader(Held) = .init(testing.allocator, &source, .{ .format = .pretty });
+    var reader: jsonl.Reader(Held) = .init(testing.allocator, &source, .{ .format = .pretty });
     defer reader.deinit();
-    try testing.expectEqualStrings(
-        "{\n  \"who\": \"\u{e9}\u{1f600}\",\n  \"n\": 1\n}",
-        (try reader.next()).?.value.data.bytes,
-    );
+    const read = (try reader.next()).?.value.data.bytes;
+    try testing.expectEqualStrings("\u{e9}\u{1f600}", (try json.parseLeaky(Who, arena.allocator(), read, .{})).who);
 }
 
 test "a raw value comes through a versioned record and its migration" {
     const Now = struct {
         pub const Self = @This();
         kind: []const u8,
-        data: strand.Raw = .null,
+        data: json.Raw = null_raw,
         pub const jsonl_version: u32 = 2;
-        pub fn jsonlMigrate(allocator: std.mem.Allocator, from: u32, data: std.json.Value) std.json.ParseFromValueError!Self {
+        pub fn jsonlMigrate(from: u32, payload: anytype) @TypeOf(payload.*).Error!Self {
             _ = from;
-            return strand.payloadOf(Self, allocator, data);
+            return payload.read(Self);
         }
     };
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
@@ -2880,11 +2816,12 @@ test "a raw value comes through a versioned record and its migration" {
     const a = arena.allocator();
 
     // The current version is read straight into the record: bytes kept.
-    const now = try strand.parseLine(strand.Versioned(Now), a, "{\"v\":2,\"data\":{\"kind\":\"k\",\"data\":[1, 2]}}", .{});
+    const now = try json.parseLeaky(jsonl.Versioned(Now), a, "{\"v\":2,\"data\":{\"kind\":\"k\",\"data\":[1, 2]}}", .{});
     try testing.expectEqualStrings("[1, 2]", now.value.data.bytes);
-    // An older one goes through a `std.json.Value`, and is kept encoded.
-    const old = try strand.parseLine(strand.Versioned(Now), a, "{\"v\":1,\"data\":{\"kind\":\"k\",\"data\":[1, 2]}}", .{});
-    try testing.expectEqualStrings("[1,2]", old.value.data.bytes);
+    // An older one is read where it lies on the line, so its bytes are kept
+    // too.
+    const old = try json.parseLeaky(jsonl.Versioned(Now), a, "{\"v\":1,\"data\":{\"kind\":\"k\",\"data\":[1, 2]}}", .{});
+    try testing.expectEqualStrings("[1, 2]", old.value.data.bytes);
     try testing.expect(old.migrated());
 }
 
@@ -2896,11 +2833,12 @@ test "a raw value comes off the end of a file owned" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
 
-    var tail: strand.Tail(Carried) = try .init(testing.allocator, &fixture.reader, .{});
+    var tail: jsonl.Tail(Carried) = try .init(testing.allocator, &fixture.reader, .{});
     defer tail.deinit();
-    const last = try tail.last(arena.allocator(), 2);
-    try testing.expectEqualStrings("[1]", last[0].data.bytes);
-    try testing.expectEqualStrings("{\"z\":2}", last[1].data.bytes);
+    var last = try tail.last(testing.allocator, 2);
+    defer last.deinit();
+    try testing.expectEqualStrings("[1]", last.value[0].data.bytes);
+    try testing.expectEqualStrings("{\"z\":2}", last.value[1].data.bytes);
 }
 
 // The line layer does one framing scan and one parse per complete record.
@@ -2908,25 +2846,22 @@ test "a raw value comes off the end of a file owned" {
 // in the benchmark, where the machine's load can be controlled.
 test "a buffered record is scanned once parsed once and borrowed without allocation" {
     const work = work_module;
-    const Row = struct { text: []const u8, note: ?[]const u8 = null };
-    const Hook = struct {
-        pub const Self = @This();
-        row: Row,
-        pub fn jsonParse(a: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) std.json.ParseError(@TypeOf(source.*))!Self {
-            return .{ .row = try parse_module.inner(Row, a, source, options) };
-        }
+    const Row = struct {
+        text: []const u8,
+        note: ?[]const u8 = null,
+        pub const strand = .{ .fields = .{ .note = .{ .omit = .null_value } } };
     };
     var out: std.Io.Writer.Allocating = .init(testing.allocator);
     defer out.deinit();
-    var writer: strand.Writer(Row) = .init(&out.writer, .{});
+    var writer: jsonl.Writer(Row) = .init(&out.writer, .{});
     for (0..128) |i| try writer.write(.{
         .text = &@as([512]u8, @splat('x')),
         .note = if (i % 7 == 0) "escaped\tnote" else null,
     });
-    inline for (.{ Row, Hook }) |T| {
+    inline for (.{Row}) |T| {
         var counting: shakedown.alloc.Counting = .init(testing.allocator);
         var input: std.Io.Reader = .fixed(out.written());
-        var reader: strand.Reader(T) = .init(counting.allocator(), &input, .{ .skip_bom = false });
+        var reader: jsonl.Reader(T) = .init(counting.allocator(), &input, .{ .skip_bom = false });
         defer reader.deinit();
         var counts: work.Counts = .{};
         work.observe(&counts);
@@ -2935,7 +2870,7 @@ test "a buffered record is scanned once parsed once and borrowed without allocat
         for (0..128) |i| {
             counts = .{};
             const line = (try reader.next()).?;
-            const row = if (T == Row) line.value else line.value.row;
+            const row = line.value;
             try testing.expect(within(line.line, out.written()));
             try testing.expect(within(row.text, line.line));
             try testing.expectEqual(@as(usize, 0), reader.lines.line_buf.written().len);
@@ -2946,7 +2881,7 @@ test "a buffered record is scanned once parsed once and borrowed without allocat
             if (i == 31) settled = grown(&counting);
             if (i >= 32) try testing.expectEqual(settled, grown(&counting));
         }
-        try testing.expectEqual(@as(?strand.Line(T), null), try reader.next());
+        try testing.expectEqual(@as(?jsonl.Line(T), null), try reader.next());
     }
 }
 
@@ -2971,12 +2906,12 @@ test "a protocol of many arms decodes and encodes without raising a comptime quo
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const line = "{\"arm59\":{\"f0\":1,\"f1\":2,\"f2\":3,\"f3\":4,\"f4\":5,\"f5\":6,\"f6\":7,\"f7\":8}}";
-    const request = try strand.parseLine(Request, arena.allocator(), line, .{});
+    const request = try json.parseLeaky(Request, arena.allocator(), line, .{});
     try std.testing.expectEqual(@as(u32, 8), request.arm59.f7);
-    try std.testing.expectEqual(std.meta.Tag(Request).arm59, strand.tagOf(Request, line).?);
+    try std.testing.expectEqual(std.meta.Tag(Request).arm59, json.tagOf(Request, line).?);
 
     var out: std.Io.Writer.Allocating = .init(arena.allocator());
-    var writer: strand.Writer(Request) = .init(&out.writer, .{});
+    var writer: jsonl.Writer(Request) = .init(&out.writer, .{});
     try writer.write(request);
     try std.testing.expectEqualStrings(line ++ "\n", out.written());
 }
@@ -2988,29 +2923,29 @@ test "an integer a few bits wide is held to its range on every path" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    try testing.expectEqual(Small{ .a = 7, .b = 1, .c = 3 }, try strand.parseLine(Small, a, "{\"a\":7,\"b\":1,\"c\":3}", .{}));
+    try testing.expectEqual(Small{ .a = 7, .b = 1, .c = 3 }, try json.parseLeaky(Small, a, "{\"a\":7,\"b\":1,\"c\":3}", .{}));
     for ([_][]const u8{ "{\"a\":8}", "{\"a\":9}", "{\"a\":10}", "{\"b\":2}", "{\"c\":4}" }) |line| {
-        try testing.expectError(error.Overflow, strand.parseLine(Small, a, line, .{}));
+        try testing.expectError(error.NumberOutOfRange, json.parseLeaky(Small, a, line, .{}));
         // and where the reader asks where it failed, which is the other path
-        var where: strand.Diagnostics = .{};
-        try testing.expectError(error.Overflow, strand.parseLine(Small, a, line, .{ .diagnostics = &where }));
+        var where: core.Diagnostics = .{};
+        try testing.expectError(error.NumberOutOfRange, json.parseLeaky(Small, a, line, .{ .diagnostics = &where }));
     }
-    try testing.expectError(error.Overflow, strand.parseLine(Small, a, "{\"c\":-5}", .{}));
+    try testing.expectError(error.NumberOutOfRange, json.parseLeaky(Small, a, "{\"c\":-5}", .{}));
 }
 
 /// Writes `value` twice with `options`: once into a destination with room
 /// in its buffer, which is where the writer encodes a record whole, and
 /// once into one with none, where it streams. Both must be `want`.
-fn expectWritten(comptime T: type, value: T, options: strand.Writer(T).Options, want: []const u8) !void {
+fn expectWritten(comptime T: type, value: T, options: jsonl.Writer(T).Options, want: []const u8) !void {
     var room: [512]u8 = undefined;
     var fixed: std.Io.Writer = .fixed(&room);
-    var buffered: strand.Writer(T) = .init(&fixed, options);
+    var buffered: jsonl.Writer(T) = .init(&fixed, options);
     try buffered.write(value);
     try testing.expectEqualStrings(want, fixed.buffered());
 
     var sink: std.Io.Writer.Allocating = .init(testing.allocator);
     defer sink.deinit();
-    var streamed: strand.Writer(T) = .init(&sink.writer, options);
+    var streamed: jsonl.Writer(T) = .init(&sink.writer, options);
     try streamed.write(value);
     try testing.expectEqualStrings(want, sink.written());
 }
@@ -3026,7 +2961,7 @@ test "an integer of any width is written as its digits" {
 
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
-    const back = try strand.parseLine(Widths, arena.allocator(), line[0 .. line.len - 1], .{});
+    const back = try json.parseLeaky(Widths, arena.allocator(), line[0 .. line.len - 1], .{});
     try testing.expectEqual(value, back);
 }
 
@@ -3039,30 +2974,31 @@ test "a packed struct is read and written as any struct is" {
 
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
-    const row = try strand.parseLine(Row, arena.allocator(), line, .{});
+    const row = try json.parseLeaky(Row, arena.allocator(), line, .{});
     try testing.expect(row.caps.plan and !row.caps.stream);
     try testing.expectEqual(@as(u3, 5), row.caps.level);
-    const partial = try strand.parseLine(Row, arena.allocator(), "{\"name\":\"x\",\"caps\":{\"stream\":true}}", .{});
+    const partial = try json.parseLeaky(Row, arena.allocator(), "{\"name\":\"x\",\"caps\":{\"stream\":true}}", .{});
     try testing.expect(!partial.caps.plan and partial.caps.stream);
-    try testing.expectError(error.Overflow, strand.parseLine(Row, arena.allocator(), "{\"name\":\"x\",\"caps\":{\"level\":8}}", .{}));
+    try testing.expectError(error.NumberOutOfRange, json.parseLeaky(Row, arena.allocator(), "{\"name\":\"x\",\"caps\":{\"level\":8}}", .{}));
 
     var out: std.Io.Writer.Allocating = .init(arena.allocator());
-    try strand.writeLine(&out.writer, row);
+    var writer: jsonl.Writer(Row) = .init(&out.writer, .{});
+    try writer.write(row);
     try testing.expectEqualStrings(line ++ "\n", out.written());
 }
 
 test "a separated writer bounds only its JSON payload" {
-    for ([_]strand.Format{ .minified, .pretty }) |format| {
+    for ([_]jsonl.Format{ .minified, .pretty }) |format| {
         var out: std.Io.Writer.Allocating = .init(testing.allocator);
         defer out.deinit();
-        var writer: strand.Writer(struct {}) = .initBounded(testing.allocator, &out.writer, 2, .{
+        var writer: jsonl.Writer(struct {}) = .initBounded(testing.allocator, &out.writer, 2, .{
             .format = format,
             .record_separator = true,
         });
         defer writer.deinit();
         try writer.write(.{});
         try testing.expectEqualStrings("\x1e{}\n", out.written());
-        var tighter: strand.Writer(struct {}) = .initBounded(testing.allocator, &out.writer, 1, .{
+        var tighter: jsonl.Writer(struct {}) = .initBounded(testing.allocator, &out.writer, 1, .{
             .format = format,
             .record_separator = true,
         });
@@ -3077,7 +3013,7 @@ test "a separated writer bounds only its JSON payload" {
 test "a separated blank line honors the carriage-return policy" {
     for ([_][]const u8{ " \t\r\n", "\r\n", "\r" }) |input| {
         var source: std.Io.Reader = .fixed(input);
-        var lines: strand.LineReader = .init(testing.allocator, &source, .{
+        var lines: jsonl.LineReader = .init(testing.allocator, &source, .{
             .record_separator = true,
             .crlf = false,
         });
@@ -3090,7 +3026,7 @@ test "a separated blank line honors the carriage-return policy" {
 test "a separated blank line discards only one carriage return" {
     for ([_][]const u8{ "\r\r\n", "\r\r" }) |input| {
         var source: std.Io.Reader = .fixed(input);
-        var lines: strand.LineReader = .init(testing.allocator, &source, .{ .record_separator = true });
+        var lines: jsonl.LineReader = .init(testing.allocator, &source, .{ .record_separator = true });
         defer lines.deinit();
         try testing.expectError(error.MissingSeparator, lines.next());
     }
@@ -3101,17 +3037,17 @@ test "a bounded writer emits the encoding it measured once" {
         pub const Self = @This();
         calls: *usize,
 
-        pub fn jsonStringify(self: Self, json: *std.json.Stringify) !void {
+        pub fn strandSerialize(self: Self, access: anytype) @TypeOf(access.*).Error!void {
             self.calls.* += 1;
-            try json.write(if (self.calls.* == 1) "x" else "too long");
+            try access.write(@as([]const u8, if (self.calls.* == 1) "x" else "too long"));
         }
     };
-    for ([_]strand.Format{ .minified, .pretty }) |format| {
+    for ([_]jsonl.Format{ .minified, .pretty }) |format| {
         for ([_]bool{ false, true }) |separated| {
             var output: std.Io.Writer.Allocating = .init(testing.allocator);
             defer output.deinit();
             var calls: usize = 0;
-            var writer: strand.Writer(Changing) = .initBounded(testing.allocator, &output.writer, 3, .{
+            var writer: jsonl.Writer(Changing) = .initBounded(testing.allocator, &output.writer, 3, .{
                 .format = format,
                 .record_separator = separated,
             });
@@ -3133,7 +3069,7 @@ test "bounded writer scratch survives allocation failures and reuses capacity" {
         fn run(allocator: std.mem.Allocator) !void {
             var output: std.Io.Writer.Allocating = .init(testing.allocator);
             defer output.deinit();
-            var writer: strand.Writer([]const u8) = .initBounded(allocator, &output.writer, 4096, .{ .record_separator = true });
+            var writer: jsonl.Writer([]const u8) = .initBounded(allocator, &output.writer, 4096, .{ .record_separator = true });
             defer writer.deinit();
             writer.write("x") catch |err| {
                 try testing.expectEqual(@as(usize, 0), output.written().len);
@@ -3157,7 +3093,7 @@ test "bounded writer scratch survives allocation failures and reuses capacity" {
     var failing: testing.FailingAllocator = .init(testing.allocator, .{ .fail_index = 0 });
     var output: std.Io.Writer.Allocating = .init(testing.allocator);
     defer output.deinit();
-    var writer: strand.Writer([]const u8) = .initBounded(failing.allocator(), &output.writer, 64, .{});
+    var writer: jsonl.Writer([]const u8) = .initBounded(failing.allocator(), &output.writer, 64, .{});
     defer writer.deinit();
     try testing.expectError(error.OutOfMemory, writer.write("first"));
     try testing.expectEqual(@as(usize, 0), output.written().len);
@@ -3171,25 +3107,24 @@ test "bounded writer scratch survives allocation failures and reuses capacity" {
     try testing.expectEqual(@as(u64, 2), writer.count);
 }
 
-test "bounded writer keeps hook failure distinct from allocation failure" {
+test "bounded writer keeps a codec's refusal distinct from allocation failure" {
     const Refusing = struct {
         pub const Self = @This();
-        pub fn jsonStringify(_: Self, json: *std.json.Stringify) !void {
-            try json.write("part");
-            return error.WriteFailed;
+        pub fn strandSerialize(_: Self, access: anytype) @TypeOf(access.*).Error!void {
+            return access.reject(1);
         }
     };
     var output: std.Io.Writer.Allocating = .init(testing.allocator);
     defer output.deinit();
-    var writer: strand.Writer(Refusing) = .initBounded(testing.allocator, &output.writer, 64, .{ .record_separator = true });
+    var writer: jsonl.Writer(Refusing) = .initBounded(testing.allocator, &output.writer, 64, .{ .record_separator = true });
     defer writer.deinit();
-    try testing.expectError(error.WriteFailed, writer.write(.{}));
+    try testing.expectError(error.CustomRejected, writer.write(.{}));
     try testing.expectEqual(@as(usize, 0), output.written().len);
     try testing.expectEqual(@as(u64, 0), writer.count);
     var failing: testing.FailingAllocator = .init(testing.allocator, .{ .fail_index = 0 });
-    var starved: strand.Writer(Refusing) = .initBounded(failing.allocator(), &output.writer, 64, .{});
+    var starved: jsonl.Writer([]const u8) = .initBounded(failing.allocator(), &output.writer, 64, .{});
     defer starved.deinit();
-    try testing.expectError(error.OutOfMemory, starved.write(.{}));
+    try testing.expectError(error.OutOfMemory, starved.write("x"));
     try testing.expectEqual(@as(usize, 0), output.written().len);
 }
 
@@ -3201,7 +3136,7 @@ test "bounded writer on a file preserves batch and sync policies" {
     defer file.close(io);
     var buffer: [128]u8 = undefined;
     var dest = file.writer(io, &buffer);
-    var writer: strand.Writer([]const u8) = .initFileBounded(testing.allocator, &dest, 3, .{ .sync = .per_batch });
+    var writer: jsonl.Writer([]const u8) = .initFileBounded(testing.allocator, &dest, 3, .{ .sync = .per_batch });
     defer writer.deinit();
     try testing.expectError(error.LineTooLong, writer.writeAll(&.{ "x", "too long", "y" }));
     try testing.expectEqual(@as(u64, 1), writer.count);
@@ -3221,7 +3156,7 @@ test "a pretty prefix at its byte bound ends without inventing a joined line" {
                 var fixed: std.Io.Reader = .fixed(input);
                 var buffer: [2]u8 = undefined;
                 var chunks: fixtures.Chunked = .init(input, &buffer, 1);
-                var reader: strand.Reader(std.json.Value) = .init(testing.allocator, if (streamed) &chunks.interface else &fixed, .{
+                var reader: jsonl.Reader(json.Value) = .init(testing.allocator, if (streamed) &chunks.interface else &fixed, .{
                     .format = .pretty,
                     .record_separator = separated,
                     .max_line_bytes = 1,
@@ -3233,7 +3168,7 @@ test "a pretty prefix at its byte bound ends without inventing a joined line" {
                     try testing.expect(reader.lines.unfinished);
                 } else {
                     try testing.expectError(error.MalformedLine, reader.next());
-                    try testing.expectEqual(error.UnexpectedEndOfInput, reader.lines.fault.err.?);
+                    try testing.expectEqual(error.SyntaxError, reader.lines.fault.err.?);
                 }
                 try testing.expectEqual(@as(u64, 1), reader.lines.number);
                 try testing.expectEqual(@as(u64, 0), reader.lines.recordStart().offset);
@@ -3250,7 +3185,7 @@ test "a pretty join past its byte bound counts the discarded physical line" {
         var fixed: std.Io.Reader = .fixed(input);
         var buffer: [2]u8 = undefined;
         var chunks: fixtures.Chunked = .init(input, &buffer, 1);
-        var reader: strand.Reader(std.json.Value) = .init(testing.allocator, if (streamed) &chunks.interface else &fixed, .{
+        var reader: jsonl.Reader(json.Value) = .init(testing.allocator, if (streamed) &chunks.interface else &fixed, .{
             .format = .pretty,
             .max_line_bytes = 1,
         });
@@ -3268,7 +3203,7 @@ test "a pretty join past its byte bound counts the discarded physical line" {
 test "an unfinished pretty record keeps its rewind point after complete records" {
     var fixture = try fixtures.Fixture.init("{}\n[\n", 64);
     defer fixture.deinit();
-    var reader: strand.Reader(std.json.Value) = .init(testing.allocator, &fixture.reader.interface, .{
+    var reader: jsonl.Reader(json.Value) = .init(testing.allocator, &fixture.reader.interface, .{
         .format = .pretty,
         .max_line_bytes = 3,
         .require_terminator = true,
@@ -3287,26 +3222,7 @@ test "an unfinished pretty record keeps its rewind point after complete records"
     try testing.expectEqualStrings("[\n]", completed.line);
     try testing.expectEqual(@as(u64, 2), completed.number);
     try testing.expectEqual(@as(u64, 3), completed.offset);
-    try testing.expectEqual(@as(usize, 0), completed.value.array.items.len);
-}
-
-test "a bounded writer completes a raw write with an empty repeated pattern" {
-    const EmptyPattern = struct {
-        pub const Self = @This();
-        pub fn jsonStringify(_: Self, json: *std.json.Stringify) !void {
-            try json.beginWriteRaw();
-            var parts = [_][]const u8{ "true", "" };
-            try json.writer.writeSplatAll(&parts, std.math.maxInt(usize));
-            json.endWriteRaw();
-        }
-    };
-    var output: std.Io.Writer.Allocating = .init(testing.allocator);
-    defer output.deinit();
-    var writer: strand.Writer(EmptyPattern) = .initBounded(testing.allocator, &output.writer, 4, .{});
-    defer writer.deinit();
-    try writer.write(.{});
-    try testing.expectEqualStrings("true\n", output.written());
-    try testing.expectEqual(@as(u64, 1), writer.count);
+    try testing.expectEqual(@as(usize, 0), completed.value.array.len);
 }
 
 /// A schema that reaches itself: decoded by recursion, one level per level
@@ -3324,9 +3240,9 @@ fn nestedNesteds(allocator: std.mem.Allocator, levels: usize) ![]u8 {
     return out.toOwnedSlice();
 }
 
-test "a recursive schema nested past max_depth is a malformed line, not a crash" {
-    // Deep enough to overflow the stack were it decoded by recursion, and
-    // well inside the default line bound.
+test "a recursive schema nested past the depth limit is a malformed line, not a crash" {
+    // Deep enough to overflow the stack were it decoded by recursion without
+    // a bound, and well inside the default line bound.
     const deep = try nestedNesteds(testing.allocator, 50_000);
     defer testing.allocator.free(deep);
     const fits = try nestedNesteds(testing.allocator, 200);
@@ -3334,28 +3250,27 @@ test "a recursive schema nested past max_depth is a malformed line, not a crash"
     const input = try std.mem.concat(testing.allocator, u8, &.{ deep, fits });
     defer testing.allocator.free(input);
 
-    for ([_]strand.Format{ .minified, .pretty }) |format| {
+    // Each level is an object and an array, and the innermost is an object.
+    // A field left out takes its default, which is copied a level deeper.
+    const parse: json.ParseOptions = .{ .limits = .{ .depth = 402 } };
+    for ([_]jsonl.Format{ .minified, .pretty }) |format| {
         var source: std.Io.Reader = .fixed(input);
-        var reader: strand.Reader(Nested) = .init(testing.allocator, &source, .{ .format = format });
+        var reader: jsonl.Reader(Nested) = .init(testing.allocator, &source, .{ .format = format, .parse = parse });
         defer reader.deinit();
         try testing.expectError(error.MalformedLine, reader.next());
-        try testing.expectEqual(@as(?strand.ParseLineError, error.NestingTooDeep), reader.lines.fault.err);
+        try testing.expectEqual(@as(?core.DecodeError, error.DepthLimit), reader.lines.fault.err);
         try testing.expectEqual(@as(usize, 1), (try reader.next()).?.value.kids.len);
         try testing.expect(try reader.next() == null);
     }
 
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
-    // Each level is an object and an array, and the innermost is an object.
     const line = fits[0 .. fits.len - 1];
-    try testing.expectError(error.NestingTooDeep, strand.parseLine(Nested, arena.allocator(), line, .{ .max_depth = 400 }));
-    _ = try strand.parseLine(Nested, arena.allocator(), line, .{ .max_depth = 401 });
-    // A schema that does not reach itself is bounded by its shape and is
-    // not held to the depth: `std.json.Value` is read without recursion.
-    _ = try strand.parseLine(std.json.Value, arena.allocator(), deep[0 .. deep.len - 1], .{});
+    try testing.expectError(error.DepthLimit, json.parseLeaky(Nested, arena.allocator(), line, .{ .limits = .{ .depth = 401 } }));
+    _ = try json.parseLeaky(Nested, arena.allocator(), line, parse);
 }
 
-test "a backward read holds a recursive schema to max_depth" {
+test "a backward read holds a recursive schema to the depth limit" {
     const deep = try nestedNesteds(testing.allocator, 50_000);
     defer testing.allocator.free(deep);
     var tmp = testing.tmpDir(.{});
@@ -3364,22 +3279,21 @@ test "a backward read holds a recursive schema to max_depth" {
     const file = try tmp.dir.openFile(testing.io, "log", .{});
     defer file.close(testing.io);
     var source = file.reader(testing.io, &.{});
-    var tail = try strand.Tail(Nested).init(testing.allocator, &source, .{});
+    var tail = try jsonl.Tail(Nested).init(testing.allocator, &source, .{});
     defer tail.deinit();
     try testing.expectError(error.MalformedLine, tail.prev());
-    try testing.expectEqual(@as(?strand.ParseLineError, error.NestingTooDeep), tail.fault.err);
+    try testing.expectEqual(@as(?core.DecodeError, error.DepthLimit), tail.fault.err);
 }
 
 test "policy types are the same for every record type" {
     const A = struct { a: u8 };
     const B = struct { b: []const u8 };
     comptime {
-        std.debug.assert(strand.Reader(A).Options == strand.Reader(B).Options);
-        std.debug.assert(strand.Reader(A).NextError == strand.Reader(B).NextError);
-        std.debug.assert(strand.Writer(A).Options == strand.Writer(B).Options);
-        std.debug.assert(strand.Writer(A).Error == strand.Writer(B).Error);
-        std.debug.assert(strand.Tail(A).Options == strand.Tail(B).Options);
-        std.debug.assert(strand.Follower(A).Options == strand.Follower(B).Options);
-        std.debug.assert(strand.Follower(A).Checkpoint == strand.Follower(B).Checkpoint);
+        std.debug.assert(jsonl.Reader(A).Options == jsonl.Reader(B).Options);
+        std.debug.assert(jsonl.Reader(A).NextError == jsonl.Reader(B).NextError);
+        std.debug.assert(jsonl.Writer(A).Options == jsonl.Writer(B).Options);
+        std.debug.assert(jsonl.Tail(A).Options == jsonl.Tail(B).Options);
+        std.debug.assert(jsonl.Follower(A).Options == jsonl.Follower(B).Options);
+        std.debug.assert(jsonl.Follower(A).Checkpoint == jsonl.Follower(B).Checkpoint);
     }
 }

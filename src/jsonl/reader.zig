@@ -1,17 +1,9 @@
 //! `Reader`: a `*std.Io.Reader` as a stream of typed lines.
-const codec_module = @import("../json/api.zig").codec_module;
-const reader_module = @import("line/reader.zig");
-const owned_module = @import("owned.zig");
-const work_module = @import("../json/api.zig").work_module;
-
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-
-const parse_line = codec_module.parser;
-const ParseOptions = parse_line.ParseOptions;
-const DuplicateFields = parse_line.DuplicateFields;
-const ParseLineError = parse_line.ParseLineError;
-const parseLineInto = parse_line.parseLineInto;
+const core = @import("../core.zig");
+const json = @import("../json/api.zig");
+const reader_module = @import("line/reader.zig");
 
 const line_mod = @import("line.zig");
 const Line = line_mod.Line;
@@ -19,23 +11,18 @@ const RawLine = line_mod.RawLine;
 const Format = line_mod.Format;
 
 const LineReader = reader_module.LineReader;
-const json_scanner = @import("../json/api.zig").Scanner_module;
 
 /// The policy types of every `Reader`, whatever its record type: shared,
 /// so that options and errors mean the same thing across instantiations.
 const shared = struct {
     /// Reading and parsing policy, fixed at `init`. The framing fields
     /// are `LineReader.Options`', under the same names, and are handed to
-    /// `lines`; the rest say how a line becomes a `T`.
+    /// `lines`; `parse` says how a line becomes a `T`.
     pub const Options = struct {
-        /// See `ParseOptions.ignore_unknown_fields`.
-        ignore_unknown_fields: bool = true,
-        /// See `ParseOptions.duplicate_fields`.
-        duplicate_fields: DuplicateFields = .@"error",
-        /// See `ParseOptions.max_depth`. A line nested deeper is
-        /// `error.MalformedLine`, with `error.NestingTooDeep` in
-        /// `lines.fault.err`.
-        max_depth: usize = parse_line.default_max_depth,
+        /// How a line is parsed: its limits, and whether unknown and repeated
+        /// keys are refused. A line the parse refuses is `error.MalformedLine`,
+        /// with the parse's error in `lines.fault.err`.
+        parse: json.ParseOptions = .{},
         /// The longest JSON payload accepted, in bytes, excluding the
         /// terminator, separator and discarded torn prefix; in `.pretty` mode this bounds the joined record
         /// rather than one physical line. A longer one is
@@ -55,8 +42,7 @@ const shared = struct {
         /// See `LineReader.Options.record_separator`.
         record_separator: bool = false,
         /// See `LineReader.Options.reject_control_bytes`. A line refused
-        /// for one is `error.ControlByte` rather than whatever
-        /// `std.json` would have made of it.
+        /// for one is `error.ControlByte` and never reaches the parse.
         reject_control_bytes: bool = true,
         /// See `LineReader.Options.require_terminator`. `Follower` sets
         /// it, and rewinds and reads a half-written line again once the
@@ -93,17 +79,16 @@ const shared = struct {
     /// What `next` can report: everything `LineReader.next` can, and
     /// `MalformedLine`.
     ///
-    /// The parse errors of `std.json` collapse into `MalformedLine`,
-    /// which says "this line, the one at `lines.fault.line`, is not a
-    /// `T`"; `lines.fault.err` holds which parse error it was.
-    /// `ControlByte` is the same claim about a line `std.json` was not
-    /// shown, made before parsing because a control byte in a line means
-    /// the line is damaged rather than merely wrong. `MissingSeparator` is
-    /// a line with no record on it at all, which only a reader in
-    /// `Options.record_separator` mode can tell. The other three are not
-    /// about the content of a line: `OutOfMemory` is the allocator's,
-    /// `ReadFailed` is the stream's (ask it for diagnostics), and
-    /// `LineTooLong` is this reader's own bound.
+    /// Every refusal of the parse is `MalformedLine`, which says "this line,
+    /// the one at `lines.fault.line`, is not a `T`"; `lines.fault.err` holds
+    /// which it was, a line past a parse limit included. `ControlByte` is the
+    /// same claim about a line the parse was not shown, made before parsing
+    /// because a control byte in a line means the line is damaged rather
+    /// than merely wrong. `MissingSeparator` is a line with no record on it
+    /// at all, which only a reader in `Options.record_separator` mode can
+    /// tell. The other three are not about the content of a line:
+    /// `OutOfMemory` is the allocator's, `ReadFailed` is the stream's (ask it
+    /// for diagnostics), and `LineTooLong` is this reader's own bound.
     pub const NextError = LineReader.NextError || error{MalformedLine};
 
     /// Where a resumed reader begins. See `resumeAt`.
@@ -155,12 +140,7 @@ pub fn Reader(comptime T: type) type {
         /// A reader over an `input` already positioned part-way into a file,
         /// numbering and placing its lines as if it had read the rest. See
         /// `LineReader.resumeAt`, which this is over.
-        pub fn resumeAt(
-            gpa: Allocator,
-            input: *std.Io.Reader,
-            start: Start,
-            options: Options,
-        ) Self {
+        pub fn resumeAt(gpa: Allocator, input: *std.Io.Reader, start: Start, options: Options) Self {
             return .{
                 .lines = .resumeAt(gpa, input, start, options.framing()),
                 .options = options,
@@ -195,19 +175,12 @@ pub fn Reader(comptime T: type) type {
         /// can arrive in the middle of a line, and leave the stream wherever
         /// they found it.
         pub fn next(self: *Self) NextError!?Line(T) {
-            // A `.pretty` reader of a type the direct decoder reads has a
-            // loop of its own, so that a minified line's is as it was.
-            if (comptime parse_line.direct(T)) if (self.options.format == .pretty) return self.nextPretty();
+            if (self.options.format == .pretty) return self.nextPretty();
             while (true) {
-                // Keep the frame and the decoded value in this call's
-                // result rather than returning each through a separate
-                // aggregate. The two layers still own their own work.
+                // The frame and the value come back in this call's result,
+                // each layer still doing its own work.
                 const raw = (try @call(.always_inline, LineReader.next, .{&self.lines})) orelse return null;
                 if (try @call(.always_inline, Self.parse, .{ self, raw })) |line| return line;
-                // An unfinished pretty record is the end reached while
-                // joining, not a skipped record. Keep the framing layer's
-                // rewind point for the caller that will read it again.
-                if (self.lines.unfinished) return null;
                 // The record was passed over under `.skip`; the next one.
             }
         }
@@ -215,11 +188,11 @@ pub fn Reader(comptime T: type) type {
         /// The next line's bytes, its number and its place, without parsing
         /// them into a `T`: `lines.next()`, under the name it has here.
         ///
-        /// This is what routing a stream is built from: `kindOf` or `tagOf`
-        /// on `raw.line` says what kind of line it is, and only the ones
-        /// worth having need to become values. A line that is not parsed
-        /// costs no arena and no allocator at all. `parse` is how one of them
-        /// becomes a `Line(T)` afterwards.
+        /// This is what routing a stream is built from: `json.kindOf` or
+        /// `json.tagOf` on `raw.line` says what kind of line it is, and only
+        /// the ones worth having need to become values. A line that is not
+        /// parsed costs no arena and no allocator at all. `parse` is how one
+        /// of them becomes a `Line(T)` afterwards.
         ///
         /// Ownership: `raw.line` borrows exactly as `Line.line` does, and is
         /// gone at the next call to `next`, `nextRaw` or `deinit`.
@@ -244,49 +217,14 @@ pub fn Reader(comptime T: type) type {
         /// mode a record that is only a prefix of a value is joined to the
         /// lines after it here, which means reading them.
         pub fn parse(self: *Self, raw: RawLine) NextError!?Line(T) {
-            var record = raw.line;
-            // A `.pretty` record that has to be joined is parsed again here,
-            // at the one place every line is parsed: a second call site of
-            // `parseLineInto` changes what is inlined into this one, and a
-            // minified line paid four percent for it over long lines. The
-            // join itself stays out of line.
-            var pretty: PrettyEnd = undefined;
-            var joining = false;
-            defer if (joining) pretty.deinit();
-            while (true) {
-                _ = self.arena.reset(.retain_capacity);
-                // Asked for by name: what is left of `parseLine` once the
-                // line is good is a scanner on the stack and one call under
-                // it, and a second call around that is a cost every line
-                // pays for nothing.
-                const how: ParseOptions = .{
-                    .ignore_unknown_fields = self.options.ignore_unknown_fields,
-                    .duplicate_fields = self.options.duplicate_fields,
-                    .copy_strings = false,
-                    .max_depth = self.options.max_depth,
-                };
-                // The value is decoded into the `Line` it is handed back in,
-                // not copied into it; `parseLineInto` says what a copy costs.
-                var line: Line(T) = .{
-                    .value = undefined,
-                    .line = record,
-                    .number = raw.number,
-                    .offset = raw.offset,
-                };
-                if (@call(.always_inline, parseLineInto, .{ T, self.arena.allocator(), record, how, &line.value })) {
-                    return line;
-                } else |err| switch (err) {
-                    error.OutOfMemory => return error.OutOfMemory,
-                    else => |parse_err| {
-                        @branchHint(.unlikely);
-                        if (self.options.format != .pretty) return self.malformed(raw.number, record, parse_err);
-                        if (!joining) {
-                            pretty.init(self.arena.child_allocator, record);
-                            joining = true;
-                        }
-                        record = (try self.grow(&pretty, raw.number, record, parse_err)) orelse return null;
-                    },
-                }
+            _ = self.arena.reset(.retain_capacity);
+            if (json.parseLeaky(T, self.arena.allocator(), raw.line, self.options.parse)) |value| {
+                return .{ .value = value, .line = raw.line, .number = raw.number, .offset = raw.offset };
+            } else |err| {
+                @branchHint(.unlikely);
+                if (err == error.OutOfMemory) return error.OutOfMemory;
+                if (self.options.format != .pretty) return self.malformed(raw.number, raw.line, err);
+                return self.joined(raw, err);
             }
         }
 
@@ -306,117 +244,72 @@ pub fn Reader(comptime T: type) type {
 
         /// A `.pretty` record parsed where it lies in the input's buffer:
         /// from its first byte, across the line breaks inside its value, to
-        /// where the value ends. One parse on the decoder a minified line
-        /// takes, and no copy. The lines it ran over are then the record's,
-        /// as joining them would have made them.
+        /// where the value ends. One parse and no copy. The lines it ran over
+        /// are then the record's, as joining them would have made them.
         ///
-        /// `null` hands the record to the joining path below, which says
-        /// what is wrong with it: a value that does not parse, or that is
-        /// cut off by the end of what is buffered, something after it on
-        /// its last line, and lines `takeThrough` will not take. What that
-        /// path makes of a record this one takes is the same record.
+        /// `null` hands the record to the joining path, which says what is
+        /// wrong with it: a value that does not parse, or that is cut off by
+        /// the end of what is buffered, something after it on its last line,
+        /// and lines `takeThrough` will not take. What that path makes of a
+        /// record this one takes is the same record.
         noinline fn inPlace(self: *Self, raw: RawLine, rest: []const u8) ?Line(T) {
             _ = self.arena.reset(.retain_capacity);
-            const how: ParseOptions = .{
-                .ignore_unknown_fields = self.options.ignore_unknown_fields,
-                .duplicate_fields = self.options.duplicate_fields,
-                .copy_strings = false,
-                .max_depth = self.options.max_depth,
-            };
-            var line: Line(T) = .{
-                .value = undefined,
-                .line = raw.line,
-                .number = raw.number,
-                .offset = raw.offset,
-            };
-            const end = parse_line.parsePrefixInto(T, self.arena.allocator(), rest, how, &line.value) catch return null;
+            const found = json.parsePrefixLeaky(T, self.arena.allocator(), rest, self.options.parse) catch return null;
             // Whitespace to the end of the line the value ended on, which
             // is where the record ends.
-            var at = end;
+            var at = found.end;
             while (at < rest.len and (rest[at] == ' ' or rest[at] == '\t')) at += 1;
             if (at == rest.len or rest[at] != '\n') return null;
+            var line: Line(T) = .{ .value = found.value, .line = raw.line, .number = raw.number, .offset = raw.offset };
             if (at == raw.line.len) return line;
             line.line = self.lines.takeThrough(raw, rest, at) orelse return null;
             return line;
         }
 
-        /// What a `.pretty` record that did not parse does next: the record
-        /// joined to the lines after it, as far as the next place a parse can
-        /// decide it, or `null` when it is decided without one — refused under
-        /// `.skip`, damaged, or unfinished under `require_terminator`.
+        /// A `.pretty` record that did not parse on its first line: joined to
+        /// the lines after it as far as its value runs, then parsed once.
         ///
-        /// A record ends where its JSON value does. Parsing it after every
-        /// joined line would find that too, but it parses a record of `n`
-        /// lines `n` times, so a scan follows the value's end a line at a
-        /// time instead and the record is parsed again only where the value
-        /// ends, where it stops being JSON, or at a blank line, which
-        /// `parseLine` refuses. That is the same record a parse per line
-        /// makes, with one exception: a record that is JSON but not a `T`
-        /// is refused where its value ends, as one record, and not on the
-        /// line where it stopped being a `T`, which would read the rest of
-        /// its lines as records of their own.
-        noinline fn grow(self: *Self, pretty: *PrettyEnd, number: u64, prefix: []const u8, failed: ParseLineError) NextError!?[]const u8 {
-            switch (pretty.state) {
-                .open => {},
-                .closed => if (failed == error.UnexpectedEndOfInput) {
-                    // The parse wants more than the value the scan saw end,
-                    // which `std.json` as the oracle of both rules out. Join
-                    // and parse a line at a time rather than guess.
-                    pretty.state = .per_line;
-                } else {
-                    _ = try self.malformed(number, prefix, failed);
-                    return null;
-                },
-                .per_line => if (failed != error.UnexpectedEndOfInput) {
-                    _ = try self.malformed(number, prefix, failed);
-                    return null;
-                },
-                // The stream ended inside the value, and this was the parse
-                // that says what the record is.
-                .ended => {
-                    _ = try self.malformed(number, prefix, failed);
-                    return null;
-                },
-            }
-            var record = prefix;
-            while (true) {
+        /// A record ends where its JSON value does, which a scan follows a
+        /// line at a time, so a record of `n` lines is parsed once and not
+        /// `n` times. A blank line ends a record too: it leaves the record
+        /// ending in its terminator, which the parse refuses. `null` when the
+        /// record is decided without a value: refused under `.skip`, damaged,
+        /// or unfinished under `require_terminator`. `failed` is what the first
+        /// line's parse said, which is the answer when the value ends on that line.
+        noinline fn joined(self: *Self, raw: RawLine, failed: anytype) NextError!?Line(T) {
+            var end: ValueEnd = .{};
+            var record = raw.line;
+            if (end.follow(record)) |_| return self.malformed(raw.number, record, failed);
+            while (end.state == .open) {
                 const before = record.len;
-                switch (try self.lines.join(number, record)) {
-                    .grown => |joined| record = joined,
+                switch (try self.lines.join(raw.number, record)) {
+                    .grown => |grown| record = grown,
                     // The record is damaged rather than unfinished, and the
-                    // line reader has already said where and counted it:
-                    // saying anything else here would replace the true
-                    // diagnosis with a guess.
+                    // line reader has already said where and counted it.
                     .damaged => return null,
                     .ended => {
                         if (self.options.require_terminator) return null;
-                        if (pretty.state == .per_line) {
-                            _ = try self.malformed(number, record, failed);
-                            return null;
-                        }
-                        pretty.state = .ended;
-                        return record;
+                        break;
                     },
                 }
-                if (pretty.state == .per_line) return record;
-                if (record.len == before + 1) {
-                    // A blank line, which leaves the record ending in its
-                    // terminator: the parse refuses that.
-                    pretty.state = .closed;
-                    return record;
-                }
-                pretty.follow(record);
-                if (pretty.state != .open) return record;
+                if (record.len == before + 1) break;
+                _ = end.follow(record);
             }
+            _ = self.arena.reset(.retain_capacity);
+            const value = json.parseLeaky(T, self.arena.allocator(), record, self.options.parse) catch |err| {
+                if (err == error.OutOfMemory) return error.OutOfMemory;
+                return self.malformed(raw.number, record, err);
+            };
+            return .{ .value = value, .line = record, .number = raw.number, .offset = raw.offset };
         }
 
         /// Records a parse failure against `number` and does what
         /// `on_malformed` says about it: `null` is a record passed over.
-        fn malformed(self: *Self, number: u64, record: []const u8, err: ParseLineError) NextError!?Line(T) {
+        fn malformed(self: *Self, number: u64, record: []const u8, err: anytype) NextError!?Line(T) {
             self.lines.fault.parse(
                 number,
-                err,
-                line_mod.whereItFailed(T, self.arena.allocator(), record, self.options),
+                line_mod.decodeError(err),
+                line_mod.whereItFailed(T, self.arena.allocator(), record, self.options.parse),
             );
             switch (self.options.on_malformed) {
                 .fail => return error.MalformedLine,
@@ -427,100 +320,88 @@ pub fn Reader(comptime T: type) type {
             }
         }
 
-        /// A copy of `line.value` and all its storage on `gpa`.
+        /// A copy of `line.value` and all its storage, in an owner of its own
+        /// on `gpa`.
         ///
-        /// The result outlives the line and the reader. This calls `copyOwned`
-        /// on the value already returned, preserving edits and migrations;
-        /// it does not read `line.line` or call JSON hooks again. Custom
-        /// parsers and migrations therefore run only when the line is read,
-        /// even when their decisions depend on external state.
-        ///
-        /// The value must meet `copyOwned`'s finite-data-tree contract. A
-        /// schema holding external resources or cyclic state needs its own
-        /// ownership operation. Unsupported field types fail at compile time.
-        /// Release the result with `freeOwned` on the same allocator, or
-        /// release its destination arena as a whole. A failed copy frees
-        /// everything it allocated and leaves the source value intact.
-        ///
-        /// The copy recurses once per level of the value. A recursive schema
-        /// read by this reader is no deeper than `Options.max_depth`, which
-        /// is what bounds that recursion too.
-        pub fn keep(self: *Self, gpa: Allocator, line: Line(T)) Allocator.Error!T {
-            _ = self;
-            return owned_module.copyOwned(gpa, line.value);
+        /// The result outlives the line and the reader. The value already
+        /// returned is copied, edits and migrations included; the line is not
+        /// read again. The copy is checked and bounded by `options.parse`'s
+        /// limits; a failed copy leaves nothing behind. Release it with its
+        /// `deinit`.
+        pub fn keep(self: *Self, gpa: Allocator, line: Line(T)) core.DecodeError!core.Parsed(T) {
+            return core.clone(gpa, line.value, self.options.parse.limits);
         }
     };
 }
 
-/// Where a `.pretty` record's value ends, followed a line at a time.
-///
-/// The scanner a parse reads tokens from, which `std.json` is the oracle of,
-/// so the value it sees end is the one a parse sees end. A line ends between
-/// two tokens of a value that goes on after it — a string, a literal or a
-/// number cut by the `\n` is not JSON — so the scanner picks up the next line
-/// where it left off. It keeps no token and borrows nothing between lines.
-const PrettyEnd = struct {
-    state: enum {
-        /// Inside the value.
-        open,
-        /// The value ended, or what was followed stopped being JSON.
-        closed,
-        /// The stream ended inside the value.
-        ended,
-        /// Not followed: parsed after every joined line.
-        per_line,
-    },
-    scanner: json_scanner,
+/// Where a `.pretty` record's value ends, followed a line at a time: how
+/// deep the scan is in containers, and whether it is inside a string. A line
+/// ends between two tokens of a value that goes on after it, because a raw
+/// line break is not allowed inside a string, so the scan picks up the next
+/// line where it left off. It borrows nothing between lines.
+pub const ValueEnd = struct {
+    state: enum { start, open, closed } = .start,
+    depth: usize = 0,
+    in_string: bool = false,
+    escaped: bool = false,
+    /// How much of the record has been followed.
+    seen: usize = 0,
 
-    noinline fn init(self: *PrettyEnd, gpa: Allocator, line: []const u8) void {
-        self.scanner = .initCompleteInput(gpa, line);
-        self.state = .open;
-        self.follow(line);
-    }
-
-    fn deinit(self: *PrettyEnd) void {
-        self.scanner.deinit();
-        self.* = undefined;
-    }
-
-    /// Follows `record`, whose front is what was followed before, to its end
-    /// or to where its value does.
-    fn follow(self: *PrettyEnd, record: []const u8) void {
-        std.debug.assert(self.scanner.cursor <= record.len);
-        work_module.scan(record.len - self.scanner.cursor);
-        // The bytes before the cursor are the same, wherever they are now.
-        self.scanner.input = record;
-        while (true) {
-            const from = self.scanner.cursor;
-            const between = self.scanner.state != .string and self.scanner.state != .string_escape;
-            const token = self.scanner.next() catch |err| switch (err) {
-                error.OutOfMemory => {
-                    self.state = .per_line;
-                    return;
+    /// Follows `record`, whose front is what was followed before, to where
+    /// its value ends: the offset just past it, or `null` when it goes on.
+    pub fn follow(self: *ValueEnd, record: []const u8) ?usize {
+        var at = self.seen;
+        defer self.seen = record.len;
+        while (at < record.len) : (at += 1) {
+            const b = record[at];
+            if (self.in_string) {
+                if (self.escaped) {
+                    self.escaped = false;
+                } else if (b == '\\') {
+                    self.escaped = true;
+                } else if (b == '"') {
+                    self.in_string = false;
+                    if (self.depth == 0) return self.close(at + 1);
+                }
+                continue;
+            }
+            switch (b) {
+                ' ', '\t', '\r', '\n' => {},
+                '{', '[' => {
+                    self.state = .open;
+                    self.depth += 1;
                 },
-                // Out of input between two tokens is a value that goes on;
-                // inside one, it is not JSON once the `\n` after it is there.
-                error.UnexpectedEndOfInput => if (between and blank(record[from..])) return else break,
-                else => break,
-            };
-            switch (token) {
-                .object_end, .array_end, .number, .string, .true, .false, .null => {
-                    if (self.scanner.stackHeight() == 0) break;
+                '}', ']' => {
+                    if (self.depth == 0) return self.close(at);
+                    self.depth -= 1;
+                    if (self.depth == 0) return self.close(at + 1);
                 },
-                .end_of_document => break,
-                else => {},
+                '"' => {
+                    self.state = .open;
+                    self.in_string = true;
+                },
+                else => if (self.depth == 0) {
+                    // A scalar at the top: a number or a word, which ends
+                    // where the line does.
+                    return self.close(record.len);
+                },
             }
         }
-        self.state = .closed;
+        return null;
     }
 
-    /// Whether `bytes` hold no part of a token: only the whitespace, commas
-    /// and colons the scanner passes over between two.
-    fn blank(bytes: []const u8) bool {
-        for (bytes) |c| switch (c) {
-            ' ', '\t', '\r', '\n', ',', ':' => {},
-            else => return false,
-        };
-        return true;
+    fn close(self: *ValueEnd, at: usize) usize {
+        self.state = .closed;
+        return at;
     }
 };
+
+test ValueEnd {
+    var end: ValueEnd = .{};
+    try std.testing.expectEqual(null, end.follow("{"));
+    try std.testing.expectEqual(null, end.follow("{\n  \"a\": \"}\\\"\","));
+    const record = "{\n  \"a\": \"}\\\"\",\n  \"b\": []\n}";
+    try std.testing.expectEqual(@as(?usize, record.len), end.follow(record));
+    var scalar: ValueEnd = .{};
+    try std.testing.expectEqual(@as(?usize, 2), scalar.follow("17"));
+}

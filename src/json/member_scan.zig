@@ -1,10 +1,9 @@
 //! One top-level member of a JSON object, found by name in bytes that go by
 //! once and are not kept: what `LineReader` holds on to of a line too long
 //! to hold, and where `memberOf` finds a member of a line it has whole.
-const Scanner_module = @import("Scanner.zig");
 
 const std = @import("std");
-const stringSpecial = Scanner_module.stringSpecial;
+const stringSpecial = @import("text.zig").special;
 
 /// The longest value kept, in bytes. A member whose value is longer is not
 /// kept, and nor is one whose value is an object or an array: what is wanted

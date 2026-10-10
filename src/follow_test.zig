@@ -2,11 +2,13 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const strand = @import("strand.zig");
-const Follower = strand.Follower;
-const Opener = strand.Opener;
-const PathOpener = strand.PathOpener;
-const Identity = strand.Identity;
-const FileId = strand.FileId;
+const json = strand.json;
+const jsonl = strand.jsonl;
+const Follower = jsonl.Follower;
+const Opener = jsonl.Opener;
+const PathOpener = jsonl.PathOpener;
+const Identity = jsonl.Identity;
+const FileId = jsonl.FileId;
 const testing = std.testing;
 const shakedown = @import("shakedown");
 
@@ -14,11 +16,17 @@ const fixtures = @import("testing/fixtures.zig");
 const Fixture = fixtures.Fixture;
 const Event = fixtures.Event;
 
+/// `value` as one line: its JSON, then a newline.
+fn writeLine(out: *std.Io.Writer, value: anytype) !void {
+    try json.write(out, value, .{});
+    try out.writeByte('\n');
+}
+
 /// Writes `count` events into `file`, a few bytes at a time, so that the
 /// follower meets half-written lines rather than whole ones.
 fn produce(io: std.Io, file: std.Io.File, buffer: []u8, count: u64) !void {
     var file_writer = file.writer(io, buffer);
-    var log: strand.Writer(Event) = .init(&file_writer.interface, .{});
+    var log: jsonl.Writer(Event) = .init(&file_writer.interface, .{});
     for (0..count) |i| {
         try log.write(.{ .kind = "tick", .at = i });
         // Flushing mid-record is exactly the case the follower exists for:
@@ -160,7 +168,7 @@ test "an over-long line finished after it was refused is not read twice" {
     try testing.expectEqual(@as(u64, 2), line.number);
     try testing.expectEqual(@as(u64, torn_long_head.len + "aaa\"}\n".len), line.offset);
     // Nothing else is on the file: the refused line is not read again.
-    try testing.expectEqual(@as(?strand.Line(Event), null), try follower.reader.next());
+    try testing.expectEqual(@as(?jsonl.Line(Event), null), try follower.reader.next());
     try testing.expectEqual(@as(u64, 0), follower.reader.lines.skipped);
 }
 
@@ -191,7 +199,7 @@ test "an over-long line finished while the follower waits is not read twice" {
     try testing.io.sleep(.fromMilliseconds(10), .awake);
     try fixture.write_file.writePositionalAll(testing.io, torn_long_tail, torn_long_head.len);
     try task.await(testing.io);
-    try testing.expectEqual(@as(?strand.Line(Event), null), try follower.reader.next());
+    try testing.expectEqual(@as(?jsonl.Line(Event), null), try follower.reader.next());
 }
 
 test "a follower still recognizes a byte-order mark after starting empty" {
@@ -204,7 +212,7 @@ test "a follower still recognizes a byte-order mark after starting empty" {
     defer follower.deinit(testing.io);
 
     // Reach the empty file once, as `Follower.next` does before it waits.
-    try testing.expectEqual(@as(?strand.Line(Event), null), try follower.reader.next());
+    try testing.expectEqual(@as(?jsonl.Line(Event), null), try follower.reader.next());
     try fixture.write_file.writeStreamingAll(testing.io, "\xEF\xBB\xBF{\"kind\":\"first\"}\n");
 
     try testing.expectEqualStrings("first", (try follower.next(testing.io)).value.kind);
@@ -287,7 +295,7 @@ test "a truncated file is reported rather than spliced onto the old one" {
 /// The lines a plain reader makes of `bytes`, as "number:line" strings.
 fn readingOf(bytes: []const u8) !std.ArrayList([]const u8) {
     var source: std.Io.Reader = .fixed(bytes);
-    var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{});
+    var reader: jsonl.Reader(Event) = .init(testing.allocator, &source, .{});
     defer reader.deinit();
 
     var out: std.ArrayList([]const u8) = .empty;
@@ -313,7 +321,7 @@ test "a follower resumed from a checkpoint reads every line exactly once" {
     const lines = 40;
     var log: std.Io.Writer.Allocating = .init(testing.allocator);
     defer log.deinit();
-    var writer: strand.Writer(Event) = .init(&log.writer, .{});
+    var writer: jsonl.Writer(Event) = .init(&log.writer, .{});
     for (0..lines) |i| try writer.write(.{ .kind = "tick", .at = i });
 
     var want = try readingOf(log.written());
@@ -443,11 +451,11 @@ test "a checkpoint is a line like any other" {
     // reads one without being asked to do anything special about it.
     var out: std.Io.Writer.Allocating = .init(testing.allocator);
     defer out.deinit();
-    try strand.writeLine(&out.writer, point);
+    try writeLine(&out.writer, point);
 
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
-    const read = try strand.parseLine(
+    const read = try json.parseLeaky(
         Follower(Event).Checkpoint,
         arena.allocator(),
         out.written()[0 .. out.written().len - 1],
@@ -875,7 +883,7 @@ test "two writers on two tasks share nothing" {
     const Task = struct {
         fn run(io: std.Io, mark: []const u8, out: *std.Io.Writer.Allocating) !u64 {
             _ = io;
-            var log: strand.Writer(Event) = .init(&out.writer, .{});
+            var log: jsonl.Writer(Event) = .init(&out.writer, .{});
             for (0..each) |i| try log.write(.{ .kind = mark, .at = i });
             return log.count;
         }
@@ -903,7 +911,7 @@ test "two writers on two tasks share nothing" {
         .{ right.written(), "right" },
     }) |pair| {
         var source: std.Io.Reader = .fixed(pair[0]);
-        var reader: strand.Reader(Event) = .init(testing.allocator, &source, .{});
+        var reader: jsonl.Reader(Event) = .init(testing.allocator, &source, .{});
         defer reader.deinit();
         var seen: u64 = 0;
         while (try reader.next()) |line| : (seen += 1) {
@@ -921,7 +929,7 @@ test "a checkpoint with the old identity shape is refused" {
         "{\"file\":{\"inode\":7,\"volume\":9,\"fingerprint\":null},\"offset\":12}",
         "{\"file\":{\"inode\":7,\"volume\":9,\"fingerprint\":123},\"offset\":12}",
     }) |old| {
-        try testing.expectError(error.MissingField, strand.parseLine(Checkpoint, testing.allocator, old, .{}));
+        try testing.expectError(error.UnknownField, json.parseLeaky(Checkpoint, testing.allocator, old, .{}));
     }
 }
 
@@ -933,8 +941,8 @@ test "a taken identity keeps every bit of the file id" {
         try testing.expect(!b.eql(a));
         var out: std.Io.Writer.Allocating = .init(testing.allocator);
         defer out.deinit();
-        try strand.writeLine(&out.writer, b);
-        const read = try strand.parseLine(Identity.Taken, testing.allocator, std.mem.trimEnd(u8, out.written(), "\n"), .{});
+        try writeLine(&out.writer, b);
+        const read = try json.parseLeaky(Identity.Taken, testing.allocator, std.mem.trimEnd(u8, out.written(), "\n"), .{});
         try testing.expectEqual(b.id.file, read.id.file);
         try testing.expect(b.eql(read));
     } else {
@@ -948,12 +956,12 @@ test "the identity policy names the volume-qualified file id" {
     try testing.expectEqualStrings("file_id", @tagName(policy));
     var out: std.Io.Writer.Allocating = .init(testing.allocator);
     defer out.deinit();
-    try strand.writeLine(&out.writer, policy);
+    try writeLine(&out.writer, policy);
     try testing.expectEqualStrings("{\"file_id\":{}}\n", out.written());
-    const read = try strand.parseLine(Identity, testing.allocator, std.mem.trimEnd(u8, out.written(), "\n"), .{});
+    const read = try json.parseLeaky(Identity, testing.allocator, std.mem.trimEnd(u8, out.written(), "\n"), .{});
     try testing.expectEqual(policy, read);
 }
 
 test "the old inode identity policy is refused" {
-    try testing.expectError(error.UnknownField, strand.parseLine(Identity, testing.allocator, "{\"inode\":{}}", .{}));
+    try testing.expectError(error.UnknownVariant, json.parseLeaky(Identity, testing.allocator, "{\"inode\":{}}", .{}));
 }

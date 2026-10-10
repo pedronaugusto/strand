@@ -13,17 +13,31 @@ pub const Error = core.EncodeError || std.Io.Writer.Error;
 
 writer: *std.Io.Writer,
 /// Whether the layout is std's, or only the whitespace the syntax needs.
-whitespace: bool = true,
-frames: [128]Frame = undefined,
-extra: std.ArrayList(Frame) = .empty,
-depth: usize = 0,
+whitespace: bool,
+frames: [128]Frame,
+extra: std.ArrayList(Frame),
+depth: usize,
 /// Containers open that wrap, which is how far a line is indented.
-indent_level: usize = 0,
-keys: [128][]const u8 = undefined,
-extra_keys: std.ArrayList([]const u8) = .empty,
-key_count: usize = 0,
-stage: [4096]u8 = undefined,
-staged: usize = 0,
+indent_level: usize,
+keys: [128][]const u8,
+extra_keys: std.ArrayList([]const u8),
+key_count: usize,
+stage: [4096]u8,
+staged: usize,
+
+/// Starts `self` over `writer`, built where it lies, field by field: its
+/// frames, keys and stage are kilobytes a struct literal would build
+/// elsewhere and copy.
+pub fn init(self: *Self, writer: *std.Io.Writer, whitespace: bool) void {
+    self.writer = writer;
+    self.whitespace = whitespace;
+    self.extra = .empty;
+    self.depth = 0;
+    self.indent_level = 0;
+    self.extra_keys = .empty;
+    self.key_count = 0;
+    self.staged = 0;
+}
 
 const Kind = enum { record, sequence, variant };
 /// A union arm is written when its payload is known: `.arm`, or `.{ .arm = `.

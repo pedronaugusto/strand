@@ -13,28 +13,8 @@
     "airlock.testing"
   ],
   "function_exceptions": {
-    "src/json/raw.zig:RawType": {
-      "lines": 143,
-      "reason": "Existing implementation at adoption; this exact bound cannot grow and shrinks when the function is split."
-    },
-    "src/json/decode.zig:Decoder": {
-      "lines": 739,
-      "reason": "Existing implementation at adoption; this exact bound cannot grow and shrinks when the function is split."
-    },
-    "src/json/decode.zig:value": {
-      "lines": 130,
-      "reason": "Existing implementation at adoption; this exact bound cannot grow and shrinks when the function is split."
-    },
-    "src/json/encode.zig:Encoder": {
-      "lines": 651,
-      "reason": "Existing implementation at adoption; this exact bound cannot grow and shrinks when the function is split."
-    },
     "src/jsonl/follow.zig:Follower": {
       "lines": 461,
-      "reason": "Existing implementation at adoption; this exact bound cannot grow and shrinks when the function is split."
-    },
-    "src/json/parse/line.zig:Parser": {
-      "lines": 283,
       "reason": "Existing implementation at adoption; this exact bound cannot grow and shrinks when the function is split."
     },
     "src/jsonl/reader.zig:Reader": {

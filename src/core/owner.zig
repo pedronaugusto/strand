@@ -80,6 +80,17 @@ pub fn acquireLeaky(comptime T: type, arena: std.mem.Allocator, bytes: []const u
     var c: context.Context = .init(arena, limits, .borrowed);
     return decode(&c, bytes);
 }
+/// An owner for `value`, which was built on `arena`: the owner takes the
+/// arena, whose child allocator must be `gpa`, and `deinit` releases it. The
+/// arena is left empty. Nothing about the value is checked: this is for a
+/// caller that built it through the bounded operations here, one at a time.
+pub fn adopt(comptime T: type, gpa: std.mem.Allocator, arena: *std.heap.ArenaAllocator, value: T) Parsed(T) {
+    aegis.assert.pre(arena.child_allocator.ptr == gpa.ptr and arena.child_allocator.vtable == gpa.vtable, "an arena is adopted only with the allocator under it");
+    const resident = arena.queryCapacity();
+    const state = arena.state;
+    arena.state = .init;
+    return .{ .value = value, .gpa = gpa, .state = state, .requested_peak = resident, .retained_bytes = resident, .allocator_resident_bytes = resident };
+}
 /// A checked deep copy into a new owner. Cycles are bounded by the depth limit;
 /// resources are excluded even when their serialization has an explicit codec.
 pub fn clone(gpa: std.mem.Allocator, value: anytype, limits: context.Limits) context.DecodeError!Parsed(@TypeOf(value)) {
@@ -93,7 +104,20 @@ pub fn clone(gpa: std.mem.Allocator, value: anytype, limits: context.Limits) con
     const copied = mapping.clone(T, value, &c) catch |err| return if (backing.limited) error.AllocationLimit else err;
     return .{ .value = copied, .gpa = gpa, .state = arena.state, .requested_peak = c.allocationRequested(), .retained_bytes = c.allocationRequested(), .allocator_resident_bytes = backing.live, .work_used = c.workUsed() };
 }
+/// `clone` onto an arena the caller owns and resets, as `acquireLeaky` parses
+/// onto one: requests are charged per operation, and a failed copy's storage
+/// stays on the arena until the caller resets it.
+pub fn cloneLeaky(arena: std.mem.Allocator, value: anytype, limits: context.Limits) context.DecodeError!@TypeOf(value) {
+    const T = @TypeOf(value);
+    comptime cloneCheck(T, &.{});
+    comptime descriptor.check(T, descriptor.schema_capabilities, true, .owned);
+    var c: context.Context = .init(arena, limits, .owned);
+    return mapping.clone(T, value, &c);
+}
 fn cloneCheck(comptime T: type, comptime seen: []const type) void {
+    // A whole protocol is more than the default thousand steps; the walk
+    // stops at a type it is already inside.
+    @setEvalBranchQuota(1_000_000);
     for (seen) |prior| if (T == prior) return;
     const next = seen ++ .{T};
     if (T == std.mem.Allocator or T == std.Io or T == std.Io.File or T == std.Io.Mutex or descriptor.has(T, "deinit")) @compileError("checked clone excludes resources");

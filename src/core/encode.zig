@@ -29,6 +29,14 @@ fn emit(comptime policy: descriptor.Field, value: anytype, out: anytype, c: *ctx
     }
     switch (@typeInfo(T)) {
         .bool => try out.boolean(value, c),
+        .comptime_int => {
+            c.items -= 1;
+            return emit(policy, @as(std.math.IntFittingRange(value, value), value), out, c, active);
+        },
+        .comptime_float => {
+            c.items -= 1;
+            return emit(policy, @as(f64, value), out, c, active);
+        },
         .int => try out.integer(value, c),
         .float => {
             if (!@TypeOf(out.*).capabilities.nonfinite_floats and !std.math.isFinite(value)) return error.UnsupportedValue;
@@ -48,6 +56,12 @@ fn emit(comptime policy: descriptor.Field, value: anytype, out: anytype, c: *ctx
         .optional => return emitOptional(T, policy, value, out, c, active),
         .pointer => |i| switch (i.size) {
             .one => {
+                // A string literal is a pointer to an array of bytes, and is
+                // the text it spells, as a slice of those bytes is.
+                if (comptime @typeInfo(i.child) == .array and @typeInfo(i.child).array.child == u8) {
+                    c.items -= 1;
+                    return emit(policy, @as([]const u8, value), out, c, active);
+                }
                 var ancestor = active;
                 while (ancestor) |a| : (ancestor = a.previous) {
                     try c.chargeWork(1);
@@ -96,28 +110,7 @@ fn emit(comptime policy: descriptor.Field, value: anytype, out: anytype, c: *ctx
             for (values) |v| try emit(.{}, v, out, c, active);
             try out.end(c);
         },
-        .@"struct" => |i| {
-            var count: usize = 0;
-            inline for (i.field_names, i.field_attrs) |name, attrs| {
-                if (!attrs.@"comptime" and !(try omit(T, name, value, c))) count += 1;
-            }
-            try begin(out, c, if (i.is_tuple) .tuple else .record, @typeName(T), count);
-            defer c.leave();
-            inline for (i.field_names, i.field_attrs) |name, attrs| {
-                if (attrs.@"comptime") continue;
-                const f = comptime descriptor.field(T, name);
-                if (!(try omit(T, name, value, c))) {
-                    if (!i.is_tuple) {
-                        try c.node();
-                        try c.span(f.name.len, true);
-                        try c.chargeWork(f.name.len);
-                        try keyed(f.name, out, c);
-                    }
-                    try emitField(T, name, value, out, c, active);
-                }
-            }
-            try out.end(c);
-        },
+        .@"struct" => return emitStruct(T, value, out, c, active),
         .@"union" => switch (value) {
             inline else => |v, tag| {
                 const opt = comptime descriptor.options(T);
@@ -130,6 +123,31 @@ fn emit(comptime policy: descriptor.Field, value: anytype, out: anytype, c: *ctx
         },
         else => @compileError("unsupported core encode type"),
     }
+}
+/// A struct's members, a record's keyed and a tuple's in order.
+fn emitStruct(comptime T: type, value: T, out: anytype, c: *ctx.Context, active: ?*const Active) Errors(T, @TypeOf(out.*))!void {
+    const i = @typeInfo(T).@"struct";
+    var count: usize = 0;
+    // A comptime field is part of the value as any other is: an
+    // anonymous literal's constants are written as its members.
+    inline for (i.field_names) |name| {
+        if (!(try omit(T, name, value, c))) count += 1;
+    }
+    try begin(out, c, if (i.is_tuple) .tuple else .record, @typeName(T), count);
+    defer c.leave();
+    inline for (i.field_names) |name| {
+        const f = comptime descriptor.field(T, name);
+        if (!(try omit(T, name, value, c))) {
+            if (!i.is_tuple) {
+                try c.node();
+                try c.span(f.name.len, true);
+                try c.chargeWork(f.name.len);
+                try keyed(f.name, out, c);
+            }
+            try emitField(T, name, value, out, c, active);
+        }
+    }
+    try out.end(c);
 }
 /// A field's name, which the type knows when it is compiled: a format that
 /// can spell it then takes it as a constant.
@@ -351,6 +369,12 @@ fn tagged(comptime T: type, value: T, out: anytype, c: *ctx.Context, active: ?*c
     switch (value) {
         inline else => |v, tag| {
             const F = @TypeOf(v);
+            // The arm a name no other arm has is read as holds the whole
+            // record, tag and all, and is written back as that record.
+            if (comptime @hasField(@TypeOf(opt), "other") and !@hasField(@TypeOf(opt), "content") and F != void and std.mem.eql(u8, @tagName(tag), opt.other)) {
+                c.items -= 1;
+                return emit(.{}, v, out, c, active);
+            }
             const count = if (@hasField(@TypeOf(opt), "content")) 2 else if (F == void) 1 else blk: {
                 var n: usize = 1;
                 inline for (@typeInfo(F).@"struct".field_names, @typeInfo(F).@"struct".field_attrs) |name, attrs| if (!attrs.@"comptime" and !try omit(F, name, v, c)) {

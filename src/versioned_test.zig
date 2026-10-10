@@ -1,10 +1,16 @@
 //! versioned scenarios through the public API.
 const std = @import("std");
-const Allocator = std.mem.Allocator;
-const Versioned = strand.Versioned;
-const payloadOf = strand.payloadOf;
 const strand = @import("strand.zig");
+const json = strand.json;
+const jsonl = strand.jsonl;
+const Versioned = jsonl.Versioned;
 const testing = std.testing;
+
+/// `value` as one line: its JSON, then a newline.
+fn writeLine(out: *std.Io.Writer, value: anytype) !void {
+    try json.write(out, value, .{});
+    try out.writeByte('\n');
+}
 
 /// Version 1: one string field, and a count that was a string.
 const EventV1 = struct {
@@ -24,61 +30,57 @@ pub const Event = struct {
     ///
     /// Version 1 wrote the count as a string and had no scope; a line with no
     /// `v` at all predates the envelope and is version 1 too.
-    pub fn jsonlMigrate(
-        allocator: Allocator,
-        from: u32,
-        data: std.json.Value,
-    ) std.json.ParseFromValueError!Event {
+    pub fn jsonlMigrate(from: u32, payload: anytype) @TypeOf(payload.*).Error!Event {
         switch (from) {
             0, 1 => {
-                const old = try payloadOf(EventV1, allocator, data);
+                const old = try payload.read(EventV1);
                 return .{
                     .scope = "app",
                     .kind = old.kind,
-                    .count = std.fmt.parseInt(u32, old.count, 10) catch return error.InvalidNumber,
+                    .count = std.fmt.parseInt(u32, old.count, 10) catch return payload.reject(1),
                 };
             },
             // A line from a build newer than this one.
-            else => return error.UnknownField,
+            else => return error.UnknownVariant,
         }
     }
 };
 
-/// A record with integers `std.json` can panic on casting into.
+/// A record with integers wide enough to hold numbers written in exponent form.
 pub const Wide = struct {
     id: u128,
     count: u64 = 0,
 
     pub const jsonl_version: u32 = 2;
 
-    pub fn jsonlMigrate(allocator: Allocator, from: u32, data: std.json.Value) std.json.ParseFromValueError!Wide {
-        if (from != 1) return error.UnknownField;
-        const old = try payloadOf(struct { id: u128, count: u64 = 0 }, allocator, data);
+    pub fn jsonlMigrate(from: u32, payload: anytype) @TypeOf(payload.*).Error!Wide {
+        if (from != 1) return error.UnknownVariant;
+        const old = try payload.read(struct { id: u128, count: u64 = 0 });
         return .{ .id = old.id, .count = old.count };
     }
 };
 
-test "a number std.json would panic on is read or refused, never a panic" {
+test "a number past its integer's range is refused, never a panic" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
 
     // Parsed straight into `T`, `v` first: read here, as the number it is.
-    const straight = try strand.parseLine(Versioned(Wide), a, "{\"v\":2,\"data\":{\"id\":1.8e38}}", .{});
+    const straight = try json.parseLeaky(Versioned(Wide), a, "{\"v\":2,\"data\":{\"id\":1.8e38}}", .{});
     try testing.expectEqual(@as(u128, 180_000_000_000_000_000_000_000_000_000_000_000_000), straight.value.id);
-    try testing.expectError(error.Overflow, strand.parseLine(Versioned(Wide), a, "{\"v\":2,\"data\":{\"id\":3.402823669209384634633746074317682114555e38}}", .{}));
+    try testing.expectError(error.NumberOutOfRange, json.parseLeaky(Versioned(Wide), a, "{\"v\":2,\"data\":{\"id\":3.402823669209384634633746074317682114555e38}}", .{}));
 
-    // Held as a `std.json.Value` until `v` is known, and read from it; and
-    // migrated through `payloadOf`. 2^64 is a `u64`'s largest value rounded
-    // up, which std.json let through to its cast.
+    // Held until `v` is known and read where it lies, and migrated through
+    // the hook: 2^64 is a `u64`'s largest value rounded up.
     for ([_][]const u8{
         "{\"data\":{\"id\":1,\"count\":1.8446744073709552e19},\"v\":2}",
         "{\"v\":1,\"data\":{\"id\":1,\"count\":1.8446744073709552e19}}",
-        "{\"v\":1,\"data\":{\"id\":\"2e38\"}}",
     }) |line| {
-        try testing.expectError(error.Overflow, strand.parseLine(Versioned(Wide), a, line, .{}));
+        try testing.expectError(error.NumberOutOfRange, json.parseLeaky(Versioned(Wide), a, line, .{}));
     }
-    const migrated = try strand.parseLine(Versioned(Wide), a, "{\"v\":1,\"data\":{\"id\":7,\"count\":1.5e3}}", .{});
+    // A number written as a string is a string.
+    try testing.expectError(error.UnexpectedType, json.parseLeaky(Versioned(Wide), a, "{\"v\":1,\"data\":{\"id\":\"2e38\"}}", .{}));
+    const migrated = try json.parseLeaky(Versioned(Wide), a, "{\"v\":1,\"data\":{\"id\":7,\"count\":1.5e3}}", .{});
     try testing.expectEqual(Wide{ .id = 7, .count = 1500 }, migrated.value);
 }
 
@@ -87,7 +89,7 @@ test "a line of the current version is parsed straight into T" {
     defer arena.deinit();
 
     const line = "{\"v\":2,\"data\":{\"scope\":\"net\",\"kind\":\"open\",\"count\":3}}";
-    const record = try strand.parseLine(Versioned(Event), arena.allocator(), line, .{});
+    const record = try json.parseLeaky(Versioned(Event), arena.allocator(), line, .{});
 
     try testing.expectEqual(@as(u32, 2), record.from);
     try testing.expect(!record.migrated());
@@ -102,7 +104,7 @@ test "an older line goes through the migrate hook" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
 
-    const record = try strand.parseLine(
+    const record = try json.parseLeaky(
         Versioned(Event),
         arena.allocator(),
         "{\"v\":1,\"data\":{\"kind\":\"open\",\"count\":\"7\"}}",
@@ -119,7 +121,7 @@ test "a line with no version at all is the unstamped one" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
 
-    const record = try strand.parseLine(
+    const record = try json.parseLeaky(
         Versioned(Event),
         arena.allocator(),
         "{\"data\":{\"kind\":\"open\",\"count\":\"2\"}}",
@@ -134,14 +136,12 @@ test "a line with no version at all is the unstamped one" {
         kind: []const u8,
         pub const jsonl_version: u32 = 2;
         pub const jsonl_version_unstamped: u32 = 1;
-        pub fn jsonlMigrate(_: Allocator, from: u32, _: std.json.Value) std.json.ParseFromValueError!Self {
-            // The hook's error set is `std.json`'s, so a surprise here is
-            // reported as one of those rather than as a test failure.
-            if (from != 1) return error.UnknownField;
+        pub fn jsonlMigrate(from: u32, payload: anytype) @TypeOf(payload.*).Error!Self {
+            if (from != 1) return error.UnknownVariant;
             return .{ .kind = "migrated" };
         }
     };
-    const stamped = try strand.parseLine(
+    const stamped = try json.parseLeaky(
         Versioned(Stamped),
         arena.allocator(),
         "{\"data\":{\"kind\":\"open\"}}",
@@ -159,60 +159,23 @@ test "the envelope's keys may arrive in either order" {
         "{\"v\":1,\"data\":{\"kind\":\"open\",\"count\":\"5\"}}",
         "{\"data\":{\"kind\":\"open\",\"count\":\"5\"},\"v\":1}",
     }) |line| {
-        const record = try strand.parseLine(Versioned(Event), arena.allocator(), line, .{});
+        const record = try json.parseLeaky(Versioned(Event), arena.allocator(), line, .{});
         try testing.expectEqual(@as(u32, 5), record.value.count);
         try testing.expectEqualStrings("open", record.value.kind);
     }
 }
 
-test "the envelope honors every duplicate-field policy" {
+test "a repeated envelope key and a key of no envelope are refused" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
-
-    const first_version = try strand.parseLine(
-        Versioned(Event),
-        arena.allocator(),
+    for ([_][]const u8{
         "{\"v\":1,\"v\":2,\"data\":{\"kind\":\"old\",\"count\":\"4\"}}",
-        .{ .duplicate_fields = .use_first },
-    );
-    try testing.expectEqual(@as(u32, 1), first_version.from);
-    try testing.expectEqualStrings("old", first_version.value.kind);
-    try testing.expectEqual(@as(u32, 4), first_version.value.count);
-
-    const last_version = try strand.parseLine(
-        Versioned(Event),
-        arena.allocator(),
-        "{\"v\":1,\"v\":2,\"data\":{\"kind\":\"new\",\"count\":5}}",
-        .{ .duplicate_fields = .use_last },
-    );
-    try testing.expectEqual(@as(u32, 2), last_version.from);
-    try testing.expectEqualStrings("new", last_version.value.kind);
-
-    const duplicate_data =
-        "{\"v\":2,\"data\":{\"kind\":\"first\",\"count\":1}," ++
-        "\"data\":{\"kind\":\"last\",\"count\":2}}";
-    const first_data = try strand.parseLine(
-        Versioned(Event),
-        arena.allocator(),
-        duplicate_data,
-        .{ .duplicate_fields = .use_first },
-    );
-    try testing.expectEqualStrings("first", first_data.value.kind);
-    const last_data = try strand.parseLine(
-        Versioned(Event),
-        arena.allocator(),
-        duplicate_data,
-        .{ .duplicate_fields = .use_last },
-    );
-    try testing.expectEqualStrings("last", last_data.value.kind);
-    try testing.expectEqual(@as(u32, 2), last_data.value.count);
-
-    try testing.expectError(error.DuplicateField, strand.parseLine(
-        Versioned(Event),
-        arena.allocator(),
-        duplicate_data,
-        .{},
-    ));
+        "{\"v\":2,\"data\":{\"kind\":\"first\",\"count\":1},\"data\":{\"kind\":\"last\",\"count\":2}}",
+        "{\"data\":{\"kind\":\"first\",\"count\":1},\"data\":{\"kind\":\"last\",\"count\":2},\"v\":2}",
+    }) |line| {
+        try testing.expectError(error.DuplicateField, json.parseLeaky(Versioned(Event), arena.allocator(), line, .{}));
+    }
+    try testing.expectError(error.UnknownField, json.parseLeaky(Versioned(Event), arena.allocator(), "{\"v\":2,\"at\":1,\"data\":{\"kind\":\"x\"}}", .{}));
 }
 
 test "a version from the future is a malformed line, by number" {
@@ -223,20 +186,33 @@ test "a version from the future is a malformed line, by number" {
         \\
     ;
     var source: std.Io.Reader = .fixed(input);
-    var reader: strand.Reader(Versioned(Event)) = .init(testing.allocator, &source, .{});
+    var reader: jsonl.Reader(Versioned(Event)) = .init(testing.allocator, &source, .{});
     defer reader.deinit();
 
     try testing.expectEqualStrings("known", (try reader.next()).?.value.value.kind);
     try testing.expectError(error.MalformedLine, reader.next());
     try testing.expectEqual(@as(u64, 2), reader.lines.fault.line);
-    try testing.expectEqual(error.UnknownField, reader.lines.fault.err.?);
+    try testing.expectEqual(error.UnknownVariant, reader.lines.fault.err.?);
     try testing.expectEqualStrings("known again", (try reader.next()).?.value.value.kind);
+}
+
+test "a hook refuses a payload with a code of its own" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    var diagnostics: strand.core.Diagnostics = .{};
+    try testing.expectError(error.CustomRejected, json.parseLeaky(
+        Versioned(Event),
+        arena.allocator(),
+        "{\"v\":1,\"data\":{\"kind\":\"open\",\"count\":\"seven\"}}",
+        .{ .diagnostics = &diagnostics },
+    ));
+    try testing.expectEqual(@as(?u32, 1), diagnostics.custom_code);
 }
 
 test "a missing data member is a missing field" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
-    try testing.expectError(error.MissingField, strand.parseLine(
+    try testing.expectError(error.MissingField, json.parseLeaky(
         Versioned(Event),
         arena.allocator(),
         "{\"v\":2}",
@@ -251,7 +227,7 @@ test "round trip: what is written under the envelope is read back under it" {
     var out: std.Io.Writer.Allocating = .init(testing.allocator);
     defer out.deinit();
 
-    var log: strand.Writer(Versioned(Event)) = .init(&out.writer, .{});
+    var log: jsonl.Writer(Versioned(Event)) = .init(&out.writer, .{});
     try log.writeAll(&.{
         .{ .value = .{ .kind = "open", .count = 1 } },
         .{ .value = .{ .scope = "net", .kind = "close", .count = 2 } },
@@ -263,11 +239,11 @@ test "round trip: what is written under the envelope is read back under it" {
     , out.written());
 
     var source: std.Io.Reader = .fixed(out.written());
-    var reader: strand.Reader(Versioned(Event)) = .init(testing.allocator, &source, .{});
+    var reader: jsonl.Reader(Versioned(Event)) = .init(testing.allocator, &source, .{});
     defer reader.deinit();
     try testing.expectEqual(@as(u32, 1), (try reader.next()).?.value.value.count);
     try testing.expectEqualStrings("net", (try reader.next()).?.value.value.scope);
-    try testing.expectEqual(@as(?strand.Line(Versioned(Event)), null), try reader.next());
+    try testing.expectEqual(@as(?jsonl.Line(Versioned(Event)), null), try reader.next());
 }
 
 test "payload fields v and data belong to the payload, not the envelope" {
@@ -278,7 +254,7 @@ test "payload fields v and data belong to the payload, not the envelope" {
     };
     var out: std.Io.Writer.Allocating = .init(testing.allocator);
     defer out.deinit();
-    try strand.writeLine(&out.writer, Versioned(Payload){ .value = .{ .v = 12, .data = "kept" } });
+    try writeLine(&out.writer, Versioned(Payload){ .value = .{ .v = 12, .data = "kept" } });
     try testing.expectEqualStrings("{\"v\":2,\"data\":{\"v\":12,\"data\":\"kept\"}}\n", out.written());
 
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
@@ -287,7 +263,7 @@ test "payload fields v and data belong to the payload, not the envelope" {
         "{\"v\":2,\"data\":{\"v\":12,\"data\":\"kept\"}}",
         "{\"data\":{\"v\":12,\"data\":\"kept\"},\"v\":2}",
     }) |line| {
-        const record = try strand.parseLine(Versioned(Payload), arena.allocator(), line, .{});
+        const record = try json.parseLeaky(Versioned(Payload), arena.allocator(), line, .{});
         try testing.expectEqual(@as(u32, 2), record.from);
         try testing.expectEqual(@as(u32, 12), record.value.v);
         try testing.expectEqualStrings("kept", record.value.data);
@@ -299,7 +275,7 @@ test "a migrated record is written back in today's shape" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
 
-    const record = try strand.parseLine(
+    const record = try json.parseLeaky(
         Versioned(Event),
         arena.allocator(),
         "{\"v\":1,\"data\":{\"kind\":\"open\",\"count\":\"9\"}}",
@@ -308,7 +284,7 @@ test "a migrated record is written back in today's shape" {
 
     var out: std.Io.Writer.Allocating = .init(testing.allocator);
     defer out.deinit();
-    try strand.writeLine(&out.writer, record);
+    try writeLine(&out.writer, record);
     try testing.expectEqualStrings(
         "{\"v\":2,\"data\":{\"scope\":\"app\",\"kind\":\"open\",\"count\":9}}\n",
         out.written(),
@@ -335,7 +311,7 @@ test "a versioned log read backwards is migrated the same way" {
 
     // One line per block, so that the backwards read really does go back to
     // the file for each of them.
-    var tail: strand.Tail(Versioned(Event)) = try .init(testing.allocator, &fixture.reader, .{
+    var tail: jsonl.Tail(Versioned(Event)) = try .init(testing.allocator, &fixture.reader, .{
         .block_bytes = 16,
     });
     defer tail.deinit();
@@ -355,14 +331,14 @@ test "a versioned log read backwards is migrated the same way" {
     try testing.expectEqualStrings("open", first.value.value.kind);
     try testing.expectEqualStrings("app", first.value.value.scope);
     try testing.expectEqual(@as(u32, 1), first.value.value.count);
-    try testing.expectEqual(@as(?strand.Line(Versioned(Event)), null), try tail.prev());
+    try testing.expectEqual(@as(?jsonl.Line(Versioned(Event)), null), try tail.prev());
 }
 
 test "a versioned log followed as it grows is migrated the same way" {
     var fixture = try fixtures.Fixture.init(mixed_log, 512);
     defer fixture.deinit();
 
-    var follower: strand.Follower(Versioned(Event)) = .init(
+    var follower: jsonl.Follower(Versioned(Event)) = .init(
         testing.allocator,
         &fixture.reader,
         .{ .wait = .{ .poll = .fromMicroseconds(100) } },
@@ -407,9 +383,7 @@ test "a payload holding a 48-byte vector comes back whole from the envelope" {
         "{\"v\":1,\"data\":" ++ data ++ "}",
         "{\"data\":" ++ data ++ ",\"v\":1}",
     }) |line| {
-        for ([_]strand.DuplicateFields{ .@"error", .use_last }) |duplicates| {
-            const result = try strand.parseLine(Versioned(Wide48), a, line, .{ .duplicate_fields = duplicates });
-            try testing.expectEqual(note, @as([3]u128, result.value.item.note orelse return error.TestUnexpectedResult));
-        }
+        const result = try json.parseLeaky(Versioned(Wide48), a, line, .{});
+        try testing.expectEqual(note, @as([3]u128, result.value.item.note orelse return error.TestUnexpectedResult));
     }
 }

@@ -1,46 +1,6 @@
-//! Strand serialization: the core, JSON, JSON Lines and ZON namespaces, and the JSON Lines names at the root.
+//! Strand serialization: the format-independent core, and JSON, JSON Lines and
+//! ZON on it.
 pub const core = @import("core.zig");
 pub const json = @import("json.zig");
 pub const jsonl = @import("jsonl.zig");
 pub const zon = @import("zon.zig");
-
-pub const parseLine = jsonl.parseLine;
-pub const innerParse = jsonl.innerParse;
-pub const ParseOptions = jsonl.ParseOptions;
-pub const Diagnostics = jsonl.Diagnostics;
-pub const DuplicateFields = jsonl.DuplicateFields;
-pub const ParseLineError = jsonl.ParseLineError;
-pub const Line = jsonl.Line;
-pub const RawLine = jsonl.RawLine;
-pub const Format = jsonl.Format;
-pub const Fault = jsonl.Fault;
-pub const separator = jsonl.separator;
-pub const lines = jsonl.lines;
-pub const LineIterator = jsonl.LineIterator;
-pub const LineReader = jsonl.LineReader;
-pub const Reader = jsonl.Reader;
-pub const Writer = jsonl.Writer;
-pub const writeLine = jsonl.writeLine;
-pub const writeValue = jsonl.writeValue;
-pub const writeObjectOpen = jsonl.writeObjectOpen;
-pub const OpenObject = jsonl.OpenObject;
-pub const leadingIntMembers = jsonl.leadingIntMembers;
-pub const IntMembers = jsonl.IntMembers;
-pub const ValueOptions = jsonl.ValueOptions;
-pub const Tail = jsonl.Tail;
-pub const Follower = jsonl.Follower;
-pub const Opener = jsonl.Opener;
-pub const PathOpener = jsonl.PathOpener;
-pub const Identity = jsonl.Identity;
-pub const FileId = jsonl.FileId;
-pub const Versioned = jsonl.Versioned;
-pub const payloadOf = jsonl.payloadOf;
-pub const Raw = jsonl.Raw;
-pub const copyOwned = jsonl.copyOwned;
-pub const freeOwned = jsonl.freeOwned;
-pub const kindOf = jsonl.kindOf;
-pub const tagOf = jsonl.tagOf;
-pub const memberOf = jsonl.memberOf;
-pub const memberStringOf = jsonl.memberStringOf;
-pub const indexOfControl = jsonl.indexOfControl;
-pub const Reached = jsonl.Reached;

@@ -52,45 +52,9 @@ pub fn has(comptime T: type, comptime name: []const u8) bool {
         else => false,
     };
 }
-fn declaredOptions(comptime T: type) if (has(T, "strand")) @TypeOf(T.strand) else @TypeOf(.{}) {
+/// What `T` declares about how it is mapped: its `strand` declaration.
+pub fn options(comptime T: type) if (has(T, "strand")) @TypeOf(T.strand) else @TypeOf(.{}) {
     return if (comptime has(T, "strand")) T.strand else .{};
-}
-fn Options(comptime T: type) type {
-    const Base = @TypeOf(declaredOptions(T));
-    if (!has(T, "jsonl_tag")) {
-        if (has(T, "jsonl_other")) @compileError("jsonl_other requires jsonl_tag; migrate both to strand.tag/other");
-        return Base;
-    }
-    if (@hasField(Base, "tag") or @hasField(Base, "content") or @hasField(Base, "other")) @compileError("conflicting jsonl_tag/jsonl_other and strand tag policy; migrate to strand.tag/other and remove legacy declarations");
-    const fields = @typeInfo(Base).@"struct";
-    const extra = if (has(T, "jsonl_other")) 2 else 1;
-    var names: [fields.field_names.len + extra][]const u8 = undefined;
-    var types: [names.len]type = undefined;
-    var attrs: [names.len]std.builtin.Type.Struct.FieldAttributes = @splat(.{});
-    for (fields.field_names, fields.field_types, fields.field_attrs, 0..) |name, F, attr, i| {
-        names[i] = name;
-        types[i] = F;
-        attrs[i] = attr;
-    }
-    names[fields.field_names.len] = "tag";
-    types[fields.field_names.len] = []const u8;
-    if (extra == 2) {
-        names[names.len - 1] = "other";
-        types[types.len - 1] = []const u8;
-    }
-    return @Struct(.auto, null, &names, &types, &attrs);
-}
-pub fn options(comptime T: type) Options(T) {
-    if (comptime !has(T, "jsonl_tag")) return declaredOptions(T);
-    var result: Options(T) = undefined;
-    const declared = declaredOptions(T);
-    inline for (@typeInfo(@TypeOf(declared)).@"struct".field_names) |name| @field(result, name) = @field(declared, name);
-    result.tag = T.jsonl_tag;
-    if (comptime has(T, "jsonl_other")) {
-        const tag_type = @typeInfo(T).@"union".tag_type orelse @compileError("jsonl_other requires a tagged union");
-        result.other = @tagName(@as(tag_type, T.jsonl_other));
-    }
-    return result;
 }
 pub fn field(comptime T: type, comptime name: []const u8) Field {
     const opt = options(T);
@@ -119,6 +83,36 @@ pub fn default(comptime T: type, comptime name: []const u8) ?@FieldType(T, name)
         } else null;
     }
     unreachable;
+}
+
+/// Whether two values of `T` hold the same data: pointers by what they point
+/// at, slices by their elements. For a value against a type's constant, which
+/// is small and fixed.
+pub fn same(comptime T: type, a: T, b: T) bool {
+    return switch (@typeInfo(T)) {
+        .pointer => |i| switch (i.size) {
+            .one => same(i.child, a.*, b.*),
+            .slice => a.len == b.len and for (a, b) |x, y| {
+                if (!same(i.child, x, y)) break false;
+            } else true,
+            else => a == b,
+        },
+        .optional => |i| if (a) |x| (if (b) |y| same(i.child, x, y) else false) else b == null,
+        .@"struct" => |i| inline for (i.field_names, i.field_types) |name, F| {
+            if (!same(F, @field(a, name), @field(b, name))) break false;
+        } else true,
+        .array => |i| for (0..i.len) |k| {
+            if (!same(i.child, a[k], b[k])) break false;
+        } else true,
+        .vector => |i| for (0..i.len) |k| {
+            if (!same(i.child, a[k], b[k])) break false;
+        } else true,
+        .@"union" => std.meta.activeTag(a) == std.meta.activeTag(b) and switch (a) {
+            inline else => |v, tag| same(@TypeOf(v), v, @field(b, @tagName(tag))),
+        },
+        .void, .null => true,
+        else => a == b,
+    };
 }
 
 pub fn describe(comptime T: type, comptime format: Capabilities) Description {
@@ -155,21 +149,24 @@ fn inspect(comptime T: type, comptime fmt: Capabilities, comptime seen: []const 
     }
     if ((has(T, "strandSerialize") or has(T, "strandDeserialize")) and containsResource(T, &.{})) return rejected(path, "data codec result cannot retain a resource");
     if (has(T, "strandSerialize") or has(T, "strandDeserialize")) return .{ .support = .conditional, .encode = has(T, "strandSerialize"), .decode = has(T, "strandDeserialize"), .path = path, .reason = "explicit data codec" };
-    if (has(T, "jsonParse") or has(T, "jsonStringify")) return rejected(path, "legacy JSON hooks require the legacy API or a strand data codec");
+    if (has(T, "jsonParse") or has(T, "jsonStringify")) return rejected(path, "std.json hooks are not read here; declare strandDeserialize and strandSerialize");
     if (has(T, "deinit")) return rejected(path, "resource owner requires an explicit data codec");
     return switch (@typeInfo(T)) {
         .bool, .void => .{},
+        // A literal's number, such as a constant of an anonymous struct: written
+        // in the narrowest type that holds it, and never a place to read into.
+        .comptime_int, .comptime_float => .{ .support = .conditional, .decode = false, .path = path, .reason = "a literal number has no type to read into" },
         .null => if (fmt.null_value) .{} else rejected(path, "format has no null"),
         .int => |i| if (i.bits > fmt.max_integer_bits) .{ .support = .conditional, .path = path, .reason = "format numeric range" } else .{},
         .float => |i| if (i.bits > fmt.max_float_bits) .{ .support = .conditional, .path = path, .reason = "format float fidelity" } else .{},
         .@"enum" => |i| if (i.mode == .exhaustive) .{} else rejected(path, "nonexhaustive enum requires a numeric codec"),
         .optional => |i| if (!fmt.null_value or (@typeInfo(i.child) == .optional and !fmt.nested_optional)) rejected(path, "optional shape needs an explicit codec") else inspect(i.child, fmt, next, path),
-        .pointer => |i| if ((i.size != .one and i.size != .slice) or i.attrs.@"volatile" or i.attrs.@"allowzero" or (i.attrs.@"addrspace" orelse .generic) != .generic) rejected(path, "pointer has no safe data meaning") else if (i.sentinel() != null and containsPointers(i.child, &.{})) rejected(path, "pointer-containing sentinel cannot change ownership") else inspect(i.child, fmt, next, path),
+        .pointer => |i| if ((i.size != .one and i.size != .slice) or i.attrs.@"volatile" or i.attrs.@"allowzero" or (i.attrs.@"addrspace" orelse .generic) != .generic) rejected(path, "pointer has no safe data meaning") else if (i.sentinel_ptr != null and containsPointers(i.child, &.{})) rejected(path, "pointer-containing sentinel cannot change ownership") else inspect(i.child, fmt, next, path),
         .array => |i| if (i.sentinel() != null and containsPointers(i.child, &.{})) rejected(path, "pointer-containing sentinel cannot change ownership") else inspect(i.child, fmt, next, path),
         .vector => |i| inspect(i.child, fmt, next, path),
         .@"struct" => |i| aggregate: {
             var result: Description = .{};
-            for (i.field_names, i.field_types, i.field_attrs) |name, F, attrs| {
+            for (i.field_names, i.field_types) |name, F| {
                 const f = field(T, name);
                 const declared = fieldOptions(T, name);
                 if (@hasField(@TypeOf(declared), "codec") and containsResource(F, &.{})) break :aggregate rejected(path ++ "." ++ name, "field codec result cannot retain a resource");
@@ -178,7 +175,6 @@ fn inspect(comptime T: type, comptime fmt: Capabilities, comptime seen: []const 
                 const child = if (@hasField(@TypeOf(declared), "codec")) Description{ .support = .conditional, .encode = @hasDecl(declared.codec, "encode"), .decode = @hasDecl(declared.codec, "decode"), .path = path ++ "." ++ name, .reason = "explicit field codec" } else inspect(F, fmt, next, path ++ "." ++ name);
                 if (child.support == .unsupported) break :aggregate child;
                 if (child.support == .conditional) result = merge(result, child);
-                if (attrs.@"comptime" and containsPointers(F, &.{})) break :aggregate rejected(path ++ "." ++ name, "comptime field cannot retain pointers");
                 if (f.as == .bytes and !fmt.bytes) break :aggregate rejected(path ++ "." ++ name, "format has no native bytes");
                 if (f.skip_decode and !hasDefault(T, name)) break :aggregate rejected(path ++ "." ++ name, "skip_decode requires a default");
                 if ((f.skip_encode or f.omit != .never or @hasField(@TypeOf(declared), "omit_if")) and !hasDefault(T, name)) result = merge(result, .{ .support = .conditional, .path = path ++ "." ++ name, .reason = "omitted required field prevents lossless round trip" });

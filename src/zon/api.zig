@@ -90,7 +90,8 @@ pub fn write(output: *std.Io.Writer, value: anytype, options: WriteOptions) @typ
     var fixed: std.heap.FixedBufferAllocator = .init(options.scratch);
     var c = core.Context.init(fixed.allocator(), options.limits, .borrowed);
     c.acceptance.reject_duplicates = true;
-    var encoder: WireEncoder = .{ .writer = output, .whitespace = options.whitespace };
+    var encoder: WireEncoder = undefined;
+    encoder.init(output, options.whitespace);
     defer encoder.extra.deinit(c.allocator());
     defer encoder.extra_keys.deinit(c.allocator());
     try core.serialize(value, &encoder, &c);

@@ -15,9 +15,9 @@
 //!
 //! The other thing it does not do is `.pretty`. `Tail.Options` is where the
 //! setting would be, and it carries the reason it is not there.
-const codec_module = @import("../json/api.zig").codec_module;
-const control_module = @import("../json/api.zig").control_module;
-const owned_module = @import("owned.zig");
+const control_module = @import("../json/control.zig");
+const core = @import("../core.zig");
+const json = @import("../json/api.zig");
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -28,8 +28,6 @@ const strand = struct {
     pub const Line = line_mod.Line;
     pub const RawLine = line_mod.RawLine;
     pub const separator = line_mod.separator;
-    pub const DuplicateFields = codec_module.parser.DuplicateFields;
-    pub const parseLine = codec_module.parser.parseLine;
     pub const indexOfControl = control_module.indexOfControl;
 };
 const line_mod = @import("line.zig");
@@ -50,11 +48,10 @@ const shared = struct {
     /// **`format`** is absent because joining lines needs an answer to
     /// "is this the whole of a value, or only part of one", and there is
     /// one answer only going forwards. `Reader` in `.pretty` mode joins
-    /// on `error.UnexpectedEndOfInput`, which `std.json` gives when a
-    /// value is cut off at the end: a definite signal, and the only
-    /// failure that means "the rest is on the next line". Backwards there
-    /// is no mirror of it. `std.json` has no notion of a valid *tail* of
-    /// a value, so a lone `}` is a syntax error exactly as `not json` is,
+    /// on a scan that follows a value to its end: a definite signal of
+    /// "the rest is on the next line". Backwards there is no mirror of it.
+    /// JSON has no notion of a valid *tail* of a value, so a lone `}` is a
+    /// syntax error exactly as `not json` is,
     /// and a backwards join would have to treat every failure as "not the
     /// beginning yet" and keep prepending lines.
     ///
@@ -76,12 +73,8 @@ const shared = struct {
     /// to say: finding where a multi-line record begins means parsing
     /// forwards.
     pub const Options = struct {
-        /// See `ParseOptions.ignore_unknown_fields`.
-        ignore_unknown_fields: bool = true,
-        /// See `ParseOptions.duplicate_fields`.
-        duplicate_fields: strand.DuplicateFields = .@"error",
-        /// See `ParseOptions.max_depth`.
-        max_depth: usize = codec_module.parser.default_max_depth,
+        /// See `Reader.Options.parse`.
+        parse: json.ParseOptions = .{},
         /// The longest line accepted, in bytes. A longer one is
         /// `error.LineTooLong`, and is discarded whole: `prev` continues
         /// with the line before it. The terminator and a leading
@@ -270,30 +263,25 @@ pub fn Tail(comptime T: type) type {
             while (true) {
                 const raw = (try self.prevRaw()) orelse return null;
                 _ = self.arena.reset(.retain_capacity);
-                const value = strand.parseLine(T, self.arena.allocator(), raw.line, .{
-                    .ignore_unknown_fields = self.options.ignore_unknown_fields,
-                    .duplicate_fields = self.options.duplicate_fields,
-                    .max_depth = self.options.max_depth,
-                }) catch |err| switch (err) {
-                    error.OutOfMemory => return error.OutOfMemory,
-                    else => |parse_err| {
-                        self.fault.parse(raw.number, parse_err, line_mod.whereItFailed(
-                            T,
-                            self.arena.allocator(),
-                            raw.line,
-                            self.options,
-                        ));
-                        switch (self.options.on_malformed) {
-                            .fail => return error.MalformedLine,
-                            .skip => {
-                                self.skipped += 1;
-                                continue;
-                            },
-                        }
-                    },
-                };
+                const value = (try self.parseRaw(self.arena.allocator(), raw)) orelse continue;
                 return .{ .value = value, .line = raw.line, .number = raw.number, .offset = raw.offset };
             }
+        }
+
+        /// The value on `raw`, allocated on `arena`, or `null` for a line
+        /// passed over under `on_malformed = .skip`.
+        fn parseRaw(self: *Self, arena: Allocator, raw: strand.RawLine) NextError!?T {
+            return json.parseLeaky(T, arena, raw.line, self.options.parse) catch |err| {
+                if (err == error.OutOfMemory) return error.OutOfMemory;
+                self.fault.parse(raw.number, line_mod.decodeError(err), line_mod.whereItFailed(T, arena, raw.line, self.options.parse));
+                switch (self.options.on_malformed) {
+                    .fail => return error.MalformedLine,
+                    .skip => {
+                        self.skipped += 1;
+                        return null;
+                    },
+                }
+            };
         }
 
         /// The line before the last one returned, as its bytes: framed,
@@ -351,41 +339,40 @@ pub fn Tail(comptime T: type) type {
             }
         }
 
-        /// A copy of `line.value` that outlives the reader, allocated on
-        /// `gpa`. See `Reader.keep`, whose contract this is.
-        pub fn keep(self: *Self, gpa: Allocator, line: Line(T)) Allocator.Error!T {
-            _ = self;
-            return owned_module.copyOwned(gpa, line.value);
+        /// A copy of `line.value` that outlives the reader, owned on `gpa`.
+        /// See `Reader.keep`, whose contract this is.
+        pub fn keep(self: *Self, gpa: Allocator, line: Line(T)) core.DecodeError!core.Parsed(T) {
+            return core.clone(gpa, line.value, self.options.parse.limits);
         }
 
-        /// The last `n` values of the file, in file order, allocated on
+        /// The last `n` values of the file, in file order, in one owner on
         /// `gpa`.
         ///
-        /// Ownership: everything the result points at is on `gpa`, and
-        /// none of it borrows the reader. Each line is parsed normally and
-        /// copied through `copyOwned`, under the same data contract as `keep`.
-        /// With an arena, drop it whole; otherwise `freeOwned` each value and
-        /// free the returned slice. A failure releases the partial batch.
+        /// Ownership: the lines' bytes are copied into the owner and parsed
+        /// there, so nothing in the result borrows the reader; `deinit`
+        /// releases all of it, and a failure releases the partial batch.
         /// Fewer than `n` values means the file ran out; under
         /// `on_malformed = .skip` a skipped line is not one of the `n`.
         ///
         /// This is the whole reason to read a file backwards, so it is worth
         /// saying what it costs: one block read per block the last `n` lines
-        /// span, and nothing at all for the rest of the file.
-        pub fn last(self: *Self, gpa: Allocator, n: usize) NextError![]T {
-            var out: std.ArrayList(T) = .empty;
-            errdefer {
-                for (out.items) |value| owned_module.freeOwned(gpa, value);
-                out.deinit(gpa);
+        /// span, one copy of each line, and nothing at all for the rest of
+        /// the file.
+        pub fn last(self: *Self, gpa: Allocator, n: usize) NextError!core.Parsed([]T) {
+            var arena: std.heap.ArenaAllocator = .init(gpa);
+            errdefer arena.deinit();
+            var values: std.ArrayList(T) = .empty;
+            defer values.deinit(gpa);
+            try values.ensureTotalCapacity(gpa, @min(n, 1024));
+            while (values.items.len < n) {
+                var raw = (try self.prevRaw()) orelse break;
+                raw.line = try arena.allocator().dupe(u8, raw.line);
+                const value = (try self.parseRaw(arena.allocator(), raw)) orelse continue;
+                try values.append(gpa, value);
             }
-            try out.ensureTotalCapacity(gpa, @min(n, 1024));
-            while (out.items.len < n) {
-                const line = (try self.prev()) orelse break;
-                try out.ensureUnusedCapacity(gpa, 1);
-                out.appendAssumeCapacity(try self.keep(gpa, line));
-            }
-            std.mem.reverse(T, out.items);
-            return out.toOwnedSlice(gpa);
+            std.mem.reverse(T, values.items);
+            const owned = try arena.allocator().dupe(T, values.items);
+            return core.adopt([]T, gpa, &arena, owned);
         }
 
         /// Frames a separated line while scanning back to its beginning.

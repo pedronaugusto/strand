@@ -1,7 +1,6 @@
 //! Minified JSON laid out as `std.json` lays a value out under an indenting
-//! `whitespace` option, as the bytes go by: what `.pretty` is for a value
-//! this package's own encoder writes, because `std.json` does not know the
-//! shape — a union tagged inside its object.
+//! `whitespace` option, as the bytes go by: the encoder writes one layout, and
+//! this is every other.
 
 const std = @import("std");
 
@@ -24,18 +23,11 @@ pub const Indent = struct {
     open: ?u8 = null,
     interface: std.Io.Writer,
 
-    pub fn init(out: *std.Io.Writer, whitespace: @FieldType(std.json.Stringify.Options, "whitespace"), buffer: []u8) Indent {
+    /// `unit` is one level of indentation; empty passes the bytes through.
+    pub fn init(out: *std.Io.Writer, unit: []const u8, buffer: []u8) Indent {
         return .{
             .out = out,
-            .unit = switch (whitespace) {
-                .minified => "",
-                .indent_1 => " ",
-                .indent_2 => "  ",
-                .indent_3 => "   ",
-                .indent_4 => "    ",
-                .indent_8 => "        ",
-                .indent_tab => "\t",
-            },
+            .unit = unit,
             .interface = .{ .vtable = &.{ .drain = drain }, .buffer = buffer },
         };
     }
@@ -122,7 +114,8 @@ test Indent {
         n: []const []const u8 = &.{ "x", "y" },
         o: struct { p: ?u8 = null, q: []const u8 = &.{}, r: []const u32 = &.{} } = .{},
     };
-    inline for (.{ .indent_2, .indent_tab, .indent_1, .minified }) |whitespace| {
+    inline for (.{ .{ .indent_2, "  " }, .{ .indent_tab, "\t" }, .{ .indent_1, " " }, .{ .minified, "" } }) |case| {
+        const whitespace = case[0];
         var expected: std.Io.Writer.Allocating = .init(std.testing.allocator);
         defer expected.deinit();
         try std.json.Stringify.value(V{}, .{ .whitespace = whitespace }, &expected.writer);
@@ -134,7 +127,7 @@ test Indent {
         var got: std.Io.Writer.Allocating = .init(std.testing.allocator);
         defer got.deinit();
         var buffer: [3]u8 = undefined;
-        var indent: Indent = .init(&got.writer, whitespace, &buffer);
+        var indent: Indent = .init(&got.writer, case[1], &buffer);
         try indent.interface.writeAll(minified.written());
         try indent.interface.flush();
         try std.testing.expectEqualStrings(expected.written(), got.written());

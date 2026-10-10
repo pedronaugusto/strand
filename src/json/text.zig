@@ -34,14 +34,120 @@ pub fn special(bytes: []const u8) Special {
             }
         }
     }
-    while (i < bytes.len) : (i += 1) {
-        work.scalarString(1);
-        const c = bytes[i];
-        if (c == '"' or c == '\\' or c < 0x20) return .{ .at = i, .non_ascii = non_ascii };
-        non_ascii = non_ascii or c >= 0x80;
+    // What is left, shorter than a vector: a word at a time, the last word
+    // overlapping the one before it, and bytes one by one only under eight.
+    if (bytes.len - i >= 8) {
+        while (i + 8 <= bytes.len) : (i += 8) {
+            const word = load(bytes[i..]);
+            const hits = specialBytes(word);
+            if (hits != 0) {
+                const at: usize = @ctz(hits) / 8;
+                return .{ .at = i + at, .non_ascii = non_ascii or (word & high_bits & below(at)) != 0 };
+            }
+            non_ascii = non_ascii or word & high_bits != 0;
+        }
+        if (i < bytes.len) {
+            const from = bytes.len - 8;
+            const seen: usize = i - from;
+            const word = load(bytes[from..]);
+            const hits = specialBytes(word) & ~below(seen);
+            if (hits != 0) {
+                const at: usize = @ctz(hits) / 8;
+                return .{ .at = from + at, .non_ascii = non_ascii or (word & high_bits & below(at) & ~below(seen)) != 0 };
+            }
+            non_ascii = non_ascii or (word & high_bits & ~below(seen)) != 0;
+        }
+        return .{ .at = bytes.len, .non_ascii = non_ascii };
     }
-    return .{ .at = bytes.len, .non_ascii = non_ascii };
+    const rest = bytes.len - i;
+    if (rest == 0) return .{ .at = bytes.len, .non_ascii = non_ascii };
+    work.scalarString(rest);
+    // Under eight bytes: copied into a word padded with plain ones.
+    var padded: [8]u8 = @splat('a');
+    copy(&padded, bytes[i..]);
+    const word = load(&padded);
+    const hits = specialBytes(word);
+    if (hits != 0) {
+        const at: usize = @ctz(hits) / 8;
+        return .{ .at = i + at, .non_ascii = non_ascii or (word & high_bits & below(at)) != 0 };
+    }
+    return .{ .at = bytes.len, .non_ascii = non_ascii or (word & high_bits) != 0 };
 }
+
+const ones: u64 = 0x0101010101010101;
+const high_bits: u64 = ones * 0x80;
+inline fn load(bytes: []const u8) u64 {
+    return std.mem.readInt(u64, bytes[0..8], .little);
+}
+/// The high bit of every byte of `word` that is a quote, a backslash or a
+/// control byte, exact up to the first such byte, which is all a caller reads.
+inline fn specialBytes(word: u64) u64 {
+    const quote = word ^ (ones * '"');
+    const slash = word ^ (ones * '\\');
+    return ((quote -% ones) & ~quote | (slash -% ones) & ~slash | (word -% ones * 0x20) & ~word) & high_bits;
+}
+/// A mask of the bytes of a word below byte `n`.
+inline fn below(n: usize) u64 {
+    return if (n >= 8) ~@as(u64, 0) else (@as(u64, 1) << @intCast(n * 8)) - 1;
+}
+
+/// Copies a few bytes, as a piece of output usually is, without a call: two
+/// overlapping loads and stores cover any length up to sixteen.
+pub inline fn copy(to: [*]u8, from: []const u8) void {
+    const n = from.len;
+    if (n >= 16) return @memcpy(to[0..n], from);
+    if (n >= 8) {
+        const head = std.mem.readInt(u64, from[0..8], .little);
+        const tail = std.mem.readInt(u64, from[n - 8 ..][0..8], .little);
+        std.mem.writeInt(u64, to[0..8], head, .little);
+        std.mem.writeInt(u64, to[n - 8 ..][0..8], tail, .little);
+    } else if (n >= 4) {
+        const head = std.mem.readInt(u32, from[0..4], .little);
+        const tail = std.mem.readInt(u32, from[n - 4 ..][0..4], .little);
+        std.mem.writeInt(u32, to[0..4], head, .little);
+        std.mem.writeInt(u32, to[n - 4 ..][0..4], tail, .little);
+    } else if (n > 0) {
+        to[0] = from[0];
+        to[n / 2] = from[n / 2];
+        to[n - 1] = from[n - 1];
+    }
+}
+
+/// Writes `value` in decimal at the end of `buffer`, two digits at a time,
+/// and returns the digits.
+pub fn decimal(buffer: []u8, value: anytype) []const u8 {
+    const T = @TypeOf(value);
+    const negative = @typeInfo(T).int.signedness == .signed and value < 0;
+    var magnitude = @abs(value);
+    var at = buffer.len;
+    while (magnitude >= 100) {
+        const pair: usize = @intCast(magnitude % 100); // safe: below one hundred.
+        magnitude /= 100;
+        at -= 2;
+        buffer[at..][0..2].* = digit_pairs[pair * 2 ..][0..2].*;
+    }
+    if (magnitude >= 10) {
+        const pair: usize = @intCast(magnitude); // safe: below one hundred.
+        at -= 2;
+        buffer[at..][0..2].* = digit_pairs[pair * 2 ..][0..2].*;
+    } else {
+        at -= 1;
+        buffer[at] = '0' + @as(u8, @intCast(magnitude)); // safe: a single digit.
+    }
+    if (negative) {
+        at -= 1;
+        buffer[at] = '-';
+    }
+    return buffer[at..];
+}
+const digit_pairs = blk: {
+    var pairs: [200]u8 = undefined;
+    for (0..100) |n| {
+        pairs[n * 2] = '0' + n / 10;
+        pairs[n * 2 + 1] = '0' + n % 10;
+    }
+    break :blk pairs;
+};
 
 /// What an escape after a backslash stands for, and how many bytes of input
 /// it took, the backslash not counted. A `\u` escape is a Unicode scalar: a
@@ -127,6 +233,41 @@ pub fn unescape(body: []const u8, out: []u8) usize {
     }
     @memcpy(out[to..][0 .. body.len - from], body[from..]);
     return to + body.len - from;
+}
+
+test special {
+    const cases = [_]struct { []const u8, usize, bool }{
+        .{ "", 0, false },
+        .{ "abc", 3, false },
+        .{ "abcdefgh", 8, false },
+        .{ "abcdefg\"", 7, false },
+        .{ "abcdefghijk\\", 11, false },
+        .{ "abc\xc3\xa9defghij\"", 12, true },
+        .{ "abcdefghij\x01k", 10, false },
+        .{ "abcdefghijklmnopqrstuvw\n", 23, false },
+        .{ "\xc3\xa9", 2, true },
+        .{ "abcdefgh\"\xc3\xa9", 8, false },
+    };
+    for (cases) |case| {
+        const found = special(case[0]);
+        try std.testing.expectEqual(case[1], found.at);
+        try std.testing.expectEqual(case[2], found.non_ascii);
+    }
+    for (0..40) |n| {
+        var bytes: [40]u8 = @splat('a');
+        bytes[n] = '"';
+        try std.testing.expectEqual(n, special(bytes[0 .. n + 1]).at);
+        try std.testing.expectEqual(n + 1, special(bytes[0..n]).at + 1);
+    }
+}
+
+test decimal {
+    var buffer: [24]u8 = undefined;
+    try std.testing.expectEqualStrings("0", decimal(&buffer, @as(u8, 0)));
+    try std.testing.expectEqualStrings("18446744073709551615", decimal(&buffer, @as(u64, std.math.maxInt(u64))));
+    try std.testing.expectEqualStrings("-128", decimal(&buffer, @as(i8, -128)));
+    try std.testing.expectEqualStrings("-9223372036854775808", decimal(&buffer, @as(i64, std.math.minInt(i64))));
+    try std.testing.expectEqualStrings("105", decimal(&buffer, @as(u16, 105)));
 }
 
 test unescape {

@@ -11,43 +11,31 @@ pub const layers: []const gantry.rules.Layer = &.{
     .{ .name = "core mapping", .patterns = &.{
         "src/core/decode.zig",
         "src/core/encode.zig",
-        "src/core/compat.zig",
     } },
     .{ .name = "core ownership", .patterns = &.{"src/core/owner.zig"} },
     .{ .name = "core public module", .patterns = &.{"src/core.zig"} },
-    .{ .name = "primitives", .patterns = &.{
-        "src/json/encode/Buffer.zig",
-        "src/json/encode.zig",
-        "src/json/indent.zig",
-        "src/json/int.zig",
-        "src/json/leading.zig",
-        "src/json/member_scan.zig",
-        "src/jsonl/owned.zig",
-        "src/json/route.zig",
-        "src/json/Scanner.zig",
-        "src/json/tagging.zig",
-        "src/json/output.zig",
+    .{ .name = "JSON text", .patterns = &.{
         "src/json/work.zig",
-    } },
-    .{ .name = "decoding and conversion", .patterns = &.{
+        "src/json/text.zig",
         "src/json/control.zig",
-        "src/json/decode.zig",
-        "src/json/from_value.zig",
-        "src/json/parse.zig",
-        "src/json/raw.zig",
+        "src/json/member_scan.zig",
+        "src/json/leading.zig",
+        "src/json/indent.zig",
+        "src/json/number.zig",
     } },
-    .{ .name = "parsing and schema", .patterns = &.{
-        "src/json/parse/line.zig",
+    .{ .name = "JSON wire", .patterns = &.{
+        "src/json/Decoder.zig",
+        "src/json/Encoder.zig",
+        "src/json/Value.zig",
+        "src/json/std_value.zig",
+        "src/json/route.zig",
     } },
-    .{ .name = "codec assembly", .patterns = &.{
-        "src/json/codec.zig",
-    } },
-    .{ .name = "JSON wire", .patterns = &.{ "src/json/text.zig", "src/json/number.zig", "src/json/Decoder.zig", "src/json/Encoder.zig", "src/json/Value.zig", "src/json/std_value.zig" } },
     .{ .name = "JSON module", .patterns = &.{"src/json/api.zig"} },
     .{ .name = "JSON facade", .patterns = &.{"src/json.zig"} },
     .{ .name = "JSONL schema", .patterns = &.{"src/jsonl/versioned.zig"} },
     .{ .name = "records", .patterns = &.{
         "src/jsonl/line.zig",
+        "src/jsonl/Buffer.zig",
     } },
     .{ .name = "framing boundaries", .patterns = &.{"src/jsonl/framing.zig"} },
     .{ .name = "line framing", .patterns = &.{
@@ -78,7 +66,6 @@ pub const entries: []const []const u8 = &.{};
 
 pub const modules: []const gantry.NamedModule = &.{
     .{ .name = "strand", .path = "src/strand.zig" },
-    .{ .name = "strand.owned", .path = "src/jsonl/owned.zig" },
 };
 pub const references: []const gantry.rules.ReferenceRule = &.{
     .{

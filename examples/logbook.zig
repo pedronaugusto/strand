@@ -44,16 +44,15 @@ pub fn main() !void {
 
         pub const jsonl_version: u32 = 2;
 
+        const Old = struct { kind: []const u8, at: []const u8 = "0" };
+
         pub fn jsonlMigrate(
             payload_arena: std.mem.Allocator,
             from: u32,
-            data: std.json.Value,
-        ) std.json.ParseFromValueError!Self {
+            data: strand.json.Value,
+        ) (strand.jsonl.PayloadError(Old) || error{ UnknownField, InvalidNumber })!Self {
             if (from != 1) return error.UnknownField;
-            const old = try strand.payloadOf(struct {
-                kind: []const u8,
-                at: []const u8 = "0",
-            }, payload_arena, data);
+            const old = try strand.jsonl.payloadOf(Old, payload_arena, data);
             return .{
                 .scope = "app",
                 .kind = old.kind,
@@ -68,7 +67,7 @@ pub fn main() !void {
         \\{"v":1,"data":{"kind":"open","at":"1"}}
         \\
     );
-    var log: strand.Writer(strand.Versioned(Entry)) = .init(&out.writer, .{});
+    var log: strand.jsonl.Writer(strand.jsonl.Versioned(Entry)) = .init(&out.writer, .{});
     try log.writeAll(&.{
         .{ .value = .{ .scope = "net", .kind = "retry", .at = 2 } },
         .{ .value = .{ .kind = "close", .at = 3 } },
@@ -77,7 +76,7 @@ pub fn main() !void {
     // Reading it back: every line arrives in today's shape, and says which
     // shape it was written in.
     var source: std.Io.Reader = .fixed(out.written());
-    var entries: strand.Reader(strand.Versioned(Entry)) = .init(gpa, &source, .{});
+    var entries: strand.jsonl.Reader(strand.jsonl.Versioned(Entry)) = .init(gpa, &source, .{});
     defer entries.deinit();
     while (try entries.next()) |line| {
         std.log.info("line {d}: v{d}{s} {s}/{s} at {d}", .{
@@ -105,7 +104,7 @@ pub fn main() !void {
         var buffer: [4096]u8 = undefined;
         var file_reader = file.reader(io, &buffer);
 
-        var tail: strand.Tail(strand.Versioned(Entry)) = try .init(gpa, &file_reader, .{});
+        var tail: strand.jsonl.Tail(strand.jsonl.Versioned(Entry)) = try .init(gpa, &file_reader, .{});
         defer tail.deinit();
 
         // In file order, on an arena, borrowing nothing from the reader.
@@ -151,7 +150,7 @@ fn follow(comptime Entry: type, gpa: std.mem.Allocator, io: std.Io, dir: std.Io.
     // `.per_record` is the policy a log another process is reading wants:
     // every record is on the file, and on the disk under it, before the next
     // one is written. It costs a sync a record.
-    var log: strand.Writer(strand.Versioned(Entry)) = .initFile(&file_writer, .{
+    var log: strand.jsonl.Writer(strand.jsonl.Versioned(Entry)) = .initFile(&file_writer, .{
         .sync = .per_record,
     });
     for (0..appended) |i| {
@@ -163,7 +162,7 @@ fn follow(comptime Entry: type, gpa: std.mem.Allocator, io: std.Io, dir: std.Io.
     // Following: read to the end of the file, wait for it to grow, carry on.
     // There is no end to a file being appended to, so a follower stops when
     // the `std.Io` cancels it — or, as here, when the caller stops asking.
-    var follower: strand.Follower(strand.Versioned(Entry)) = .init(gpa, &file_reader, .{
+    var follower: strand.jsonl.Follower(strand.jsonl.Versioned(Entry)) = .init(gpa, &file_reader, .{
         .wait = .{ .poll = .fromMilliseconds(5) },
     });
     defer follower.deinit(io);
@@ -197,7 +196,7 @@ fn follow(comptime Entry: type, gpa: std.mem.Allocator, io: std.Io, dir: std.Io.
     var reopened_buffer: [4096]u8 = undefined;
     var reopened_reader = reopened.reader(io, &reopened_buffer);
 
-    var resumed: strand.Follower(strand.Versioned(Entry)) = try .resumeFrom(gpa, io, &reopened_reader, point, .{
+    var resumed: strand.jsonl.Follower(strand.jsonl.Versioned(Entry)) = try .resumeFrom(gpa, io, &reopened_reader, point, .{
         .wait = .{ .poll = .fromMilliseconds(5) },
     });
     defer resumed.deinit(io);
@@ -230,7 +229,7 @@ fn separated(gpa: std.mem.Allocator) !void {
     // With a separator in front of every record there is no such question:
     // 0x1E is the one byte that cannot appear unescaped inside a JSON value,
     // so it marks where a record begins and nothing else can.
-    var log: strand.Writer(Event) = .init(&out.writer, .{ .record_separator = true });
+    var log: strand.jsonl.Writer(Event) = .init(&out.writer, .{ .record_separator = true });
     try log.write(.{ .kind = "open", .at = 1 });
     try log.write(.{ .kind = "close", .at = 2 });
 
@@ -239,7 +238,7 @@ fn separated(gpa: std.mem.Allocator) !void {
     // line carrying no record at all is `error.MissingSeparator` rather than
     // a line that might have been meant.
     var source: std.Io.Reader = .fixed(out.written());
-    var events: strand.Reader(Event) = .init(gpa, &source, .{ .record_separator = true });
+    var events: strand.jsonl.Reader(Event) = .init(gpa, &source, .{ .record_separator = true });
     defer events.deinit();
     while (try events.next()) |line| {
         std.log.info("record {d}: {s} at {d}", .{ line.number, line.value.kind, line.value.at });
@@ -249,7 +248,7 @@ fn separated(gpa: std.mem.Allocator) !void {
 
 /// The other way a schema grows: a tagged union that gains an arm.
 ///
-/// `std.json` writes a tagged union as a one-key object naming the arm, so
+/// A tagged union is written as a one-key object naming the arm, so
 /// `tagOf` reads the arm without parsing the payload — and an old reader needs
 /// somewhere for an arm it has never heard of to land.
 fn arms(arena: std.mem.Allocator) !void {
@@ -262,18 +261,18 @@ fn arms(arena: std.mem.Allocator) !void {
         open: struct { path: []const u8 },
         close: struct { code: u8 },
         /// Every arm this build does not know. Keep the bytes, not a guess.
-        unknown: std.json.Value,
+        unknown: strand.json.Value,
     };
 
     // Route on the tag, and give an unknown one the line rather than an error.
-    const message: Message = if (strand.tagOf(Message, line)) |_|
-        try strand.parseLine(Message, arena, line, .{})
+    const message: Message = if (strand.json.tagOf(Message, line)) |_|
+        try strand.json.parseLeaky(Message, arena, line, .{})
     else
-        .{ .unknown = try std.json.parseFromSliceLeaky(std.json.Value, arena, line, .{}) };
+        .{ .unknown = try strand.json.parseLeaky(strand.json.Value, arena, line, .{}) };
     // --- README:arms ---
 
     std.log.info("unrecognised arm kept whole: {s}", .{
-        message.unknown.object.keys()[0],
+        message.unknown.object[0].key,
     });
 }
 
@@ -293,21 +292,21 @@ fn protocol(gpa: std.mem.Allocator, arena: std.mem.Allocator) !void {
     // one after it. In a program this is a socket's reader.
     var sent: std.Io.Writer.Allocating = .init(gpa);
     defer sent.deinit();
-    try strand.writeLine(&sent.writer, Request{ .say = .{ .text = "hello" } });
+    try strand.jsonl.writeLine(&sent.writer, Request{ .say = .{ .text = "hello" } }, .{});
     try sent.writer.writeAll("{\"say\":{\"text\":\"");
     try sent.writer.splatByteAll('x', 100_000);
     try sent.writer.writeAll("\"}}\n");
-    try strand.writeLine(&sent.writer, Request{ .bye = .{} });
+    try strand.jsonl.writeLine(&sent.writer, Request{ .bye = .{} }, .{});
     var socket: std.Io.Reader = .fixed(sent.written());
 
     // Replies go back a record at a time, each one drained as it is written.
     var answered: std.Io.Writer.Allocating = .init(gpa);
     defer answered.deinit();
-    var replies: strand.Writer(Reply) = .init(&answered.writer, .{ .flush = .per_record });
+    var replies: strand.jsonl.Writer(Reply) = .init(&answered.writer, .{ .flush = .per_record });
 
     // The lines, framed and bounded. What a line means is the server's own
     // business, so nothing here is parsed until the server parses it.
-    var requests: strand.LineReader = .init(gpa, &socket, .{ .max_line_bytes = 64 * 1024 });
+    var requests: strand.jsonl.LineReader = .init(gpa, &socket, .{ .max_line_bytes = 64 * 1024 });
     defer requests.deinit();
     while (true) {
         const raw = requests.next() catch |err| switch (err) {
@@ -319,7 +318,7 @@ fn protocol(gpa: std.mem.Allocator, arena: std.mem.Allocator) !void {
             },
             else => |e| return e,
         } orelse break;
-        const request = strand.parseLine(Request, arena, raw.line, .{}) catch {
+        const request = strand.json.parseLeaky(Request, arena, raw.line, .{}) catch {
             try replies.write(.{ .ok = false, .line = raw.number, .message = "not a request" });
             continue;
         };
@@ -327,6 +326,6 @@ fn protocol(gpa: std.mem.Allocator, arena: std.mem.Allocator) !void {
     }
     // --- README:protocol ---
 
-    var it = strand.lines(answered.written());
+    var it = strand.jsonl.lines(answered.written());
     while (it.next()) |line| std.log.info("reply: {s}", .{line.line});
 }

@@ -64,14 +64,6 @@ pub export fn rejected() void {
         8 => {
             core.serialize(Legacy{}, &backend, &c) catch unreachable;
         },
-        9 => {
-            const Mixed = union(enum) {
-                a,
-                pub const jsonl_tag = "kind";
-                pub const strand = .{ .tag = "type" };
-            };
-            core.serialize(@as(Mixed, .a), &backend, &c) catch unreachable;
-        },
         else => unreachable,
     }
 }

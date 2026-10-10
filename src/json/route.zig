@@ -5,7 +5,7 @@ const Scanner_module = @import("Scanner.zig");
 const std = @import("std");
 const member_scan = @import("member_scan.zig");
 const stringSpecial = Scanner_module.stringSpecial;
-const tagging = @import("tagging.zig");
+const descriptor = @import("../core/descriptor.zig");
 
 /// The first key of the object on `line`, or `null` when there is not one to
 /// read cheaply.
@@ -121,31 +121,34 @@ pub fn memberStringOf(line: []const u8, name: []const u8) ?[]const u8 {
 
 /// The arm of the tagged union `U` that `line` names, or `null`.
 ///
-/// `std.json` encodes a tagged union as a one-key object whose key is the
-/// active arm — `{"open":{...}}` — so the first key is the tag, and reading
-/// it is enough to route a line without parsing its payload.
+/// A union is written by default as a one-key object whose key is the active
+/// arm, `{"open":{...}}`, so the first key is the tag, and reading it is enough
+/// to route a line without parsing its payload.
 ///
-/// A union that declares `jsonl_tag` is tagged inside its object instead —
-/// `{"type":"open",...}` — and its arm is the string in that member, read
-/// as `memberStringOf` reads it. A tag that names no arm is the arm
-/// `jsonl_other` names, when the union declares one, as a parse takes it.
+/// A union whose `strand` declaration names a `tag` is tagged by a member
+/// instead, `{"type":"open",...}`, wherever in the object it sits, and its arm
+/// is the string in that member, read as `memberStringOf` reads it. A tag that
+/// names no arm is the arm the declaration's `other` names, when it names
+/// one, as a parse takes it. Wire names are the ones the declaration gives.
 ///
 /// `null` means the line is not shaped that way, its key or tag is escaped
-/// (see `kindOf`), or the tag does not name an arm of `U` and there is no
-/// `jsonl_other` to take it.
+/// (see `kindOf`), or the tag names no arm of `U` and there is no `other`.
 pub fn tagOf(comptime U: type, line: []const u8) ?std.meta.Tag(U) {
     comptime {
         const info = @typeInfo(U);
         if (info != .@"union" or info.@"union".tag_type == null) {
-            @compileError("strand.tagOf expects a tagged union, got " ++ @typeName(U));
+            @compileError("strand.json.tagOf expects a tagged union, got " ++ @typeName(U));
         }
     }
-    if (comptime tagging.internal(U)) |inside| {
-        const text = memberStringOf(line, inside.tag) orelse return null;
-        return std.meta.stringToEnum(std.meta.Tag(U), text) orelse inside.other;
+    const opt = comptime descriptor.options(U);
+    const name = if (comptime @hasField(@TypeOf(opt), "tag")) memberStringOf(line, opt.tag) orelse return null else kindOf(line) orelse return null;
+    inline for (@typeInfo(U).@"union".field_names) |arm| {
+        const wire = comptime descriptor.variant(U, arm);
+        if (std.mem.eql(u8, name, wire.name)) return @field(std.meta.Tag(U), arm);
+        inline for (wire.aliases) |alias| if (std.mem.eql(u8, name, alias)) return @field(std.meta.Tag(U), arm);
     }
-    const key = kindOf(line) orelse return null;
-    return std.meta.stringToEnum(std.meta.Tag(U), key);
+    if (comptime @hasField(@TypeOf(opt), "tag") and @hasField(@TypeOf(opt), "other")) return @field(std.meta.Tag(U), opt.other);
+    return null;
 }
 
 test memberOf {

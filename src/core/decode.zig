@@ -7,12 +7,21 @@ const model = @import("model.zig");
 /// Backend.next(context, request) must meter wire reads/scratch through context before
 /// doing that work, validate grammar, and distinguish input from scratch spans.
 /// endInput verifies no trailing value. All backend errors are named.
+/// Where a value lies in the input.
+const Range = struct { start: usize, end: usize };
+
 pub fn deserialize(comptime T: type, backend: anytype, c: *ctx.Context) Errors(T, @TypeOf(backend.*))!T {
-    comptime descriptor.check(T, @TypeOf(backend.*).capabilities, true, .borrowed);
-    var cursor: Cursor(@TypeOf(backend.*)) = .{ .backend = backend, .context = c };
-    const value = try cursor.read(T, .{});
+    const value = try deserializePrefix(T, backend, c);
     try backend.endInput(c);
     return value;
+}
+
+/// One value from the front of the input, with the rest left to the caller: the
+/// backend's `offset` says where it ended.
+pub fn deserializePrefix(comptime T: type, backend: anytype, c: *ctx.Context) Errors(T, @TypeOf(backend.*))!T {
+    comptime descriptor.check(T, @TypeOf(backend.*).capabilities, true, .borrowed);
+    var cursor: Cursor(@TypeOf(backend.*)) = .{ .backend = backend, .context = c };
+    return cursor.read(T, .{});
 }
 
 pub fn Cursor(comptime Backend: type) type {
@@ -285,7 +294,7 @@ pub fn Cursor(comptime Backend: type) type {
             var entered = true;
             defer if (entered) self.context.leave();
             var tag: ?[]const u8 = null;
-            var payload: ?struct { start: usize, end: usize } = null;
+            var payload: ?Range = null;
             var count: usize = 0;
             while (!try self.atEnd()) {
                 if (count >= self.context.limits.container_items) return error.ItemLimit;
@@ -340,7 +349,7 @@ pub fn Cursor(comptime Backend: type) type {
             if (@hasField(@TypeOf(opt), "other")) {
                 const F = @FieldType(T, opt.other);
                 if (F == void) return @unionInit(T, opt.other, {});
-                const span = payload orelse .{ .start = record_start, .end = record_end };
+                const span: Range = payload orelse .{ .start = record_start, .end = record_end };
                 var backend = self.backend.replay(span.start, span.end);
                 defer if (@hasDecl(Backend, "deinit")) backend.deinit();
                 return @unionInit(T, opt.other, try deserialize(F, &backend, self.context));
@@ -770,6 +779,17 @@ fn PolicyAccess(comptime Backend: type, comptime policy: descriptor.Field) type 
         }
         pub fn alloc(self: *Self, comptime T: type, n: usize) ctx.DecodeError![]T {
             return self.cursor.context.alloc(T, n);
+        }
+        /// The operation's allocator, for what a codec builds that the result
+        /// keeps. Every request is charged against the allocation limit, and
+        /// what it returns lives as long as the result does.
+        pub fn allocator(self: *Self) std.mem.Allocator {
+            return self.cursor.context.allocator();
+        }
+        /// Whether the caller asked for unknown fields to be refused, for a codec that
+        /// reads a record's members itself.
+        pub fn rejectsUnknownFields(self: *const Self) bool {
+            return self.cursor.context.acceptance.reject_unknown_fields;
         }
         pub fn chargeWork(self: *Self, n: usize) ctx.DecodeError!void {
             try self.cursor.context.chargeWork(n);

@@ -93,6 +93,15 @@ pub fn clone(gpa: std.mem.Allocator, value: anytype, limits: context.Limits) con
     const copied = mapping.clone(T, value, &c) catch |err| return if (backing.limited) error.AllocationLimit else err;
     return .{ .value = copied, .gpa = gpa, .state = arena.state, .requested_peak = c.allocationRequested(), .retained_bytes = c.allocationRequested(), .allocator_resident_bytes = backing.live, .work_used = c.workUsed() };
 }
+/// `clone` into a caller's arena: requests are charged per operation, and what a
+/// failed copy allocated stays until the caller resets the arena.
+pub fn cloneLeaky(arena: std.mem.Allocator, value: anytype, limits: context.Limits) context.DecodeError!@TypeOf(value) {
+    const T = @TypeOf(value);
+    comptime cloneCheck(T, &.{});
+    comptime descriptor.check(T, descriptor.schema_capabilities, true, .owned);
+    var c: context.Context = .init(arena, limits, .owned);
+    return mapping.clone(T, value, &c);
+}
 fn cloneCheck(comptime T: type, comptime seen: []const type) void {
     for (seen) |prior| if (T == prior) return;
     const next = seen ++ .{T};

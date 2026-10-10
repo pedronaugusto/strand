@@ -1,7 +1,7 @@
 //! `LineReader`: a `*std.Io.Reader` as a stream of lines, framed and
 //! bounded, with nothing parsed.
 const framing = @import("../framing.zig");
-const codec_module = @import("../../json/api.zig").codec_module;
+const json = @import("../../json.zig");
 const member_scan_module = @import("../../json/api.zig").member_scan_module;
 
 const std = @import("std");
@@ -15,7 +15,7 @@ const bom = line_mod.bom;
 const trimCr = line_mod.trimCr;
 const isBlank = line_mod.isBlank;
 
-pub const Raw = codec_module.Raw;
+pub const Raw = json.Raw;
 const MemberScan = member_scan_module.MemberScan;
 
 const control = @import("../../json/api.zig").control_module;

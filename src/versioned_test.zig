@@ -1,8 +1,8 @@
 //! versioned scenarios through the public API.
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const Versioned = strand.Versioned;
-const payloadOf = strand.payloadOf;
+const Versioned = strand.jsonl.Versioned;
+const payloadOf = strand.jsonl.payloadOf;
 const strand = @import("strand.zig");
 const testing = std.testing;
 
@@ -223,7 +223,7 @@ test "a version from the future is a malformed line, by number" {
         \\
     ;
     var source: std.Io.Reader = .fixed(input);
-    var reader: strand.Reader(Versioned(Event)) = .init(testing.allocator, &source, .{});
+    var reader: strand.jsonl.Reader(Versioned(Event)) = .init(testing.allocator, &source, .{});
     defer reader.deinit();
 
     try testing.expectEqualStrings("known", (try reader.next()).?.value.value.kind);
@@ -251,7 +251,7 @@ test "round trip: what is written under the envelope is read back under it" {
     var out: std.Io.Writer.Allocating = .init(testing.allocator);
     defer out.deinit();
 
-    var log: strand.Writer(Versioned(Event)) = .init(&out.writer, .{});
+    var log: strand.jsonl.Writer(Versioned(Event)) = .init(&out.writer, .{});
     try log.writeAll(&.{
         .{ .value = .{ .kind = "open", .count = 1 } },
         .{ .value = .{ .scope = "net", .kind = "close", .count = 2 } },
@@ -263,11 +263,11 @@ test "round trip: what is written under the envelope is read back under it" {
     , out.written());
 
     var source: std.Io.Reader = .fixed(out.written());
-    var reader: strand.Reader(Versioned(Event)) = .init(testing.allocator, &source, .{});
+    var reader: strand.jsonl.Reader(Versioned(Event)) = .init(testing.allocator, &source, .{});
     defer reader.deinit();
     try testing.expectEqual(@as(u32, 1), (try reader.next()).?.value.value.count);
     try testing.expectEqualStrings("net", (try reader.next()).?.value.value.scope);
-    try testing.expectEqual(@as(?strand.Line(Versioned(Event)), null), try reader.next());
+    try testing.expectEqual(@as(?strand.jsonl.Line(Versioned(Event)), null), try reader.next());
 }
 
 test "payload fields v and data belong to the payload, not the envelope" {
@@ -278,7 +278,7 @@ test "payload fields v and data belong to the payload, not the envelope" {
     };
     var out: std.Io.Writer.Allocating = .init(testing.allocator);
     defer out.deinit();
-    try strand.writeLine(&out.writer, Versioned(Payload){ .value = .{ .v = 12, .data = "kept" } });
+    try strand.jsonl.writeLine(&out.writer, Versioned(Payload){ .value = .{ .v = 12, .data = "kept" } });
     try testing.expectEqualStrings("{\"v\":2,\"data\":{\"v\":12,\"data\":\"kept\"}}\n", out.written());
 
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
@@ -308,7 +308,7 @@ test "a migrated record is written back in today's shape" {
 
     var out: std.Io.Writer.Allocating = .init(testing.allocator);
     defer out.deinit();
-    try strand.writeLine(&out.writer, record);
+    try strand.jsonl.writeLine(&out.writer, record);
     try testing.expectEqualStrings(
         "{\"v\":2,\"data\":{\"scope\":\"app\",\"kind\":\"open\",\"count\":9}}\n",
         out.written(),
@@ -335,7 +335,7 @@ test "a versioned log read backwards is migrated the same way" {
 
     // One line per block, so that the backwards read really does go back to
     // the file for each of them.
-    var tail: strand.Tail(Versioned(Event)) = try .init(testing.allocator, &fixture.reader, .{
+    var tail: strand.jsonl.Tail(Versioned(Event)) = try .init(testing.allocator, &fixture.reader, .{
         .block_bytes = 16,
     });
     defer tail.deinit();
@@ -355,14 +355,14 @@ test "a versioned log read backwards is migrated the same way" {
     try testing.expectEqualStrings("open", first.value.value.kind);
     try testing.expectEqualStrings("app", first.value.value.scope);
     try testing.expectEqual(@as(u32, 1), first.value.value.count);
-    try testing.expectEqual(@as(?strand.Line(Versioned(Event)), null), try tail.prev());
+    try testing.expectEqual(@as(?strand.jsonl.Line(Versioned(Event)), null), try tail.prev());
 }
 
 test "a versioned log followed as it grows is migrated the same way" {
     var fixture = try fixtures.Fixture.init(mixed_log, 512);
     defer fixture.deinit();
 
-    var follower: strand.Follower(Versioned(Event)) = .init(
+    var follower: strand.jsonl.Follower(Versioned(Event)) = .init(
         testing.allocator,
         &fixture.reader,
         .{ .wait = .{ .poll = .fromMicroseconds(100) } },

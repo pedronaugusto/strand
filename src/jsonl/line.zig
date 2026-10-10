@@ -9,13 +9,23 @@
 //! the two things a reader and a writer agree on beyond the schema — `Format`
 //! and `separator` — and `lines`, which walks the lines of a buffer already
 //! in memory.
-const codec_module = @import("../json/api.zig").codec_module;
+const json = @import("../json.zig");
+const core = @import("../core.zig");
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-const parse_line = codec_module.parser;
-pub const ParseLineError = parse_line.ParseLineError;
+/// What reading a line as a `T` can refuse it with, whatever the codecs of `T`
+/// refuse with: those are `CustomRejected` here.
+pub const ParseError = core.DecodeError;
+
+/// A parse failure by its name in `ParseError`; a codec's own refusals are `CustomRejected`.
+pub fn narrow(err: anyerror) ParseError {
+    inline for (@typeInfo(ParseError).error_set.error_names.?) |known| {
+        if (err == @field(anyerror, known)) return @field(ParseError, known);
+    }
+    return error.CustomRejected;
+}
 
 /// The UTF-8 byte-order mark. Not part of the first line of a stream, and
 /// never written by this package.
@@ -39,27 +49,23 @@ pub fn isBlank(line: []const u8) bool {
     return true;
 }
 
-/// Where `std.json` gave up on a line that has already failed to parse.
+/// Where a line that has already failed to parse went wrong.
 ///
-/// The line is parsed a second time with the scanner's diagnostics on, which
-/// is what makes the first parse — the one every good line goes through —
-/// cost nothing for this. The answer is an offset in `line`; `null` when the
-/// second parse disagrees with the first and succeeds, which only a `T` with
-/// a `jsonParse` of its own can arrange.
+/// The line is parsed a second time with diagnostics on, which is what makes
+/// the first parse, the one every good line goes through, cost nothing for
+/// this. The answer is an offset in `line`; `null` when the second parse
+/// disagrees with the first and succeeds, which only a `T` with a codec that
+/// depends on more than the bytes can arrange.
 pub fn whereItFailed(
     comptime T: type,
     arena: Allocator,
     line: []const u8,
-    options: anytype,
+    options: json.ParseOptions,
 ) ?usize {
-    var where: parse_line.Diagnostics = .{};
-    _ = parse_line.parseLine(T, arena, line, .{
-        .ignore_unknown_fields = options.ignore_unknown_fields,
-        .duplicate_fields = options.duplicate_fields,
-        .copy_strings = false,
-        .diagnostics = &where,
-        .max_depth = options.max_depth,
-    }) catch return where.offset;
+    var where: core.Diagnostics = .{};
+    var how = options;
+    how.diagnostics = &where;
+    _ = json.parseLeaky(T, arena, line, how) catch return where.offset;
     return null;
 }
 
@@ -72,10 +78,10 @@ pub const Fault = struct {
     /// The number of the line, in that reader's own numbering; 0 when there
     /// has not been one.
     line: u64 = 0,
-    /// What `std.json` made of the line. `null` when the line never reached
-    /// `std.json` — it was too long, it carried a raw control byte, or it
+    /// What parsing made of the line. `null` when the line never reached
+    /// the parser — it was too long, it carried a raw control byte, or it
     /// carried no record at all.
-    err: ?ParseLineError = null,
+    err: ?ParseError = null,
     /// The 0-based offset within the line: the control byte itself, or the
     /// byte `std.json` gave up at — which is not always the byte that is
     /// wrong, but is never before it. `null` when there is no place to name.
@@ -87,7 +93,7 @@ pub const Fault = struct {
     }
 
     /// `std.json` refused the line, having got as far as `at`.
-    pub fn parse(self: *Fault, number: u64, err: ParseLineError, at: ?usize) void {
+    pub fn parse(self: *Fault, number: u64, err: ParseError, at: ?usize) void {
         self.* = .{ .line = number, .err = err, .offset = at };
     }
 

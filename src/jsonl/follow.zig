@@ -20,7 +20,7 @@
 //! and the follower uses it only when the file it holds has stopped growing,
 //! so the old file is read to its end before the new one is started.
 const line_module = @import("line.zig");
-const codec_module = @import("../json/api.zig").codec_module;
+const core = @import("../core.zig");
 const reader_module = @import("reader.zig");
 
 const std = @import("std");
@@ -29,11 +29,9 @@ const Allocator = std.mem.Allocator;
 
 const strand = struct {
     pub const Line = line_module.Line;
-    pub const ParseLineError = codec_module.parser.ParseLineError;
     pub const Reader = reader_module.Reader;
 };
 const Line = strand.Line;
-const ParseLineError = strand.ParseLineError;
 
 /// How a follower gets the file a path names right now.
 ///
@@ -405,7 +403,7 @@ pub fn Follower(comptime T: type) type {
 
         /// A copy of `line.value` that outlives the follower, allocated on
         /// `gpa`. See `Reader.keep`, whose contract this is.
-        pub fn keep(self: *Self, gpa: Allocator, line: Line(T)) Allocator.Error!T {
+        pub fn keep(self: *Self, gpa: Allocator, line: Line(T)) core.DecodeError!core.Parsed(T) {
             return self.reader.keep(gpa, line);
         }
 

@@ -24,7 +24,7 @@ fn timedInput(gpa: std.mem.Allocator, size: Size) ![]u8 {
     errdefer out.deinit();
     try out.ensureUnusedCapacity(size.mixed_lines * 80);
 
-    var log: strand.Writer(Timed) = .init(&out.writer, .{});
+    var log: strand.jsonl.Writer(Timed) = .init(&out.writer, .{ .encode = .{ .nulls = .omit } });
     for (0..size.mixed_lines) |i| try log.write(.{
         .kind = kinds[i % kinds.len],
         .at = i,
@@ -39,7 +39,7 @@ fn timedInput(gpa: std.mem.Allocator, size: Size) ![]u8 {
 /// This package's reader over `input`, in nanoseconds.
 fn timeReader(gpa: std.mem.Allocator, io: std.Io, size: Size, input: []const u8) !u64 {
     var source: std.Io.Reader = .fixed(input);
-    var reader: strand.Reader(Timed) = .init(gpa, &source, .{});
+    var reader: strand.jsonl.Reader(Timed) = .init(gpa, &source, .{});
     defer reader.deinit();
 
     var checksum: u64 = 0;
@@ -65,7 +65,7 @@ fn timeFloor(gpa: std.mem.Allocator, io: std.Io, size: Size, input: []const u8) 
     while (source.takeDelimiterInclusive('\n')) |framed| {
         const line = framed[0 .. framed.len - 1];
         _ = arena.reset(.retain_capacity);
-        const value = try strand.parseLine(Timed, arena.allocator(), line, .{});
+        const value = try strand.json.parseLeaky(Timed, arena.allocator(), line, .{ .ignore_unknown_fields = true });
         checksum +%= value.at +% value.kind.len;
         seen += 1;
     } else |err| switch (err) {

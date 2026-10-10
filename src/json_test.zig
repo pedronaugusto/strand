@@ -166,13 +166,12 @@ test "S2 std Value bridge uses bounded context and standard numeric alternatives
     try std.testing.expectError(error.AllocationLimit, json.parseStdValue(std.testing.allocator, "[1]", .{ .limits = .{ .allocation_bytes = 0 } }));
 }
 
-test "S2 legacy internal tag normalizes into common descriptor" {
+test "S2 internal tag with a catch-all arm" {
     const U = union(enum) {
         a: struct { n: u8 },
         b,
         other,
-        pub const jsonl_tag = "kind";
-        pub const jsonl_other = .other;
+        pub const strand = .{ .tag = "kind", .other = "other" };
     };
     var owner = try json.parse(U, std.testing.allocator, "{\"n\":3,\"kind\":\"a\"}", .{});
     defer owner.deinit();

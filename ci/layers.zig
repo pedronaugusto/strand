@@ -11,7 +11,6 @@ pub const layers: []const gantry.rules.Layer = &.{
     .{ .name = "core mapping", .patterns = &.{
         "src/core/decode.zig",
         "src/core/encode.zig",
-        "src/core/compat.zig",
     } },
     .{ .name = "core ownership", .patterns = &.{"src/core/owner.zig"} },
     .{ .name = "core public module", .patterns = &.{"src/core.zig"} },

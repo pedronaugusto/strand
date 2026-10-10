@@ -25,6 +25,11 @@ fn emit(comptime policy: descriptor.Field, value: anytype, out: anytype, c: *ctx
     switch (@typeInfo(T)) {
         .bool => try out.boolean(value, c),
         .int => try out.integer(value, c),
+        .comptime_int => {
+            const Wide = comptime if (value >= 0) (if (value <= std.math.maxInt(u64)) u64 else u128) else (if (value >= std.math.minInt(i64)) i64 else i128);
+            try out.integer(@as(Wide, value), c);
+        },
+        .comptime_float => try emit(policy, @as(f64, value), out, c, active),
         .float => {
             if (!@TypeOf(out.*).capabilities.nonfinite_floats and !std.math.isFinite(value)) return error.UnsupportedValue;
             try out.floating(value, c);
@@ -43,6 +48,11 @@ fn emit(comptime policy: descriptor.Field, value: anytype, out: anytype, c: *ctx
         .optional => return emitOptional(T, policy, value, out, c, active),
         .pointer => |i| switch (i.size) {
             .one => {
+                // A pointer to an array of bytes is a string, as a literal is.
+                if (comptime @typeInfo(i.child) == .array and @typeInfo(i.child).array.child == u8) {
+                    c.items -= 1;
+                    return emit(policy, @as([]const u8, value), out, c, active);
+                }
                 var ancestor = active;
                 while (ancestor) |a| : (ancestor = a.previous) {
                     try c.chargeWork(1);
@@ -93,13 +103,12 @@ fn emit(comptime policy: descriptor.Field, value: anytype, out: anytype, c: *ctx
         },
         .@"struct" => |i| {
             var count: usize = 0;
-            inline for (i.field_names, i.field_attrs) |name, attrs| {
-                if (!attrs.@"comptime" and !(try omit(T, name, value, c))) count += 1;
+            inline for (i.field_names) |name| {
+                if (!(try omit(T, name, value, c))) count += 1;
             }
             try begin(out, c, if (i.is_tuple) .tuple else .record, @typeName(T), count);
             defer c.leave();
-            inline for (i.field_names, i.field_attrs) |name, attrs| {
-                if (attrs.@"comptime") continue;
+            inline for (i.field_names) |name| {
                 const f = comptime descriptor.field(T, name);
                 if (!(try omit(T, name, value, c))) {
                     if (!i.is_tuple) {
@@ -140,6 +149,9 @@ fn begin(out: anytype, c: *ctx.Context, kind: model.Kind, name: []const u8, n: u
 fn omit(comptime T: type, comptime name: []const u8, value: T, c: *ctx.Context) ctx.EncodeError!bool {
     const policy = comptime descriptor.field(T, name);
     if (policy.skip_encode) return true;
+    if (c.omit_nulls and comptime @typeInfo(@FieldType(T, name)) == .optional and !@hasField(@TypeOf(descriptor.fieldOptions(T, name)), "codec")) {
+        if (@field(value, name) == null) return true;
+    }
     const declared = comptime descriptor.fieldOptions(T, name);
     if (@hasField(@TypeOf(declared), "omit_if")) return declared.omit_if(@field(value, name));
     return switch (policy.omit) {
@@ -348,7 +360,7 @@ fn tagged(comptime T: type, value: T, out: anytype, c: *ctx.Context, active: ?*c
             const F = @TypeOf(v);
             const count = if (@hasField(@TypeOf(opt), "content")) 2 else if (F == void) 1 else blk: {
                 var n: usize = 1;
-                inline for (@typeInfo(F).@"struct".field_names, @typeInfo(F).@"struct".field_attrs) |name, attrs| if (!attrs.@"comptime" and !try omit(F, name, v, c)) {
+                inline for (@typeInfo(F).@"struct".field_names) |name| if (!try omit(F, name, v, c)) {
                     n += 1;
                 };
                 break :blk n;
@@ -368,8 +380,7 @@ fn tagged(comptime T: type, value: T, out: anytype, c: *ctx.Context, active: ?*c
                 try keyed(opt.content, out, c);
                 try emit(.{}, v, out, c, active);
             } else if (F != void) {
-                inline for (@typeInfo(F).@"struct".field_names, @typeInfo(F).@"struct".field_attrs) |name, attrs| {
-                    if (attrs.@"comptime") continue;
+                inline for (@typeInfo(F).@"struct".field_names) |name| {
                     if (!try omit(F, name, v, c)) {
                         const policy = comptime descriptor.field(F, name);
                         try c.node();

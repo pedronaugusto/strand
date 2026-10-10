@@ -26,7 +26,7 @@ pub const Stateful = struct {
     pub fn jsonlMigrate(allocator: std.mem.Allocator, from: u32, data: std.json.Value) std.json.ParseFromValueError!Stateful {
         if (from != 1) return error.UnknownField;
         calls += 1;
-        const wire = try strand.payloadOf(Wire, allocator, data);
+        const wire = try strand.jsonl.payloadOf(Wire, allocator, data);
         return .{ .text = wire.text, .count = wire.count + offset };
     }
 };
@@ -34,7 +34,7 @@ pub const Stateful = struct {
 const Direction = enum { reader, tail, follower };
 
 fn keepParsed(comptime direction: Direction) !void {
-    const T = strand.Versioned(Stateful);
+    const T = strand.jsonl.Versioned(Stateful);
     for ([_]u32{ 1, 2 }) |version| {
         Stateful.offset = 7;
         Stateful.calls = 0;
@@ -47,9 +47,9 @@ fn keepParsed(comptime direction: Direction) !void {
         var kept: T = undefined;
         {
             var reader = switch (direction) {
-                .reader => strand.Reader(T).init(testing.allocator, &fixture.reader.interface, .{}),
-                .tail => try strand.Tail(T).init(testing.allocator, &fixture.reader, .{ .block_bytes = 4 }),
-                .follower => strand.Follower(T).init(testing.allocator, &fixture.reader, .{}),
+                .reader => strand.jsonl.Reader(T).init(testing.allocator, &fixture.reader.interface, .{}),
+                .tail => try strand.jsonl.Tail(T).init(testing.allocator, &fixture.reader, .{ .block_bytes = 4 }),
+                .follower => strand.jsonl.Follower(T).init(testing.allocator, &fixture.reader, .{}),
             };
             defer if (direction == .follower) reader.deinit(testing.io) else reader.deinit();
             var line = switch (direction) {
@@ -94,7 +94,7 @@ test "Follower keep preserves edits and stateful parsing and migration" {
 pub const LastData = struct {
     text: []const u8,
     fallback: []const u8 = "default",
-    raw: strand.Raw,
+    raw: strand.json.Raw,
     dynamic: std.json.Value,
 
     var shared: [5]u8 = undefined;
@@ -102,7 +102,7 @@ pub const LastData = struct {
 
     pub fn jsonParse(a: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) !LastData {
         calls += 1;
-        const wire = try std.json.innerParse(struct { text: [5]u8, raw: strand.Raw, dynamic: std.json.Value }, a, source, options);
+        const wire = try std.json.innerParse(struct { text: [5]u8, raw: strand.json.Raw, dynamic: std.json.Value }, a, source, options);
         shared = wire.text;
         return .{ .text = &shared, .raw = wire.raw, .dynamic = wire.dynamic };
     }
@@ -118,7 +118,7 @@ fn lastOwned(a: std.mem.Allocator) !void {
     defer fixture.deinit();
     var batch: []LastData = undefined;
     {
-        var tail = try strand.Tail(LastData).init(testing.allocator, &fixture.reader, .{ .block_bytes = 4 });
+        var tail = try strand.jsonl.Tail(LastData).init(testing.allocator, &fixture.reader, .{ .block_bytes = 4 });
         defer tail.deinit();
         batch = try tail.last(a, 3);
     }
@@ -150,15 +150,15 @@ test "Tail last releases every partial owned batch on allocation failure" {
 }
 
 test "Tail last reports only NextError" {
-    const result_type = @typeInfo(@TypeOf(strand.Tail(LastData).last)).@"fn".return_type.?;
+    const result_type = @typeInfo(@TypeOf(strand.jsonl.Tail(LastData).last)).@"fn".return_type.?;
     const error_set = @typeInfo(result_type).error_union.error_set;
-    try testing.expect(error_set == strand.Tail(LastData).NextError);
+    try testing.expect(error_set == strand.jsonl.Tail(LastData).NextError);
 }
 
 test "Tail last releases owned values when a later line is malformed" {
     var fixture = try Fixture.init("broken\n{\"text\":\"later\",\"raw\":[2],\"dynamic\":{}}\n", 8);
     defer fixture.deinit();
-    var tail = try strand.Tail(LastData).init(testing.allocator, &fixture.reader, .{});
+    var tail = try strand.jsonl.Tail(LastData).init(testing.allocator, &fixture.reader, .{});
     defer tail.deinit();
     try testing.expectError(error.MalformedLine, tail.last(testing.allocator, 2));
 }

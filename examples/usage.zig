@@ -1,5 +1,5 @@
-//! A log written and then read back: events out through a `strand.Writer`,
-//! events in through a `strand.Reader`, one line kept past the line it came
+//! A log written and then read back: events out through a `strand.jsonl.Writer`,
+//! events in through a `strand.jsonl.Reader`, one line kept past the line it came
 //! from, and a line routed by its first key without being parsed.
 //!
 //! `zig build examples` builds AND runs this; `zig build docs -- usage` extracts
@@ -27,14 +27,14 @@ pub fn main() !void {
     // --- README:usage ---
 
     var out: std.Io.Writer.Allocating = .init(arena);
-    var log: strand.Writer(Event) = .init(&out.writer, .{});
+    var log: strand.jsonl.Writer(Event) = .init(&out.writer, .{ .encode = .{ .nulls = .omit } });
     try log.write(.{ .kind = "open", .at = 1, .note = "user \"ada\"" });
     try log.write(.{ .kind = "retry", .at = 2, .level = .warn });
     try log.write(.{ .kind = "close", .at = 3 });
 
     var source: std.Io.Reader = .fixed(out.written());
-    var events: strand.Reader(Event) = .init(arena, &source, .{
-        .ignore_unknown_fields = true,
+    var events: strand.jsonl.Reader(Event) = .init(arena, &source, .{
+        .parse = .{ .ignore_unknown_fields = true },
         .max_line_bytes = 64 * 1024,
         .on_malformed = .fail,
     });
@@ -44,13 +44,13 @@ pub fn main() !void {
     var last_open: ?Event = null;
     while (try events.next()) |line| {
         if (std.mem.eql(u8, line.value.kind, "open")) {
-            last_open = try events.keep(arena, line);
+            last_open = try strand.core.cloneLeaky(arena, line.value, .{});
         }
         if (line.value.level == .warn) warnings += 1;
         std.log.info("line {d}: {s}", .{ line.number, line.line });
     }
 
-    const kind = strand.kindOf("{\"kind\":\"open\",\"at\":1}");
+    const kind = strand.json.kindOf("{\"kind\":\"open\",\"at\":1}");
     // --- README:usage ---
 
     std.log.info("read {d} lines, {d} warning(s)", .{ events.lines.number, warnings });

@@ -117,6 +117,7 @@ fn writeRow(comptime common: bool, c: *Context, units: u64) WorkError!void {
         var out: Encoder = .{ .writer = &writer };
         var budget: core.Context = .init(c.gpa, .{}, .borrowed);
         if (common) try core.serialize(c.value, &out, &budget) else try hand(c.value, &out, &budget);
+        try out.flush(&budget);
         sum +%= writer.buffered().len;
         std.mem.doNotOptimizeAway(writer.buffered());
     }
@@ -140,6 +141,7 @@ pub fn main(init: std.process.Init) !void {
     var out: Encoder = .{ .writer = &writer };
     var budget: core.Context = .init(c.gpa, .{}, .borrowed);
     try hand(c.value, &out, &budget);
+    try out.flush(&budget);
     if (!std.mem.eql(u8, input, writer.buffered()) or budget.allocationRequested() != 0) return error.PolicyMismatch;
     const rows = [_]shakedown.bench.Row(Context, WorkError){
         .{ .name = "json.strict.borrowed.512", .unit = "record", .initial = 1024, .run = strictParse },

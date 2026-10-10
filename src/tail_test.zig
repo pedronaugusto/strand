@@ -3,7 +3,7 @@ const builtin = @import("builtin");
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const strand = @import("strand.zig");
-const Tail = strand.Tail;
+const Tail = strand.jsonl.Tail;
 const line_mod = @import("jsonl/api.zig").line_module;
 const Fault = line_mod.Fault;
 const Line = line_mod.Line;
@@ -84,7 +84,7 @@ test "tail snapshots the current file length rather than a reader's cached size"
 test "the block size does not change what is read" {
     var input: std.Io.Writer.Allocating = .init(testing.allocator);
     defer input.deinit();
-    var writer: strand.Writer(Event) = .init(&input.writer, .{});
+    var writer: strand.jsonl.Writer(Event) = .init(&input.writer, .{});
     for (0..500) |i| try writer.write(.{ .kind = "tick", .at = i });
 
     for ([_]usize{ 1, 2, 7, 64, 4096, 1 << 20 }) |block| {
@@ -129,7 +129,7 @@ test "the tail bound excludes CRLF and a leading byte-order mark" {
 test "last(n) reads the end of the file and nothing else" {
     var input: std.Io.Writer.Allocating = .init(testing.allocator);
     defer input.deinit();
-    var writer: strand.Writer(Event) = .init(&input.writer, .{});
+    var writer: strand.jsonl.Writer(Event) = .init(&input.writer, .{});
     for (0..10_000) |i| try writer.write(.{ .kind = "tick", .at = i });
 
     var fixture = try Fixture.init(input.written(), 64);
@@ -198,7 +198,7 @@ test "a control byte is reported with the line and the offset" {
 test "an over-long line is discarded whole and the one before it is still read" {
     var input: std.Io.Writer.Allocating = .init(testing.allocator);
     defer input.deinit();
-    var writer: strand.Writer(Event) = .init(&input.writer, .{});
+    var writer: strand.jsonl.Writer(Event) = .init(&input.writer, .{});
     try writer.write(.{ .kind = "short", .at = 1 });
     try writer.write(.{ .kind = &@as([300]u8, @splat('x')), .at = 2 });
     try writer.write(.{ .kind = "last", .at = 3 });
@@ -315,7 +315,7 @@ test "skipped counts what a tolerant backwards read lost" {
 test "a separated file is read backwards the same way" {
     var out: std.Io.Writer.Allocating = .init(testing.allocator);
     defer out.deinit();
-    var writer: strand.Writer(Event) = .init(&out.writer, .{ .record_separator = true });
+    var writer: strand.jsonl.Writer(Event) = .init(&out.writer, .{ .record_separator = true });
     try writer.writeAll(&.{
         .{ .kind = "a", .at = 1 },
         .{ .kind = "b", .at = 2 },
@@ -336,7 +336,7 @@ test "a separated file is read backwards the same way" {
         try testing.expectEqualStrings(want, line.value.kind);
         // The separator is where the record begins, backwards as forwards.
         try testing.expectEqual(
-            @as(u8, strand.separator),
+            @as(u8, strand.jsonl.separator),
             out.written()[@intCast(line.offset)],
         );
     }
@@ -456,7 +456,7 @@ test "a backward read takes the record after a torn one on its line" {
         try testing.expectEqual(@as(u64, std.mem.findScalarLast(u8, input, 0x1e).?), b.offset);
         try testing.expectEqual(@as(u64, 1), tail.skipped);
         try testing.expectEqualStrings("a", (try tail.prev()).?.value.kind);
-        try testing.expectEqual(@as(?strand.Line(Event), null), try tail.prev());
+        try testing.expectEqual(@as(?strand.jsonl.Line(Event), null), try tail.prev());
     }
 }
 
@@ -478,7 +478,7 @@ test "separated forward and backward framing agree at every payload boundary" {
                         var passed = false;
                         defer if (!passed) std.debug.print("input={any}, block={d}, max={d}, crlf={}, blank={}\n", .{ input, block_bytes, max, crlf, skip_blank });
                         var forward_source: std.Io.Reader = .fixed(input);
-                        var forward: strand.LineReader = .init(testing.allocator, &forward_source, .{
+                        var forward: strand.jsonl.LineReader = .init(testing.allocator, &forward_source, .{
                             .record_separator = true,
                             .max_line_bytes = max,
                             .crlf = crlf,

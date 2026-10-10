@@ -1,12 +1,11 @@
 //! `Writer`: values as JSON Lines on a `*std.Io.Writer`, counted, drained and
 //! synced as often as it is told to.
-const codec_module = @import("../json/api.zig").codec_module;
+const json = @import("../json.zig");
+const core = @import("../core.zig");
 
 const std = @import("std");
 const airlock = @import("airlock");
 const assert = std.debug.assert;
-const encode = codec_module.encode;
-const tagging = @import("../json/api.zig").tagging_module;
 const json_buffer = @import("../json/api.zig").EncodeBuffer_module;
 
 const line_mod = @import("line.zig");
@@ -18,14 +17,13 @@ const separator = line_mod.separator;
 const shared = struct {
     /// Encoding policy, fixed at `init`.
     pub const Options = struct {
-        /// When false, an optional field that is `null` is left out of
-        /// the line rather than written as `null` — which is what a
-        /// reader that defaults its missing fields wants, and what keeps
-        /// a log small.
-        emit_null_optional_fields: bool = false,
-        /// When true, non-ASCII characters are written as `\uXXXX`
-        /// escapes, so every line is pure ASCII.
-        escape_unicode: bool = false,
+        /// What the value is written as: see `json.WriteOptions`. An optional
+        /// field that is `null` can be left out of the line, which is what a
+        /// reader that defaults its missing fields wants, and what keeps a log
+        /// small. `layout` is not read here: `format` is the line's layout.
+        /// `scratch` is the memory a value nested deeper than 128 levels
+        /// needs; the limits bound a record.
+        encode: json.WriteOptions = .{},
         /// See `Format`. `.pretty` writes a record over several lines,
         /// which only a reader in `.pretty` mode reads back.
         format: Format = .minified,
@@ -147,7 +145,7 @@ const shared = struct {
     /// file for diagnostics — and
     /// `LineTooLong` is this writer's own bound, if it was given one.
     /// `OutOfMemory` is bounded record storage refusing to grow.
-    pub const Error = std.Io.Writer.Error || std.mem.Allocator.Error || error{ SyncFailed, LineTooLong };
+    pub const Error = std.Io.Writer.Error || std.mem.Allocator.Error || core.EncodeError || error{ SyncFailed, LineTooLong };
 };
 
 /// Writes values as JSON Lines to a `*std.Io.Writer`, and counts them.
@@ -232,7 +230,7 @@ pub fn Writer(comptime T: type) type {
             }
         }
 
-        pub const Error = shared.Error;
+        pub const Error = shared.Error || @typeInfo(@TypeOf(json.write(@as(*std.Io.Writer, undefined), @as(T, undefined), .{}))).error_union.error_set;
 
         /// A writer over `output`. Writes nothing.
         ///
@@ -313,8 +311,10 @@ pub fn Writer(comptime T: type) type {
             const out = &staged.interface;
             if (self.scratch) |*scratch| {
                 scratch.buffer.reset();
-                self.encodeValue(value, &scratch.buffer.writer) catch |err|
-                    return scratch.buffer.diagnose(err);
+                self.encodeValue(value, &scratch.buffer.writer) catch |err| switch (err) {
+                    error.WriteFailed => return scratch.buffer.diagnose(error.WriteFailed),
+                    else => |other| return other,
+                };
                 const bytes = scratch.buffer.writer.buffered();
                 if (bytes.len > scratch.max_line_bytes) return error.LineTooLong;
                 self.stage(&staged, bytes) catch |err| return self.failed(&staged, err);
@@ -340,7 +340,7 @@ pub fn Writer(comptime T: type) type {
 
         /// What a record that failed leaves behind: nothing, unless part of
         /// it had to be handed to the destination before it was whole.
-        fn failed(self: *Self, staged: *const Staged, err: std.Io.Writer.Error) std.Io.Writer.Error {
+        fn failed(self: *Self, staged: *const Staged, err: Error) Error {
             if (staged.spilled and !self.options.record_separator) self.torn = true;
             return err;
         }
@@ -359,52 +359,17 @@ pub fn Writer(comptime T: type) type {
             if (dueForBatch(self.options.flush)) try self.flushOutput();
         }
 
-        /// How `std.json` is asked to lay a value out.
-        fn encoding(self: *const Self) std.json.Stringify.Options {
-            return .{
-                .whitespace = switch (self.options.format) {
-                    .minified => .minified,
-                    .pretty => .indent_2,
-                },
-                .emit_null_optional_fields = self.options.emit_null_optional_fields,
-                .escape_unicode = self.options.escape_unicode,
+        /// One record's JSON on `output`: minified, or indented in `.pretty`.
+        fn encodeValue(self: *const Self, value: T, output: *std.Io.Writer) Error!void {
+            var how = self.options.encode;
+            how.layout = switch (self.options.format) {
+                .minified => .compact,
+                .pretty => .indented,
             };
+            return json.write(output, value, how);
         }
 
-        /// The direct encoder is the minified ordinary-type path. Pretty
-        /// output and custom `jsonStringify` methods keep std's stateful
-        /// stringifier, which defines those extension contracts.
-        fn encodeValue(self: *const Self, value: T, output: *std.Io.Writer) std.Io.Writer.Error!void {
-            if (comptime encode.supports(T)) {
-                if (self.options.format == .minified) return encode.value(value, self.encoding(), output);
-                // `std.json` would write a union tagged inside its object as
-                // one tagged by its key.
-                if (comptime tagging.reaches(T)) return encode.indented(value, self.encoding(), output);
-            }
-            return std.json.Stringify.value(value, self.encoding(), output);
-        }
-
-        /// Encode a common record wholly inside `out`'s unused buffer,
-        /// then publish its length in one step. If the record does not fit,
-        /// the ordinary writer path drains and carries on.
-        fn writeRecord(self: *const Self, value: T, out: *std.Io.Writer) std.Io.Writer.Error!void {
-            if (comptime encode.supports(T)) {
-                if (self.options.format == .minified and out.end < out.buffer.len) {
-                    var fixed: std.Io.Writer = .fixed(out.buffer[out.end..]);
-                    if (self.options.record_separator) fixed.writeByte(separator) catch
-                        return self.writeRecordSlow(value, out);
-                    const encoded = encode.valueBuffer(value, self.encoding(), fixed.buffer[fixed.end..]) catch
-                        return self.writeRecordSlow(value, out);
-                    fixed.end += encoded;
-                    fixed.writeByte('\n') catch return self.writeRecordSlow(value, out);
-                    out.end += fixed.end;
-                    return;
-                }
-            }
-            return self.writeRecordSlow(value, out);
-        }
-
-        fn writeRecordSlow(self: *const Self, value: T, out: *std.Io.Writer) std.Io.Writer.Error!void {
+        fn writeRecord(self: *const Self, value: T, out: *std.Io.Writer) Error!void {
             if (self.options.record_separator) try out.writeByte(separator);
             try self.encodeValue(value, out);
             try out.writeByte('\n');
@@ -530,44 +495,16 @@ const RecordScratch = struct {
     }
 };
 
-/// How `writeValue` spells a value. The same two settings as
-/// `Writer.Options`, and the same defaults.
-pub const ValueOptions = codec_module.ValueOptions;
-
-/// Writes one value's JSON, minified, with no terminator: the bytes a line
-/// holds, for a caller that frames the line itself — an envelope around the
-/// value, a checksum after it, a length in front of it.
-///
-/// The encoding is `Writer`'s, which is `std.json`'s byte for byte under the
-/// same options. A value that fits in the unused part of `output`'s buffer
-/// is encoded there directly, and one that does not goes through `output`'s
-/// interface, which drains or grows it as `output` does.
-pub const writeValue = codec_module.writeValue;
-/// See `writeValue`; members follow and `OpenObject.close` ends it.
-pub const writeObjectOpen = codec_module.writeObjectOpen;
-pub const OpenObject = codec_module.OpenObject;
-
-test writeValue {
-    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
-    defer out.deinit();
-
-    // A record framed by its caller: the value, then what the caller adds.
-    try out.writer.writeAll("{\"seq\":1,\"ev\":");
-    try writeValue(&out.writer, .{ .kind = "open", .note = @as(?[]const u8, null) }, .{ .emit_null_optional_fields = true });
-    try out.writer.writeAll("}");
-    try std.testing.expectEqualStrings("{\"seq\":1,\"ev\":{\"kind\":\"open\",\"note\":null}}", out.written());
-}
-
 /// Writes one value as one JSON Lines line, for a caller with nothing to
-/// count. Same encoding as `Writer` with default options.
-pub fn writeLine(output: *std.Io.Writer, value: anytype) std.Io.Writer.Error!void {
-    var w: Writer(@TypeOf(value)) = .init(output, .{});
+/// count. Same encoding as `Writer` with its default options.
+pub fn writeLine(output: *std.Io.Writer, value: anytype, options: json.WriteOptions) !void {
+    var w: Writer(@TypeOf(value)) = .init(output, .{ .encode = options });
     w.write(value) catch |err| switch (err) {
-        error.WriteFailed => return error.WriteFailed,
         // The default sync policy is `.never`, so nothing here ever asks a
         // file for anything and this writer has no file to ask; the default
         // bound is no bound.
-        error.SyncFailed, error.LineTooLong, error.OutOfMemory => unreachable,
+        error.SyncFailed, error.LineTooLong => unreachable,
+        else => |other| return other,
     };
 }
 
@@ -575,6 +512,6 @@ test writeLine {
     var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer out.deinit();
 
-    try writeLine(&out.writer, .{ .kind = "open", .at = 17, .note = @as(?[]const u8, null) });
+    try writeLine(&out.writer, .{ .kind = "open", .at = 17, .note = @as(?[]const u8, null) }, .{ .nulls = .omit });
     try std.testing.expectEqualStrings("{\"kind\":\"open\",\"at\":17}\n", out.written());
 }

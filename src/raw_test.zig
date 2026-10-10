@@ -2,7 +2,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const strand = @import("strand.zig");
-const Raw = strand.Raw;
+const Raw = strand.json.Raw;
 
 const testing = std.testing;
 const shakedown = @import("shakedown");
@@ -31,7 +31,7 @@ test Raw {
 
     // Written back as it came.
     var out: std.Io.Writer.Allocating = .init(a);
-    try strand.writeLine(&out.writer, mark);
+    try strand.jsonl.writeLine(&out.writer, mark);
     try testing.expectEqualStrings(line ++ "\n", out.written());
 
     // Absent, it is JSON null.

@@ -42,6 +42,7 @@ pub fn main(init: std.process.Init) !void {
         var out: Encoder = .{ .writer = &writer };
         var c: core.Context = .init(std.testing.failing_allocator, .{}, .borrowed);
         if (options.common) try core.serialize(value, &out, &c) else try separate(value, &out, &c);
+        try out.flush(&c);
         if (c.allocationRequested() != 0) return error.UnexpectedAllocation;
         std.mem.doNotOptimizeAway(writer.buffered());
     }

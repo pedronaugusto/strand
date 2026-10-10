@@ -25,7 +25,8 @@ pub fn integer(comptime T: type, text: []const u8, c: *core.Context) core.Decode
     if (trailing == digits) return 0;
     const trim: usize = if (shift < 0) std.math.cast(usize, std.math.negate(shift) catch return error.NumberOutOfRange) orelse return error.NumberOutOfRange else 0;
     if (trim > trailing) return error.NumberOutOfRange;
-    const magnitude_type = @Int(.unsigned, @max(@typeInfo(T).int.bits, 1));
+    // Wide enough to hold the ten each digit is multiplied by.
+    const magnitude_type = @Int(.unsigned, @max(@typeInfo(T).int.bits, 8));
     var magnitude: magnitude_type = 0;
     var seen: usize = 0;
     for (text[start..exponent_at]) |byte| {

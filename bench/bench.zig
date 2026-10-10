@@ -16,7 +16,7 @@
 //!    show that it costs a block and not a file.
 //! 5. One line of a hundred megabytes, read with the borrow intact.
 //! 6. A million lines each carrying a value the reader does not read, typed
-//!    as a `strand.Raw` and as a `std.json.Value`: the first stays on the
+//!    as a `strand.json.Raw` and as a `strand.json.Value`: the first stays on the
 //!    direct path, the second takes the whole line to `std.json`.
 //!
 //! 7. Mixed lines against the same parse with framing removed, with a target
@@ -72,7 +72,7 @@ fn benchWrite(gpa: std.mem.Allocator, io: std.Io, stdout: *std.Io.Writer, size: 
     // The measurement is the encoding, not the growth of the destination.
     try out.ensureUnusedCapacity(size.lines * 64);
 
-    var log: strand.Writer(Event) = .init(&out.writer, .{});
+    var log: strand.jsonl.Writer(Event) = .init(&out.writer, .{ .encode = .{ .nulls = .omit } });
     const started = size.now(io);
     for (0..size.lines) |i| {
         try log.write(.{
@@ -91,7 +91,7 @@ fn benchWrite(gpa: std.mem.Allocator, io: std.Io, stdout: *std.Io.Writer, size: 
 /// The same million back through a `Reader`.
 fn benchRead(gpa: std.mem.Allocator, io: std.Io, stdout: *std.Io.Writer, size: Size, input: []const u8) !void {
     var source: std.Io.Reader = .fixed(input);
-    var reader: strand.Reader(Event) = .init(gpa, &source, .{});
+    var reader: strand.jsonl.Reader(Event) = .init(gpa, &source, .{});
     defer reader.deinit();
 
     var checksum: u64 = 0;
@@ -119,7 +119,7 @@ fn benchWriteAll(gpa: std.mem.Allocator, io: std.Io, stdout: *std.Io.Writer, siz
     defer out.deinit();
     try out.ensureUnusedCapacity(size.lines * 64);
 
-    var log: strand.Writer(Event) = .init(&out.writer, .{});
+    var log: strand.jsonl.Writer(Event) = .init(&out.writer, .{ .encode = .{ .nulls = .omit } });
     const started = size.now(io);
     try log.writeAll(events);
     const elapsed = size.since(started, io);
@@ -139,7 +139,7 @@ fn benchTail(gpa: std.mem.Allocator, io: std.Io, stdout: *std.Io.Writer, size: S
     var arena: std.heap.ArenaAllocator = .init(gpa);
     defer arena.deinit();
 
-    var tail: strand.Tail(Event) = try .init(gpa, &file_reader, .{});
+    var tail: strand.jsonl.Tail(Event) = try .init(gpa, &file_reader, .{});
     defer tail.deinit();
 
     const started = size.now(io);
@@ -161,8 +161,11 @@ fn benchBigLine(gpa: std.mem.Allocator, io: std.Io, stdout: *std.Io.Writer, size
     var buffer: [64 * 1024]u8 = undefined;
     var file_reader = work.file.reader(io, &buffer);
 
-    var reader: strand.Reader(Event) = .init(gpa, &file_reader.interface, .{
-        .max_line_bytes = size.big_line_bytes + 1024,
+    // A line this long is a decision about every limit that scales with it.
+    const big: usize = size.big_line_bytes + 1024;
+    var reader: strand.jsonl.Reader(Event) = .init(gpa, &file_reader.interface, .{
+        .max_line_bytes = big,
+        .parse = .{ .ignore_unknown_fields = true, .limits = .{ .string_bytes = big, .work = 4 * big } },
     });
     defer reader.deinit();
 
@@ -185,21 +188,21 @@ fn Carried(comptime Data: type) type {
 }
 
 /// A million lines with a small object in each that nobody reads, typed as a
-/// `strand.Raw` and then as a `std.json.Value`.
+/// `strand.json.Raw` and then as a `strand.json.Value`.
 fn benchCarried(gpa: std.mem.Allocator, io: std.Io, stdout: *std.Io.Writer, size: Size) !void {
     var out: std.Io.Writer.Allocating = .init(gpa);
     defer out.deinit();
     try out.ensureUnusedCapacity(size.lines * 96);
-    var log: strand.Writer(Carried(strand.Raw)) = .init(&out.writer, .{});
+    var log: strand.jsonl.Writer(Carried(strand.json.Raw)) = .init(&out.writer, .{ .encode = .{ .nulls = .omit } });
     for (0..size.lines) |i| try log.write(.{
         .kind = "mark",
         .at = i,
         .data = .{ .bytes = "{\"who\":\"ada\",\"beat\":3,\"tags\":[\"a\",\"b\"]}" },
     });
 
-    inline for (.{ strand.Raw, std.json.Value }, .{ "carried, Raw", "carried, Value" }) |Data, name| {
+    inline for (.{ strand.json.Raw, strand.json.Value }, .{ "carried, Raw", "carried, Value" }) |Data, name| {
         var source: std.Io.Reader = .fixed(out.written());
-        var reader: strand.Reader(Carried(Data)) = .init(gpa, &source, .{});
+        var reader: strand.jsonl.Reader(Carried(Data)) = .init(gpa, &source, .{});
         defer reader.deinit();
         var checksum: u64 = 0;
         const started = size.now(io);
@@ -221,7 +224,7 @@ fn benchSyncedWrite(io: std.Io, stdout: *std.Io.Writer, size: Size) !void {
 
     var buffer: [4096]u8 = undefined;
     var file_writer = file.writer(io, &buffer);
-    var log: strand.Writer(Event) = .initFile(&file_writer, .{ .sync = .per_record });
+    var log: strand.jsonl.Writer(Event) = .initFile(&file_writer, .{ .sync = .per_record });
     const started = size.now(io);
     for (0..records) |i| try log.write(.{ .kind = "request", .at = i });
     const elapsed = size.since(started, io);
@@ -236,11 +239,11 @@ fn benchIdentity(io: std.Io, stdout: *std.Io.Writer, size: Size) !void {
     var work = try Scratch.init(io, "{\"kind\":\"open\"}\n");
     defer work.deinit(io);
 
-    const first = try strand.Identity.take(.file_id, io, work.file);
+    const first = try strand.jsonl.Identity.take(.file_id, io, work.file);
     const started = size.now(io);
     var same: usize = 0;
     for (0..looks) |_| {
-        if ((try strand.Identity.take(.file_id, io, work.file)).eql(first)) same += 1;
+        if ((try strand.jsonl.Identity.take(.file_id, io, work.file)).eql(first)) same += 1;
     }
     const elapsed = size.since(started, io);
 

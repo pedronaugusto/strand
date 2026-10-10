@@ -10,7 +10,7 @@ const err = aegis.err;
 const int = aegis.int;
 
 pub const LimitError = error{ InputLimit, OutputLimit, DepthLimit, ItemLimit, LengthLimit, AllocationLimit, WorkLimit };
-pub const DecodeError = error{ InputLimit, DepthLimit, ItemLimit, LengthLimit, AllocationLimit, WorkLimit } || error{ SyntaxError, InvalidUtf8, UnexpectedType, MissingField, UnknownField, DuplicateField, UnknownVariant, NumberOutOfRange, InexactNumber, UnsupportedValue, BorrowUnavailable, CustomRejected, OutOfMemory };
+pub const DecodeError = error{ InputLimit, DepthLimit, ItemLimit, LengthLimit, AllocationLimit, WorkLimit } || error{ SyntaxError, UnexpectedEndOfInput, InvalidUtf8, UnexpectedType, MissingField, UnknownField, DuplicateField, UnknownVariant, NumberOutOfRange, InexactNumber, UnsupportedValue, BorrowUnavailable, CustomRejected, OutOfMemory };
 pub const EncodeError = LimitError || error{ DuplicateField, InvalidRaw, InvalidUtf8, NumberOutOfRange, InexactNumber, UnsupportedValue, CycleDetected, CustomRejected, OutOfMemory };
 pub const Lifetime = enum { borrowed, transient, owned };
 pub const Ownership = enum { borrowed, owned };
@@ -110,6 +110,9 @@ pub const Context = struct {
     /// Internal replay: wire nodes/bytes were already validated and charged.
     replaying: bool = false,
     allocation_limited: bool = false,
+    /// Writing: an optional field that is null is left out of its record, whatever
+    /// its type's own policy says.
+    omit_nulls: bool = false,
 
     pub fn init(storage: std.mem.Allocator, limits: Limits, ownership: Ownership) Context {
         return .{

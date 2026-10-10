@@ -30,7 +30,7 @@ const Open = union(enum) {
 const Kept = union(enum) {
     assistant: struct { text: []const u8, n: u64 = 0 },
     ping,
-    other: strand.Raw,
+    other: strand.json.Raw,
     pub const jsonl_tag = "type";
     pub const jsonl_other = .other;
 };
@@ -71,7 +71,7 @@ fn answer(comptime U: type, a: std.mem.Allocator, line: []const u8, path: Path) 
         .value => value: {
             const value = std.json.parseFromSliceLeaky(std.json.Value, a, line, .{ .duplicate_field_behavior = .@"error" }) catch |err|
                 break :value err;
-            break :value strand.payloadOf(U, a, value);
+            break :value strand.jsonl.payloadOf(U, a, value);
         },
     };
     const v = parsed catch |err| return a.print("err {s}", .{class(err)});
@@ -189,17 +189,17 @@ test "a Writer writes the tag inside the object in both formats, and reads it ba
         // one with room the fast one; both write the same bytes.
         for ([_]usize{ 4, 4096 }) |room| {
             var direct: std.Io.Writer.Allocating = try .initCapacity(a, room);
-            var log: strand.Writer(Kept) = .init(&direct.writer, .{ .format = format });
+            var log: strand.jsonl.Writer(Kept) = .init(&direct.writer, .{ .format = format });
             for (records) |record| try log.write(record);
 
             var source: std.Io.Reader = .fixed(direct.written());
-            var reader: strand.Reader(Kept) = .init(a, &source, .{ .format = format });
+            var reader: strand.jsonl.Reader(Kept) = .init(a, &source, .{ .format = format });
             defer reader.deinit();
             for (records) |record| {
                 const line = (try reader.next()).?;
                 try testing.expectEqual(std.meta.activeTag(record), std.meta.activeTag(line.value));
             }
-            try testing.expectEqual(@as(?strand.Line(Kept), null), try reader.next());
+            try testing.expectEqual(@as(?strand.jsonl.Line(Kept), null), try reader.next());
             if (format == .pretty) {
                 try testing.expect(std.mem.find(u8, direct.written(), "{\n  \"type\": \"assistant\",\n  \"text\": ") != null);
             } else {
@@ -238,25 +238,25 @@ test "an arm holding a type with its own hooks is written and read by them" {
 }
 
 test "tagOf reads the arm from the tag member of a union tagged inside its object" {
-    try testing.expectEqual(.assistant, strand.tagOf(Closed, "{\"text\":\"x\",\"type\":\"assistant\"}").?);
-    try testing.expectEqual(.ping, strand.tagOf(Closed, "{\"type\":\"ping\"}").?);
-    try testing.expectEqual(@as(?std.meta.Tag(Closed), null), strand.tagOf(Closed, "{\"type\":\"nope\"}"));
-    try testing.expectEqual(@as(?std.meta.Tag(Closed), null), strand.tagOf(Closed, "{\"ping\":{}}"));
-    try testing.expectEqual(.unknown, strand.tagOf(Open, "{\"type\":\"nope\"}").?);
-    try testing.expectEqual(@as(?std.meta.Tag(Open), null), strand.tagOf(Open, "{\"type\":7}"));
+    try testing.expectEqual(.assistant, strand.json.tagOf(Closed, "{\"text\":\"x\",\"type\":\"assistant\"}").?);
+    try testing.expectEqual(.ping, strand.json.tagOf(Closed, "{\"type\":\"ping\"}").?);
+    try testing.expectEqual(@as(?std.meta.Tag(Closed), null), strand.json.tagOf(Closed, "{\"type\":\"nope\"}"));
+    try testing.expectEqual(@as(?std.meta.Tag(Closed), null), strand.json.tagOf(Closed, "{\"ping\":{}}"));
+    try testing.expectEqual(.unknown, strand.json.tagOf(Open, "{\"type\":\"nope\"}").?);
+    try testing.expectEqual(@as(?std.meta.Tag(Open), null), strand.json.tagOf(Open, "{\"type\":7}"));
 }
 
 test "memberOf peeks at a member wherever it is in the object" {
     const line = "{\"message\":{\"type\":\"inner\",\"content\":[{\"type\":\"text\"}]},\"session_id\":\"s-1\",\"type\":\"assistant\"}";
-    try testing.expectEqualStrings("\"assistant\"", strand.memberOf(line, "type").?);
-    try testing.expectEqualStrings("assistant", strand.memberStringOf(line, "type").?);
-    try testing.expectEqualStrings("s-1", strand.memberStringOf(line, "session_id").?);
+    try testing.expectEqualStrings("\"assistant\"", strand.json.memberOf(line, "type").?);
+    try testing.expectEqualStrings("assistant", strand.json.memberStringOf(line, "type").?);
+    try testing.expectEqualStrings("s-1", strand.json.memberStringOf(line, "session_id").?);
     // The value is a view into the line.
     const at = std.mem.findLast(u8, line, "\"assistant\"").?;
-    try testing.expect(strand.memberOf(line, "type").?.ptr == line.ptr + at);
+    try testing.expect(strand.json.memberOf(line, "type").?.ptr == line.ptr + at);
     // A structured member is not something to route on.
-    try testing.expectEqual(@as(?[]const u8, null), strand.memberOf(line, "message"));
+    try testing.expectEqual(@as(?[]const u8, null), strand.json.memberOf(line, "message"));
     // A long string value has no bound: the line is in hand.
     const long = "{\"type\":\"" ++ @as([300]u8, @splat('x')) ++ "\"}";
-    try testing.expectEqual(@as(usize, 302), strand.memberOf(long, "type").?.len);
+    try testing.expectEqual(@as(usize, 302), strand.json.memberOf(long, "type").?.len);
 }

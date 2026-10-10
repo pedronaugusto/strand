@@ -30,7 +30,10 @@ pub fn offset(self: *const Self) usize {
     return self.scanner.cursor;
 }
 pub fn raw(self: *const Self, start: usize, end: usize) core.Span {
-    return .{ .bytes = self.scanner.input[start..end], .lifetime = .borrowed };
+    // The offset before a value is before the whitespace, comma or colon in front of it.
+    var from = start;
+    while (from < end and (self.scanner.input[from] == ' ' or self.scanner.input[from] == '\t' or self.scanner.input[from] == '\r' or self.scanner.input[from] == '\n' or self.scanner.input[from] == ',' or self.scanner.input[from] == ':')) from += 1;
+    return .{ .bytes = self.scanner.input[from..end], .lifetime = .borrowed };
 }
 pub fn replay(self: *const Self, start: usize, end: usize) Self {
     var result: Self = .{ .scanner = .initCompleteInput(self.scanner.gpa, self.scanner.input[0..end]), .reject_duplicates = self.reject_duplicates };
@@ -41,6 +44,7 @@ fn mapped(c: *core.Context, err: anyerror) Error {
     return switch (err) {
         error.OutOfMemory => if (c.allocation_limited) error.AllocationLimit else error.OutOfMemory,
         error.ValueTooLong => error.LengthLimit,
+        error.UnexpectedEndOfInput => error.UnexpectedEndOfInput,
         else => error.SyntaxError,
     };
 }

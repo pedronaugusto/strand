@@ -100,7 +100,7 @@ test "S1 semantic encoder fixed buffer zero allocations and same typed round tri
     var out: Reference.Encoder = .{ .buffer = &memory };
     var c: core.Context = .init(std.testing.failing_allocator, .{}, .borrowed);
     try core.serialize(Record{ .id = 42, .label = "ok" }, &out, &c);
-    try std.testing.expectEqual(@as(usize, 0), c.allocation_requested);
+    try std.testing.expectEqual(@as(usize, 0), c.allocationRequested());
     var result = try core.acquire(Record, .borrowed, std.testing.allocator, memory[0..out.used], .{}, decodeRecord);
     defer result.deinit();
     try std.testing.expectEqual(@as(u8, 42), result.value.id);
@@ -359,7 +359,7 @@ test "S1 canonical raw refuses unnormalized bytes before output" {
     var backend: Canonical = .{};
     var c: core.Context = .init(std.testing.failing_allocator, .{}, .borrowed);
     try std.testing.expectError(error.UnsupportedValue, core.serialize(ReferenceRaw{ .bytes = &.{ 2, 42 } }, &backend, &c));
-    try std.testing.expectEqual(@as(usize, 0), c.output_bytes);
+    try std.testing.expectEqual(@as(usize, 0), c.outputUsed());
 }
 
 const FactoryRecord = struct {
@@ -567,7 +567,7 @@ test "S1 strict caller policy tightens schema and diagnostics survive input muta
     c.acceptance = .{ .reject_duplicates = true, .reject_unknown_fields = true };
     c.diagnostics = &diagnostics;
     try std.testing.expectError(error.DuplicateField, decoded(Loose, &c, &.{ 6, 2, 3, 2, 'i', 'd', 2, 1, 3, 2, 'i', 'd', 2, 2, 0 }));
-    try std.testing.expectEqual(@as(usize, 1), diagnostics.count);
+    try std.testing.expectEqual(@as(usize, 1), diagnostics.path.len);
     diagnostics = .{};
     var input = [_]u8{ 6, 1, 3, 1, 'x', 2, 1, 0 };
     c = .init(std.testing.failing_allocator, .{}, .borrowed);
@@ -575,8 +575,59 @@ test "S1 strict caller policy tightens schema and diagnostics survive input muta
     c.diagnostics = &diagnostics;
     try std.testing.expectError(error.UnknownField, decoded(Loose, &c, &input));
     input[4] = 'z';
-    try std.testing.expectEqual(@as(u8, 'x'), diagnostics.names[0]);
+    try std.testing.expectEqualStrings("x", diagnostics.path.frames()[0].name.view());
 }
+test "S1 diagnostics hold no raw control byte from a hostile unknown field name" {
+    const Loose = struct { id: u8 };
+    var diagnostics: core.Diagnostics = .{};
+    var c: core.Context = .init(std.testing.failing_allocator, .{}, .borrowed);
+    c.diagnostics = &diagnostics;
+    c.acceptance.reject_unknown_fields = true;
+    // An unknown field named "a\n\x1b[2Jb": a newline and a terminal escape.
+    const input = [_]u8{ 6, 1, 3, 6, 'a', '\n', 0x1b, '[', '2', 'J', 2, 1, 0 };
+    try std.testing.expectError(error.UnknownField, decoded(Loose, &c, &input));
+    try std.testing.expect(diagnostics.path.len != 0);
+    for (diagnostics.path.frames()) |step| for (step.name.view()) |byte| try std.testing.expect(byte >= 0x20 and byte != 0x7f);
+    try std.testing.expectEqualStrings("a\\x0a\\x1b[2J", diagnostics.path.frames()[0].name.view());
+}
+test "S1 a refused or failed request is not charged and the totals report what was" {
+    var c: core.Context = .init(std.testing.failing_allocator, .{ .allocation_bytes = 64 }, .borrowed);
+    try std.testing.expectError(error.OutOfMemory, c.alloc(u8, 16));
+    try std.testing.expectEqual(@as(usize, 0), c.allocationRequested());
+    try std.testing.expectError(error.AllocationLimit, c.alloc(u8, 65));
+    try std.testing.expectError(error.AllocationLimit, c.alloc(u64, std.math.maxInt(usize)));
+    try std.testing.expectEqual(@as(usize, 0), c.allocationRequested());
+    var ok: core.Context = .init(std.testing.allocator, .{ .allocation_bytes = 64, .work = 10 }, .borrowed);
+    const memory = try ok.alloc(u8, 40);
+    defer std.testing.allocator.free(memory);
+    try std.testing.expectEqual(@as(usize, 40), ok.allocationRequested());
+    try std.testing.expectError(error.AllocationLimit, ok.alloc(u8, 25));
+    try std.testing.expectEqual(@as(usize, 40), ok.allocationRequested());
+    try ok.chargeWork(10);
+    try std.testing.expectError(error.WorkLimit, ok.chargeWork(1));
+    try std.testing.expectEqual(@as(usize, 10), ok.workUsed());
+    var fresh: core.Context = .init(std.testing.allocator, .{ .allocation_bytes = 8, .work = 3 }, .borrowed);
+    try fresh.adopt(3, 8);
+    try std.testing.expectError(error.WorkLimit, fresh.adopt(1, 0));
+    try std.testing.expectError(error.AllocationLimit, fresh.adopt(0, 1));
+}
+
+test "S1 diagnostics paths and names are bounded and say when they were cut" {
+    var diagnostics: core.Diagnostics = .{};
+    for (0..core.Diagnostics.path_steps + 3) |n| diagnostics.index(n);
+    try std.testing.expectEqual(core.Diagnostics.path_steps, diagnostics.path.len);
+    try std.testing.expect(diagnostics.path.truncated);
+    diagnostics = .{};
+    diagnostics.field("a_field_name_that_is_longer_than_the_step_can_hold");
+    const step = diagnostics.path.frames()[0];
+    try std.testing.expect(step.name.truncated);
+    try std.testing.expectEqual(@as(usize, core.Step.name_bytes), step.name.view().len);
+    const mark = diagnostics.checkpoint();
+    diagnostics.field("inner");
+    diagnostics.restore(mark);
+    try std.testing.expectEqual(@as(usize, 1), diagnostics.path.len);
+}
+
 test "S1 internal tagging composes field codecs and typed tuples reject false arity hints" {
     const Wrapped = union(enum) {
         data: FieldRecord,

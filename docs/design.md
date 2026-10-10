@@ -126,6 +126,23 @@ reported separately. `acquireLeaky` uses a caller arena: failed allocations rema
 until the caller resets it. Checked `clone` copies reflected plain data into a
 new owner, excludes resource owners and bounds cycles by depth.
 
+The core's accounting is aegis where aegis fits. The totals that are charged once
+and never returned (input, output, work, requested allocation) are `bounded.Budget`s,
+a refused request is a released reservation, and size arithmetic is `int.Checked`;
+the budget's own compare-then-add replaced four functions that ran with runtime
+safety forced on, which cost a record's strict parse and write a double-digit
+share in the paired timings. The node count, which a hint type hands back, the two nesting
+depths, which are entered and left in pairs on every level, and the allocator
+wrapper's live bytes, which fall as it frees, stay plain counters: a budget has no
+way to give back. `Limits` stays plain numbers because the core takes their
+minimum and their difference as well as comparing against them. A diagnostic's path
+is an `err.Context` of closed frames, so a field name that the input chose is escaped
+text, never raw bytes. `Parsed` keeps its own liveness check, which is always on; an
+`own.Owned` tracks use only in Debug. `input.Untrusted` has no place where the parser
+is the boundary and nothing else sees the raw bytes, and it refuses a parse whose
+result is the bytes' own type, such as a string. Legacy facade types keep their
+plain `u64` and `usize` counts: they are the compatibility surface.
+
 Limits cover input/output bytes, wire depth and independently capped hook
 delegation depth, total and per-container items, text/key
 length, numeric length, allocation and work. Skipped fields, unknown payloads,

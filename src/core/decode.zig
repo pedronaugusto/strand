@@ -371,7 +371,7 @@ pub fn Cursor(comptime Backend: type) type {
                 array[i.len] = sentinel;
             };
             for (&array, 0..) |*element, index| {
-                const mark: ctx.Diagnostics.Checkpoint = if (self.context.diagnostics) |d| d.checkpoint() else .{ .count = 0, .used = 0, .truncated = false };
+                const mark: ctx.Diagnostics.Checkpoint = if (self.context.diagnostics) |d| d.checkpoint() else .none;
                 if (self.context.diagnostics) |d| d.index(index);
                 element.* = try self.read(i.child, .{ .name = "" });
                 if (self.context.diagnostics) |d| d.restore(mark);
@@ -426,8 +426,8 @@ pub fn Cursor(comptime Backend: type) type {
                 if (initialized >= policy.max_len or initialized >= self.context.limits.container_items) return error.LengthLimit;
                 try self.context.count(1);
                 if (initialized == values.len) {
-                    const capacity = @max(@as(usize, 1), std.math.mul(usize, values.len, 2) catch return error.AllocationLimit);
-                    const grown = try self.context.allocPointer(T, @min(capacity, @min(policy.max_len, self.context.limits.container_items)));
+                    const capacity = try ctx.Context.grownCapacity(values.len, @min(policy.max_len, self.context.limits.container_items));
+                    const grown = try self.context.allocPointer(T, capacity);
                     try self.context.chargeWork(initialized);
                     @memcpy(grown[0..initialized], values[0..initialized]);
                     values = grown;
@@ -488,7 +488,7 @@ pub fn Cursor(comptime Backend: type) type {
                         if (f.skip_decode or (seen[index] and duplicates == .first)) {
                             try self.skip();
                         } else {
-                            const mark: ctx.Diagnostics.Checkpoint = if (self.context.diagnostics) |d| d.checkpoint() else .{ .count = 0, .used = 0, .truncated = false };
+                            const mark: ctx.Diagnostics.Checkpoint = if (self.context.diagnostics) |d| d.checkpoint() else .none;
                             if (self.context.diagnostics) |d| d.field(field_name);
                             @field(value, field_name) = try self.readField(T, field_name);
                             if (self.context.diagnostics) |d| d.restore(mark);
@@ -509,7 +509,7 @@ pub fn Cursor(comptime Backend: type) type {
             inline for (i.field_names, i.field_types, i.field_attrs, 0..) |name, F, attrs, index| {
                 if (attrs.@"comptime") continue;
                 if (!seen[index]) {
-                    const mark: ctx.Diagnostics.Checkpoint = if (self.context.diagnostics) |d| d.checkpoint() else .{ .count = 0, .used = 0, .truncated = false };
+                    const mark: ctx.Diagnostics.Checkpoint = if (self.context.diagnostics) |d| d.checkpoint() else .none;
                     if (self.context.diagnostics) |d| {
                         d.offset = self.backend.offset();
                         d.field(name);
@@ -705,8 +705,8 @@ fn PolicyAccess(comptime Backend: type, comptime policy: descriptor.Field) type 
                 if (n >= policy.max_len) return error.LengthLimit;
                 if (n >= self.cursor.context.limits.container_items) return error.ItemLimit;
                 if (n == result.len) {
-                    const capacity = @max(@as(usize, 1), std.math.mul(usize, n, 2) catch return error.AllocationLimit);
-                    const grown = try self.alloc(T, @min(capacity, @min(policy.max_len, self.cursor.context.limits.container_items)));
+                    const capacity = try ctx.Context.grownCapacity(n, @min(policy.max_len, self.cursor.context.limits.container_items));
+                    const grown = try self.alloc(T, capacity);
                     try self.chargeWork(n);
                     @memcpy(grown[0..n], result[0..n]);
                     result = grown;
@@ -729,8 +729,8 @@ fn PolicyAccess(comptime Backend: type, comptime policy: descriptor.Field) type 
                 if (n >= policy.max_len) return error.LengthLimit;
                 if (n >= self.cursor.context.limits.container_items) return error.ItemLimit;
                 if (n == storage.len) {
-                    const capacity = @max(@as(usize, 1), std.math.mul(usize, n, 2) catch return error.AllocationLimit);
-                    const next = try self.alloc(model.Pair(K, V), @min(capacity, @min(policy.max_len, self.cursor.context.limits.container_items)));
+                    const capacity = try ctx.Context.grownCapacity(n, @min(policy.max_len, self.cursor.context.limits.container_items));
+                    const next = try self.alloc(model.Pair(K, V), capacity);
                     try self.chargeWork(n);
                     @memcpy(next[0..n], storage[0..n]);
                     storage = next;

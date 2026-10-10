@@ -18,6 +18,13 @@
             .url = "git+https://github.com/pedronaugusto/airlock#2353ec6a8ea4e44338a6e806da104d5200806055",
             .hash = "airlock-0.1.0-rfvu6CNTBQBc6soo3YE3Gr5IYQeS-eycX_V7hfCWhJmX",
         },
+        // Types that make the checked work in the core safe by construction:
+        // finite budgets, checked arithmetic, closed public diagnostics and
+        // always-on contracts. std only, pinned to a commit.
+        .aegis = .{
+            .url = "git+https://github.com/pedronaugusto/aegis#b77c6598dbb5dc614e96b0e0f34f0a34e6e9f659",
+            .hash = "aegis-0.0.0-rsxouq3RBACj3yUWyVoivDKVbhous7EAEWoEe1nyVY3_",
+        },
         // Test doubles, for the tests alone: no module a consumer builds
         // imports it, and a consumer never fetches it.
         .shakedown = .{
@@ -26,8 +33,8 @@
             .lazy = true,
         },
         .preflight = .{
-            .url = "git+https://github.com/pedronaugusto/preflight#e80b9a631956b1b7b7a7c6ebc69ec7e495ad623d",
-            .hash = "preflight-0.1.0-LX1Zwv3_CACAF-_k51Z494nvVGgk4EPS1hfQCBVozPQo",
+            .url = "git+https://github.com/pedronaugusto/preflight#387e188a9b8e9f0a157d528606cc2db4175db7de",
+            .hash = "preflight-0.1.0-LX1ZwgwgCQAGeK4DZqDnyq6HZfbJkupClWp56O8kY_Db",
             .lazy = true,
         },
     },

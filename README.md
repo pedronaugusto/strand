@@ -95,7 +95,8 @@ const kind = strand.kindOf("{\"kind\":\"open\",\"at\":1}");
 
 ## Design
 
-The serialization core uses `std`. The JSON Lines API also has a runtime dependency
+The serialization core uses `std` and [aegis](https://github.com/pedronaugusto/aegis),
+which is `std` alone. The JSON Lines API also has a runtime dependency
 on [airlock](https://github.com/pedronaugusto/airlock) for file durability and identity.
 Readers take an allocator for a reusable line buffer and
 per-record arena; unescaped strings can borrow from the input. A returned line and its
@@ -166,6 +167,8 @@ a file named by its volume and number, as `Follower` uses it to notice a rotatio
 ## Built with
 
 - [Zig](https://ziglang.org) 0.17.0 and its standard library.
+- [aegis](https://github.com/pedronaugusto/aegis) supplies the core's finite budgets,
+  checked arithmetic, closed diagnostics text and always-on contracts.
 - [airlock](https://github.com/pedronaugusto/airlock) syncs the file under a `Writer`
   and numbers files for a `Follower`.
 - [shakedown](https://github.com/pedronaugusto/shakedown) supplies the tests' doubles:

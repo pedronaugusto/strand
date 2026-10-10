@@ -15,10 +15,12 @@ pub fn build(b: *std.Build) !void {
 
     const airlock_dependency = b.dependency("airlock", .{ .target = target, .optimize = optimize });
     const airlock = airlock_dependency.module("airlock");
+    const aegis = b.dependency("aegis", .{ .target = target, .optimize = optimize }).module("aegis");
     const core_module = b.addModule("strand.core", .{
         .root_source_file = b.path("src/core.zig"),
         .target = target,
         .optimize = optimize,
+        .imports = &.{.{ .name = "aegis", .module = aegis }},
     });
     const mapping = b.createModule(.{ .root_source_file = b.path("src/core/compat.zig"), .target = target, .optimize = optimize });
     const json_impl = b.createModule(.{
@@ -358,12 +360,12 @@ pub fn build(b: *std.Build) !void {
                 .optimize = optimize,
             },
         });
-        // A project that depends on strand by path, with airlock and
-        // nothing else to fetch: the build a consumer gets.
+        // A project that depends on strand by path, with airlock and aegis
+        // and nothing else to fetch: the build a consumer gets.
         preflight.addConsumerCheck(b, .{
             .package = "strand",
             .program = b.path("ci/consumer.zig"),
-            .packages = &.{b.dependency("airlock", .{})},
+            .packages = &.{ b.dependency("aegis", .{}), b.dependency("airlock", .{}) },
         });
     }
     return needed;
@@ -374,7 +376,8 @@ pub fn build(b: *std.Build) !void {
 /// Debug module would time the Debug module.
 fn benchImports(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize) []const std.Build.Module.Import {
     const airlock = b.dependency("airlock", .{ .target = target, .optimize = optimize }).module("airlock");
-    const core_module = b.createModule(.{ .root_source_file = b.path("src/core.zig"), .target = target, .optimize = optimize });
+    const aegis = b.dependency("aegis", .{ .target = target, .optimize = optimize }).module("aegis");
+    const core_module = b.createModule(.{ .root_source_file = b.path("src/core.zig"), .target = target, .optimize = optimize, .imports = &.{.{ .name = "aegis", .module = aegis }} });
     const mapping = b.createModule(.{ .root_source_file = b.path("src/core/compat.zig"), .target = target, .optimize = optimize });
     const json_impl = b.createModule(.{ .root_source_file = b.path("src/json/api.zig"), .target = target, .optimize = optimize, .imports = &.{ .{ .name = "strand.core", .module = core_module }, .{ .name = "mapping", .module = mapping } } });
     const json_module = b.createModule(.{ .root_source_file = b.path("src/json.zig"), .target = target, .optimize = optimize, .imports = &.{.{ .name = "json", .module = json_impl }} });

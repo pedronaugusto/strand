@@ -1,5 +1,6 @@
 //! An arena result owns storage, never the caller's input or an Io.
 const std = @import("std");
+const aegis = @import("aegis");
 const context = @import("context.zig");
 const descriptor = @import("descriptor.zig");
 const mapping = @import("decode.zig");
@@ -19,8 +20,7 @@ pub fn Parsed(comptime T: type) type {
         }
         /// Consumes the owner. A value copy alone never transfers storage.
         pub fn take(self: *Self) Self {
-            @setRuntimeSafety(true);
-            std.debug.assert(self.isLive());
+            aegis.assert.pre(self.isLive(), "a parsed owner was used after it was taken or released");
             const destination = self.*;
             self.state = null;
             self.value = undefined;
@@ -28,8 +28,7 @@ pub fn Parsed(comptime T: type) type {
         }
         /// Exactly once, infallible; the transferred-from owner is invalid.
         pub fn deinit(self: *Self) void {
-            @setRuntimeSafety(true);
-            std.debug.assert(self.isLive());
+            aegis.assert.pre(self.isLive(), "a parsed owner was used after it was taken or released");
             var arena = self.state.?.promote(self.gpa);
             arena.deinit();
             self.state = null;
@@ -63,7 +62,7 @@ pub fn acquireWith(comptime T: type, comptime ownership: context.Ownership, gpa:
     const value = decode(&c, bytes) catch |err| return if (backing.limited) error.AllocationLimit else err;
     // Only the linked arena state survives. No pointer into stack-local backing
     // or arena/context survives publication; deinit promotes with the original gpa.
-    return .{ .value = value, .gpa = gpa, .state = arena.state, .requested_peak = c.allocation_requested, .retained_bytes = c.allocation_requested, .allocator_resident_bytes = backing.live, .work_used = c.work };
+    return .{ .value = value, .gpa = gpa, .state = arena.state, .requested_peak = c.allocationRequested(), .retained_bytes = c.allocationRequested(), .allocator_resident_bytes = backing.live, .work_used = c.workUsed() };
 }
 
 fn CallbackError(comptime decode: anytype) type {
@@ -92,7 +91,7 @@ pub fn clone(gpa: std.mem.Allocator, value: anytype, limits: context.Limits) con
     errdefer arena.deinit();
     var c: context.Context = .init(arena.allocator(), limits, .owned);
     const copied = mapping.clone(T, value, &c) catch |err| return if (backing.limited) error.AllocationLimit else err;
-    return .{ .value = copied, .gpa = gpa, .state = arena.state, .requested_peak = c.allocation_requested, .retained_bytes = c.allocation_requested, .allocator_resident_bytes = backing.live, .work_used = c.work };
+    return .{ .value = copied, .gpa = gpa, .state = arena.state, .requested_peak = c.allocationRequested(), .retained_bytes = c.allocationRequested(), .allocator_resident_bytes = backing.live, .work_used = c.workUsed() };
 }
 fn cloneCheck(comptime T: type, comptime seen: []const type) void {
     for (seen) |prior| if (T == prior) return;

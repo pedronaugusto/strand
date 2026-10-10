@@ -140,7 +140,7 @@ pub fn main(init: std.process.Init) !void {
     var out: Encoder = .{ .writer = &writer };
     var budget: core.Context = .init(c.gpa, .{}, .borrowed);
     try hand(c.value, &out, &budget);
-    if (!std.mem.eql(u8, input, writer.buffered()) or budget.allocation_requested != 0) return error.PolicyMismatch;
+    if (!std.mem.eql(u8, input, writer.buffered()) or budget.allocationRequested() != 0) return error.PolicyMismatch;
     const rows = [_]shakedown.bench.Row(Context, WorkError){
         .{ .name = "json.strict.borrowed.512", .unit = "record", .initial = 1024, .run = strictParse },
         .{ .name = "json.std.borrowed.512", .unit = "record", .initial = 1024, .run = stdParse },

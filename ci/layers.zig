@@ -82,6 +82,7 @@ pub const modules: []const gantry.NamedModule = &.{
 };
 pub const references: []const gantry.rules.ReferenceRule = &.{
     .{ .name = "named dependencies", .unresolved_only = true, .except_targets = &.{
+        "aegis",
         "airlock",
         "airlock.testing",
         "build_options",

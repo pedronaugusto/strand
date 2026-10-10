@@ -64,7 +64,7 @@ pub fn main(init: std.process.Init) !void {
     var actual: proof.Reference.Encoder = .{ .buffer = &context.memory };
     var cc: core.Context = .init(std.heap.smp_allocator, .{}, .borrowed);
     try core.serialize(context.value, &actual, &cc);
-    if (!std.mem.eql(u8, expected.buffer[0..expected.used], actual.buffer[0..actual.used]) or hc.items != cc.items or hc.work != cc.work) return error.PolicyMismatch;
+    if (!std.mem.eql(u8, expected.buffer[0..expected.used], actual.buffer[0..actual.used]) or hc.items != cc.items or hc.workUsed() != cc.workUsed()) return error.PolicyMismatch;
     const rows = [_]shakedown.bench.Row(Context, core.EncodeError){
         .{ .name = "reference.hand.a", .unit = "record", .initial = 1024, .run = handRow },
         .{ .name = "reference.core.a", .unit = "record", .initial = 1024, .run = coreRow },

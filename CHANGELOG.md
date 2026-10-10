@@ -44,6 +44,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Breaking
 
+- strand.core depends on [aegis](https://github.com/pedronaugusto/aegis) (pinned to a commit), which is `std` alone.
+  `core.Context` keeps its input, output, work and requested-allocation totals as `aegis.bounded.Budget`s, so its public
+  `work`, `input_bytes`, `output_bytes` and `allocation_requested` fields are the methods `workUsed`, `outputUsed` and
+  `allocationRequested`, and `adopt` takes over what another operation has charged. `core.Diagnostics.path` is an
+  `aegis.err.Context` of `Step`s with escaped names of at most 32 bytes in place of `path`, `count`, `names` and `used`;
+  `Checkpoint` records the number of steps. A field name from the input appeared in diagnostics as raw bytes, a newline
+  and a terminal escape among them; it is now escaped.
 - S2 adds the `core.Event.number` lexeme alternative; exhaustive backend event
   switches must handle it. `core.EncodeError` adds `DuplicateField` for checked
   dynamic object keys. Existing root JSONL parse/write error sets are unchanged.

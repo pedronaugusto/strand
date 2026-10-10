@@ -2,6 +2,7 @@
 pub const Context = @import("core/context.zig").Context;
 pub const Limits = @import("core/context.zig").Limits;
 pub const Diagnostics = @import("core/context.zig").Diagnostics;
+pub const Step = @import("core/context.zig").Step;
 pub const DecodeError = @import("core/context.zig").DecodeError;
 pub const EncodeError = @import("core/context.zig").EncodeError;
 pub const Lifetime = @import("core/context.zig").Lifetime;

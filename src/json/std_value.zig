@@ -83,8 +83,7 @@ pub fn take(source: *core.Parsed(native.Value), limits: core.Limits) core.Decode
     arena.* = moved.state.?.promote(backing.allocator());
     errdefer arena.deinit();
     var c: core.Context = .init(arena.allocator(), limits, .owned);
-    c.allocation_requested = moved.requested_peak + overhead;
-    c.work = moved.work_used;
+    try c.adopt(moved.work_used, moved.requested_peak + overhead);
     const value = fromNative(moved.value, &c) catch |err| return if (backing.limited or c.allocation_limited) error.AllocationLimit else err;
     arena.child_allocator = gpa;
     return .{ .arena = arena, .value = value };

@@ -26,7 +26,7 @@ pub fn Directory(comptime name: []const u8) type {
                     error.PathAlreadyExists => continue,
                     else => return err,
                 };
-                errdefer cwd.deleteTree(io, &path) catch {};
+                errdefer cwd.deleteTree(io, &path) catch {}; // glint-ignore: Z026 -- the error path already returns the failure that matters; a stray scratch directory is all a failed delete leaves
                 return .{ .dir = try cwd.openDir(io, &path, .{}), .path = path };
             }
         }

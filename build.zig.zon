@@ -15,26 +15,26 @@
         // Syncing a file and telling files apart. Pinned to a commit; the
         // hash is what the build checks.
         .airlock = .{
-            .url = "git+https://github.com/pedronaugusto/airlock#2353ec6a8ea4e44338a6e806da104d5200806055",
-            .hash = "airlock-0.1.0-rfvu6CNTBQBc6soo3YE3Gr5IYQeS-eycX_V7hfCWhJmX",
+            .url = "git+https://github.com/pedronaugusto/airlock#a19d4f4e6825a49fc61478c14718414fb190a324",
+            .hash = "airlock-0.1.0-rfvu6JWGBQCN3u7evgacrcGxb7KYWMxQ-cxp8jviJKOD",
         },
         // Types that make the checked work in the core safe by construction:
         // finite budgets, checked arithmetic, closed public diagnostics and
         // always-on contracts. std only, pinned to a commit.
         .aegis = .{
-            .url = "git+https://github.com/pedronaugusto/aegis#b77c6598dbb5dc614e96b0e0f34f0a34e6e9f659",
-            .hash = "aegis-0.0.0-rsxouq3RBACj3yUWyVoivDKVbhous7EAEWoEe1nyVY3_",
+            .url = "git+https://github.com/pedronaugusto/aegis#be2523ffd337fa31b5336e6f652f642c43622471",
+            .hash = "aegis-0.0.0-rsxoutrdBgCSI4l3iGMCx8rEymViUGaDM3yuGFI3z01T",
         },
         // Test doubles, for the tests alone: no module a consumer builds
         // imports it, and a consumer never fetches it.
         .shakedown = .{
-            .url = "git+https://github.com/pedronaugusto/shakedown#e99eccb269dfeeb4569bce843743ec80c6e094c3",
-            .hash = "shakedown-0.1.0-BR8U4-XJEAB46Facu1RERO-yErm9BwNcJGUxxk9vMLQv",
+            .url = "git+https://github.com/pedronaugusto/shakedown#caf380381a49ace7c13beba70dd512c4faf24ce7",
+            .hash = "shakedown-0.1.0-BR8U4yVfEgCS2Vw6zWMqw0wRjxct8g3tePy1UKNZ8Q89",
             .lazy = true,
         },
         .preflight = .{
-            .url = "git+https://github.com/pedronaugusto/preflight#387e188a9b8e9f0a157d528606cc2db4175db7de",
-            .hash = "preflight-0.1.0-LX1ZwgwgCQAGeK4DZqDnyq6HZfbJkupClWp56O8kY_Db",
+            .url = "git+https://github.com/pedronaugusto/preflight#e3d81b9e477c1c690f1ce03506511935d16035c3",
+            .hash = "preflight-0.1.0-LX1Zwl2HCQB4-h0brJMmXe_1ZA3UoIT6vI9kJ3IE1grE",
             .lazy = true,
         },
     },

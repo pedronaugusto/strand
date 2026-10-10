@@ -11,7 +11,8 @@ Test/tool dependencies remain lazy and outside production modules.
 
 Bounds → semantic vocabulary/schema → mapping → ownership → core facade → JSON
 wire/syntax → JSON API/facade → framing/schema → streams → tail/follow → JSONL
-API/facade → root. The historical mapping policy is a core specialization over
+API/facade → root. ZON sits beside JSON on the core, wire/syntax → ZON API/facade,
+and imports neither JSON nor JSONL. The historical mapping policy is a core specialization over
 format-supplied wire primitives for reading, preserving its in-place hot path;
 writing stays in the JSON module, the one format that uses it, because routing
 it through the core cost the legacy writer 3% on an M3 and about 10% on an M1.
@@ -187,6 +188,47 @@ marks the path truncated. Common mapping supplies offsets and expected kinds;
 text backends supply format identity and line/column when available. No input
 fragment is logged. Legacy JSON hooks retain their existing allocation and limit
 contract; exposing the core does not strengthen legacy hooks implicitly.
+
+## ZON
+
+ZON is its own module on the core and imports no other format. `std.zon` is the
+grammar and typed-value oracle, and reading it needs a tree: a tokenizer, a syntax
+tree and a Zoir for the whole document before a byte of the result exists, none of
+it bounded by anything but memory. strand reads a document in one pass instead. A
+small state machine turns the tokens `std` itself defines (its number literal
+grammar, string and character escapes) into the core's immediate events, so the
+core's depth, node, string, key, number, work and allocation limits are charged
+before the storage they guard exists, and an ignored value, a `Raw` value and an
+escape in a name cost what they cost anywhere else. Nothing but data is syntax: an
+identifier other than `true`, `false`, `null`, `inf` and `nan` is an error, and so
+are calls, imports, operators and a doc comment. A field name given twice in one
+struct is refused, whether or not anyone asked for it, as the grammar requires.
+
+A struct is `.{ .name = value }` and a tuple, array and slice is `.{ value }`, which
+the first member decides. A union is the arm's name when it holds nothing and a
+struct of one field when it does. An enum is its name, which the type asked for as a
+symbol and not as text, so that a string is never a name and a name is never a
+string; the core asks formats for that by an `Expected.symbol` request and a `symbol`
+hook on the encoder, which a format that does not spell names apart ignores. A
+character literal is a number to everything but a Unicode scalar. A plain string
+with no escape is borrowed from the input; with an escape, or across lines, it is
+unescaped into the result's arena after its length is known and limited.
+
+The encoder is the core's emission with `std.zon`'s spelling: containers of more
+than two members wrap one to a line with a trailing comma, shorter ones stay on
+their line, a one-element tuple has no inner space, an arm with no payload is
+`.arm`. It stages its output and counts it against the output limit a stage at a
+time, because a member is a few tiny pieces and counting each costs more than the
+piece. A constant field name is written with its `.name = ` as one piece.
+
+What `std.zon` accepts and strand does not: a number whose literal does not fit its
+type is an error, never infinity (`1e999` as `f64`); a `[]const u8` is a string, so a
+tuple of numbers is not one and a string with bytes that are not UTF-8 needs
+`.as = .bytes`; untagged unions, nested optionals and names (`NamedUnit`, `Newtype`,
+`NamedTuple`) have no representation and are refused when the type is compiled. A
+float is rounded to its width once, from its decimal digits, where `std.zon` rounds to
+`f128` first. What strand accepts and `std.zon` does not: integers of any width, and
+a document of any size, within the limits.
 
 ## Manual comparison protocol
 

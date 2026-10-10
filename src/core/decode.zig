@@ -38,6 +38,14 @@ pub fn Cursor(comptime Backend: type) type {
             }
             return self.pending.?;
         }
+        /// Whether the container being read has no more members. A format that can
+        /// tell without producing the next member's event says so, so that the
+        /// member is fetched knowing the type it was asked for.
+        fn atEnd(self: *Self) Error!bool {
+            if (self.pending) |event| return event == .end;
+            if (comptime @hasDecl(Backend, "atEnd")) return self.backend.atEnd();
+            return try self.peek() == .end;
+        }
         fn take(self: *Self) Error!model.Event {
             const event = try self.peek();
             self.pending = null;
@@ -226,7 +234,7 @@ pub fn Cursor(comptime Backend: type) type {
                     return self.record(T);
                 },
                 .@"enum" => |i| {
-                    const name = try self.keyValue();
+                    const name = try self.symbolValue();
                     inline for (i.field_names) |variant| {
                         const v = comptime descriptor.variant(T, variant);
                         var matches = try self.equals(name, v.name);
@@ -279,7 +287,7 @@ pub fn Cursor(comptime Backend: type) type {
             var tag: ?[]const u8 = null;
             var payload: ?struct { start: usize, end: usize } = null;
             var count: usize = 0;
-            while (try self.peek() != .end) {
+            while (!try self.atEnd()) {
                 if (count >= self.context.limits.container_items) return error.ItemLimit;
                 count += 1;
                 const name = try self.key();
@@ -379,6 +387,16 @@ pub fn Cursor(comptime Backend: type) type {
             try self.end();
             return array;
         }
+        /// A name the format spells apart from text where it can: an enum's.
+        fn symbolValue(self: *Self) Error![]const u8 {
+            self.request = .{ .expected = .symbol };
+            const event = try self.take();
+            if (event != .text) return error.UnexpectedType;
+            try self.context.span(event.text.bytes.len, false);
+            try self.context.chargeWork(event.text.bytes.len);
+            if (!std.unicode.utf8ValidateSlice(event.text.bytes)) return error.InvalidUtf8;
+            return event.text.bytes;
+        }
         fn keyValue(self: *Self) Error![]const u8 {
             return (try self.keySpan()).bytes;
         }
@@ -422,7 +440,7 @@ pub fn Cursor(comptime Backend: type) type {
             }
             var values = try self.context.allocPointer(T, 0);
             var initialized: usize = 0;
-            while (try self.peek() != .end) {
+            while (!try self.atEnd()) {
                 if (initialized >= policy.max_len or initialized >= self.context.limits.container_items) return error.LengthLimit;
                 try self.context.count(1);
                 if (initialized == values.len) {
@@ -464,7 +482,7 @@ pub fn Cursor(comptime Backend: type) type {
             var value: T = undefined;
             var seen: [i.field_names.len]bool = @splat(false);
             var pairs: usize = 0;
-            while (try self.peek() != .end) {
+            while (!try self.atEnd()) {
                 try self.context.count(1);
                 if (pairs >= self.context.limits.container_items) return error.ItemLimit;
                 pairs += 1;
@@ -541,6 +559,8 @@ pub fn Cursor(comptime Backend: type) type {
             @setRuntimeSafety(true);
             try self.context.node();
             try self.context.chargeWork(1);
+            // Whatever the last request was, an ignored value may be anything.
+            self.request = .{};
             switch (try self.take()) {
                 .end => return error.SyntaxError,
                 .text => |span| {
@@ -571,7 +591,7 @@ pub fn Cursor(comptime Backend: type) type {
                     defer self.context.leave();
                     if (header.len) |n| try self.context.count(n);
                     var count: usize = 0;
-                    while (try self.peek() != .end) {
+                    while (!try self.atEnd()) {
                         if (count >= self.context.limits.container_items) return error.ItemLimit;
                         count += 1;
                         if (header.kind == .record) _ = try self.key();
@@ -685,6 +705,7 @@ fn PolicyAccess(comptime Backend: type, comptime policy: descriptor.Field) type 
         pub fn scalar(self: *Self) Error!u21 {
             if (self.used) return error.CustomRejected;
             self.used = true;
+            self.cursor.request = .{ .expected = .scalar };
             const event = try self.cursor.take();
             if (event != .scalar) return error.UnexpectedType;
             if (!std.unicode.utf8ValidCodepoint(event.scalar)) return error.InvalidUtf8;
@@ -931,7 +952,7 @@ fn PolicyCompoundAccess(comptime Backend: type, comptime policy: descriptor.Fiel
         const Self = @This();
         pub fn hasNext(self: *Self) Error!bool {
             if (!self.live or self.key_pending) return error.CustomRejected;
-            return try self.access.cursor.peek() != .end;
+            return !try self.access.cursor.atEnd();
         }
         pub fn key(self: *Self, comptime T: type) Errors(T, Backend)!T {
             if (!self.live or self.key_pending or (self.header.kind != .map and self.header.kind != .record)) return error.CustomRejected;
@@ -975,12 +996,14 @@ fn expectedKind(comptime T: type, comptime policy: descriptor.Field) ctx.Diagnos
         .bool => .boolean,
         .int => .integer,
         .float => .floating,
-        .optional => .option,
+        // A presence hint asks for what the value is, unless the value is a presence itself.
+        .optional => |i| if (@typeInfo(i.child) == .optional) .option else expectedKind(i.child, policy),
         .void, .null => .unit,
-        .pointer => |i| if (i.size == .slice and i.child == u8) (if (policy.as == .bytes) .bytes else .text) else .sequence,
+        .pointer => |i| if (i.size == .one) expectedKind(i.child, policy) else if (i.child == u8) (if (policy.as == .bytes) .bytes else .text) else .sequence,
         .array, .vector => .tuple,
         .@"struct" => |i| if (i.is_tuple) .tuple else .record,
-        .@"union", .@"enum" => .variant,
+        .@"enum" => .symbol,
+        .@"union" => .variant,
         else => .unknown,
     };
 }

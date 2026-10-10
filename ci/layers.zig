@@ -64,6 +64,10 @@ pub const layers: []const gantry.rules.Layer = &.{
     } },
     .{ .name = "JSON Lines module", .patterns = &.{"src/jsonl/api.zig"} },
     .{ .name = "JSONL facade", .patterns = &.{"src/jsonl.zig"} },
+    .{ .name = "ZON text", .patterns = &.{ "src/zon/text.zig", "src/zon/number.zig" } },
+    .{ .name = "ZON wire", .patterns = &.{ "src/zon/Decoder.zig", "src/zon/Encoder.zig" } },
+    .{ .name = "ZON module", .patterns = &.{"src/zon/api.zig"} },
+    .{ .name = "ZON facade", .patterns = &.{"src/zon.zig"} },
     .{ .name = "public", .patterns = &.{
         "src/strand.zig",
     } },
@@ -79,18 +83,27 @@ pub const modules: []const gantry.NamedModule = &.{
     .{ .name = "strand.json", .path = "src/json.zig" },
     .{ .name = "strand.jsonl", .path = "src/jsonl.zig" },
     .{ .name = "jsonl", .path = "src/jsonl/api.zig" },
+    .{ .name = "strand.zon", .path = "src/zon.zig" },
+    .{ .name = "zon", .path = "src/zon/api.zig" },
 };
 pub const references: []const gantry.rules.ReferenceRule = &.{
-    .{ .name = "named dependencies", .unresolved_only = true, .except_targets = &.{
-        "aegis",
-        "airlock",
-        "airlock.testing",
-        "build_options",
-        "builtin",
-        "rejection_options",
-        "shakedown",
-        "std",
-    } },
+    .{
+        .name = "named dependencies",
+        .unresolved_only = true,
+        .except_targets = &.{
+            "aegis",
+            "airlock",
+            "airlock.testing",
+            "build_options",
+            "builtin",
+            "rejection_options",
+            "shakedown",
+            // gantry reads a name that ends `.zon` as a ZON file beside the importer,
+            // so it cannot see this module, which `modules` below does name.
+            "strand.zon",
+            "std",
+        },
+    },
     .{ .name = "source siblings", .suffix = ".zig", .relative = true, .except_targets = &.{"src/**"} },
 };
 

@@ -59,7 +59,7 @@ pub const Diagnostics = struct {
     /// the path stops growing and says so (`path.truncated`).
     path: err.Context(Step, path_steps) = .{},
     pub const path_steps = 32;
-    pub const Expected = enum { unknown, boolean, integer, floating, text, scalar, bytes, option, unit, sequence, tuple, record, variant, map, named_tuple, named_unit, newtype, some };
+    pub const Expected = enum { unknown, boolean, integer, floating, text, symbol, scalar, bytes, option, unit, sequence, tuple, record, variant, map, named_tuple, named_unit, newtype, some };
     /// How much of the path there is: what a failed alternative returns to.
     pub const Checkpoint = struct {
         steps: usize,

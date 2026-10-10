@@ -62,6 +62,13 @@
       "imports": [
         "strand"
       ]
+    },
+    "zig build docs -- zon": {
+      "source": "examples/zon.zig",
+      "region": "zon",
+      "imports": [
+        "strand"
+      ]
     }
   },
   "ziglint_exceptions": "ci/ziglint-exceptions.json",

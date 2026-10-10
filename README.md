@@ -1,12 +1,12 @@
 # strand
 
-strand provides a std-only serialization core and JSON codecs, with JSON Lines
-framing, readers, writers, tail and follow built above them. Zig 0.17.0 is required.
+strand provides a serialization core and JSON and ZON codecs, with JSON Lines
+framing, readers, writers, tail and follow built above JSON. Zig 0.17.0 is required.
 The root API remains a facade for the existing JSON Lines contract.
 
-The build exposes `strand.core`, `strand.json`, `strand.jsonl`, and `strand`.
-JSON and core have no durability import; JSONL uses airlock for sync and identity.
-ZON, CBOR, MessagePack and TOML are later work.
+The build exposes `strand.core`, `strand.json`, `strand.jsonl`, `strand.zon`, and
+`strand`. JSON, ZON and core have no durability import; JSONL uses airlock for sync
+and identity. CBOR, MessagePack and TOML are later work.
 
 `strand.json.parse(T, gpa, bytes, options)` returns `Parsed(T)`: plain const
 strings may borrow input until either input mutation/expiry or `deinit`.
@@ -44,6 +44,52 @@ the push decoder; caller-arena parsing meters requests. Legacy `parseLine`, Read
 Versioned and checkpoint defaults and error sets remain unchanged. Legacy std
 hooks stay on their existing bridge and do not gain full bounded guarantees;
 strict operations require a common data codec instead.
+
+`strand.zon` reads and writes ZON, the notation Zig writes its data in, on the same
+core: `parse`, `parseOwned`, `parseLeaky` and `write`, with the limits, ownership and
+field policy of JSON. The grammar is `std.zon`'s, read in one pass with no syntax tree,
+so a document is bounded before anything is allocated for it, and what is not data
+(an import, a call, an operator, a name but `true`, `false`, `null`, `inf` and `nan`)
+is not read. A string literal with no escape in it is a span of the input. `write`
+produces `std.zon`'s own layout, byte for byte, or only the whitespace the syntax needs
+with `.whitespace = false`. [examples/zon.zig](examples/zon.zig) reads a settings file.
+It differs from `std.zon` where strand's promises differ: a number past the width of
+its type is an error and never infinity; a byte slice is text, or arbitrary bytes with
+`.as = .bytes`, and a tuple of numbers is a list of numbers; an untagged union and a
+nested optional have no meaning in ZON and are refused when the type is compiled.
+
+<!-- BEGIN GENERATED zig build docs -- zon -->
+```zig
+const strand = @import("strand");
+
+const source =
+    \\// What to run, and how hard to try.
+    \\.{
+    \\    .name = "nightly build",
+    \\    .mode = .careful,
+    \\    .tags = .{ "linux", "release" },
+    \\    .limit = 0x10_000,
+    \\}
+;
+
+// `name` and the tags are spans of `source`: nothing was copied for them.
+var settings = try strand.zon.parse(Settings, gpa, source, .{});
+defer settings.deinit();
+
+// Written back in Zig's own layout; a default is a field like any other.
+var out: std.Io.Writer.Allocating = .init(gpa);
+try strand.zon.write(&out.writer, settings.value, .{});
+
+// A mistake is an error that says where it was.
+var diagnostics: strand.core.Diagnostics = .{};
+const bad = ".{ .name = \"x\",\n   .retries = 300 }";
+if (strand.zon.parse(Settings, gpa, bad, .{ .diagnostics = &diagnostics })) |_| {
+    unreachable; // unreachable: 300 does not fit a u8.
+} else |err| {
+    std.log.info("{s}, line {d}", .{ @errorName(err), diagnostics.line.? });
+}
+```
+<!-- END GENERATED -->
 
 strand reads and writes typed JSON Lines in Zig. Records carry their line number and
 byte offset, and damaged lines can be refused or skipped while reading continues.

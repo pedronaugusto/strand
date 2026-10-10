@@ -1,7 +1,8 @@
-//! Strand serialization: independent core, JSON and JSON Lines modules.
+//! Strand serialization: independent core, JSON, JSON Lines and ZON modules.
 pub const core = @import("strand.core");
 pub const json = @import("strand.json");
 pub const jsonl = @import("strand.jsonl");
+pub const zon = @import("strand.zon");
 
 pub const parseLine = jsonl.parseLine;
 pub const innerParse = jsonl.innerParse;

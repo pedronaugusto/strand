@@ -18,6 +18,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   standard dynamic owner, and checked standard Value writing with explicit scratch.
 - The complete pinned JSONTestSuite corpus and chunk/lifetime/limit tests.
 
+### ZON
+
+- `strand.zon`, its own module on the core: `parse`, `parseOwned`, `parseLeaky`, `write`,
+  `Raw` and `ParseOptions`, with the core's limits, ownership and field policy. It reads
+  the grammar of `std.zon` in one pass with no syntax tree, so every limit is charged
+  before the storage it guards exists; plain strings are borrowed from the input; a
+  failure reports its line and column. It writes `std.zon`'s own layout byte for byte.
+  Differences are written in the README and `docs/design.md`.
+- Differential tests against `std.zon`'s parser and stringifier over a corpus of
+  spellings and types, a mutation of every byte of a document, and generated values.
+- Core: enums are asked for as `Expected.symbol` and written through an optional
+  `symbol` hook, a format may answer `atEnd` without producing the member's event so
+  that the member is fetched knowing its type, and may take a constant field name
+  through an optional `field` hook. A skipped value is asked for as anything, a
+  `Scalar` as a scalar, and an optional or a pointer as the value it holds.
+
 ### Core framework
 
 - Add the provisional std-only `strand.core` module with recursive descriptors,

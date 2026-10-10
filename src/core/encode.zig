@@ -36,7 +36,8 @@ fn emit(comptime policy: descriptor.Field, value: anytype, out: anytype, c: *ctx
                 const name = (comptime descriptor.variant(T, @tagName(tag))).name;
                 try c.span(name.len, false);
                 try c.chargeWork(name.len);
-                try out.text(name, c);
+                // A format that spells a name apart from text takes it as one.
+                if (comptime @hasDecl(@TypeOf(out.*), "symbol")) try out.symbol(name, c) else try out.text(name, c);
             },
         },
         .optional => return emitOptional(T, policy, value, out, c, active),
@@ -105,7 +106,7 @@ fn emit(comptime policy: descriptor.Field, value: anytype, out: anytype, c: *ctx
                         try c.node();
                         try c.span(f.name.len, true);
                         try c.chargeWork(f.name.len);
-                        try out.key(f.name, c);
+                        try keyed(f.name, out, c);
                     }
                     try emitField(T, name, value, out, c, active);
                 }
@@ -124,6 +125,11 @@ fn emit(comptime policy: descriptor.Field, value: anytype, out: anytype, c: *ctx
         },
         else => @compileError("unsupported core encode type"),
     }
+}
+/// A field's name, which the type knows when it is compiled: a format that
+/// can spell it then takes it as a constant.
+fn keyed(comptime name: []const u8, out: anytype, c: *ctx.Context) (ctx.EncodeError || @TypeOf(out.*).Error)!void {
+    if (comptime @hasDecl(@TypeOf(out.*), "field")) try out.field(name, c) else try out.key(name, c);
 }
 fn begin(out: anytype, c: *ctx.Context, kind: model.Kind, name: []const u8, n: usize) (ctx.EncodeError || @TypeOf(out.*).Error)!void {
     try c.enter();
@@ -351,7 +357,7 @@ fn tagged(comptime T: type, value: T, out: anytype, c: *ctx.Context, active: ?*c
             defer c.leave();
             try c.node();
             try c.span(opt.tag.len, true);
-            try out.key(opt.tag, c);
+            try keyed(opt.tag, out, c);
             const wire_tag = (comptime descriptor.variant(T, @tagName(tag))).name;
             try c.node();
             try c.span(wire_tag.len, false);
@@ -359,7 +365,7 @@ fn tagged(comptime T: type, value: T, out: anytype, c: *ctx.Context, active: ?*c
             if (@hasField(@TypeOf(opt), "content")) {
                 try c.node();
                 try c.span(opt.content.len, true);
-                try out.key(opt.content, c);
+                try keyed(opt.content, out, c);
                 try emit(.{}, v, out, c, active);
             } else if (F != void) {
                 inline for (@typeInfo(F).@"struct".field_names, @typeInfo(F).@"struct".field_attrs) |name, attrs| {
@@ -368,7 +374,7 @@ fn tagged(comptime T: type, value: T, out: anytype, c: *ctx.Context, active: ?*c
                         const policy = comptime descriptor.field(F, name);
                         try c.node();
                         try c.span(policy.name.len, true);
-                        try out.key(policy.name, c);
+                        try keyed(policy.name, out, c);
                         try emitField(F, name, v, out, c, active);
                     }
                 }

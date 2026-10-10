@@ -34,6 +34,7 @@ const codec_test_module = @import("codec_test.zig");
 test {
     _ = @import("core_test.zig");
     _ = @import("json_test.zig");
+    _ = @import("zon_test.zig");
     _ = @import("testing/json_suite.zig");
     _ = @import("testing/compatibility.zig");
     _ = strand_module;

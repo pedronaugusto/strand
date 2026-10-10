@@ -130,6 +130,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- The Smith fuzz tests are shakedown `check` properties. `-Dcampaign` and `-Dseed` are gone: `SHAKEDOWN_CASES` and `SHAKEDOWN_SEED` choose the cases, and the generator seed files under `src/corpus/lines` and `src/corpus/versioned` with them.
 - A struct's comptime fields are written as members, an anonymous literal's
   constants among them, and a string literal is written as its text; reading a
   record with a comptime field checks the member holds that constant.
@@ -147,6 +148,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A `.pretty` reader no longer starts a record on a first line that is only whitespace (a lone carriage return with `crlf` off), and no longer parses a record that ends with the stream from a line buffer the look for the next line had moved.
+- A character literal cut inside its UTF-8 sequence is refused rather than read past the end of the literal.
 - A pointer to an opaque type, such as `*const anyopaque`, stopped the compile inside
   the descriptor's checks with an error about optional opaque types; it is refused as
   having no automatic data meaning, with the path to it.

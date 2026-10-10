@@ -1,18 +1,21 @@
-//! Properties that must hold for any bytes at all, checked by
-//! `std.testing.fuzz` and by a table of awkward inputs so that a plain
-//! `zig build test` checks them too.
+//! Properties that must hold for any bytes at all, checked by shakedown's
+//! `check` and by a table of awkward inputs.
 //!
 //! The properties are the ones a log reader is trusted for: nothing panics,
 //! nothing leaks, a line is reported under its own number, and a line that
 //! could not be parsed does not cost the reader its place in the stream.
 //!
-//! `zig build test` runs each property over the corpus below, over the table,
-//! and over as many seeded rounds as `-Dcampaign` asks for, which is quick.
-//! `zig build test --fuzz` runs the same properties under the compiler's
-//! fuzzer, which steers by coverage and does not stop.
+//! `zig build test` runs each property over seeded cases, and a failing case
+//! is shrunk to a minimal tape; `SHAKEDOWN_CASES` and `SHAKEDOWN_SEED` choose
+//! how many and which. `zig build test --fuzz` runs the same properties under
+//! the compiler's fuzzer, which steers by coverage and does not stop.
 
 const std = @import("std");
 const testing = std.testing;
+const shakedown = @import("shakedown");
+const gen = shakedown.gen;
+const Source = shakedown.Source;
+const inputs = @import("inputs.zig");
 const strand = @import("../strand.zig");
 const json = strand.json;
 const jsonl = strand.jsonl;
@@ -1046,11 +1049,10 @@ fn checkRotation(a: []const u8, b: []const u8) !void {
 //=========================================================================
 
 /// Writes generated JSON Lines into `buf` and returns what was written.
-fn generate(smith: *std.testing.Smith, buf: []u8) []u8 {
-    @disableInstrumentation();
+fn generate(s: *Source, buf: []u8) []u8 {
     var end: usize = 0;
-    while (end < buf.len and !smith.eos()) {
-        switch (smith.valueRangeAtMost(u8, 0, 6)) {
+    while (end < buf.len and s.more(6)) {
+        switch (gen.intRange(s, u8, 0, 6)) {
             0 => append(buf, &end, "{\"kind\":\"open\",\"at\":1,\"tags\":[\"a\"]}"),
             1 => append(buf, &end, "{\"kind\":\"open\",\"at\":"),
             2 => append(buf, &end, "{\"ping\":7}"),
@@ -1058,17 +1060,17 @@ fn generate(smith: *std.testing.Smith, buf: []u8) []u8 {
             4 => append(buf, &end, "{\"ki\\u006ed\":\"escaped\"}"),
             5 => {
                 append(buf, &end, "{\"kind\":\"");
-                const filler = smith.valueRangeAtMost(u8, 0, 64);
+                const filler = gen.intRange(s, u8, 0, 64);
                 for (0..filler) |_| append(buf, &end, "x");
                 append(buf, &end, "\"}");
             },
             // Bytes with no intentions at all, newlines among them.
             else => {
                 var chunk: [24]u8 = undefined;
-                append(buf, &end, chunk[0..smith.slice(&chunk)]);
+                append(buf, &end, chunkBytes(s, &chunk));
             },
         }
-        switch (smith.valueRangeAtMost(u8, 0, 2)) {
+        switch (gen.intRange(s, u8, 0, 2)) {
             0 => append(buf, &end, "\n"),
             1 => append(buf, &end, "\r\n"),
             else => {},
@@ -1079,15 +1081,14 @@ fn generate(smith: *std.testing.Smith, buf: []u8) []u8 {
 
 /// Records tagged inside their object: the tag first, last, twice, missing
 /// or not a string, around members of the arms and of none.
-fn generateTagged(smith: *std.testing.Smith, buf: []u8) []u8 {
-    @disableInstrumentation();
+fn generateTagged(s: *Source, buf: []u8) []u8 {
     var end: usize = 0;
-    while (end < buf.len and !smith.eos()) {
+    while (end < buf.len and s.more(3)) {
         append(buf, &end, "{");
-        const members = smith.valueRangeAtMost(u8, 0, 4);
+        const members = gen.intRange(s, u8, 0, 4);
         for (0..members) |i| {
             if (i != 0) append(buf, &end, ",");
-            switch (smith.valueRangeAtMost(u8, 0, 9)) {
+            switch (gen.intRange(s, u8, 0, 9)) {
                 0 => append(buf, &end, "\"kind\":\"open\""),
                 1 => append(buf, &end, "\"kind\":\"close\""),
                 2 => append(buf, &end, "\"kind\":\"ping\""),
@@ -1099,7 +1100,7 @@ fn generateTagged(smith: *std.testing.Smith, buf: []u8) []u8 {
                 8 => append(buf, &end, "\"k\\u0069nd\":\"ping\""),
                 else => {
                     var chunk: [12]u8 = undefined;
-                    append(buf, &end, chunk[0..smith.slice(&chunk)]);
+                    append(buf, &end, chunkBytes(s, &chunk));
                 },
             }
         }
@@ -1110,8 +1111,7 @@ fn generateTagged(smith: *std.testing.Smith, buf: []u8) []u8 {
 
 /// Lines of indented values, cut where a value can and cannot be cut: what a
 /// `.pretty` reader joins.
-fn generatePretty(smith: *std.testing.Smith, buf: []u8) []u8 {
-    @disableInstrumentation();
+fn generatePretty(s: *Source, buf: []u8) []u8 {
     const pieces = [_][]const u8{
         "{",            "}",         "[",     "]",       "  \"kind\": \"open\",",
         "  \"at\": 12", "1,",        "12",    "-0.5e3",  "tr",
@@ -1121,9 +1121,9 @@ fn generatePretty(smith: *std.testing.Smith, buf: []u8) []u8 {
         "\"\xff\"",     "\"a\x01\"", "\x1e{", "\"k\" 1", "{\"kind\":\"flat\"}",
     };
     var end: usize = 0;
-    while (end < buf.len and !smith.eos()) {
-        append(buf, &end, pieces[smith.valueRangeAtMost(u8, 0, pieces.len - 1)]);
-        switch (smith.valueRangeAtMost(u8, 0, 5)) {
+    while (end < buf.len and s.more(10)) {
+        append(buf, &end, pieces[gen.intRange(s, u8, 0, pieces.len - 1)]);
+        switch (gen.intRange(s, u8, 0, 5)) {
             0 => append(buf, &end, "\r\n"),
             1 => {},
             else => append(buf, &end, "\n"),
@@ -1132,9 +1132,15 @@ fn generatePretty(smith: *std.testing.Smith, buf: []u8) []u8 {
     return buf[0..end];
 }
 
+/// Up to `buf.len` arbitrary bytes, as many as the source chooses.
+fn chunkBytes(s: *Source, buf: []u8) []u8 {
+    const n = gen.intRange(s, usize, 0, buf.len);
+    s.bytes(buf[0..n]);
+    return buf[0..n];
+}
+
 /// Appends what fits and drops the rest, so the generator cannot overrun.
 fn append(buf: []u8, end: *usize, bytes: []const u8) void {
-    @disableInstrumentation();
     const n = @min(bytes.len, buf.len - end.*);
     @memcpy(buf[end.*..][0..n], bytes[0..n]);
     end.* += n;
@@ -1143,11 +1149,10 @@ fn append(buf: []u8, end: *usize, bytes: []const u8) void {
 /// Writes generated versioned envelopes into `buf` and returns what was
 /// written. Versions from before, at and after the current one, plus lines
 /// with no version at all and lines that are not envelopes.
-fn generateVersioned(smith: *std.testing.Smith, buf: []u8) []u8 {
-    @disableInstrumentation();
+fn generateVersioned(s: *Source, buf: []u8) []u8 {
     var end: usize = 0;
-    while (end < buf.len and !smith.eos()) {
-        switch (smith.valueRangeAtMost(u8, 0, 6)) {
+    while (end < buf.len and s.more(5)) {
+        switch (gen.intRange(s, u8, 0, 6)) {
             0 => append(buf, &end, "{\"v\":2,\"data\":{\"kind\":\"open\",\"at\":1}}"),
             1 => append(buf, &end, "{\"v\":1,\"data\":{\"kind\":\"open\"}}"),
             2 => append(buf, &end, "{\"data\":{\"kind\":\"open\"},\"v\":1}"),
@@ -1156,7 +1161,7 @@ fn generateVersioned(smith: *std.testing.Smith, buf: []u8) []u8 {
             5 => append(buf, &end, "{\"v\":2}"),
             else => {
                 var chunk: [24]u8 = undefined;
-                append(buf, &end, chunk[0..smith.slice(&chunk)]);
+                append(buf, &end, chunkBytes(s, &chunk));
             },
         }
         append(buf, &end, "\n");
@@ -1167,21 +1172,20 @@ fn generateVersioned(smith: *std.testing.Smith, buf: []u8) []u8 {
 /// Writes generated lines carrying values into `buf` and returns what was
 /// written: a record whose `data`, and sometimes whose `more`, is a value
 /// that is nearly JSON, nested a few deep.
-fn generateCarrying(smith: *std.testing.Smith, buf: []u8) []u8 {
-    @disableInstrumentation();
+fn generateCarrying(s: *Source, buf: []u8) []u8 {
     var end: usize = 0;
-    while (end < buf.len and !smith.eos()) {
+    while (end < buf.len and s.more(3)) {
         append(buf, &end, "{\"kind\":\"k\",\"data\":");
-        generateValue(smith, buf, &end, 3);
-        if (smith.valueRangeAtMost(u8, 0, 1) == 0) {
+        generateValue(s, buf, &end, 3);
+        if (gen.intRange(s, u8, 0, 1) == 0) {
             append(buf, &end, ",\"more\":[");
-            generateValue(smith, buf, &end, 2);
+            generateValue(s, buf, &end, 2);
             append(buf, &end, ",");
-            generateValue(smith, buf, &end, 2);
+            generateValue(s, buf, &end, 2);
             append(buf, &end, "]");
         }
         append(buf, &end, "}");
-        switch (smith.valueRangeAtMost(u8, 0, 2)) {
+        switch (gen.intRange(s, u8, 0, 2)) {
             0 => append(buf, &end, "\n"),
             1 => append(buf, &end, "\r\n"),
             else => {},
@@ -1193,9 +1197,8 @@ fn generateCarrying(smith: *std.testing.Smith, buf: []u8) []u8 {
 /// One value, most of the time: the scalars, containers of more of them,
 /// whitespace where JSON allows it and where it does not, the ways a value
 /// goes wrong, and bytes with no intentions at all.
-fn generateValue(smith: *std.testing.Smith, buf: []u8, end: *usize, depth: u8) void {
-    @disableInstrumentation();
-    switch (smith.valueRangeAtMost(u8, 0, 10)) {
+fn generateValue(s: *Source, buf: []u8, end: *usize, depth: u8) void {
+    switch (gen.intRange(s, u8, 0, 10)) {
         0 => append(buf, end, "null"),
         1 => append(buf, end, "true"),
         2 => append(buf, end, "-12.50e+3"),
@@ -1203,26 +1206,26 @@ fn generateValue(smith: *std.testing.Smith, buf: []u8, end: *usize, depth: u8) v
         4 => append(buf, end, " { }\t"),
         5 => if (depth == 0) append(buf, end, "{}") else {
             append(buf, end, "{\"a\" : ");
-            generateValue(smith, buf, end, depth - 1);
+            generateValue(s, buf, end, depth - 1);
             append(buf, end, ", \"b\":");
-            generateValue(smith, buf, end, depth - 1);
+            generateValue(s, buf, end, depth - 1);
             append(buf, end, "}");
         },
         6 => if (depth == 0) append(buf, end, "[]") else {
             append(buf, end, "[ ");
-            generateValue(smith, buf, end, depth - 1);
+            generateValue(s, buf, end, depth - 1);
             append(buf, end, ",");
-            generateValue(smith, buf, end, depth - 1);
+            generateValue(s, buf, end, depth - 1);
             append(buf, end, " ]");
         },
         7 => {
             const broken: []const []const u8 = &.{ "[1,", "{\"a\"", "tru", "01", "\"\\q\"", "\"\xff\"", "}", "", "1 2", "\"\\ud800\"" };
-            append(buf, end, broken[smith.valueRangeAtMost(u8, 0, broken.len - 1)]);
+            append(buf, end, broken[gen.intRange(s, u8, 0, broken.len - 1)]);
         },
         8 => append(buf, end, "  \r "),
         else => {
             var chunk: [8]u8 = undefined;
-            append(buf, end, chunk[0..smith.slice(&chunk)]);
+            append(buf, end, chunkBytes(s, &chunk));
         },
     }
 }
@@ -1230,8 +1233,7 @@ fn generateValue(smith: *std.testing.Smith, buf: []u8, end: *usize, depth: u8) v
 /// Fills `events` with generated values, drawing their strings out of `text`,
 /// and returns the ones that fit. The strings are where a round trip can go
 /// wrong, so they are where the awkward bytes go.
-fn generateEvents(smith: *std.testing.Smith, events: []Event, text: []u8) []Event {
-    @disableInstrumentation();
+fn generateEvents(s: *Source, events: []Event, text: []u8) []Event {
     const specials: []const []const u8 = &.{
         "plain",       "with \"quotes\"", "line\nbreak",
         "tab\there",   "\u{2028}sep",     "back\\slash",
@@ -1239,116 +1241,92 @@ fn generateEvents(smith: *std.testing.Smith, events: []Event, text: []u8) []Even
     };
     var used: usize = 0;
     var count: usize = 0;
-    while (count < events.len and !smith.eos()) : (count += 1) {
-        const pick = specials[smith.valueRangeAtMost(u8, 0, specials.len - 1)];
+    while (count < events.len and s.more(4)) : (count += 1) {
+        const pick = specials[gen.intRange(s, u8, 0, specials.len - 1)];
         if (used + pick.len > text.len) break;
         @memcpy(text[used..][0..pick.len], pick);
         const kind = text[used..][0..pick.len];
         used += pick.len;
         events[count] = .{
             .kind = kind,
-            .at = smith.valueRangeAtMost(u64, 0, std.math.maxInt(u64)),
-            .level = if (smith.valueRangeAtMost(u8, 0, 1) == 0) .info else .warn,
-            .note = if (smith.valueRangeAtMost(u8, 0, 1) == 0) null else kind,
+            .at = gen.intRange(s, u64, 0, std.math.maxInt(u64)),
+            .level = if (gen.intRange(s, u8, 0, 1) == 0) .info else .warn,
+            .note = if (gen.intRange(s, u8, 0, 1) == 0) null else kind,
         };
     }
     return events[0..count];
 }
 
-/// Seeds, from `src/corpus/lines`. Their bytes drive the generator rather than
-/// being the input, so they are there to give a campaign somewhere to start
-/// and to give `zig build test` a handful of runs that are not the empty one.
-///
-/// They are files rather than string literals so that an input a campaign
-/// found can be kept: write the bytes into `src/corpus/lines` under a name that
-/// says what they are, add the line here, and every later run starts from it
-/// too.
-const corpus: []const []const u8 = &.{
-    @embedFile("../corpus/lines/plain.jsonl"),
-    @embedFile("../corpus/lines/control-bytes.jsonl"),
-    @embedFile("../corpus/lines/not-utf8.jsonl"),
-    @embedFile("../corpus/lines/empty-objects.jsonl"),
-    @embedFile("../corpus/lines/escapes.jsonl"),
-    @embedFile("../corpus/lines/byte-order-mark.jsonl"),
-};
-
-/// Seeds for the versioned property, from `src/corpus/versioned`.
-const versioned_corpus: []const []const u8 = &.{
-    @embedFile("../corpus/versioned/current.jsonl"),
-    @embedFile("../corpus/versioned/older-and-unknown.jsonl"),
-    @embedFile("../corpus/versioned/damaged.jsonl"),
-};
-
 test "fuzz: Reader.next over generated lines" {
-    try std.testing.fuzz({}, fuzzReader, .{ .corpus = corpus });
+    try shakedown.check(testing.allocator, {}, fuzzReader, .{ .cases = 64 });
 }
 
 test "fuzz: LineReader over generated lines" {
-    try std.testing.fuzz({}, fuzzLineReader, .{ .corpus = corpus });
+    try shakedown.check(testing.allocator, {}, fuzzLineReader, .{ .cases = 64 });
 }
 
-fn fuzzLineReader(_: void, smith: *std.testing.Smith) anyerror!void {
-    @disableInstrumentation();
+fn fuzzLineReader(_: void, case: *shakedown.Case) anyerror!void {
+    const s = case.source;
     var buf: [2048]u8 = undefined;
-    const input = generate(smith, &buf);
+    const input = generate(s, &buf);
     // A bound the input can reach, so that a refusal and the lines read
     // after it are part of the property, and one it cannot.
-    try checkLineReader(input, smith.valueRangeAtMost(u32, 1, 128));
+    try checkLineReader(input, gen.intRange(s, u32, 1, 128));
     try checkLineReader(input, buf.len + 1);
 }
 
-fn fuzzReader(_: void, smith: *std.testing.Smith) anyerror!void {
-    @disableInstrumentation();
+fn fuzzReader(_: void, case: *shakedown.Case) anyerror!void {
+    const s = case.source;
     var buf: [2048]u8 = undefined;
-    const input = generate(smith, &buf);
+    const input = generate(s, &buf);
     // A bound the input can actually reach, so that `error.LineTooLong` is
     // part of the property rather than a branch nothing takes.
-    const max_line_bytes = smith.valueRangeAtMost(u32, 1, 128);
+    const max_line_bytes = gen.intRange(s, u32, 1, 128);
     try checkReaderFail(input, max_line_bytes);
     try checkReaderFail(input, buf.len + 1);
     try checkReaderSkip(input);
 }
 
 test "fuzz: a resumed Reader over generated lines" {
-    try std.testing.fuzz({}, fuzzResume, .{ .corpus = corpus });
+    try shakedown.check(testing.allocator, {}, fuzzResume, .{ .cases = 64 });
 }
 
-fn fuzzResume(_: void, smith: *std.testing.Smith) anyerror!void {
-    @disableInstrumentation();
+fn fuzzResume(_: void, case: *shakedown.Case) anyerror!void {
+    const s = case.source;
     var buf: [512]u8 = undefined;
-    try checkResume(generate(smith, &buf));
+    try checkResume(generate(s, &buf));
 }
 
 test "fuzz: kindOf over generated lines" {
-    try std.testing.fuzz({}, fuzzKindOf, .{ .corpus = corpus });
+    try shakedown.check(testing.allocator, {}, fuzzKindOf, .{ .cases = 64 });
 }
 
-fn fuzzKindOf(_: void, smith: *std.testing.Smith) anyerror!void {
-    @disableInstrumentation();
+fn fuzzKindOf(_: void, case: *shakedown.Case) anyerror!void {
+    const s = case.source;
     var buf: [512]u8 = undefined;
-    var it = jsonl.lines(generate(smith, &buf));
+    var it = jsonl.lines(generate(s, &buf));
     while (it.next()) |line| try checkKindOf(line.line);
 }
 
 test "fuzz: tagOf over generated lines" {
-    try std.testing.fuzz({}, fuzzTagOf, .{ .corpus = corpus });
+    try shakedown.check(testing.allocator, {}, fuzzTagOf, .{ .cases = 64 });
 }
 
-fn fuzzTagOf(_: void, smith: *std.testing.Smith) anyerror!void {
-    @disableInstrumentation();
+fn fuzzTagOf(_: void, case: *shakedown.Case) anyerror!void {
+    const s = case.source;
     var buf: [512]u8 = undefined;
-    var it = jsonl.lines(generate(smith, &buf));
+    var it = jsonl.lines(generate(s, &buf));
     while (it.next()) |line| try checkTagOf(line.line);
 }
 
 test "fuzz: memberOf and tagged unions over generated lines" {
-    try std.testing.fuzz({}, fuzzTagged, .{ .corpus = corpus });
+    try shakedown.check(testing.allocator, {}, fuzzTagged, .{ .cases = 64 });
 }
 
-fn fuzzTagged(_: void, smith: *std.testing.Smith) anyerror!void {
-    @disableInstrumentation();
+fn fuzzTagged(_: void, case: *shakedown.Case) anyerror!void {
+    const s = case.source;
     var buf: [512]u8 = undefined;
-    const input = if (smith.value(bool)) generateTagged(smith, &buf) else generate(smith, &buf);
+    const input = if (gen.boolean(s)) generateTagged(s, &buf) else generate(s, &buf);
     var it = jsonl.lines(input);
     while (it.next()) |line| {
         try checkMemberOf(line.line);
@@ -1357,33 +1335,38 @@ fn fuzzTagged(_: void, smith: *std.testing.Smith) anyerror!void {
 }
 
 test "fuzz: lines over generated input" {
-    try std.testing.fuzz({}, fuzzLines, .{ .corpus = corpus });
+    try shakedown.check(testing.allocator, {}, fuzzLines, .{ .cases = 64 });
 }
 
-fn fuzzLines(_: void, smith: *std.testing.Smith) anyerror!void {
-    @disableInstrumentation();
+fn fuzzLines(_: void, case: *shakedown.Case) anyerror!void {
+    const s = case.source;
     var buf: [2048]u8 = undefined;
-    try checkLines(generate(smith, &buf));
+    try checkLines(generate(s, &buf));
 }
 
 test "fuzz: a pretty reader over generated lines" {
-    try std.testing.fuzz({}, fuzzPretty, .{ .corpus = corpus });
+    try shakedown.check(testing.allocator, {}, fuzzPretty, .{ .cases = 64 });
 }
 
-fn fuzzPretty(_: void, smith: *std.testing.Smith) anyerror!void {
-    @disableInstrumentation();
+fn fuzzPretty(_: void, case: *shakedown.Case) anyerror!void {
+    const s = case.source;
     var buf: [2048]u8 = undefined;
-    try checkPretty(generate(smith, &buf));
+    try checkPretty(generate(s, &buf));
 }
 
 test "fuzz: a pretty reader parses in place what it would join" {
-    try std.testing.fuzz({}, fuzzPrettyInPlace, .{ .corpus = corpus });
+    try shakedown.check(testing.allocator, {}, fuzzPrettyInPlace, .{ .cases = 64 });
 }
 
-fn fuzzPrettyInPlace(_: void, smith: *std.testing.Smith) anyerror!void {
-    @disableInstrumentation();
+test "a pretty reader does not start a record on a first line that is only whitespace" {
+    // With `crlf` off a lone carriage return is a line, and the value after it is not its record.
+    try checkPrettyInPlace(json.Value, "}\r\n\r\n12\n", .{ .reject_control_bytes = false, .crlf = false });
+}
+
+fn fuzzPrettyInPlace(_: void, case: *shakedown.Case) anyerror!void {
+    const s = case.source;
     var buf: [1024]u8 = undefined;
-    const input = generatePretty(smith, &buf);
+    const input = generatePretty(s, &buf);
     inline for (.{ AnyObject, Event, json.Value }) |T| {
         try checkPrettyInPlace(T, input, .{ .on_malformed = .skip });
         try checkPrettyInPlace(T, input, .{});
@@ -1394,99 +1377,102 @@ fn fuzzPrettyInPlace(_: void, smith: *std.testing.Smith) anyerror!void {
 }
 
 test "fuzz: a pretty round trip over generated values" {
-    try std.testing.fuzz({}, fuzzPrettyRoundTrip, .{ .corpus = corpus });
+    try shakedown.check(testing.allocator, {}, fuzzPrettyRoundTrip, .{ .cases = 64 });
 }
 
 test "fuzz: a writer writes each record as json.write does, one line each" {
-    try std.testing.fuzz({}, fuzzWriter, .{ .corpus = corpus });
+    try shakedown.check(testing.allocator, {}, fuzzWriter, .{ .cases = 64 });
 }
 
-fn fuzzWriter(_: void, smith: *std.testing.Smith) anyerror!void {
-    @disableInstrumentation();
+fn fuzzWriter(_: void, case: *shakedown.Case) anyerror!void {
+    const s = case.source;
     var text: [512]u8 = undefined;
     var events: [16]Event = undefined;
-    try checkWriter(generateEvents(smith, &events, &text));
+    try checkWriter(generateEvents(s, &events, &text));
 }
 
-fn fuzzPrettyRoundTrip(_: void, smith: *std.testing.Smith) anyerror!void {
-    @disableInstrumentation();
+fn fuzzPrettyRoundTrip(_: void, case: *shakedown.Case) anyerror!void {
+    const s = case.source;
     var text: [512]u8 = undefined;
     var events: [16]Event = undefined;
-    try checkPrettyRoundTrip(generateEvents(smith, &events, &text));
+    try checkPrettyRoundTrip(generateEvents(s, &events, &text));
 }
 
 test "fuzz: a separated stream over generated values" {
-    try std.testing.fuzz({}, fuzzSeparated, .{ .corpus = corpus });
+    try shakedown.check(testing.allocator, {}, fuzzSeparated, .{ .cases = 64 });
 }
 
-fn fuzzSeparated(_: void, smith: *std.testing.Smith) anyerror!void {
-    @disableInstrumentation();
+fn fuzzSeparated(_: void, case: *shakedown.Case) anyerror!void {
+    const s = case.source;
     var text: [512]u8 = undefined;
     var events: [16]Event = undefined;
     var damage: [64]u8 = undefined;
-    const made = generateEvents(smith, &events, &text);
-    try checkSeparated(made, damage[0..smith.slice(&damage)]);
+    const made = generateEvents(s, &events, &text);
+    try checkSeparated(made, chunkBytes(s, &damage));
 }
 
 test "fuzz: a follower over a file replaced under it" {
-    try std.testing.fuzz({}, fuzzRotation, .{ .corpus = corpus });
+    try shakedown.check(testing.allocator, {}, fuzzRotation, .{ .cases = 64 });
 }
 
-fn fuzzRotation(_: void, smith: *std.testing.Smith) anyerror!void {
-    @disableInstrumentation();
+fn fuzzRotation(_: void, case: *shakedown.Case) anyerror!void {
+    const s = case.source;
     var before: [256]u8 = undefined;
     var after: [256]u8 = undefined;
-    const a = generate(smith, &before);
-    const b = generate(smith, &after);
+    const a = generate(s, &before);
+    const b = generate(s, &after);
     try checkRotation(a, b);
 }
 
 test "fuzz: Tail over generated files" {
-    try std.testing.fuzz({}, fuzzTail, .{ .corpus = corpus });
+    try shakedown.check(testing.allocator, {}, fuzzTail, .{ .cases = 64 });
 }
 
-fn fuzzTail(_: void, smith: *std.testing.Smith) anyerror!void {
-    @disableInstrumentation();
+fn fuzzTail(_: void, case: *shakedown.Case) anyerror!void {
+    const s = case.source;
     var buf: [512]u8 = undefined;
-    try checkTail(generate(smith, &buf));
+    try checkTail(generate(s, &buf));
 }
 
 test "fuzz: Versioned over generated lines" {
-    try std.testing.fuzz({}, fuzzVersioned, .{ .corpus = versioned_corpus });
+    try shakedown.check(testing.allocator, {}, fuzzVersioned, .{ .cases = 64 });
 }
 
-fn fuzzVersioned(_: void, smith: *std.testing.Smith) anyerror!void {
-    @disableInstrumentation();
+fn fuzzVersioned(_: void, case: *shakedown.Case) anyerror!void {
+    const s = case.source;
     var buf: [512]u8 = undefined;
-    var it = jsonl.lines(generateVersioned(smith, &buf));
+    var it = jsonl.lines(generateVersioned(s, &buf));
     while (it.next()) |line| try checkVersioned(line.line);
 }
 
 test "fuzz: raw values over generated lines" {
-    try std.testing.fuzz({}, fuzzRaw, .{ .corpus = corpus });
+    try shakedown.check(testing.allocator, {}, fuzzRaw, .{ .cases = 64 });
 }
 
-fn fuzzRaw(_: void, smith: *std.testing.Smith) anyerror!void {
-    @disableInstrumentation();
+fn fuzzRaw(_: void, case: *shakedown.Case) anyerror!void {
+    const s = case.source;
     var buf: [1024]u8 = undefined;
-    const input = generateCarrying(smith, &buf);
+    const input = generateCarrying(s, &buf);
     try checkRawReader(input);
     var it: PhysicalLines = .{ .rest = input };
     while (it.next()) |line| try checkRaw(line.line);
 }
 
 test "fuzz: the decoder accepts the grammar std.json accepts, and never panics" {
-    try std.testing.fuzz({}, fuzzDecode, .{ .corpus = &decode_corpus });
+    try shakedown.check(testing.allocator, {}, fuzzDecode, .{});
+}
+
+test "the decoder takes each recorded value" {
+    for (decode_examples) |bytes| try checkDecode(bytes);
 }
 
 /// Any bytes, read as any JSON value and as two record types: accepted as
 /// JSON exactly where `std.json` accepts them (the grammar, with repeated
 /// keys allowed and within the depth limit), never a panic, and what is
 /// accepted is written to bytes that read back as the same bytes.
-fn fuzzDecode(_: void, smith: *std.testing.Smith) anyerror!void {
+fn fuzzDecode(_: void, case: *shakedown.Case) anyerror!void {
     var buffer: [512]u8 = undefined;
-    const bytes = buffer[0..smith.slice(&buffer)];
-    try checkDecode(bytes);
+    try checkDecode(inputs.draw(case, &buffer, &decode_examples, 48));
 }
 
 fn checkDecode(bytes: []const u8) !void {
@@ -1511,15 +1497,22 @@ fn checkDecode(bytes: []const u8) !void {
 }
 
 test "fuzz: a string is written as std.json writes it" {
-    try std.testing.fuzz({}, fuzzEncode, .{ .corpus = &encode_corpus });
+    try shakedown.check(testing.allocator, {}, fuzzEncode, .{});
+}
+
+test "a string is written as std.json writes it, for each recorded string" {
+    for (encode_examples) |bytes| try checkEncodeAll(bytes);
 }
 
 /// Any bytes, as a string, a struct's member and a union's payload: UTF-8 is
 /// written as `std.json` writes it and reads back as the same bytes, and
 /// anything else is refused, with nothing written in its place.
-fn fuzzEncode(_: void, smith: *std.testing.Smith) anyerror!void {
+fn fuzzEncode(_: void, case: *shakedown.Case) anyerror!void {
     var buffer: [512]u8 = undefined;
-    const bytes = buffer[0..smith.slice(&buffer)];
+    try checkEncodeAll(inputs.draw(case, &buffer, &encode_examples, 48));
+}
+
+fn checkEncodeAll(bytes: []const u8) !void {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
@@ -1545,130 +1538,35 @@ fn checkEncode(a: std.mem.Allocator, value: anytype, text: []const u8) !void {
     try testing.expectEqualStrings(try written(a, value), try written(a, back));
 }
 
-const encode_corpus = [_][]const u8{
-    smithSlice(""),
-    smithSlice("plain"),
-    smithSlice("a quote \" and a backslash \\ past the first sixteen bytes"),
-    smithSlice("\x00\x01\x1f\x7f\n\r\t"),
-    smithSlice("caf\xc3\xa9 \xe2\x82\xac \xf0\x9f\x98\x80"),
-    smithSlice("\xff\xfe not UTF-8"),
-    smithSlice("\xed\xa0\x80 a surrogate half"),
+const encode_examples = [_][]const u8{
+    "",
+    "plain",
+    "a quote \" and a backslash \\ past the first sixteen bytes",
+    "\x00\x01\x1f\x7f\n\r\t",
+    "caf\xc3\xa9 \xe2\x82\xac \xf0\x9f\x98\x80",
+    "\xff\xfe not UTF-8",
+    "\xed\xa0\x80 a surrogate half",
 };
 
-/// Bytes as `std.testing.Smith.slice` reads them: a little-endian length,
-/// then the bytes.
-fn smithSlice(comptime body: []const u8) []const u8 {
-    comptime {
-        var entry: [4 + body.len]u8 = undefined;
-        std.mem.writeInt(u32, entry[0..4], body.len, .little);
-        @memcpy(entry[4..], body);
-        const frozen = entry;
-        return &frozen;
-    }
-}
-
-const decode_corpus = [_][]const u8{
-    smithSlice("{\"text\":\"plain\"}"),
-    smithSlice("{\"nested\":{\"a\":null,\"b\":[\"x\",\"y\"],\"d\":\"red\",\"e\":{\"empty\":{}}}}"),
-    smithSlice("{\"list\":[1,0,4294967295]}"),
-    smithSlice("{\"twice\":null}"),
-    smithSlice("{\"hue\":\"gr\\\"een\"}"),
-    smithSlice("{\"signed\":-9223372036854775808}"),
-    smithSlice("{\"text\":\"caf\xc3\xa9 \\u0041\"}"),
-    smithSlice("{ \"flag\" : true }"),
-    smithSlice("{\"value\":1,\"padding\":\"pppp\"}"),
-    smithSlice("{\"huge\":1.8e38}"),
-    smithSlice("{\"negative\":1.7014118346046923173168730371588410572e38}"),
-    smithSlice("{\"huge\":3.402823669209384634633746074317682114555e38}"),
-    smithSlice("{\"text\":\"caf\xc3"),
+const decode_examples = [_][]const u8{
+    "{\"text\":\"plain\"}",
+    "{\"nested\":{\"a\":null,\"b\":[\"x\",\"y\"],\"d\":\"red\",\"e\":{\"empty\":{}}}}",
+    "{\"list\":[1,0,4294967295]}",
+    "{\"twice\":null}",
+    "{\"hue\":\"gr\\\"een\"}",
+    "{\"signed\":-9223372036854775808}",
+    "{\"text\":\"caf\xc3\xa9 \\u0041\"}",
+    "{ \"flag\" : true }",
+    "{\"value\":1,\"padding\":\"pppp\"}",
+    "{\"huge\":1.8e38}",
+    "{\"negative\":1.7014118346046923173168730371588410572e38}",
+    "{\"huge\":3.402823669209384634633746074317682114555e38}",
+    "{\"text\":\"caf\xc3",
 };
 
 //=========================================================================
-// The campaign: every property over generated inputs, driven by a seed.
-//
-// `zig build test --fuzz` runs the properties under the compiler's fuzzer,
-// which steers the next input by the coverage the last one reached and runs
-// until it is stopped. That is the mode to leave running; it is not a mode a
-// build can wait on. A `std.testing.Smith` can be driven from any bytes at
-// all, so the same properties take bytes from a seeded generator here: no
-// coverage to steer it, and a run that ends.
-//
-// `-Dcampaign=N` is how many rounds, `-Dseed=N` is which ones. A round that
-// fails prints both, and a run with those two numbers is that round again.
-//=========================================================================
-
-const build_options = @import("build_options");
-
-/// Bytes shaped the way a `std.testing.Smith` reads them.
-///
-/// It takes one byte to decide whether a sequence has ended — anything but
-/// zero ends it — and eight little-endian bytes for a value, which it throws
-/// away and replaces with the bottom of the range unless it is inside it. A
-/// stream of uniform random bytes therefore ends at once and chooses nothing,
-/// and mostly zeros with small values among them is what drives it through
-/// its choices instead.
-fn seedBytes(random: std.Random, out: []u8) void {
-    for (out) |*byte| byte.* = switch (random.uintLessThan(u8, 10)) {
-        0...7 => 0,
-        8 => random.uintLessThan(u8, 7),
-        else => random.int(u8),
-    };
-}
-
-/// Every property, over one generated input.
-fn oneRound(bytes: []const u8) !void {
-    inline for (.{
-        fuzzLineReader,
-        fuzzReader,
-        fuzzResume,
-        fuzzKindOf,
-        fuzzTagOf,
-        fuzzTagged,
-        fuzzLines,
-        fuzzPretty,
-        fuzzPrettyRoundTrip,
-        fuzzPrettyInPlace,
-        fuzzWriter,
-        fuzzSeparated,
-        fuzzRotation,
-        fuzzTail,
-        fuzzVersioned,
-        fuzzRaw,
-        fuzzDecode,
-        fuzzEncode,
-    }) |property| {
-        var smith: std.testing.Smith = .{ .in = bytes };
-        try property({}, &smith);
-    }
-}
-
-test "the properties hold over generated inputs" {
-    // The corpus first, through every property rather than only the ones
-    // that name it, and then as much generated input as the build asked for.
-    for (corpus) |seed| try oneRound(seed);
-    for (versioned_corpus) |seed| try oneRound(seed);
-    for (decode_corpus) |seed| try oneRound(seed);
-    for (encode_corpus) |seed| try oneRound(seed);
-
-    var prng: std.Random.DefaultPrng = .init(build_options.seed);
-    var bytes: [1024]u8 = undefined;
-    for (0..build_options.campaign) |i| {
-        const len = prng.random().intRangeAtMost(usize, 1, bytes.len);
-        seedBytes(prng.random(), bytes[0..len]);
-        oneRound(bytes[0..len]) catch |err| {
-            std.debug.print(
-                "round {d} of seed 0x{x} failed: rerun with -Dseed=0x{x} -Dcampaign={d}\n",
-                .{ i, build_options.seed, build_options.seed, i + 1 },
-            );
-            return err;
-        };
-    }
-}
-
-//=========================================================================
-// The same properties, over inputs chosen by hand. A fuzz test that is only
-// ever run over its corpus proves little, and a corpus drives the generator
-// rather than the code, so the awkward cases are stated outright.
+// The same properties, over inputs chosen by hand: the awkward cases are
+// stated outright.
 //=========================================================================
 
 const table: []const []const u8 = &.{

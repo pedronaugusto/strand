@@ -128,6 +128,13 @@ pub const Character = struct { value: u21, end: usize };
 /// The character literal at `at`, an opening quote.
 pub fn character(input: []const u8, at: usize) error{SyntaxError}!Character {
     const end = try literalEnd(input, at + 1, '\'');
+    // std indexes the whole UTF-8 sequence a lead byte announces, and does
+    // not look that the literal holds it: `'\xe2'` is out of bounds there.
+    const inner = input[at + 1 .. end];
+    if (inner.len != 0 and inner[0] != '\\') {
+        const length = std.unicode.utf8ByteSequenceLength(inner[0]) catch return error.SyntaxError;
+        if (inner.len < length) return error.SyntaxError;
+    }
     return switch (literal.parseCharLiteral(input[at .. end + 1])) {
         .success => |value| .{ .value = value, .end = end + 1 },
         .failure => error.SyntaxError,

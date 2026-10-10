@@ -504,8 +504,10 @@ pub const LineReader = struct {
         grown: []const u8,
         /// The stream ended first, and the record is exactly as it was —
         /// which for a `.pretty` reader means a record that never
-        /// finished.
-        ended,
+        /// finished. These are its bytes, in the line buffer: looking for
+        /// the next line may have moved the buffer, so the slice that was
+        /// passed in is not to be used again.
+        ended: []const u8,
         /// The line joined on holds a raw control byte and the reader was
         /// told to skip such a record. `fault` names it already.
         damaged,
@@ -544,7 +546,7 @@ pub const LineReader = struct {
             return err;
         }) orelse {
             self.line_buf.writer.end = before;
-            return .ended;
+            return .{ .ended = self.line_buf.writer.buffered() };
         };
         if (try self.checkControl(joined, before + 1, number)) {
             self.skipped += 1;

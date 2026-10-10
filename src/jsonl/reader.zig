@@ -253,6 +253,12 @@ pub fn Reader(comptime T: type) type {
         /// and lines `takeThrough` will not take. What that path makes of a
         /// record this one takes is the same record.
         noinline fn inPlace(self: *Self, raw: RawLine, rest: []const u8) ?Line(T) {
+            // The value starts on the record's first line. A first line that is
+            // only whitespace (a lone carriage return when `crlf` is off) is
+            // not the start of a record, whatever follows it.
+            var start: usize = 0;
+            while (start < raw.line.len and (rest[start] == ' ' or rest[start] == '\t' or rest[start] == '\r')) start += 1;
+            if (start == raw.line.len) return null;
             _ = self.arena.reset(.retain_capacity);
             const found = json.parsePrefixLeaky(T, self.arena.allocator(), rest, self.options.parse) catch return null;
             // Whitespace to the end of the line the value ended on, which
@@ -287,8 +293,9 @@ pub fn Reader(comptime T: type) type {
                     // The record is damaged rather than unfinished, and the
                     // line reader has already said where and counted it.
                     .damaged => return null,
-                    .ended => {
+                    .ended => |kept| {
                         if (self.options.require_terminator) return null;
+                        record = kept;
                         break;
                     },
                 }

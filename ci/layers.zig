@@ -75,7 +75,6 @@ pub const references: []const gantry.rules.ReferenceRule = &.{
             "aegis",
             "airlock",
             "airlock.testing",
-            "build_options",
             "builtin",
             "rejection_options",
             "shakedown",

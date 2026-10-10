@@ -223,8 +223,8 @@ path to the field that is the problem. A type with a meaning of its own declares
 
 `zig build test` runs the unit suite, scratch tests and examples in Debug by default.
 The suite covers framing, codec agreement with `std.json`, owned copies, rotation,
-cancellation and malformed records. Properties run from corpus inputs and 32 seeded
-rounds by default; `-Dcampaign=N` and `-Dseed=N` select a generated-input run. `zig
+cancellation and malformed records. Properties are shakedown `check` runs of seeded
+cases; `SHAKEDOWN_CASES` and `SHAKEDOWN_SEED` select a larger or a repeated run. `zig
 build test --fuzz` runs the coverage-guided targets until stopped. CI also runs
 `zig build lint`.
 
@@ -233,8 +233,8 @@ Linux Debug tests and examples, and cross-target compilation. Merge adds the
 configured macOS/Windows SDK links and native Debug test replay. Release adds
 optimized configurations, full configured cross coverage and Linux ThreadSanitizer.
 Merge/release also try Zig master in a non-blocking job. The profile job refreshes
-recorded test durations; it does not execute a larger generated-input campaign.
-Run a larger campaign explicitly with `zig build test -Dcampaign=20000 -Doptimize=safe`.
+recorded test durations; it does not run a larger set of generated cases.
+Run one explicitly with `SHAKEDOWN_CASES=20000 zig build test -Doptimize=safe`.
 
 Zig 0.17.0 on aarch64 macOS miscompiles a vector whose size is not a power of two,
 such as `@Vector(3, u128)` (48 bytes), held in an optional or in an aggregate inside

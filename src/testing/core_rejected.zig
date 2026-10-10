@@ -1,6 +1,6 @@
 //! Negative operation instantiations. Inspection alone remains non-failing.
 const std = @import("std");
-const core = @import("strand.core");
+const core = @import("strand").core;
 const options = @import("rejection_options");
 const Backend = struct {
     pub const Error = core.DecodeError || core.EncodeError;

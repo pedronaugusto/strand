@@ -1,6 +1,6 @@
 //! Complete JSON wire tokens as immediate core events, not a token tape.
 const std = @import("std");
-const core = @import("strand.core");
+const core = @import("../core.zig");
 const Scanner = @import("Scanner.zig");
 const number = @import("number.zig");
 pub const Format = enum { json };

@@ -7,63 +7,24 @@ pub fn build(b: *std.Build) !void {
     const optimize = b.standardOptimizeOption(.{});
 
     //=====================================================================
-    // The module. Pure Zig on `std` and airlock, which syncs the file under
-    // a writer and tells one file from another for a follower: nothing to
-    // link, nothing to vendor, no build options, and so nothing a consumer
-    // has to match.
+    // The module. Pure Zig on `std`, aegis (the checked work in the core) and
+    // airlock (which syncs the file under a writer and tells one file from
+    // another for a follower): nothing to link, nothing to vendor, no build
+    // options, and so nothing a consumer has to match. core, json, jsonl and
+    // zon are namespaces of it, not modules of their own: every user fetches
+    // the same two packages whichever part they take, no part links anything,
+    // and Zig analyzes only the part a program names. The layering inside is
+    // ci/layers.zig's, checked at file level.
     //=====================================================================
 
     const airlock_dependency = b.dependency("airlock", .{ .target = target, .optimize = optimize });
     const airlock = airlock_dependency.module("airlock");
     const aegis = b.dependency("aegis", .{ .target = target, .optimize = optimize }).module("aegis");
-    const core_module = b.addModule("strand.core", .{
-        .root_source_file = b.path("src/core.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{.{ .name = "aegis", .module = aegis }},
-    });
-    const mapping = b.createModule(.{ .root_source_file = b.path("src/core/compat.zig"), .target = target, .optimize = optimize });
-    const json_impl = b.createModule(.{
-        .root_source_file = b.path("src/json/api.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{ .{ .name = "strand.core", .module = core_module }, .{ .name = "mapping", .module = mapping } },
-    });
-    const json_module = b.addModule("strand.json", .{
-        .root_source_file = b.path("src/json.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{.{ .name = "json", .module = json_impl }},
-    });
-    const jsonl_impl = b.createModule(.{
-        .root_source_file = b.path("src/jsonl/api.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{ .{ .name = "airlock", .module = airlock }, .{ .name = "json", .module = json_impl }, .{ .name = "strand.core", .module = core_module }, .{ .name = "strand.json", .module = json_module } },
-    });
-    const jsonl_module = b.addModule("strand.jsonl", .{
-        .root_source_file = b.path("src/jsonl.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{.{ .name = "jsonl", .module = jsonl_impl }},
-    });
-    const zon_impl = b.createModule(.{
-        .root_source_file = b.path("src/zon/api.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{.{ .name = "strand.core", .module = core_module }},
-    });
-    const zon_module = b.addModule("strand.zon", .{
-        .root_source_file = b.path("src/zon.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{.{ .name = "zon", .module = zon_impl }},
-    });
     const module = b.addModule("strand", .{
         .root_source_file = b.path("src/strand.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{ .{ .name = "strand.core", .module = core_module }, .{ .name = "strand.json", .module = json_module }, .{ .name = "strand.jsonl", .module = jsonl_module }, .{ .name = "strand.zon", .module = zon_module } },
+        .imports = &.{ .{ .name = "aegis", .module = aegis }, .{ .name = "airlock", .module = airlock } },
     });
 
     // Everything below is strand's own: a project depending on strand
@@ -93,7 +54,7 @@ pub fn build(b: *std.Build) !void {
             .target = target,
             .optimize = optimize,
             .sanitize_thread = if (thread_sanitizer) true else null,
-            .imports = &.{ .{ .name = "airlock", .module = airlock }, .{ .name = "strand.core", .module = core_module }, .{ .name = "json", .module = json_impl }, .{ .name = "jsonl", .module = jsonl_impl }, .{ .name = "strand.json", .module = json_module }, .{ .name = "strand.jsonl", .module = jsonl_module }, .{ .name = "zon", .module = zon_impl }, .{ .name = "strand.zon", .module = zon_module } },
+            .imports = &.{ .{ .name = "aegis", .module = aegis }, .{ .name = "airlock", .module = airlock } },
         }),
     });
     // shakedown, and airlock's seam on it, are lazy and test-only: no
@@ -122,30 +83,8 @@ pub fn build(b: *std.Build) !void {
     test_options.addOption(u64, "seed", seed);
     tests.root_module.addOptions("build_options", test_options);
 
-    const json_tests = b.addTest(.{ .name = "json-module-tests", .root_module = b.createModule(.{
-        .root_source_file = b.path("src/json/api.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{ .{ .name = "strand.core", .module = core_module }, .{ .name = "mapping", .module = mapping } },
-    }) });
-    const jsonl_tests = b.addTest(.{ .name = "jsonl-module-tests", .root_module = b.createModule(.{
-        .root_source_file = b.path("src/jsonl/api.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{ .{ .name = "airlock", .module = airlock }, .{ .name = "json", .module = json_impl }, .{ .name = "strand.core", .module = core_module }, .{ .name = "strand.json", .module = json_module } },
-    }) });
-    if (tests.root_module.import_table.get("airlock.testing")) |seam| jsonl_tests.root_module.addImport("airlock.testing", seam);
-    const zon_tests = b.addTest(.{ .name = "zon-module-tests", .root_module = b.createModule(.{
-        .root_source_file = b.path("src/zon/api.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{.{ .name = "strand.core", .module = core_module }},
-    }) });
     const test_step = b.step("test", "Run strand tests");
-    // The assembly above reaches every module's tests once. The module roots
-    // are compiled on their own below, which holds each module to its own
-    // imports; running them too would run every test twice, and a test run on
-    // two shards is a profile failure.
+    // The assembly reaches every test once, in one executable.
     test_step.dependOn(&b.addRunArtifact(tests).step);
 
     const scratch_tests = b.addTest(.{
@@ -164,9 +103,6 @@ pub fn build(b: *std.Build) !void {
     // installs nothing, so `zig build` would otherwise do no work at all.
     const check_step = b.step("check", "Compile the tests and examples without running them");
     check_step.dependOn(&tests.step);
-    check_step.dependOn(&json_tests.step);
-    check_step.dependOn(&jsonl_tests.step);
-    check_step.dependOn(&zon_tests.step);
     check_step.dependOn(&scratch_tests.step);
     b.getInstallStep().dependOn(check_step);
 
@@ -176,7 +112,7 @@ pub fn build(b: *std.Build) !void {
             .root_source_file = b.path("ci/json-consumer.zig"),
             .target = target,
             .optimize = optimize,
-            .imports = &.{ .{ .name = "strand.json", .module = json_module }, .{ .name = "strand.core", .module = core_module } },
+            .imports = &.{.{ .name = "strand", .module = module }},
         }),
     });
     test_step.dependOn(&b.addRunArtifact(json_consumer).step);
@@ -228,7 +164,7 @@ pub fn build(b: *std.Build) !void {
                     .root_source_file = b.path("src/testing/core_rejected.zig"),
                     .target = target,
                     .optimize = optimize,
-                    .imports = &.{.{ .name = "strand.core", .module = core_module }},
+                    .imports = &.{.{ .name = "strand", .module = module }},
                 }),
             });
             rejected.root_module.addOptions("rejection_options", rejection_options);
@@ -296,10 +232,8 @@ pub fn build(b: *std.Build) !void {
         baseline.root_module.addImport("shakedown", dependency.module("shakedown"));
         const s2_bench = b.addExecutable(.{
             .name = "strand-s2-bench",
-            .root_module = b.createModule(.{ .root_source_file = b.path("bench/s2.zig"), .target = target, .optimize = bench_mode, .imports = benchImports(b, target, bench_mode) }),
+            .root_module = b.createModule(.{ .root_source_file = b.path("bench/s2.zig"), .target = target, .optimize = bench_mode, .imports = &.{.{ .name = "seam", .module = benchSeam(b, target, bench_mode) }} }),
         });
-        const s2_root = s2_bench.root_module.import_table.get("strand").?;
-        s2_bench.root_module.addImport("json", s2_root.import_table.get("strand.json").?.import_table.get("json").?);
         s2_bench.root_module.addImport("shakedown", dependency.module("shakedown"));
         b.step("s2-bench-build", "Compile explicit paired S2 observations").dependOn(&b.addInstallArtifact(s2_bench, .{}).step);
         check_step.dependOn(&s2_bench.step);
@@ -321,7 +255,7 @@ pub fn build(b: *std.Build) !void {
             schema_options.addOption(bool, "common", comptime std.mem.eql(u8, which, "core"));
             const schema = b.addExecutable(.{
                 .name = "strand-schema-" ++ which,
-                .root_module = b.createModule(.{ .root_source_file = b.path("bench/schema.zig"), .target = target, .optimize = bench_mode, .imports = &.{ .{ .name = "strand.core", .module = s2_root.import_table.get("strand.core").? }, .{ .name = "json", .module = s2_bench.root_module.import_table.get("json").? } } }),
+                .root_module = b.createModule(.{ .root_source_file = b.path("bench/schema.zig"), .target = target, .optimize = bench_mode, .imports = &.{.{ .name = "seam", .module = s2_bench.root_module.import_table.get("seam").? }} }),
             });
             schema.root_module.addOptions("schema_options", schema_options);
             b.step("schema-" ++ which ++ "-build", "Compile ten 100-field checked JSON encoders").dependOn(&b.addInstallArtifact(schema, .{}).step);
@@ -334,7 +268,7 @@ pub fn build(b: *std.Build) !void {
             .root_source_file = .{ .cwd_relative = source },
             .target = target,
             .optimize = bench_mode,
-            .imports = &.{.{ .name = "airlock", .module = bench_module.import_table.get("airlock").? }},
+            .imports = &.{ .{ .name = "aegis", .module = bench_module.import_table.get("aegis").? }, .{ .name = "airlock", .module = bench_module.import_table.get("airlock").? } },
         }) else bench_module);
         inline for (.{ "current", "previous" }) |which| {
             const size_exe = b.addExecutable(.{
@@ -344,7 +278,7 @@ pub fn build(b: *std.Build) !void {
             b.step("size-" ++ which ++ "-build", "Compile the identical legacy footprint fixture").dependOn(&b.addInstallArtifact(size_exe, .{}).step);
             check_step.dependOn(&size_exe.step);
         }
-        const proof_module = b.createModule(.{ .root_source_file = b.path("src/core_test.zig"), .target = target, .optimize = bench_mode, .imports = &.{ .{ .name = "shakedown", .module = dependency.module("shakedown") }, .{ .name = "strand.core", .module = bench_module.import_table.get("strand.core").? } } });
+        const proof_module = b.createModule(.{ .root_source_file = b.path("src/core_test.zig"), .target = target, .optimize = bench_mode, .imports = &.{ .{ .name = "shakedown", .module = dependency.module("shakedown") }, .{ .name = "aegis", .module = bench_module.import_table.get("aegis").? } } });
         const core_bench = b.addExecutable(.{
             .name = "strand-core-bench",
             .root_module = b.createModule(.{
@@ -403,6 +337,7 @@ pub fn build(b: *std.Build) !void {
         // and nothing else to fetch: the build a consumer gets.
         preflight.addConsumerCheck(b, .{
             .package = "strand",
+            .modules = &.{"strand"},
             .program = b.path("ci/consumer.zig"),
             .packages = &.{ b.dependency("aegis", .{}), b.dependency("airlock", .{}) },
         });
@@ -416,16 +351,18 @@ pub fn build(b: *std.Build) !void {
 fn benchImports(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize) []const std.Build.Module.Import {
     const airlock = b.dependency("airlock", .{ .target = target, .optimize = optimize }).module("airlock");
     const aegis = b.dependency("aegis", .{ .target = target, .optimize = optimize }).module("aegis");
-    const core_module = b.createModule(.{ .root_source_file = b.path("src/core.zig"), .target = target, .optimize = optimize, .imports = &.{.{ .name = "aegis", .module = aegis }} });
-    const mapping = b.createModule(.{ .root_source_file = b.path("src/core/compat.zig"), .target = target, .optimize = optimize });
-    const json_impl = b.createModule(.{ .root_source_file = b.path("src/json/api.zig"), .target = target, .optimize = optimize, .imports = &.{ .{ .name = "strand.core", .module = core_module }, .{ .name = "mapping", .module = mapping } } });
-    const json_module = b.createModule(.{ .root_source_file = b.path("src/json.zig"), .target = target, .optimize = optimize, .imports = &.{.{ .name = "json", .module = json_impl }} });
-    const jsonl_impl = b.createModule(.{ .root_source_file = b.path("src/jsonl/api.zig"), .target = target, .optimize = optimize, .imports = &.{ .{ .name = "json", .module = json_impl }, .{ .name = "strand.core", .module = core_module }, .{ .name = "strand.json", .module = json_module }, .{ .name = "airlock", .module = airlock } } });
-    const jsonl_module = b.createModule(.{ .root_source_file = b.path("src/jsonl.zig"), .target = target, .optimize = optimize, .imports = &.{.{ .name = "jsonl", .module = jsonl_impl }} });
-    const zon_impl = b.createModule(.{ .root_source_file = b.path("src/zon/api.zig"), .target = target, .optimize = optimize, .imports = &.{.{ .name = "strand.core", .module = core_module }} });
-    const zon_module = b.createModule(.{ .root_source_file = b.path("src/zon.zig"), .target = target, .optimize = optimize, .imports = &.{.{ .name = "zon", .module = zon_impl }} });
-    const strand = b.createModule(.{ .root_source_file = b.path("src/strand.zig"), .target = target, .optimize = optimize, .imports = &.{ .{ .name = "strand.core", .module = core_module }, .{ .name = "strand.json", .module = json_module }, .{ .name = "strand.jsonl", .module = jsonl_module }, .{ .name = "strand.zon", .module = zon_module }, .{ .name = "airlock", .module = airlock } } });
+    const strand = b.createModule(.{ .root_source_file = b.path("src/strand.zig"), .target = target, .optimize = optimize, .imports = &.{ .{ .name = "aegis", .module = aegis }, .{ .name = "airlock", .module = airlock } } });
     return b.allocator.dupe(std.Build.Module.Import, &.{.{ .name = "strand", .module = strand }}) catch @panic("OOM");
+}
+
+/// The way below the public API for the two benchmarks that time the wire
+/// encoder against `core.serialize`. A source file belongs to one module, so
+/// they cannot take it beside `strand`: this root names both, and is not part
+/// of the strand module.
+fn benchSeam(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize) *std.Build.Module {
+    const airlock = b.dependency("airlock", .{ .target = target, .optimize = optimize }).module("airlock");
+    const aegis = b.dependency("aegis", .{ .target = target, .optimize = optimize }).module("aegis");
+    return b.createModule(.{ .root_source_file = b.path("src/seam.zig"), .target = target, .optimize = optimize, .imports = &.{ .{ .name = "aegis", .module = aegis }, .{ .name = "airlock", .module = airlock } } });
 }
 
 /// Every example, listed rather than globbed: a build graph that scans a

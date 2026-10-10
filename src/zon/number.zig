@@ -4,7 +4,7 @@
 //! checked arithmetic, because std reads integers to 64 bits and floats to
 //! `f128` and this core promises the destination's width.
 const std = @import("std");
-const core = @import("strand.core");
+const core = @import("../core.zig");
 const literal = std.zig.number_literal;
 
 /// An integer from a literal, with its sign if it has one. An integral float

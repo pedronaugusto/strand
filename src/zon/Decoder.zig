@@ -6,7 +6,7 @@
 //! can run: no identifier but `true`, `false`, `null`, `inf` and `nan`, no
 //! import, call or operator but the minus of a number.
 const std = @import("std");
-const core = @import("strand.core");
+const core = @import("../core.zig");
 const number = @import("number.zig");
 const text = @import("text.zig");
 pub const Format = enum { zon };

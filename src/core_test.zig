@@ -1,6 +1,6 @@
 const shakedown = @import("shakedown");
 const std = @import("std");
-pub const core = @import("strand.core");
+pub const core = @import("core.zig");
 
 test "S1 admission sees rejected inactive branches and recursive data" {
     const Node = struct {

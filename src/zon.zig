@@ -1,5 +1,5 @@
 //! ZON: the notation Zig writes its data in, on the shared core.
-const api = @import("zon");
+const api = @import("zon/api.zig");
 pub const Format = api.Format;
 pub const capabilities = api.capabilities;
 pub const Raw = api.Raw;

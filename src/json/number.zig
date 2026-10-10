@@ -1,6 +1,6 @@
 //! Exact decimal integer conversion, with no floating intermediate.
 const std = @import("std");
-const core = @import("strand.core");
+const core = @import("../core.zig");
 pub fn integer(comptime T: type, text: []const u8, c: *core.Context) core.DecodeError!T {
     try c.chargeWork(text.len);
     const negative = text[0] == '-';

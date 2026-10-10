@@ -1,5 +1,5 @@
 //! JSON: bounded slice/owned APIs on the shared core, plus the legacy contract.
-const api = @import("json");
+const api = @import("json/api.zig");
 pub const Format = api.Format;
 pub const capabilities = api.capabilities;
 pub const Raw = api.Raw;

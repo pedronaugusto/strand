@@ -1,6 +1,6 @@
 //! ZON on Strand's shared type mapping and ownership core.
 const std = @import("std");
-const core = @import("strand.core");
+const core = @import("../core.zig");
 const WireDecoder = @import("Decoder.zig");
 const WireEncoder = @import("Encoder.zig");
 pub const Format = WireDecoder.Format;

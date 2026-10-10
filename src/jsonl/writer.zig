@@ -1,13 +1,13 @@
 //! `Writer`: values as JSON Lines on a `*std.Io.Writer`, counted, drained and
 //! synced as often as it is told to.
-const codec_module = @import("json").codec_module;
+const codec_module = @import("../json/api.zig").codec_module;
 
 const std = @import("std");
 const airlock = @import("airlock");
 const assert = std.debug.assert;
 const encode = codec_module.encode;
-const tagging = @import("json").tagging_module;
-const json_buffer = @import("json").EncodeBuffer_module;
+const tagging = @import("../json/api.zig").tagging_module;
+const json_buffer = @import("../json/api.zig").EncodeBuffer_module;
 
 const line_mod = @import("line.zig");
 const Format = line_mod.Format;

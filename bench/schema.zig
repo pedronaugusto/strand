@@ -1,7 +1,7 @@
 //! Ten distinct 100-field checked JSON encoders, derived versus separate typed code.
 const std = @import("std");
-const core = @import("strand.core");
-const Encoder = @import("json").Encoder_module;
+const core = @import("seam").strand.core;
+const Encoder = @import("seam").Encoder;
 const options = @import("schema_options");
 fn Schema(comptime index: usize) type {
     @setEvalBranchQuota(1_000_000);

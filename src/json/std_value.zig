@@ -1,7 +1,7 @@
 //! The standard dynamic Value bridge uses the same bounded operation context.
 //! Precision follows std.json.Value's integer/float/number_string alternatives.
 const std = @import("std");
-const core = @import("strand.core");
+const core = @import("../core.zig");
 const native = @import("Value.zig");
 pub fn fromNative(value: native.Value, c: *core.Context) core.DecodeError!std.json.Value {
     try c.chargeWork(1);

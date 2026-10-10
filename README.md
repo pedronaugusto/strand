@@ -4,9 +4,14 @@ strand provides a serialization core and JSON and ZON codecs, with JSON Lines
 framing, readers, writers, tail and follow built above JSON. Zig 0.17.0 is required.
 The root API remains a facade for the existing JSON Lines contract.
 
-The build exposes `strand.core`, `strand.json`, `strand.jsonl`, `strand.zon`, and
-`strand`. JSON, ZON and core have no durability import; JSONL uses airlock for sync
-and identity. CBOR, MessagePack and TOML are later work.
+The build exposes one module, `strand`, and `strand.core`, `strand.json`,
+`strand.jsonl` and `strand.zon` are namespaces of it. Every user fetches the same two
+packages, [aegis](https://github.com/pedronaugusto/aegis) and
+[airlock](https://github.com/pedronaugusto/airlock), whichever part they take, and no
+part links anything, so a module per part would buy nothing: Zig analyzes only what a
+program names. A program that names only `strand.json` reaches no JSON Lines or airlock
+code. JSON, ZON and core have no durability import; JSONL uses airlock for sync and
+identity. CBOR, MessagePack and TOML are later work.
 
 `strand.json.parse(T, gpa, bytes, options)` returns `Parsed(T)`: plain const
 strings may borrow input until either input mutation/expiry or `deinit`.

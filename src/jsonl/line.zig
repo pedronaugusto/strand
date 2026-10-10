@@ -9,7 +9,7 @@
 //! the two things a reader and a writer agree on beyond the schema — `Format`
 //! and `separator` — and `lines`, which walks the lines of a buffer already
 //! in memory.
-const codec_module = @import("json").codec_module;
+const codec_module = @import("../json/api.zig").codec_module;
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;

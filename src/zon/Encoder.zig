@@ -4,7 +4,7 @@
 //! trailing comma; one of one or two stays on its line; a union is `.arm` with
 //! no payload and `.{ .arm = payload }` with one.
 const std = @import("std");
-const core = @import("strand.core");
+const core = @import("../core.zig");
 const Decoder = @import("Decoder.zig");
 pub const Format = Decoder.Format;
 pub const capabilities = Decoder.capabilities;

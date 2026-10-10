@@ -1,8 +1,8 @@
-const core = @import("strand.core");
+const core = @import("core.zig");
 const shakedown = @import("shakedown");
-const jsonl = @import("strand.jsonl");
+const jsonl = @import("jsonl.zig");
 const std = @import("std");
-const json = @import("strand.json");
+const json = @import("json.zig");
 test "S2 JSON exact decimal integers, shared field policy and lifetime" {
     const T = struct {
         n: u128,

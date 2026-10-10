@@ -8,7 +8,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- Independent JSON and JSON Lines build modules on the shared core; the root
+- `strand.json` and `strand.jsonl` on the shared core; the root
   remains a facade with its existing source, wire, error and ownership contracts.
 - Strict slice, owned and caller-arena JSON parsing, JSON-native numeric lexemes,
   checked decimal integers, exact float policy, full wire limits and checked writes.
@@ -20,7 +20,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### ZON
 
-- `strand.zon`, its own module on the core: `parse`, `parseOwned`, `parseLeaky`, `write`,
+- `strand.zon`, its own namespace on the core: `parse`, `parseOwned`, `parseLeaky`, `write`,
   `Raw` and `ParseOptions`, with the core's limits, ownership and field policy. It reads
   the grammar of `std.zon` in one pass with no syntax tree, so every limit is charged
   before the storage it guards exists; plain strings are borrowed from the input; a
@@ -36,7 +36,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Core framework
 
-- Add the provisional std-only `strand.core` module with recursive descriptors,
+- Add the provisional `strand.core` namespace with recursive descriptors,
   type-declared options, immediate semantic mapping and bounded arena owners.
 - Add a small reference test backend, generic ordered maps, explicit standard
   list codec, fixed-buffer paths, rollback and full wire-limit proofs.
@@ -60,6 +60,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Breaking
 
+- `strand` is one build module. `strand.core`, `strand.json`, `strand.jsonl` and `strand.zon` are no longer modules to import by name (`b.dependency("strand", ...).module("strand.json")` and the like); use them as namespaces of `@import("strand")`, at the same paths, so code that wrote `@import("strand").json` is unchanged. Every user fetched aegis and airlock whichever part they took, no part links anything and Zig analyzes only what a program names, so the separate modules bought nothing. The implementation modules behind them were private to the build and are gone.
 - strand.core depends on [aegis](https://github.com/pedronaugusto/aegis) (pinned to a commit), which is `std` alone.
   `core.Context` keeps its input, output, work and requested-allocation totals as `aegis.bounded.Budget`s, so its public
   `work`, `input_bytes`, `output_bytes` and `allocation_requested` fields are the methods `workUsed`, `outputUsed` and

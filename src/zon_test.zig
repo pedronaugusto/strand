@@ -3,8 +3,8 @@
 //! value of the type and, if it is, on which. Where strand deliberately says
 //! otherwise, the test says so in its name.
 const std = @import("std");
-const zon = @import("strand.zon");
-const core = @import("strand.core");
+const zon = @import("zon.zig");
+const core = @import("core.zig");
 const shakedown = @import("shakedown");
 const testing = std.testing;
 

@@ -1,7 +1,9 @@
-//! Pure JSON consumer: its entire module closure has no airlock or test import.
+//! Pure JSON consumer: names strand.json and strand.core and nothing else, so
+//! no jsonl or airlock code is analysed and none reaches the executable.
 const std = @import("std");
-const json = @import("strand.json");
-const core = @import("strand.core");
+const strand = @import("strand");
+const json = strand.json;
+const core = strand.core;
 const Event = struct { n: u8, text: []const u8 };
 comptime {
     std.debug.assert(json.Parsed(Event) == core.Parsed(Event));

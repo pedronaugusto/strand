@@ -24,8 +24,8 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const typed_parse = @import("json").parse_module;
-const from_value = @import("json").from_value_module;
+const typed_parse = @import("../json/api.zig").parse_module;
+const from_value = @import("../json/api.zig").from_value_module;
 
 /// The envelope's two keys. Short, because they are on every line.
 const version_key = "v";

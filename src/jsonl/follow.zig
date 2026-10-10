@@ -20,7 +20,7 @@
 //! and the follower uses it only when the file it holds has stopped growing,
 //! so the old file is read to its end before the new one is started.
 const line_module = @import("line.zig");
-const codec_module = @import("json").codec_module;
+const codec_module = @import("../json/api.zig").codec_module;
 const reader_module = @import("reader.zig");
 
 const std = @import("std");

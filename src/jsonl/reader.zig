@@ -1,8 +1,8 @@
 //! `Reader`: a `*std.Io.Reader` as a stream of typed lines.
-const codec_module = @import("json").codec_module;
+const codec_module = @import("../json/api.zig").codec_module;
 const reader_module = @import("line/reader.zig");
 const owned_module = @import("owned.zig");
-const work_module = @import("json").work_module;
+const work_module = @import("../json/api.zig").work_module;
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -19,7 +19,7 @@ const RawLine = line_mod.RawLine;
 const Format = line_mod.Format;
 
 const LineReader = reader_module.LineReader;
-const json_scanner = @import("json").Scanner_module;
+const json_scanner = @import("../json/api.zig").Scanner_module;
 
 /// The policy types of every `Reader`, whatever its record type: shared,
 /// so that options and errors mean the same thing across instantiations.

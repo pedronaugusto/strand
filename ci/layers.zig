@@ -71,20 +71,14 @@ pub const layers: []const gantry.rules.Layer = &.{
     .{ .name = "public", .patterns = &.{
         "src/strand.zig",
     } },
+    .{ .name = "benchmark seam", .patterns = &.{"src/seam.zig"} },
 };
 
 pub const entries: []const []const u8 = &.{};
 
 pub const modules: []const gantry.NamedModule = &.{
+    .{ .name = "strand", .path = "src/strand.zig" },
     .{ .name = "strand.owned", .path = "src/jsonl/owned.zig" },
-    .{ .name = "strand.core", .path = "src/core.zig" },
-    .{ .name = "mapping", .path = "src/core/compat.zig" },
-    .{ .name = "json", .path = "src/json/api.zig" },
-    .{ .name = "strand.json", .path = "src/json.zig" },
-    .{ .name = "strand.jsonl", .path = "src/jsonl.zig" },
-    .{ .name = "jsonl", .path = "src/jsonl/api.zig" },
-    .{ .name = "strand.zon", .path = "src/zon.zig" },
-    .{ .name = "zon", .path = "src/zon/api.zig" },
 };
 pub const references: []const gantry.rules.ReferenceRule = &.{
     .{
@@ -98,9 +92,6 @@ pub const references: []const gantry.rules.ReferenceRule = &.{
             "builtin",
             "rejection_options",
             "shakedown",
-            // gantry reads a name that ends `.zon` as a ZON file beside the importer,
-            // so it cannot see this module, which `modules` below does name.
-            "strand.zon",
             "std",
         },
     },

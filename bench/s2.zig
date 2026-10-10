@@ -1,10 +1,10 @@
 //! Explicit paired S2 observations; compilation and smoke are correctness gates.
 const std = @import("std");
-const strand = @import("strand");
+const strand = @import("seam").strand;
 const core = strand.core;
 const json = strand.json;
 const jsonl = strand.jsonl;
-const Encoder = @import("json").Encoder_module;
+const Encoder = @import("seam").Encoder;
 const shakedown = @import("shakedown");
 const paired = @import("paired.zig");
 const Record = struct { id: u64, label: []const u8, data: [2]u8 };

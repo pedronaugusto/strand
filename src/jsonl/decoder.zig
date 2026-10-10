@@ -1,7 +1,7 @@
 //! Push JSON Lines decoder. One owner for its bounded record buffer and arena.
 const std = @import("std");
-const json = @import("strand.json");
-const core = @import("strand.core");
+const json = @import("../json.zig");
+const core = @import("../core.zig");
 const framing = @import("framing.zig");
 const line = @import("line.zig");
 pub fn Decoder(comptime T: type) type {

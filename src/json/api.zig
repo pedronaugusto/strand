@@ -1,6 +1,6 @@
 //! JSON on Strand's shared type mapping and ownership core.
 const std = @import("std");
-const core = @import("strand.core");
+const core = @import("../core.zig");
 const std_value = @import("std_value.zig");
 const WireDecoder = @import("Decoder.zig");
 const WireEncoder = @import("Encoder.zig");
@@ -110,7 +110,7 @@ pub const raw_module = @import("raw.zig");
 pub const line_parser_module = @import("parse/line.zig");
 pub const EncodeBuffer_module = @import("encode/Buffer.zig");
 
-// This build-module root is reached by the test assembly. Name every embedded
+// This root is reached by the test assembly. Name every embedded
 // test namespace explicitly so coverage survives changes in consumers.
 test {
     _ = Scanner_module;

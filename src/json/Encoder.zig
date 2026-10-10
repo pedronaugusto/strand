@@ -1,6 +1,6 @@
 //! JSON wire emission. Shape and field policy belong to core.
 const std = @import("std");
-const core = @import("strand.core");
+const core = @import("../core.zig");
 const Scanner = @import("Scanner.zig");
 const Decoder = @import("Decoder.zig");
 pub const Format = Decoder.Format;

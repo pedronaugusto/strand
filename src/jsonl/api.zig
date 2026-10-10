@@ -1,11 +1,11 @@
 //! JSON Lines framing, durability and legacy contracts.
-pub const json = @import("strand.json");
-const codec_module = @import("json").codec_module;
-const parse_module = @import("json").parse_module;
+pub const json = @import("../json.zig");
+const codec_module = @import("../json/api.zig").codec_module;
+const parse_module = @import("../json/api.zig").parse_module;
 
-const leading_module = @import("json").leading_module;
-const route_module = @import("json").route_module;
-const control_module = @import("json").control_module;
+const leading_module = @import("../json/api.zig").leading_module;
+const route_module = @import("../json/api.zig").route_module;
+const control_module = @import("../json/api.zig").control_module;
 const airlock = @import("airlock");
 
 const parse_line = codec_module.parser;
@@ -113,7 +113,7 @@ pub const versioned_module = @import("versioned.zig");
 
 pub const Decoder = @import("decoder.zig").Decoder;
 
-// This build-module root is reached by the test assembly. Name every embedded
+// This root is reached by the test assembly. Name every embedded
 // test namespace explicitly so coverage survives changes in consumers.
 test {
     _ = follow_module;

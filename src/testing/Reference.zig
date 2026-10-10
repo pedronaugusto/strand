@@ -1,7 +1,7 @@
 //! S1 proof backend only. A tiny binary grammar, not a production format.
 //! Each container ends explicitly; declared counts must match the actual payload.
 const std = @import("std");
-const core = @import("strand.core");
+const core = @import("../core.zig");
 const core_decode = core;
 pub const Format = enum { reference };
 pub const Error = error{SyntaxError};

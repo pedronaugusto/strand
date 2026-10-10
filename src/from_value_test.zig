@@ -1,7 +1,7 @@
 //! from_value scenarios through the public API.
-const from_value_module = @import("json").from_value_module;
+const from_value_module = @import("json/api.zig").from_value_module;
 const strand_module = @import("strand.zig");
-const codec_module = @import("json").codec_module;
+const codec_module = @import("json/api.zig").codec_module;
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const parseFromValue = from_value_module.parseFromValue;

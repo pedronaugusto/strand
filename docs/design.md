@@ -1,11 +1,22 @@
 # Serialization core and JSON formats
 
-Strand has independent `strand.core`, `strand.json`, and `strand.jsonl` build
-modules. The root is a declaration-only compatibility facade. Private build
-modules give each source a single compiler owner, including when a consumer
-imports all four public modules together. Gantry checks every source's layer.
-Core and JSON import no airlock; JSONL owns that unchanged durability edge.
-Test/tool dependencies remain lazy and outside production modules.
+Strand is one build module, `strand`. `strand.core`, `strand.json`, `strand.jsonl`
+and `strand.zon` are namespaces of it, and the root keeps the JSON Lines names as a
+declaration-only facade. A separate build module buys something only where it keeps
+dependencies from users who do not need that part, or keeps a part from linking
+something. Here it bought neither: the parts need the same two packages, aegis for the
+core's checked work and airlock for JSONL's sync and file identity, so every user
+fetches both whichever part they take; nothing is linked; and Zig's lazy analysis
+leaves out whatever a program does not name, so a program that names only `strand.json`
+analyses no JSON Lines or airlock code (`ci/json-consumer.zig` is that program).
+A module per part had a cost of its own: a source file belongs to one module, so every
+part needed a private implementation module beside its public one, and a test or
+benchmark that reached below the facade needed yet another root.
+
+The layering inside the module is Gantry's, checked at file level by `ci/layers.zig`:
+every source has one named layer and imports only downward. Core and JSON import no
+airlock; JSONL owns that unchanged durability edge. Test/tool dependencies remain lazy
+and outside the module.
 
 ## Module boundaries
 
@@ -69,7 +80,7 @@ operations do not silently inherit strict limits or policy.
 
 ## Evidence
 
-Existing tests continue with only mechanical module-import changes. The pinned
+Existing tests continue with only mechanical import changes. The pinned
 MIT-licensed JSONTestSuite corpus runs all y/n/i inputs in CI. Grammar mode
 permits duplicates; strict rejection has separate tests. Numeric i cases retain
 lexemes; invalid encodings and lone surrogates reject. Bounds, exact arithmetic,
@@ -191,7 +202,7 @@ contract; exposing the core does not strengthen legacy hooks implicitly.
 
 ## ZON
 
-ZON is its own module on the core and imports no other format. `std.zon` is the
+ZON is its own namespace on the core and imports no other format. `std.zon` is the
 grammar and typed-value oracle, and reading it needs a tree: a tokenizer, a syntax
 tree and a Zoir for the whole document before a byte of the result exists, none of
 it bounded by anything but memory. strand reads a document in one pass instead. A
@@ -252,8 +263,8 @@ implementation-policy inputs, with no omitted input. Compatibility tests freeze
 S1 root declarations and replay its existing byte/error/Raw/checkpoint, FaultIo
 and Clock cases. The unchanged Chronicle main fixture compiles and executes
 against this local package without changing the published consumer pin.
-Independent consumer builds check that importing all public modules preserves
-nominal owner types; a pure JSON consumer imports no durability module.
+The consumer build checks that the namespaces share nominal owner types; a pure JSON
+consumer names no durability code.
 
 Fixed 100-field schemas parse and write with a failing allocator and zero
 requested allocation. Managed standard Value arrays are tested after the

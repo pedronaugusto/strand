@@ -15,8 +15,8 @@
 //!
 //! The other thing it does not do is `.pretty`. `Tail.Options` is where the
 //! setting would be, and it carries the reason it is not there.
-const codec_module = @import("json").codec_module;
-const control_module = @import("json").control_module;
+const codec_module = @import("../json/api.zig").codec_module;
+const control_module = @import("../json/api.zig").control_module;
 const owned_module = @import("owned.zig");
 
 const std = @import("std");

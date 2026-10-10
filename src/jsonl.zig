@@ -1,5 +1,5 @@
 //! JSON Lines: framing, typed streams, tail/follow and airlock durability.
-const api = @import("jsonl");
+const api = @import("jsonl/api.zig");
 pub const json = api.json;
 pub const parseLine = api.parseLine;
 pub const innerParse = api.innerParse;

@@ -6,6 +6,7 @@ const std = @import("std");
 const zon = @import("zon.zig");
 const core = @import("core.zig");
 const shakedown = @import("shakedown");
+const inputs = @import("testing/inputs.zig");
 const testing = std.testing;
 
 const Reading = union(enum) { failed, value: []u8 };
@@ -126,6 +127,14 @@ test "characters are numbers" {
     try all(u8, &.{ "'a'", "'\\''", "'\\\\'", "'\\t'", "'\\x7f'", "'\\xff'", "'\\xFF'", "'\\u{ff}'", "'\\u{100}'", "'é'", "'\\q'", "'\\x4'", "'\\u{}'", "'\\u{110000}'", "'\\u{d800}'", "'" });
     try all(u21, &.{ "'\\u{10ffff}'", "'😀'", "'\\u{1F600}'" });
     try all(f32, &.{ "'a'", "'\\u{1F600}'" });
+}
+
+test "a character literal cut inside its UTF-8 sequence is refused" {
+    // std.zon indexes past such a literal; these are not compared with it.
+    for ([_][]const u8{ "'\xe2'", "'\xe2\x82'", "'\xf0\x9f\x98'", "'\xc3'" }) |source| {
+        try testing.expect(try ownReading(u21, source) == .failed);
+        try testing.expect(try ownReading(zon.Raw, source) == .failed);
+    }
 }
 
 test "strings, escapes and multiline strings" {
@@ -870,10 +879,18 @@ fn sound(comptime T: type, source: []const u8) !void {
 }
 
 test "fuzz: whatever strand reads of arbitrary bytes is what std.zon reads" {
-    try testing.fuzz({}, struct {
-        fn run(_: void, smith: *testing.Smith) anyerror!void {
+    const seeds = [_][]const u8{
+        ".{ .x = 1, .y = \"two\" }",
+        ".{ 1, 2, 3 }",
+        ".{ .u = 340282366920938463463374607431768211455, .i = -170141183460469231731687303715884105728, .n = null }",
+        ".{ .x = 0x1.8p1, .y = 'a', .z = .tag }",
+        "\"text\\n\\u{1f600}\"",
+        "[3]f32{ 0.5, -1, 1e3 }",
+    };
+    try shakedown.check(testing.allocator, {}, struct {
+        fn run(_: void, case: *shakedown.Case) anyerror!void {
             var input: [512]u8 = undefined;
-            const data = input[0..smith.slice(&input)];
+            const data = inputs.draw(case, &input, &seeds, 48);
             try sound(Settings, data);
             try sound(Shape, data);
             try sound([]const i64, data);

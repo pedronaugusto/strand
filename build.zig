@@ -60,12 +60,11 @@ pub fn build(b: *std.Build) !void {
     // shakedown, and airlock's seam on it, are lazy and test-only: no
     // module a consumer builds imports them. Their error is returned last,
     // so one configure pass asks for them and for preflight together.
+    // One shakedown in the graph: the one airlock's seam is built on.
     var needed: error{LazyDependencyNeeded}!void = {};
-    if (b.dependencyLazy("shakedown", .{ .target = target, .optimize = optimize })) |shakedown| {
-        tests.root_module.addImport("shakedown", shakedown.module("shakedown"));
-    } else |err| needed = err;
     if (airlock_build.testing(airlock_dependency)) |seam| {
         tests.root_module.addImport("airlock.testing", seam);
+        tests.root_module.addImport("shakedown", seam.import_table.get("shakedown").?);
     } else |err| needed = err;
 
     // How much generated input the properties are run over, and which. The
@@ -211,14 +210,12 @@ pub fn build(b: *std.Build) !void {
     const bench_mode: std.lang.Optimize = if (runs_here or optimize != .debug) .fast else .debug;
 
     // Explicit manual measurement, compiled without timing by the check graph.
-    if (b.dependencyLazy("shakedown", .{ .target = target, .optimize = bench_mode })) |dependency| {
+    if (shakedownFor(b, target, bench_mode)) |dependency| {
         const s2_bench = b.addExecutable(.{
             .name = "strand-s2-bench",
             .root_module = b.createModule(.{ .root_source_file = b.path("bench/s2.zig"), .target = target, .optimize = bench_mode, .imports = &.{.{ .name = "seam", .module = benchSeam(b, target, bench_mode) }} }),
         });
         s2_bench.root_module.addImport("shakedown", dependency.module("shakedown"));
-        const prof = b.addExecutable(.{ .name = "strand-prof", .root_module = b.createModule(.{ .root_source_file = .{ .cwd_relative = "/private/tmp/claude-501/-Users-gusto-work-tycho/bafb8972-fd4d-4df5-a8ec-13a1c661e738/scratchpad/prof.zig" }, .target = target, .optimize = bench_mode, .imports = &.{.{ .name = "seam", .module = s2_bench.root_module.import_table.get("seam").? }} }) });
-        b.step("prof-build", "x").dependOn(&b.addInstallArtifact(prof, .{}).step);
         b.step("s2-bench-build", "Compile explicit paired S2 observations").dependOn(&b.addInstallArtifact(s2_bench, .{}).step);
         check_step.dependOn(&s2_bench.step);
         const zon_bench = b.addExecutable(.{
@@ -305,6 +302,15 @@ pub fn build(b: *std.Build) !void {
         });
     }
     return needed;
+}
+
+/// shakedown for the benchmarks, bound to strand's aegis, so a build links
+/// one aegis.
+fn shakedownFor(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize) error{LazyDependencyNeeded}!*std.Build.Dependency {
+    const shakedown = try b.dependencyLazy("shakedown", .{ .target = target, .optimize = optimize, .aegis = .consumer });
+    const shakedown_build = b.lazyImport(@This(), "shakedown") orelse return error.LazyDependencyNeeded;
+    shakedown_build.useAegis(shakedown, b.dependency("aegis", .{ .target = target, .optimize = optimize }).module("aegis"));
+    return shakedown;
 }
 
 /// strand and airlock again, in the mode a benchmark builds in: an

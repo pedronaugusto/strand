@@ -30,7 +30,7 @@ permissions:
   actions: read
 jobs:
   gate:
-    uses: pedronaugusto/preflight/.github/workflows/zig.yml@cb348117bc08b298276d51a00dbbfe83e79570a7
+    uses: pedronaugusto/preflight/.github/workflows/zig.yml@5a2d7c3f8efb70ead532a923ebb411a6324f2581
     # Only the job that lands a green merge run writes (`land` in ci/workflow.json), and only to move main.
     permissions:
       contents: write
@@ -38,7 +38,7 @@ jobs:
     with:
       tier: ${{ github.event_name == 'workflow_dispatch' && inputs.tier || github.event_name == 'schedule' && 'release' || 'merge' }}
       working-directory: "."
-      preflight-ref: cb348117bc08b298276d51a00dbbfe83e79570a7
+      preflight-ref: 5a2d7c3f8efb70ead532a923ebb411a6324f2581
       attest: ${{ github.event_name == 'push' || inputs.status-only }}
       land: ${{ github.event_name == 'workflow_dispatch' && inputs.land }}
       fast-matrix: >-
@@ -73,7 +73,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: pedronaugusto/preflight
-          ref: e3d81b9e477c1c690f1ce03506511935d16035c3
+          ref: 5a2d7c3f8efb70ead532a923ebb411a6324f2581
           path: .preflight
       - uses: ./.preflight/.github/actions/setup
       - name: Compile paired manual observations without timing

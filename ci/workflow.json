@@ -11,5 +11,6 @@
     "aarch64-macos"
   ],
   "compile_once": true,
-  "sanitizer": "test"
+  "sanitizer": "test",
+  "fast_shards": 2
 }

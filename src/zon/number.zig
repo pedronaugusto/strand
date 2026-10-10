@@ -4,6 +4,7 @@
 //! checked arithmetic, because std reads integers to 64 bits and floats to
 //! `f128` and this core promises the destination's width.
 const std = @import("std");
+const aegis = @import("aegis");
 const core = @import("../core.zig");
 const literal = std.zig.number_literal;
 
@@ -57,8 +58,8 @@ fn digits(comptime W: type, body: []const u8, base: u8) core.DecodeError!W {
         const byte = body[at];
         if (byte == '_') continue;
         const digit = std.fmt.charToDigit(byte, base) catch return error.SyntaxError;
-        value = std.math.mul(W, value, base) catch return error.NumberOutOfRange;
-        value = std.math.add(W, value, digit) catch return error.NumberOutOfRange;
+        value = (aegis.int.Checked(W).init(value).mul(base) catch return error.NumberOutOfRange).raw();
+        value = (aegis.int.Checked(W).init(value).add(digit) catch return error.NumberOutOfRange).raw();
     }
     return value;
 }
@@ -79,8 +80,8 @@ fn integralDecimal(comptime W: type, body: []const u8) core.DecodeError!W {
             'e', 'E' => break,
             else => {
                 const digit = byte - '0';
-                mantissa = std.math.mul(W, mantissa, 10) catch return error.NumberOutOfRange;
-                mantissa = std.math.add(W, mantissa, digit) catch return error.NumberOutOfRange;
+                mantissa = (aegis.int.Checked(W).init(mantissa).mul(10) catch return error.NumberOutOfRange).raw();
+                mantissa = (aegis.int.Checked(W).init(mantissa).add(digit) catch return error.NumberOutOfRange).raw();
                 zeros = if (digit == 0) zeros + 1 else 0;
                 if (in_fraction) fraction += 1;
             },
@@ -113,7 +114,7 @@ fn integralDecimal(comptime W: type, body: []const u8) core.DecodeError!W {
     }
     // Each factor of ten is a digit: past the width of W there is no value.
     if (scale > @typeInfo(W).int.bits) return error.NumberOutOfRange;
-    while (scale > 0) : (scale -= 1) mantissa = std.math.mul(W, mantissa, 10) catch return error.NumberOutOfRange;
+    while (scale > 0) : (scale -= 1) mantissa = (aegis.int.Checked(W).init(mantissa).mul(10) catch return error.NumberOutOfRange).raw();
     return mantissa;
 }
 

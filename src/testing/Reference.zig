@@ -1,6 +1,7 @@
 //! S1 proof backend only. A tiny binary grammar, not a production format.
 //! Each container ends explicitly; declared counts must match the actual payload.
 const std = @import("std");
+const aegis = @import("aegis");
 const core = @import("../core.zig");
 const core_decode = core;
 pub const Format = enum { reference };
@@ -137,7 +138,7 @@ pub const Encoder = struct {
         } else {
             const len = (@typeInfo(T).int.bits + 7) / 8;
             if (len > c.limits.numeric_bytes) return error.LengthLimit;
-            const size = std.math.cast(u8, len) orelse return error.NumberOutOfRange;
+            const size = aegis.int.cast(u8, len) catch return error.NumberOutOfRange;
             var encoded: [len]u8 = undefined;
             var remaining = magnitude;
             for (&encoded) |*byte| {
@@ -150,12 +151,12 @@ pub const Encoder = struct {
         }
     }
     pub fn text(self: *Encoder, value: []const u8, c: *core.Context) core.EncodeError!void {
-        const len = std.math.cast(u8, value.len) orelse return error.LengthLimit;
+        const len = aegis.int.cast(u8, value.len) catch return error.LengthLimit;
         try self.write(c, &.{ 3, len });
         try self.write(c, value);
     }
     pub fn bytes(self: *Encoder, value: []const u8, c: *core.Context) core.EncodeError!void {
-        const len = std.math.cast(u8, value.len) orelse return error.LengthLimit;
+        const len = aegis.int.cast(u8, value.len) catch return error.LengthLimit;
         try self.write(c, &.{ 4, len });
         try self.write(c, value);
     }
@@ -169,14 +170,14 @@ pub const Encoder = struct {
         try self.write(c, &.{8});
     }
     pub fn begin(self: *Encoder, kind: core.Kind, name: []const u8, len: usize, c: *core.Context) core.EncodeError!void {
-        const size = std.math.cast(u8, len) orelse return error.ItemLimit;
+        const size = aegis.int.cast(u8, len) catch return error.ItemLimit;
         if (kind == .newtype or kind == .named_unit or kind == .named_tuple or kind == .some) {
-            const n = std.math.cast(u8, name.len) orelse return error.LengthLimit;
+            const n = aegis.int.cast(u8, name.len) catch return error.LengthLimit;
             try self.write(c, &.{ 16, @backingInt(kind), size, n });
             try self.write(c, name);
         } else if (kind == .variant) {
             if (len != 1) return error.UnsupportedValue;
-            const n = std.math.cast(u8, name.len) orelse return error.LengthLimit;
+            const n = aegis.int.cast(u8, name.len) catch return error.LengthLimit;
             try self.write(c, &.{ 12, n });
             try self.write(c, name);
         } else try self.write(c, &.{ if (kind == .record) @as(u8, 6) else if (kind == .map) @as(u8, 13) else @as(u8, 5), size });

@@ -1,5 +1,6 @@
 //! Exact decimal integer conversion, with no floating intermediate.
 const std = @import("std");
+const aegis = @import("aegis");
 const core = @import("../core.zig");
 pub inline fn integer(comptime T: type, text: []const u8, c: *core.Context) core.DecodeError!T {
     try c.chargeWork(text.len);
@@ -52,7 +53,7 @@ fn spelled(comptime T: type, text: []const u8) core.DecodeError!T {
     if (exponent_at != text.len) {
         exponent = std.fmt.parseInt(i64, text[exponent_at + 1 ..], 10) catch return error.NumberOutOfRange;
     }
-    const shift = std.math.sub(i64, exponent, std.math.cast(i64, fraction) orelse return error.NumberOutOfRange) catch return error.NumberOutOfRange;
+    const shift = (aegis.int.Checked(i64).init(exponent).sub(std.math.cast(i64, fraction) orelse return error.NumberOutOfRange) catch return error.NumberOutOfRange).raw();
     const digits = exponent_at - start - @intFromBool(dot != null);
     var trailing: usize = 0;
     var at = exponent_at;
@@ -63,7 +64,7 @@ fn spelled(comptime T: type, text: []const u8) core.DecodeError!T {
         trailing += 1;
     }
     if (trailing == digits) return 0;
-    const trim: usize = if (shift < 0) std.math.cast(usize, std.math.negate(shift) catch return error.NumberOutOfRange) orelse return error.NumberOutOfRange else 0;
+    const trim: usize = if (shift < 0) aegis.int.cast(usize, std.math.negate(shift) catch return error.NumberOutOfRange) catch return error.NumberOutOfRange else 0;
     if (trim > trailing) return error.NumberOutOfRange;
     const magnitude_type = @Int(.unsigned, @max(@typeInfo(T).int.bits, 4)); // wide enough for the ten each digit is scaled by; the range of `T` is checked at the end
     var magnitude: magnitude_type = 0;
@@ -72,13 +73,13 @@ fn spelled(comptime T: type, text: []const u8) core.DecodeError!T {
         if (byte == '.') continue;
         seen += 1;
         if (seen > digits - trim) break;
-        magnitude = std.math.mul(magnitude_type, magnitude, 10) catch return error.NumberOutOfRange;
-        magnitude = std.math.add(magnitude_type, magnitude, std.math.cast(magnitude_type, byte - '0') orelse return error.NumberOutOfRange) catch return error.NumberOutOfRange;
+        magnitude = (aegis.int.Checked(magnitude_type).init(magnitude).mul(10) catch return error.NumberOutOfRange).raw();
+        magnitude = (aegis.int.Checked(magnitude_type).init(magnitude).add(std.math.cast(magnitude_type, byte - '0') orelse return error.NumberOutOfRange) catch return error.NumberOutOfRange).raw();
     }
     if (shift > 0) {
         if (shift > @typeInfo(T).int.bits) return error.NumberOutOfRange;
         var n: i64 = 0;
-        while (n < shift) : (n += 1) magnitude = std.math.mul(magnitude_type, magnitude, 10) catch return error.NumberOutOfRange;
+        while (n < shift) : (n += 1) magnitude = (aegis.int.Checked(magnitude_type).init(magnitude).mul(10) catch return error.NumberOutOfRange).raw();
     }
     if (@typeInfo(T).int.signedness == .unsigned) {
         if (negative or magnitude > std.math.maxInt(T)) return error.NumberOutOfRange;
@@ -115,12 +116,12 @@ fn isExact(comptime T: type, value: T, text: []const u8, c: *core.Context) core.
     if (std.mem.allEqual(u8, digits, '0')) return value == 0;
     if (value == 0) return false;
     const exponent: i64 = if (end == text.len) 0 else std.fmt.parseInt(i64, text[end + 1 ..], 10) catch return false;
-    const scale = std.math.sub(i64, exponent, std.math.cast(i64, fraction) orelse return false) catch return false;
-    const scale_abs = std.math.cast(usize, @abs(scale)) orelse return false;
+    const scale = (aegis.int.Checked(i64).init(exponent).sub(std.math.cast(i64, fraction) orelse return false) catch return false).raw();
+    const scale_abs = aegis.int.cast(usize, @abs(scale)) catch return false;
     // A finite IEEE value cannot need more decimal powers than its binary
     // exponent range plus the supplied coefficient. Refuse before big work.
     if (scale_abs > std.math.floatExponentMax(T) + text.len + std.math.floatMantissaBits(T)) return false;
-    try c.chargeWork(std.math.mul(usize, scale_abs + digits.len, scale_abs + digits.len) catch return error.WorkLimit);
+    try c.chargeWork((aegis.int.Checked(usize).init(scale_abs + digits.len).mul(scale_abs + digits.len) catch return error.WorkLimit).raw());
     const allocator = c.allocator();
     var decimal = try Big.init(allocator);
     defer decimal.deinit();
@@ -134,7 +135,7 @@ fn isExact(comptime T: type, value: T, text: []const u8, c: *core.Context) core.
     defer ten.deinit();
     var power = try Big.init(allocator);
     defer power.deinit();
-    const power_count = std.math.cast(u32, scale_abs) orelse return false;
+    const power_count = aegis.int.cast(u32, scale_abs) catch return false;
     try power.pow(&ten, power_count);
     if (scale >= 0) try decimal.mul(&decimal, &power) else try binary.mul(&binary, &power);
     const binary_scale = parts.exponent - precision;

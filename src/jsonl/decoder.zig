@@ -1,5 +1,6 @@
 //! Push JSON Lines decoder. One owner for its bounded record buffer and arena.
 const std = @import("std");
+const aegis = @import("aegis");
 const json = @import("../json.zig");
 const core = @import("../core.zig");
 const framing = @import("framing.zig");
@@ -59,7 +60,7 @@ pub fn Decoder(comptime T: type) type {
             _ = self.arena.reset(.retain_capacity);
         }
         fn append(self: *Self, bytes: []const u8, backing: *core.Backing) Error!void {
-            const cap = std.math.add(usize, @min(self.options.max_line_bytes, self.options.parse.limits.input_bytes), 4) catch return error.InputLimit;
+            const cap = (aegis.int.Checked(usize).init(@min(self.options.max_line_bytes, self.options.parse.limits.input_bytes)).add(4) catch return error.InputLimit).raw();
             if (bytes.len > cap - self.used) return error.LineTooLong;
             const needed = self.used + bytes.len;
             if (needed > self.buffer.len) {

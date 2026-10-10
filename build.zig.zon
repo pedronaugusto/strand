@@ -28,8 +28,8 @@
         // Test doubles, for the tests alone: no module a consumer builds
         // imports it, and a consumer never fetches it.
         .shakedown = .{
-            .url = "git+https://github.com/pedronaugusto/shakedown#18445cd52dc898766310a609db652eb0a1647f58",
-            .hash = "shakedown-0.1.0-BR8U43ozFQD8gJV56m19Dvgj99tRNxyD_vmnKNzssMVy",
+            .url = "git+https://github.com/pedronaugusto/shakedown#9109af53a261bf10f047bdef7e6e04396d30a1cd",
+            .hash = "shakedown-0.1.0-BR8U4-C_FQAbsCcYY10dTaGMmi0oqCk3vTYx7iSYqYpU",
             .lazy = true,
         },
         .preflight = .{

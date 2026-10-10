@@ -42,7 +42,7 @@ pub const layers: []const gantry.rules.Layer = &.{
     .{ .name = "codec assembly", .patterns = &.{
         "src/json/codec.zig",
     } },
-    .{ .name = "JSON wire", .patterns = &.{ "src/json/number.zig", "src/json/Decoder.zig", "src/json/Encoder.zig", "src/json/Value.zig", "src/json/std_value.zig" } },
+    .{ .name = "JSON wire", .patterns = &.{ "src/json/text.zig", "src/json/number.zig", "src/json/Decoder.zig", "src/json/Encoder.zig", "src/json/Value.zig", "src/json/std_value.zig" } },
     .{ .name = "JSON module", .patterns = &.{"src/json/api.zig"} },
     .{ .name = "JSON facade", .patterns = &.{"src/json.zig"} },
     .{ .name = "JSONL schema", .patterns = &.{"src/jsonl/versioned.zig"} },

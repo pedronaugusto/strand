@@ -18,7 +18,9 @@ fn Decode(comptime T: type) type {
     return struct {
         const Error = @typeInfo(@TypeOf(core.deserialize(T, @as(*WireDecoder, undefined), @as(*core.Context, undefined)))).error_union.error_set;
         fn run(c: *core.Context, input: []const u8) Error!T {
-            var decoder = try WireDecoder.init(c, input);
+            try c.input(input.len);
+            var decoder: WireDecoder = undefined;
+            decoder.init(c, input);
             defer decoder.deinit();
             return core.deserialize(T, &decoder, c) catch |err| {
                 if (c.diagnostics) |d| locate(d, input);

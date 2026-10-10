@@ -17,6 +17,9 @@ pub const Capabilities = struct {
     indefinite_containers: bool = true,
     max_integer_bits: usize = 128,
     max_float_bits: usize = 128,
+    /// The format validates every text event as UTF-8 before handing it over,
+    /// so mapping does not look at the bytes a second time.
+    utf8_text: bool = false,
 };
 pub const schema_capabilities: Capabilities = .{ .nested_optional = true, .max_integer_bits = std.math.maxInt(usize), .max_float_bits = std.math.maxInt(usize) };
 pub const Description = struct {

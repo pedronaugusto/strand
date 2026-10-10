@@ -15,6 +15,93 @@ pub fn deserialize(comptime T: type, backend: anytype, c: *ctx.Context) Errors(T
     return value;
 }
 
+/// Whether `name` is `spelling`, a name the schema spells at compile time:
+/// a short one is compared a byte at a time with no call.
+inline fn spelled(name: []const u8, comptime spelling: []const u8) bool {
+    if (name.len != spelling.len) return false;
+    if (spelling.len > 32) return std.mem.eql(u8, name, spelling);
+    inline for (spelling, 0..) |b, k| if (name[k] != b) return false;
+    return true;
+}
+
+/// A record member's key, and the field it names.
+const Member = struct { name: []const u8, field: ?usize };
+
+/// The names a record's keys are matched against: every field's, in
+/// declaration order, then the aliases; which field each names; and, for each
+/// field, the position of the name after its own, which is the one a writer
+/// that keeps declaration order puts next.
+fn MemberNames(comptime T: type) type {
+    @setEvalBranchQuota(100_000);
+    const i = @typeInfo(T).@"struct";
+    var n = 0;
+    for (i.field_names, i.field_attrs) |name, attrs| if (!attrs.@"comptime") {
+        n += 1 + descriptor.field(T, name).aliases.len;
+    };
+    var list: [n][]const u8 = undefined;
+    var owners: [n]usize = undefined;
+    var after: [i.field_names.len]usize = @splat(0);
+    var k = 0;
+    for (i.field_names, i.field_attrs, 0..) |name, attrs, index| if (!attrs.@"comptime") {
+        list[k] = descriptor.field(T, name).name;
+        owners[k] = index;
+        k += 1;
+    };
+    const primaries = k;
+    for (0..primaries) |p| after[owners[p]] = (p + 1) % primaries;
+    for (i.field_names, i.field_attrs, 0..) |name, attrs, index| if (!attrs.@"comptime") {
+        for (descriptor.field(T, name).aliases) |alias| {
+            list[k] = alias;
+            owners[k] = index;
+            k += 1;
+        }
+    };
+    const frozen_list = list;
+    const frozen_owners = owners;
+    const frozen_after = after;
+    return struct {
+        pub const spellings: []const []const u8 = &frozen_list;
+        pub const fields: []const usize = &frozen_owners;
+        pub const next = frozen_after;
+    };
+}
+
+/// The keys of a record that matched no field, kept to refuse one given twice.
+const Ignored = struct {
+    inline_names: [8][]const u8 = undefined,
+    extra: [][]const u8 = &.{},
+    len: usize = 0,
+    fn add(self: *Ignored, c: *ctx.Context, name: []const u8) ctx.DecodeError!void {
+        for (0..self.len) |k| {
+            const prior = if (k < self.inline_names.len) self.inline_names[k] else self.extra[k - self.inline_names.len];
+            try c.chargeWork(@min(name.len, prior.len));
+            if (std.mem.eql(u8, name, prior)) return error.DuplicateField;
+        }
+        if (self.len < self.inline_names.len) {
+            self.inline_names[self.len] = name;
+        } else {
+            const k = self.len - self.inline_names.len;
+            if (k == self.extra.len) {
+                const grown = try c.alloc([]const u8, try ctx.Context.grownCapacity(self.extra.len, c.limits.container_items));
+                @memcpy(grown[0..k], self.extra);
+                self.extra = grown;
+            }
+            self.extra[k] = name;
+        }
+        self.len += 1;
+    }
+};
+
+/// What a backend's `replay` starts: itself, or what a wrapper wraps.
+fn Replayed(comptime Backend: type) type {
+    return if (@hasDecl(Backend, "Replayed")) Backend.Replayed else Backend;
+}
+
+/// Text a backend hands over is UTF-8 once one of them has checked it.
+inline fn validText(comptime Backend: type, bytes: []const u8) bool {
+    return Backend.capabilities.utf8_text or std.unicode.utf8ValidateSlice(bytes);
+}
+
 pub fn Cursor(comptime Backend: type) type {
     return struct {
         backend: *Backend,
@@ -25,16 +112,24 @@ pub fn Cursor(comptime Backend: type) type {
         first_event: bool = true,
         const Self = @This();
         const Error = ctx.DecodeError || Backend.Error;
+        /// The next event, as the backend makes it. Nothing is kept: `peek` keeps
+        /// it for the caller who wants to look first.
+        inline fn fetch(self: *Self) Error!model.Event {
+            if (self.context.diagnostics) |d| d.offset = self.backend.offset();
+            const event = self.backend.next(self.context, self.request) catch |err| {
+                if (self.context.diagnostics) |d| d.offset = self.backend.offset();
+                return err;
+            };
+            if (self.first_event) {
+                if (self.context.depth == 0 and !Backend.capabilities.scalar_roots and event != .begin) return error.UnsupportedValue;
+                self.first_event = false;
+            }
+            return event;
+        }
         fn peek(self: *Self) Error!model.Event {
             if (self.pending == null) {
                 self.pending_start = self.backend.offset();
-                if (self.context.diagnostics) |d| d.offset = self.pending_start;
-                self.pending = self.backend.next(self.context, self.request) catch |err| {
-                    if (self.context.diagnostics) |d| d.offset = self.backend.offset();
-                    return err;
-                };
-                if (self.first_event and self.context.depth == 0 and !Backend.capabilities.scalar_roots and self.pending.? != .begin) return error.UnsupportedValue;
-                self.first_event = false;
+                self.pending = try self.fetch();
             }
             return self.pending.?;
         }
@@ -47,9 +142,11 @@ pub fn Cursor(comptime Backend: type) type {
             return try self.peek() == .end;
         }
         fn take(self: *Self) Error!model.Event {
-            const event = try self.peek();
-            self.pending = null;
-            return event;
+            if (self.pending) |event| {
+                self.pending = null;
+                return event;
+            }
+            return self.fetch();
         }
         fn end(self: *Self) Error!void {
             if (try self.take() != .end) return error.SyntaxError;
@@ -66,21 +163,101 @@ pub fn Cursor(comptime Backend: type) type {
                 .newtype => .newtype,
                 .some => .some,
             } };
-            const event = try self.take();
-            if (event != .begin) return error.UnexpectedType;
-            try self.context.span(event.begin.name.len, false);
-            try self.context.chargeWork(event.begin.name.len);
-            if (!std.unicode.utf8ValidateSlice(event.begin.name)) return error.InvalidUtf8;
-            if (event.begin.len == null and !Backend.capabilities.indefinite_containers) return error.UnsupportedValue;
-            if (event.begin.kind != expected and !(expected == .tuple and event.begin.kind == .sequence) and !(expected == .record and event.begin.kind == .map) and !(expected == .map and event.begin.kind == .record)) return error.UnexpectedType;
+            const header: model.Compound = opened: {
+                if (comptime @hasDecl(Backend, "open")) if (self.pending == null) {
+                    if (self.context.diagnostics) |d| d.offset = self.backend.offset();
+                    const found = self.backend.open(self.context, self.request) catch |err| {
+                        if (self.context.diagnostics) |d| d.offset = self.backend.offset();
+                        return err;
+                    };
+                    if (found) |compound| {
+                        self.first_event = false;
+                        break :opened compound;
+                    }
+                };
+                const event = try self.take();
+                if (event != .begin) return error.UnexpectedType;
+                break :opened event.begin;
+            };
+            if (header.name.len != 0) {
+                try self.context.span(header.name.len, false);
+                try self.context.chargeWork(header.name.len);
+                if (!std.unicode.utf8ValidateSlice(header.name)) return error.InvalidUtf8;
+            }
+            if (header.len == null and !Backend.capabilities.indefinite_containers) return error.UnsupportedValue;
+            if (header.kind != expected and !(expected == .tuple and header.kind == .sequence) and !(expected == .record and header.kind == .map) and !(expected == .map and header.kind == .record)) return error.UnexpectedType;
             try self.context.enter();
             errdefer self.context.leave();
-            if (event.begin.len) |n| try self.context.count(n);
-            return event.begin;
+            if (header.len) |n| try self.context.count(n);
+            return header;
         }
         fn equals(self: *Self, a: []const u8, b: []const u8) Error!bool {
             try self.context.chargeWork(@min(a.len, b.len));
             return std.mem.eql(u8, a, b);
+        }
+        /// A value of one kind read by the backend's own reader of that kind,
+        /// with no event between: `null` when the next value is of another
+        /// kind, which the event path then reads and refuses or takes.
+        inline fn direct(self: *Self, comptime reader: []const u8) Error!@typeInfo(@typeInfo(@TypeOf(@field(Backend, reader))).@"fn".return_type.?).error_union.payload {
+            if (self.pending != null) return null;
+            if (self.context.diagnostics) |d| d.offset = self.backend.offset();
+            const result = @field(Backend, reader)(self.backend, self.context) catch |err| {
+                if (self.context.diagnostics) |d| d.offset = self.backend.offset();
+                return err;
+            };
+            if (result != null) {
+                if (self.first_event and self.context.depth == 0 and !Backend.capabilities.scalar_roots) return error.UnsupportedValue;
+                self.first_event = false;
+            }
+            return result;
+        }
+        /// The key of the next member of the record being read, or `null`
+        /// where it closes, the close taken. A format that reads a key and
+        /// the separators around it in one step says so with `memberKey`.
+        inline fn member(self: *Self) Error!?[]const u8 {
+            if (comptime @hasDecl(Backend, "memberKey")) if (self.pending == null) {
+                if (self.context.diagnostics) |d| d.offset = self.backend.offset();
+                const span = (self.backend.memberKey(self.context) catch |err| {
+                    if (self.context.diagnostics) |d| d.offset = self.backend.offset();
+                    return err;
+                }) orelse return null;
+                try self.context.node();
+                try self.context.span(span.bytes.len, true);
+                try self.context.chargeWork(span.bytes.len);
+                if (!validText(Backend, span.bytes)) return error.InvalidUtf8;
+                return span.bytes;
+            };
+            if (try self.atEnd()) {
+                try self.end();
+                return null;
+            }
+            return try self.key();
+        }
+        /// The next member of a record of `T`: the field its key names, or
+        /// the key when it names none, or `null` where the record closes, the
+        /// close taken. `hint` is the name expected next: a writer keeps
+        /// declaration order. A format that can match a key against the
+        /// schema's names where it lies says so with `memberOf`.
+        inline fn recordMember(self: *Self, comptime T: type, hint: usize) Error!?Member {
+            const names = MemberNames(T);
+            if (comptime @hasDecl(Backend, "memberOf")) if (self.pending == null) {
+                if (self.context.diagnostics) |d| d.offset = self.backend.offset();
+                const found = (self.backend.memberOf(self.context, names.spellings, hint) catch |err| {
+                    if (self.context.diagnostics) |d| d.offset = self.backend.offset();
+                    return err;
+                }) orelse return null;
+                try self.context.node();
+                try self.context.span(found.name.len, true);
+                try self.context.chargeWork(found.name.len);
+                if (!validText(Backend, found.name)) return error.InvalidUtf8;
+                if (names.fields.len == 0) return .{ .name = found.name, .field = null };
+                return .{ .name = found.name, .field = if (found.index) |k| names.fields[k] else null };
+            };
+            const name = (try self.member()) orelse return null;
+            inline for (names.spellings, names.fields) |spelling, field_index| {
+                if (spelled(name, spelling)) return .{ .name = name, .field = field_index };
+            }
+            return .{ .name = name, .field = null };
         }
         fn key(self: *Self) Error![]const u8 {
             self.request = .{ .expected = .text };
@@ -89,7 +266,7 @@ pub fn Cursor(comptime Backend: type) type {
             if (event != .text) return error.UnexpectedType;
             try self.context.span(event.text.bytes.len, true);
             try self.context.chargeWork(event.text.bytes.len);
-            if (!std.unicode.utf8ValidateSlice(event.text.bytes)) return error.InvalidUtf8;
+            if (!validText(Backend, event.text.bytes)) return error.InvalidUtf8;
             return event.text.bytes;
         }
         fn integer(self: *Self, comptime T: type, number: model.Integer) Error!T {
@@ -132,6 +309,38 @@ pub fn Cursor(comptime Backend: type) type {
             // safe: positive magnitude was checked against the signed maximum.
             return @intCast(value); // safe: checked destination bounds or Zig-provided typed storage precede this conversion.
         }
+        fn readInteger(self: *Self, comptime T: type) Error!T {
+            @setRuntimeSafety(true);
+            if (comptime @hasDecl(Backend, "number") and @hasDecl(Backend, "parseInteger")) {
+                if (try self.direct("number")) |lexeme| return Backend.parseInteger(T, lexeme, self.context);
+            }
+            const event = try self.take();
+            if (event == .number) {
+                if (comptime @hasDecl(Backend, "parseInteger")) return Backend.parseInteger(T, event.number.bytes, self.context);
+                return error.UnexpectedType;
+            }
+            if (event != .integer) return error.UnexpectedType;
+            return self.integer(T, event.integer);
+        }
+        fn readFloat(self: *Self, comptime T: type, comptime policy: descriptor.Field) Error!T {
+            @setRuntimeSafety(true);
+            if (comptime @hasDecl(Backend, "number") and @hasDecl(Backend, "parseFloat")) {
+                if (try self.direct("number")) |lexeme| return Backend.parseFloat(T, lexeme, policy.exact, self.context);
+            }
+            const event = try self.take();
+            if (event == .number) {
+                if (comptime @hasDecl(Backend, "parseFloat")) return Backend.parseFloat(T, event.number.bytes, policy.exact, self.context);
+                return error.UnexpectedType;
+            }
+            if (event != .floating) return error.UnexpectedType;
+            // safe: float narrowing is the declared destination's rounding;
+            // overflow is explicitly rejected before publishing the result.
+            if (!Backend.capabilities.nonfinite_floats and !std.math.isFinite(event.floating)) return error.UnsupportedValue;
+            const value: T = @floatCast(event.floating); // safe: checked destination bounds or Zig-provided typed storage precede this conversion.
+            if (std.math.isFinite(event.floating) and !std.math.isFinite(value)) return error.NumberOutOfRange;
+            if (policy.exact and std.math.isFinite(event.floating) and @as(f128, value) != event.floating) return error.InexactNumber;
+            return value;
+        }
         pub fn read(self: *Self, comptime T: type, comptime policy: descriptor.Field) Errors(T, Backend)!T {
             @setRuntimeSafety(true);
             comptime descriptor.check(T, Backend.capabilities, true, .borrowed);
@@ -153,30 +362,8 @@ pub fn Cursor(comptime Backend: type) type {
                     if (event != .boolean) return error.UnexpectedType;
                     return event.boolean;
                 },
-                .int => {
-                    const event = try self.take();
-                    if (event == .number) {
-                        if (comptime @hasDecl(Backend, "parseInteger")) return Backend.parseInteger(T, event.number.bytes, self.context);
-                        return error.UnexpectedType;
-                    }
-                    if (event != .integer) return error.UnexpectedType;
-                    return self.integer(T, event.integer);
-                },
-                .float => {
-                    const event = try self.take();
-                    if (event == .number) {
-                        if (comptime @hasDecl(Backend, "parseFloat")) return Backend.parseFloat(T, event.number.bytes, policy.exact, self.context);
-                        return error.UnexpectedType;
-                    }
-                    if (event != .floating) return error.UnexpectedType;
-                    // safe: float narrowing is the declared destination's rounding;
-                    // overflow is explicitly rejected before publishing the result.
-                    if (!Backend.capabilities.nonfinite_floats and !std.math.isFinite(event.floating)) return error.UnsupportedValue;
-                    const value: T = @floatCast(event.floating); // safe: checked destination bounds or Zig-provided typed storage precede this conversion.
-                    if (std.math.isFinite(event.floating) and !std.math.isFinite(value)) return error.NumberOutOfRange;
-                    if (policy.exact and std.math.isFinite(event.floating) and @as(f128, value) != event.floating) return error.InexactNumber;
-                    return value;
-                },
+                .int => return self.readInteger(T),
+                .float => return self.readFloat(T, policy),
                 .void => {
                     if (try self.take() != .unit) return error.UnexpectedType;
                     return {};
@@ -322,16 +509,18 @@ pub fn Cursor(comptime Backend: type) type {
                 if (matches) {
                     const value = if (@hasField(@TypeOf(opt), "content")) blk: {
                         const span = payload orelse return error.MissingField;
-                        var backend = self.backend.replay(span.start, span.end);
+                        var backend: Replayed(Backend) = undefined;
+                        self.backend.replay(&backend, span.start, span.end);
                         defer if (@hasDecl(Backend, "deinit")) backend.deinit();
                         break :blk try deserialize(F, &backend, self.context);
                     } else if (F == void) blk: {
                         if (count != 1) return error.UnknownField;
                         break :blk {};
                     } else blk: {
-                        var backend = self.backend.replay(record_start, record_end);
+                        var backend: Replayed(Backend) = undefined;
+                        self.backend.replay(&backend, record_start, record_end);
                         defer if (@hasDecl(Backend, "deinit")) backend.deinit();
-                        var filtered: Filtered(Backend) = .{ .backend = &backend, .tag = opt.tag };
+                        var filtered: Filtered(Replayed(Backend)) = .{ .backend = &backend, .tag = opt.tag };
                         break :blk try deserialize(F, &filtered, self.context);
                     };
                     return @unionInit(T, name, value);
@@ -341,7 +530,8 @@ pub fn Cursor(comptime Backend: type) type {
                 const F = @FieldType(T, opt.other);
                 if (F == void) return @unionInit(T, opt.other, {});
                 const span = payload orelse .{ .start = record_start, .end = record_end };
-                var backend = self.backend.replay(span.start, span.end);
+                var backend: Replayed(Backend) = undefined;
+                self.backend.replay(&backend, span.start, span.end);
                 defer if (@hasDecl(Backend, "deinit")) backend.deinit();
                 return @unionInit(T, opt.other, try deserialize(F, &backend, self.context));
             }
@@ -363,7 +553,7 @@ pub fn Cursor(comptime Backend: type) type {
                 if (span.bytes.len > policy.max_len) return error.LengthLimit;
                 try self.context.span(span.bytes.len, false);
                 try self.context.chargeWork(span.bytes.len);
-                if (policy.as == .text and !std.unicode.utf8ValidateSlice(span.bytes)) return error.InvalidUtf8;
+                if (policy.as == .text and !validText(Backend, span.bytes)) return error.InvalidUtf8;
                 var array: if (@typeInfo(T) == .array) T else [i.len]i.child = undefined;
                 @memcpy(&array, span.bytes);
                 if (@typeInfo(T) == .array) if (i.sentinel()) |sentinel| {
@@ -394,7 +584,7 @@ pub fn Cursor(comptime Backend: type) type {
             if (event != .text) return error.UnexpectedType;
             try self.context.span(event.text.bytes.len, false);
             try self.context.chargeWork(event.text.bytes.len);
-            if (!std.unicode.utf8ValidateSlice(event.text.bytes)) return error.InvalidUtf8;
+            if (!validText(Backend, event.text.bytes)) return error.InvalidUtf8;
             return event.text.bytes;
         }
         fn keyValue(self: *Self) Error![]const u8 {
@@ -406,14 +596,14 @@ pub fn Cursor(comptime Backend: type) type {
             if (event != .text) return error.UnexpectedType;
             try self.context.span(event.text.bytes.len, false);
             try self.context.chargeWork(event.text.bytes.len);
-            if (!std.unicode.utf8ValidateSlice(event.text.bytes)) return error.InvalidUtf8;
+            if (!validText(Backend, event.text.bytes)) return error.InvalidUtf8;
             return event.text;
         }
         fn slice(self: *Self, comptime T: type, comptime policy: descriptor.Field) Errors(T, Backend)!T {
             const i = @typeInfo(T).pointer;
             if (i.child == u8) {
-                const event = try self.take();
-                const bytes = switch (event) {
+                const direct_text = if (comptime @hasDecl(Backend, "text")) (if (policy.as != .bytes) try self.direct("text") else null) else null;
+                const bytes = direct_text orelse switch (try self.take()) {
                     .text => |s| if (policy.as == .bytes) return error.UnexpectedType else s,
                     .bytes => |s| if (policy.as != .bytes) return error.UnexpectedType else s,
                     else => return error.UnexpectedType,
@@ -421,7 +611,7 @@ pub fn Cursor(comptime Backend: type) type {
                 if (bytes.bytes.len > policy.max_len) return error.LengthLimit;
                 try self.context.span(bytes.bytes.len, false);
                 try self.context.chargeWork(bytes.bytes.len);
-                if (policy.as != .bytes and !std.unicode.utf8ValidateSlice(bytes.bytes)) return error.InvalidUtf8;
+                if (policy.as != .bytes and !validText(Backend, bytes.bytes)) return error.InvalidUtf8;
                 if (i.attrs.@"const" and i.sentinel() == null and (i.attrs.@"align" orelse 1) == 1) return self.context.retain(bytes.bytes, bytes.lifetime, policy.borrow);
                 if (policy.borrow == .require) return error.BorrowUnavailable;
                 try self.context.chargeWork(bytes.bytes.len);
@@ -481,23 +671,22 @@ pub fn Cursor(comptime Backend: type) type {
             defer self.context.leave();
             var value: T = undefined;
             var seen: [i.field_names.len]bool = @splat(false);
+            // A record's keys are checked here, not by the format: the known
+            // ones by `seen`, the ignored ones by name.
+            var ignored: Ignored = .{};
             var pairs: usize = 0;
-            while (!try self.atEnd()) {
+            var hint: usize = 0;
+            while (try self.recordMember(T, hint)) |entry| {
+                const name = entry.name;
                 try self.context.count(1);
                 if (pairs >= self.context.limits.container_items) return error.ItemLimit;
                 pairs += 1;
-                const name = try self.key();
-                var matched: ?usize = null;
-                inline for (i.field_names, i.field_attrs, 0..) |field_name, attrs, index| {
-                    if (attrs.@"comptime") continue;
-                    const f = comptime descriptor.field(T, field_name);
-                    var matches = try self.equals(name, f.name);
-                    inline for (f.aliases) |alias| matches = matches or try self.equals(name, alias);
-                    if (matches) matched = index;
-                }
-                inline for (i.field_names, i.field_attrs, 0..) |field_name, attrs, index| {
-                    if (attrs.@"comptime") continue;
-                    if (matched == index) {
+                if (entry.field) |found| switch (found) {
+                    inline 0...@max(i.field_names.len, 1) - 1 => |index| {
+                        // Only a declared field that is not `comptime` is named.
+                        if (comptime index >= i.field_names.len or i.field_attrs[index].@"comptime") unreachable;
+                        hint = comptime MemberNames(T).next[index];
+                        const field_name = i.field_names[index];
                         const f = comptime descriptor.field(T, field_name);
                         if (seen[index] and duplicates == .reject) {
                             if (self.context.diagnostics) |d| d.field(field_name);
@@ -512,18 +701,18 @@ pub fn Cursor(comptime Backend: type) type {
                             if (self.context.diagnostics) |d| d.restore(mark);
                         }
                         seen[index] = !f.skip_decode;
-                    }
-                }
-                if (matched == null) {
+                    },
+                    else => unreachable,
+                } else {
                     if (unknown == .reject) {
                         if (self.context.diagnostics) |d| d.field(name);
                         return error.UnknownField;
                     }
+                    if (self.context.acceptance.reject_duplicates) try ignored.add(self.context, name);
                     try self.skip();
                 }
             }
             if (header.len) |n| if (n != pairs) return error.SyntaxError;
-            try self.end();
             inline for (i.field_names, i.field_types, i.field_attrs, 0..) |name, F, attrs, index| {
                 if (attrs.@"comptime") continue;
                 if (!seen[index]) {
@@ -566,7 +755,7 @@ pub fn Cursor(comptime Backend: type) type {
                 .text => |span| {
                     try self.context.span(span.bytes.len, false);
                     try self.context.chargeWork(span.bytes.len);
-                    if (!std.unicode.utf8ValidateSlice(span.bytes)) return error.InvalidUtf8;
+                    if (!validText(Backend, span.bytes)) return error.InvalidUtf8;
                 },
                 .bytes => |span| {
                     try self.context.span(span.bytes.len, false);
@@ -908,8 +1097,9 @@ fn Filtered(comptime Backend: type) type {
         pub fn raw(self: *const Self, start: usize, end: usize) model.Span {
             return self.backend.raw(start, end);
         }
-        pub fn replay(self: *const Self, start: usize, end: usize) Backend {
-            return self.backend.replay(start, end);
+        pub const Replayed = Backend;
+        pub fn replay(self: *const Self, into: *Backend, start: usize, end: usize) void {
+            self.backend.replay(into, start, end);
         }
         pub fn next(self: *Self, c: *ctx.Context, request: model.Request) (ctx.DecodeError || Error)!model.Event {
             while (true) {

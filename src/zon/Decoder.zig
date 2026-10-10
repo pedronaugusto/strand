@@ -30,24 +30,38 @@ const Frame = struct { kind: Kind, state: State, key_start: usize };
 const Pending = enum { none, unit, end };
 
 input: []const u8,
-at: usize = 0,
+at: usize,
 allocator: std.mem.Allocator,
-frames: [128]Frame = undefined,
-extra: std.ArrayList(Frame) = .empty,
-depth: usize = 0,
-keys: [128][]const u8 = undefined,
-extra_keys: std.ArrayList([]const u8) = .empty,
-key_count: usize = 0,
-pending: Pending = .none,
+frames: [128]Frame,
+extra: std.ArrayList(Frame),
+depth: usize,
+keys: [128][]const u8,
+extra_keys: std.ArrayList([]const u8),
+key_count: usize,
+pending: Pending,
 /// Where the last token ended, before the trivia after it.
-last_end: usize = 0,
-root_done: bool = false,
+last_end: usize,
+root_done: bool,
 digits: [12]u8 = undefined,
 const Self = @This();
 
-pub fn init(c: *core.Context, bytes: []const u8) Error!Self {
-    try c.input(bytes.len);
-    return .{ .input = bytes, .at = text.skipTrivia(bytes, 0), .allocator = c.allocator() };
+/// Starts `self` over `bytes`, which the caller has charged to `c.input`. It
+/// is built where it lies, field by field: its frames and keys are kilobytes
+/// that a struct literal would build elsewhere and copy, unread.
+pub fn init(self: *Self, c: *core.Context, bytes: []const u8) void {
+    self.begin(bytes, text.skipTrivia(bytes, 0), c.allocator());
+}
+fn begin(self: *Self, bytes: []const u8, at: usize, allocator: std.mem.Allocator) void {
+    self.input = bytes;
+    self.at = at;
+    self.allocator = allocator;
+    self.extra = .empty;
+    self.depth = 0;
+    self.extra_keys = .empty;
+    self.key_count = 0;
+    self.pending = .none;
+    self.last_end = 0;
+    self.root_done = false;
 }
 pub fn deinit(self: *Self) void {
     self.extra.deinit(self.allocator);
@@ -65,9 +79,10 @@ pub fn raw(self: *const Self, start: usize, end: usize) core.Span {
     const to = if (end == self.at) self.last_end else end;
     return .{ .bytes = self.input[from..@max(from, to)], .lifetime = .borrowed };
 }
-pub fn replay(self: *const Self, start: usize, end: usize) Self {
+/// Starts `into` over a value already read, as the root of its own input.
+pub fn replay(self: *const Self, into: *Self, from: usize, end: usize) void {
     const bounded = self.input[0..end];
-    return .{ .input = bounded, .at = text.skipTrivia(bounded, start), .allocator = self.allocator };
+    into.begin(bounded, text.skipTrivia(bounded, from), self.allocator);
 }
 
 fn failure(c: *core.Context, err: anyerror) Error {

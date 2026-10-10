@@ -19,7 +19,9 @@ fn Decode(comptime T: type) type {
     return struct {
         const Error = @typeInfo(@TypeOf(core.deserialize(T, @as(*WireDecoder, undefined), @as(*core.Context, undefined)))).error_union.error_set;
         fn run(c: *core.Context, input: []const u8) Error!T {
-            var decoder = try WireDecoder.init(c, input);
+            try c.input(input.len);
+            var decoder: WireDecoder = undefined;
+            decoder.init(c, input);
             defer decoder.deinit();
             const result = core.deserialize(T, &decoder, c) catch |err| {
                 if (err == error.OutOfMemory and c.allocation_limited) return error.AllocationLimit;
@@ -72,11 +74,12 @@ pub fn write(output: *std.Io.Writer, value: anytype, options: WriteOptions) @typ
     var fixed: std.heap.FixedBufferAllocator = .init(options.scratch);
     var c = core.Context.init(fixed.allocator(), options.limits, .borrowed);
     c.acceptance.reject_duplicates = true;
-    var encoder: WireEncoder = .{ .writer = output };
-    defer encoder.extra.deinit(c.allocator());
-    defer encoder.extra_keys.deinit(c.allocator());
+    var encoder: WireEncoder = undefined;
+    encoder.init(output);
+    defer encoder.deinit(&c);
     const data = if (@TypeOf(value) == std.json.Value) try std_value.toNative(value, &c) else value;
-    return core.serialize(data, &encoder, &c);
+    try core.serialize(data, &encoder, &c);
+    try encoder.flush(&c);
 }
 // The historical JSON contract remains one implementation and is explicitly
 // separate from finite strict entry points.

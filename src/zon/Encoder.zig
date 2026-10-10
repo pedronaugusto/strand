@@ -411,7 +411,9 @@ pub fn end(self: *Self, c: *core.Context) Error!void {
     self.extra_keys.shrinkRetainingCapacity(self.key_count - @min(self.key_count, self.keys.len));
 }
 pub fn validateRaw(_: *Self, payload: []const u8, c: *core.Context) Error!void {
-    var decoder = Decoder.init(c, payload) catch |err| return encodeError(err);
+    c.input(payload.len) catch |err| return encodeError(err);
+    var decoder: Decoder = undefined;
+    decoder.init(c, payload);
     defer decoder.deinit();
     var cursor: core.Cursor(Decoder) = .{ .backend = &decoder, .context = c };
     cursor.skip() catch |err| return encodeError(err);

@@ -114,9 +114,11 @@ fn writeRow(comptime common: bool, c: *Context, units: u64) WorkError!void {
     var sum: usize = 0;
     for (0..units) |_| {
         var writer = std.Io.Writer.fixed(&c.buffer);
-        var out: Encoder = .{ .writer = &writer };
+        var out: Encoder = undefined;
+        out.init(&writer);
         var budget: core.Context = .init(c.gpa, .{}, .borrowed);
         if (common) try core.serialize(c.value, &out, &budget) else try hand(c.value, &out, &budget);
+        try out.flush(&budget);
         sum +%= writer.buffered().len;
         std.mem.doNotOptimizeAway(writer.buffered());
     }
@@ -137,9 +139,11 @@ pub fn main(init: std.process.Init) !void {
     const expected = try std.json.parseFromSliceLeaky(Record, c.arena.allocator(), input, .{});
     if (!std.meta.eql(c.value.data, expected.data) or c.value.id != expected.id or !std.mem.eql(u8, c.value.label, expected.label)) return error.PolicyMismatch;
     var writer = std.Io.Writer.fixed(&c.buffer);
-    var out: Encoder = .{ .writer = &writer };
+    var out: Encoder = undefined;
+    out.init(&writer);
     var budget: core.Context = .init(c.gpa, .{}, .borrowed);
     try hand(c.value, &out, &budget);
+    try out.flush(&budget);
     if (!std.mem.eql(u8, input, writer.buffered()) or budget.allocationRequested() != 0) return error.PolicyMismatch;
     const rows = [_]shakedown.bench.Row(Context, WorkError){
         .{ .name = "json.strict.borrowed.512", .unit = "record", .initial = 1024, .run = strictParse },

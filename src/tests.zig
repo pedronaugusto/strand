@@ -20,6 +20,7 @@ test {
     _ = @import("codec_test.zig");
     // The parts' own roots name the tests of the files under them.
     _ = @import("json/api.zig");
+    _ = @import("json/text.zig");
     _ = @import("jsonl/api.zig");
     _ = @import("zon/api.zig");
     _ = @import("json/codec.zig").parser;

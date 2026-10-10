@@ -1,8 +1,48 @@
 //! Exact decimal integer conversion, with no floating intermediate.
 const std = @import("std");
 const core = @import("../core.zig");
-pub fn integer(comptime T: type, text: []const u8, c: *core.Context) core.DecodeError!T {
+pub inline fn integer(comptime T: type, text: []const u8, c: *core.Context) core.DecodeError!T {
     try c.chargeWork(text.len);
+    if (plain(T, text)) |value| return value;
+    return spelled(T, text);
+}
+
+/// An integer spelled with digits alone and short enough that it cannot
+/// overflow the accumulator: the common case, read without looking for a
+/// fraction or an exponent. `null` hands every other spelling to `spelled`.
+inline fn plain(comptime T: type, text: []const u8) ?T {
+    const bits = @typeInfo(T).int.bits;
+    if (bits == 0 or bits > 64) return null;
+    const negative = text[0] == '-';
+    const digits = text[@intFromBool(negative)..];
+    // Nineteen digits always fit a u64; a twentieth may not.
+    if (digits.len == 0 or digits.len > 20) return null;
+    var magnitude: u64 = 0;
+    for (digits[0..@min(digits.len, 19)]) |byte| {
+        if (byte < '0' or byte > '9') return null;
+        magnitude = magnitude * 10 + (byte - '0');
+    }
+    if (digits.len == 20) {
+        const last = digits[19];
+        if (last < '0' or last > '9') return null;
+        const scaled = @mulWithOverflow(magnitude, 10);
+        if (scaled[1] != 0) return null;
+        const sum = @addWithOverflow(scaled[0], last - '0');
+        if (sum[1] != 0) return null;
+        magnitude = sum[0];
+    }
+    if (@typeInfo(T).int.signedness == .unsigned) {
+        if (negative and magnitude != 0) return null;
+        return std.math.cast(T, magnitude);
+    }
+    if (negative) {
+        if (magnitude > @as(u64, 1) << (bits - 1)) return null;
+        return @intCast(-@as(i65, magnitude)); // safe: the magnitude is at most that of the signed minimum.
+    }
+    return std.math.cast(T, magnitude);
+}
+
+fn spelled(comptime T: type, text: []const u8) core.DecodeError!T {
     const negative = text[0] == '-';
     const start = @intFromBool(negative);
     const exponent_at = std.mem.findAny(u8, text, "eE") orelse text.len;

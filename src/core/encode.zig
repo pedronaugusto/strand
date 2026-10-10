@@ -9,6 +9,11 @@ pub fn serialize(value: anytype, serializer: anytype, c: *ctx.Context) Errors(@T
     try emit(.{}, value, serializer, c, null);
 }
 const Active = struct { address: usize, previous: ?*const Active };
+/// A format that checks text for UTF-8 as it writes it says so: the bytes are
+/// then looked at once.
+fn checksText(comptime Out: type) bool {
+    return @hasDecl(Out, "validates_text") and Out.validates_text;
+}
 fn emit(comptime policy: descriptor.Field, value: anytype, out: anytype, c: *ctx.Context, active: ?*const Active) Errors(@TypeOf(value), @TypeOf(out.*))!void {
     @setRuntimeSafety(true);
     const T = @TypeOf(value);
@@ -60,7 +65,7 @@ fn emit(comptime policy: descriptor.Field, value: anytype, out: anytype, c: *ctx
                     try c.span(value.len, false);
                     try c.chargeWork(value.len);
                     if (policy.as == .bytes) try out.bytes(value, c) else {
-                        if (!std.unicode.utf8ValidateSlice(value)) return error.InvalidUtf8;
+                        if (!checksText(@TypeOf(out.*)) and !std.unicode.utf8ValidateSlice(value)) return error.InvalidUtf8;
                         try out.text(value, c);
                     }
                 } else {
@@ -81,7 +86,7 @@ fn emit(comptime policy: descriptor.Field, value: anytype, out: anytype, c: *ctx
                 try c.span(i.len, false);
                 try c.chargeWork(i.len);
                 if (policy.as == .bytes) try out.bytes(&values, c) else {
-                    if (!std.unicode.utf8ValidateSlice(&values)) return error.InvalidUtf8;
+                    if (!checksText(@TypeOf(out.*)) and !std.unicode.utf8ValidateSlice(&values)) return error.InvalidUtf8;
                     try out.text(&values, c);
                 }
                 return;

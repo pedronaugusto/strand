@@ -39,9 +39,11 @@ pub fn main(init: std.process.Init) !void {
         var value: T = undefined;
         inline for (@typeInfo(T).@"struct".field_names) |name| @field(value, name) = seed +% name.len;
         var writer = std.Io.Writer.fixed(&memory);
-        var out: Encoder = .{ .writer = &writer };
+        var out: Encoder = undefined;
+        out.init(&writer);
         var c: core.Context = .init(std.testing.failing_allocator, .{}, .borrowed);
         if (options.common) try core.serialize(value, &out, &c) else try separate(value, &out, &c);
+        try out.flush(&c);
         if (c.allocationRequested() != 0) return error.UnexpectedAllocation;
         std.mem.doNotOptimizeAway(writer.buffered());
     }

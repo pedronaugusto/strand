@@ -80,8 +80,8 @@ pub fn offset(self: *const Self) usize {
 pub fn raw(self: *const Self, start: usize, end: usize) core.Span {
     return .{ .bytes = self.input[start..end], .lifetime = .borrowed };
 }
-pub fn replay(self: *const Self, start: usize, end: usize) Self {
-    return .{ .input = self.input, .position = start, .end_position = end };
+pub fn replay(self: *const Self, into: *Self, start: usize, end: usize) void {
+    into.* = .{ .input = self.input, .position = start, .end_position = end };
 }
 pub fn endInput(self: *Self, _: *core.Context) Error!void {
     if (self.position != (self.end_position orelse self.input.len)) return error.SyntaxError;

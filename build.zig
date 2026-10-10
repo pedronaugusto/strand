@@ -124,8 +124,10 @@ pub fn build(b: *std.Build) !void {
     }) });
     if (tests.root_module.import_table.get("airlock.testing")) |seam| jsonl_tests.root_module.addImport("airlock.testing", seam);
     const test_step = b.step("test", "Run strand tests");
-    test_step.dependOn(&b.addRunArtifact(json_tests).step);
-    test_step.dependOn(&b.addRunArtifact(jsonl_tests).step);
+    // The assembly above reaches every module's tests once. The module roots
+    // are compiled on their own below, which holds each module to its own
+    // imports; running them too would run every test twice, and a test run on
+    // two shards is a profile failure.
     test_step.dependOn(&b.addRunArtifact(tests).step);
 
     const scratch_tests = b.addTest(.{

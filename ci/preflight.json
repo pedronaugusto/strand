@@ -3,9 +3,7 @@
     "src"
   ],
   "test_roots": [
-    "src/tests.zig",
-    "src/json/api.zig",
-    "src/jsonl/api.zig"
+    "src/tests.zig"
   ],
   "test_support": [
     "src/testing/**"

@@ -244,9 +244,9 @@ these vectors as arrays. Types you hold in an optional yourself are yours to che
 
 `zig build bench` times the benchmarks in [bench/](bench/) in ReleaseFast. `zig build
 test` runs them once with `--smoke`, over tiny inputs and without reading a clock.
-Regular correctness gates compile or smoke-run the comparison drivers. A manual
-workflow can opt into hosted observations with `indicative_timing`; variable
-wall-clock performance never gates correctness.
+Regular correctness gates compile or smoke-run the comparison drivers. The
+`Manual indicative observations` workflow takes hosted observations when
+dispatched; variable wall-clock performance never gates correctness.
 
 `zig build check` compiles without running. CI uses it for `x86_64-linux-gnu`,
 `aarch64-linux-gnu`, `x86_64-linux-musl`, `x86_64-windows-gnu`, `aarch64-windows-gnu`,

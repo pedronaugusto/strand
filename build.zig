@@ -274,21 +274,29 @@ pub fn build(b: *std.Build) !void {
     // bench_scratch.zig's own tests check the scratch files it writes.
     //=====================================================================
 
+    // The benchmarks are timed, and smoke-run by the tests, in ReleaseFast. A
+    // target this host cannot run is only held to compiling them, and a debug
+    // compile analyses the same source for a fraction of the optimizer's time,
+    // which is most of what a cross-target check costs.
+    const host = b.graph.host.result;
+    const runs_here = target.result.cpu.arch == host.cpu.arch and target.result.os.tag == host.os.tag;
+    const bench_mode: std.lang.Optimize = if (runs_here or optimize != .debug) .fast else .debug;
+
     // Explicit manual measurement, compiled without timing by the check graph.
-    if (b.dependencyLazy("shakedown", .{ .target = target, .optimize = .fast })) |dependency| {
+    if (b.dependencyLazy("shakedown", .{ .target = target, .optimize = bench_mode })) |dependency| {
         const baseline = b.addExecutable(.{
             .name = "strand-baseline",
             .root_module = b.createModule(.{
                 .root_source_file = b.path("bench/baseline.zig"),
                 .target = target,
-                .optimize = .fast,
-                .imports = benchImports(b, target, .fast),
+                .optimize = bench_mode,
+                .imports = benchImports(b, target, bench_mode),
             }),
         });
         baseline.root_module.addImport("shakedown", dependency.module("shakedown"));
         const s2_bench = b.addExecutable(.{
             .name = "strand-s2-bench",
-            .root_module = b.createModule(.{ .root_source_file = b.path("bench/s2.zig"), .target = target, .optimize = .fast, .imports = benchImports(b, target, .fast) }),
+            .root_module = b.createModule(.{ .root_source_file = b.path("bench/s2.zig"), .target = target, .optimize = bench_mode, .imports = benchImports(b, target, bench_mode) }),
         });
         const s2_root = s2_bench.root_module.import_table.get("strand").?;
         s2_bench.root_module.addImport("json", s2_root.import_table.get("strand.json").?.import_table.get("json").?);
@@ -297,7 +305,7 @@ pub fn build(b: *std.Build) !void {
         check_step.dependOn(&s2_bench.step);
         const zon_bench = b.addExecutable(.{
             .name = "strand-zon-bench",
-            .root_module = b.createModule(.{ .root_source_file = b.path("bench/zon.zig"), .target = target, .optimize = .fast, .imports = benchImports(b, target, .fast) }),
+            .root_module = b.createModule(.{ .root_source_file = b.path("bench/zon.zig"), .target = target, .optimize = bench_mode, .imports = benchImports(b, target, bench_mode) }),
         });
         zon_bench.root_module.addImport("shakedown", dependency.module("shakedown"));
         b.step("zon-bench-build", "Compile explicit paired ZON observations against std.zon").dependOn(&b.addInstallArtifact(zon_bench, .{}).step);
@@ -313,7 +321,7 @@ pub fn build(b: *std.Build) !void {
             schema_options.addOption(bool, "common", comptime std.mem.eql(u8, which, "core"));
             const schema = b.addExecutable(.{
                 .name = "strand-schema-" ++ which,
-                .root_module = b.createModule(.{ .root_source_file = b.path("bench/schema.zig"), .target = target, .optimize = .fast, .imports = &.{ .{ .name = "strand.core", .module = s2_root.import_table.get("strand.core").? }, .{ .name = "json", .module = s2_bench.root_module.import_table.get("json").? } } }),
+                .root_module = b.createModule(.{ .root_source_file = b.path("bench/schema.zig"), .target = target, .optimize = bench_mode, .imports = &.{ .{ .name = "strand.core", .module = s2_root.import_table.get("strand.core").? }, .{ .name = "json", .module = s2_bench.root_module.import_table.get("json").? } } }),
             });
             schema.root_module.addOptions("schema_options", schema_options);
             b.step("schema-" ++ which ++ "-build", "Compile ten 100-field checked JSON encoders").dependOn(&b.addInstallArtifact(schema, .{}).step);
@@ -325,24 +333,24 @@ pub fn build(b: *std.Build) !void {
         baseline.root_module.addImport("previous-main", if (baseline_source) |source| b.createModule(.{
             .root_source_file = .{ .cwd_relative = source },
             .target = target,
-            .optimize = .fast,
+            .optimize = bench_mode,
             .imports = &.{.{ .name = "airlock", .module = bench_module.import_table.get("airlock").? }},
         }) else bench_module);
         inline for (.{ "current", "previous" }) |which| {
             const size_exe = b.addExecutable(.{
                 .name = "strand-size-" ++ which,
-                .root_module = b.createModule(.{ .root_source_file = b.path("bench/footprint.zig"), .target = target, .optimize = .fast, .imports = &.{.{ .name = "api", .module = if (comptime std.mem.eql(u8, which, "current")) bench_module else baseline.root_module.import_table.get("previous-main").? }} }),
+                .root_module = b.createModule(.{ .root_source_file = b.path("bench/footprint.zig"), .target = target, .optimize = bench_mode, .imports = &.{.{ .name = "api", .module = if (comptime std.mem.eql(u8, which, "current")) bench_module else baseline.root_module.import_table.get("previous-main").? }} }),
             });
             b.step("size-" ++ which ++ "-build", "Compile the identical legacy footprint fixture").dependOn(&b.addInstallArtifact(size_exe, .{}).step);
             check_step.dependOn(&size_exe.step);
         }
-        const proof_module = b.createModule(.{ .root_source_file = b.path("src/core_test.zig"), .target = target, .optimize = .fast, .imports = &.{ .{ .name = "shakedown", .module = dependency.module("shakedown") }, .{ .name = "strand.core", .module = bench_module.import_table.get("strand.core").? } } });
+        const proof_module = b.createModule(.{ .root_source_file = b.path("src/core_test.zig"), .target = target, .optimize = bench_mode, .imports = &.{ .{ .name = "shakedown", .module = dependency.module("shakedown") }, .{ .name = "strand.core", .module = bench_module.import_table.get("strand.core").? } } });
         const core_bench = b.addExecutable(.{
             .name = "strand-core-bench",
             .root_module = b.createModule(.{
                 .root_source_file = b.path("bench/core.zig"),
                 .target = target,
-                .optimize = .fast,
+                .optimize = bench_mode,
                 .imports = &.{
                     .{ .name = "proof", .module = proof_module },
                     .{ .name = "shakedown", .module = dependency.module("shakedown") },

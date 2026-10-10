@@ -37,6 +37,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   on aarch64 macOS. Zig 0.17.0 miscompiles such an optional; the envelope now keeps its
   payload as a value and a flag.
 
+- The legacy JSON writer is the direct encoder it was before S2 again. S2 had moved its
+  value and member emission into the core behind a wire-parameterised function that only
+  JSON used; the same machine code came out a little differently, 3% slower on an M3 and
+  about 10% on the hosted M1, against 0.7% when emitted directly.
+
 ### Breaking
 
 - S2 adds the `core.Event.number` lexeme alternative; exhaustive backend event

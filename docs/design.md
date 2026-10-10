@@ -12,8 +12,10 @@ Test/tool dependencies remain lazy and outside production modules.
 Bounds → semantic vocabulary/schema → mapping → ownership → core facade → JSON
 wire/syntax → JSON API/facade → framing/schema → streams → tail/follow → JSONL
 API/facade → root. The historical mapping policy is a core specialization over
-format-supplied wire primitives, preserving its in-place and fixed-buffer hot
-paths. Bounded mapping consumes immediate events, including JSON number
+format-supplied wire primitives for reading, preserving its in-place hot path;
+writing stays in the JSON module, the one format that uses it, because routing
+it through the core cost the legacy writer 3% on an M3 and about 10% on an M1.
+Bounded mapping consumes immediate events, including JSON number
 lexemes; it requires no DOM or token tape. JSONL framing shares its line/drain
 boundary decision between the pull path and push decoder. std's historical
 hooks remain confined to the legacy JSON entry points.

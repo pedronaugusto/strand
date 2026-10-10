@@ -2,7 +2,6 @@
 //!
 //! Custom `jsonStringify` types and pretty output stay with `std.json`.
 //! `Raw` has a `jsonStringify` for that path and is written here directly.
-const mapping = @import("mapping");
 const indent_module = @import("indent.zig");
 
 const std = @import("std");
@@ -11,24 +10,6 @@ const Indent = indent_module.Indent;
 
 pub fn Encoder(comptime Raw: type) type {
     return struct {
-        pub const RawType = Raw;
-        pub const internal = tagging.internal;
-        pub const stdValue = std.json.Stringify.value;
-        pub const record_begin = '{';
-        pub const record_end = '}';
-        pub const sequence_begin = '[';
-        pub const sequence_end = ']';
-        pub const comma = ',';
-        pub const comma_word = ",";
-        pub const colon = ':';
-        pub const text_begin = '"';
-        pub const null_word = "null";
-        pub const true_word = "true";
-        pub const false_word = "false";
-        pub const empty_record = "{}";
-        pub fn keyLiteral(comptime name: []const u8) []const u8 {
-            return "\"" ++ name ++ "\":";
-        }
         pub fn supports(comptime T: type) bool {
             // The walk visits every field of every type reachable from `T`, once
             // per path to it: a line protocol of sixty requests is thousands of
@@ -83,7 +64,84 @@ pub fn Encoder(comptime Raw: type) type {
         }
 
         pub fn value(v: anytype, options: std.json.Stringify.Options, writer: *std.Io.Writer) std.Io.Writer.Error!void {
-            return mapping.emit(@This(), v, options, writer);
+            const T = @TypeOf(v);
+            if (T == Raw) return raw(v.bytes, options, writer);
+            if (comptime hasOwnStringify(T)) return std.json.Stringify.value(v, options, writer);
+            switch (@typeInfo(T)) {
+                .bool => try writer.writeAll(if (v) "true" else "false"),
+                .int => |info| if (info.bits > 128) {
+                    try writer.printInt(v, 10, .lower, .{});
+                } else {
+                    var digits: [decimal_max]u8 = undefined;
+                    try writer.writeAll(decimal(&digits, v));
+                },
+                .comptime_int => try value(@as(std.math.IntFittingRange(v, v), v), options, writer),
+                .float, .comptime_float => {
+                    if (@as(f64, @floatCast(v)) == v) {
+                        try writer.print("{}", .{@as(f64, @floatCast(v))});
+                    } else {
+                        try writer.writeByte('"');
+                        try writer.print("{}", .{v});
+                        try writer.writeByte('"');
+                    }
+                },
+                .optional => if (v) |payload| try value(payload, options, writer) else try writer.writeAll("null"),
+                .@"enum" => |info| {
+                    if (info.mode == .nonexhaustive) {
+                        inline for (info.field_names) |field_name| {
+                            if (v == @field(T, field_name)) break;
+                        } else return value(@backingInt(v), options, writer);
+                    }
+                    try string(@tagName(v), options, writer);
+                },
+                .enum_literal => try string(@tagName(v), options, writer),
+                .error_set => try string(@errorName(v), options, writer),
+                .@"struct" => |info| {
+                    try writer.writeByte(if (info.is_tuple) '[' else '{');
+                    _ = try members(v, options, writer, true);
+                    try writer.writeByte(if (info.is_tuple) ']' else '}');
+                },
+                .@"union" => |info| {
+                    if (comptime tagging.internal(T)) |inside| return tagged(v, inside, options, WriterSink{ .writer = writer });
+                    const Tag = info.tag_type.?;
+                    try writer.writeByte('{');
+                    inline for (info.field_names, info.field_types) |field_name, field_type| {
+                        if (v == @field(Tag, field_name)) {
+                            try memberName(field_name, options, writer);
+                            if (field_type == void) {
+                                try writer.writeAll("{}");
+                            } else {
+                                try value(@field(v, field_name), options, writer);
+                            }
+                            break;
+                        }
+                    } else unreachable;
+                    try writer.writeByte('}');
+                },
+                .pointer => |info| switch (info.size) {
+                    .one => switch (@typeInfo(info.child)) {
+                        .array => try value(@as([]const std.meta.Elem(info.child), v), options, writer),
+                        else => try value(v.*, options, writer),
+                    },
+                    .many, .slice => {
+                        if (info.size == .many and info.sentinel() == null)
+                            @compileError("unable to stringify type '" ++ @typeName(T) ++ "' without sentinel");
+                        const slice = if (info.size == .many) std.mem.span(v) else v;
+                        if (info.child == u8) {
+                            if (!try text(WriterSink{ .writer = writer }, slice, options)) try array(slice, options, writer);
+                        } else {
+                            try array(slice, options, writer);
+                        }
+                    },
+                    else => @compileError("Unable to stringify type '" ++ @typeName(T) ++ "'"),
+                },
+                .array => try value(&v, options, writer),
+                .vector => |info| {
+                    const a: [info.len]info.child = v;
+                    try value(&a, options, writer);
+                },
+                else => @compileError("Unable to stringify type '" ++ @typeName(T) ++ "'"),
+            }
         }
 
         /// A struct's members, or a tuple's items, with no bracket either side:
@@ -91,7 +149,22 @@ pub fn Encoder(comptime Raw: type) type {
         /// been written inside the bracket yet; the answer is whether that is
         /// still so, which is whether the next member needs a comma.
         pub fn members(v: anytype, options: std.json.Stringify.Options, writer: *std.Io.Writer, first: bool) std.Io.Writer.Error!bool {
-            return mapping.emitMembers(@This(), v, options, writer, first);
+            const info = @typeInfo(@TypeOf(v)).@"struct";
+            var none = first;
+            inline for (info.field_names, info.field_types) |field_name, field_type| {
+                if (field_type == void) continue;
+                var emit = true;
+                if (!info.is_tuple and @typeInfo(field_type) == .optional and !options.emit_null_optional_fields) {
+                    if (@field(v, field_name) == null) emit = false;
+                }
+                if (emit) {
+                    if (!none) try writer.writeByte(',');
+                    none = false;
+                    if (!info.is_tuple) try memberName(field_name, options, writer);
+                    try value(@field(v, field_name), options, writer);
+                }
+            }
+            return none;
         }
 
         /// A member's name and the colon after it.
@@ -115,11 +188,10 @@ pub fn Encoder(comptime Raw: type) type {
         }
 
         const Buffer = struct {
-            pub const Error = BufferError;
             bytes: []u8,
             end: usize = 0,
 
-            pub inline fn byte(self: *Buffer, b: u8) BufferError!void {
+            inline fn byte(self: *Buffer, b: u8) BufferError!void {
                 std.debug.assert(self.end <= self.bytes.len);
                 defer std.debug.assert(self.end <= self.bytes.len);
                 if (self.end == self.bytes.len) return error.NoSpace;
@@ -127,7 +199,7 @@ pub fn Encoder(comptime Raw: type) type {
                 self.end += 1;
             }
 
-            pub inline fn write(self: *Buffer, src: []const u8) BufferError!void {
+            inline fn write(self: *Buffer, src: []const u8) BufferError!void {
                 std.debug.assert(self.end <= self.bytes.len);
                 defer std.debug.assert(self.end <= self.bytes.len);
                 if (src.len > self.bytes.len - self.end) return error.NoSpace;
@@ -135,7 +207,7 @@ pub fn Encoder(comptime Raw: type) type {
                 self.end += src.len;
             }
 
-            pub fn integer(self: *Buffer, v: anytype) BufferError!void {
+            fn integer(self: *Buffer, v: anytype) BufferError!void {
                 if (@typeInfo(@TypeOf(v)).int.bits > 128) {
                     var fixed: std.Io.Writer = .fixed(self.bytes[self.end..]);
                     fixed.printInt(v, 10, .lower, .{}) catch return error.NoSpace;
@@ -146,46 +218,145 @@ pub fn Encoder(comptime Raw: type) type {
                 try self.write(decimal(&digits, v));
             }
 
-            pub fn stdValue(self: *Buffer, v: anytype, options: std.json.Stringify.Options) BufferError!void {
+            fn stdValue(self: *Buffer, v: anytype, options: std.json.Stringify.Options) BufferError!void {
                 var fixed: std.Io.Writer = .fixed(self.bytes[self.end..]);
                 std.json.Stringify.value(v, options, &fixed) catch return error.NoSpace;
                 self.end += fixed.end;
             }
 
-            pub fn raw(self: *Buffer, bytes: []const u8, options: std.json.Stringify.Options) BufferError!void {
+            fn raw(self: *Buffer, bytes: []const u8, options: std.json.Stringify.Options) BufferError!void {
                 if (rawAsIs(bytes, options)) return self.write(bytes);
                 var fixed: std.Io.Writer = .fixed(self.bytes[self.end..]);
                 rawChanged(bytes, options, &fixed) catch return error.NoSpace;
                 self.end += fixed.end;
             }
 
-            pub fn members(self: *Buffer, v: anytype, options: std.json.Stringify.Options) BufferError!void {
+            fn members(self: *Buffer, v: anytype, options: std.json.Stringify.Options) BufferError!void {
                 return bufferMembers(v, options, self, true);
             }
 
-            pub fn stdString(self: *Buffer, s: []const u8, options: std.json.Stringify.Options) BufferError!void {
+            fn stdString(self: *Buffer, s: []const u8, options: std.json.Stringify.Options) BufferError!void {
                 var fixed: std.Io.Writer = .fixed(self.bytes[self.end..]);
                 std.json.Stringify.encodeJsonString(s, options, &fixed) catch return error.NoSpace;
                 self.end += fixed.end;
             }
         };
 
-        pub fn bufferValue(v: anytype, options: std.json.Stringify.Options, out: *Buffer) BufferError!void {
-            return mapping.emitBuffer(@This(), v, options, out);
+        fn bufferValue(v: anytype, options: std.json.Stringify.Options, out: *Buffer) BufferError!void {
+            const T = @TypeOf(v);
+            if (T == Raw) return out.raw(v.bytes, options);
+            if (comptime hasOwnStringify(T)) return out.stdValue(v, options);
+            switch (@typeInfo(T)) {
+                .bool => try out.write(if (v) "true" else "false"),
+                .int => try out.integer(v),
+                .comptime_int => try bufferValue(@as(std.math.IntFittingRange(v, v), v), options, out),
+                .float, .comptime_float => try out.stdValue(v, options),
+                .optional => if (v) |payload| try bufferValue(payload, options, out) else try out.write("null"),
+                // A value a non-exhaustive enum does not name is its number.
+                .@"enum" => |info| if (info.mode == .exhaustive) switch (v) {
+                    inline else => |tag| try bufferTagName(@tagName(tag), options, out),
+                } else switch (v) {
+                    inline else => |tag| try bufferTagName(@tagName(tag), options, out),
+                    _ => try bufferValue(@backingInt(v), options, out),
+                },
+                .enum_literal => try bufferString(@tagName(v), options, out),
+                .error_set => try bufferString(@errorName(v), options, out),
+                .@"struct" => |info| {
+                    try out.byte(if (info.is_tuple) '[' else '{');
+                    try bufferMembers(v, options, out, false);
+                    try out.byte(if (info.is_tuple) ']' else '}');
+                },
+                .@"union" => |info| {
+                    if (comptime tagging.internal(T)) |inside| return tagged(v, inside, options, out);
+                    const Tag = info.tag_type.?;
+                    try out.byte('{');
+                    inline for (info.field_names, info.field_types) |field_name, field_type| {
+                        if (v == @field(Tag, field_name)) {
+                            if (comptime safeFieldName(field_name)) {
+                                try out.write(comptime "\"" ++ field_name ++ "\":");
+                            } else {
+                                try bufferString(field_name, options, out);
+                                try out.byte(':');
+                            }
+                            if (field_type == void) {
+                                try out.write("{}");
+                            } else {
+                                try bufferValue(@field(v, field_name), options, out);
+                            }
+                            break;
+                        }
+                    } else unreachable;
+                    try out.byte('}');
+                },
+                .pointer => |info| switch (info.size) {
+                    .one => switch (@typeInfo(info.child)) {
+                        .array => try bufferValue(@as([]const std.meta.Elem(info.child), v), options, out),
+                        else => try bufferValue(v.*, options, out),
+                    },
+                    .many, .slice => {
+                        if (info.size == .many and info.sentinel() == null)
+                            @compileError("unable to stringify type '" ++ @typeName(T) ++ "' without sentinel");
+                        const slice = if (info.size == .many) std.mem.span(v) else v;
+                        if (info.child == u8) {
+                            if (!try text(out, slice, options)) try bufferArray(slice, options, out);
+                        } else try bufferArray(slice, options, out);
+                    },
+                    else => @compileError("Unable to stringify type '" ++ @typeName(T) ++ "'"),
+                },
+                .array => try bufferValue(&v, options, out),
+                .vector => |info| {
+                    const a: [info.len]info.child = v;
+                    try bufferValue(&a, options, out);
+                },
+                else => @compileError("Unable to stringify type '" ++ @typeName(T) ++ "'"),
+            }
         }
 
         /// A struct's members, or a tuple's items, between its brackets. `lead`
         /// says a member is already written in front of them, so every one of
         /// them takes a comma: the tag of a union tagged inside its object.
-        pub fn bufferMembers(v: anytype, options: std.json.Stringify.Options, out: *Buffer, comptime lead: bool) BufferError!void {
-            return mapping.emitBufferMembers(@This(), lead, v, options, out);
+        fn bufferMembers(v: anytype, options: std.json.Stringify.Options, out: *Buffer, comptime lead: bool) BufferError!void {
+            const info = @typeInfo(@TypeOf(v)).@"struct";
+            var first = !lead;
+            _ = &first;
+            // Whether a member before this one is always written, which
+            // makes the comma in front of this one a constant.
+            comptime var written_before = lead;
+            inline for (info.field_names, info.field_types) |field_name, field_type| {
+                if (field_type == void) continue;
+                const optional = !info.is_tuple and @typeInfo(field_type) == .optional;
+                var emit = true;
+                if (optional and !options.emit_null_optional_fields) {
+                    if (@field(v, field_name) == null) emit = false;
+                }
+                if (emit) {
+                    if (!info.is_tuple and comptime safeFieldName(field_name)) {
+                        const key = comptime "\"" ++ field_name ++ "\":";
+                        if (written_before) {
+                            try out.write("," ++ key);
+                        } else {
+                            if (!first) try out.byte(',');
+                            try out.write(key);
+                        }
+                    } else {
+                        if (!first) try out.byte(',');
+                        if (!info.is_tuple) {
+                            try bufferString(field_name, options, out);
+                            try out.byte(':');
+                        }
+                    }
+                    first = false;
+                    try bufferValue(@field(v, field_name), options, out);
+                }
+                if (!optional) written_before = true;
+            }
         }
 
         /// A union tagged inside its object: the tag first, then the arm's
         /// members, in one object. The arm a tag naming no arm was read as is
         /// written as it was read: a `Raw` holds the record, tag and all, and
         /// a `void` one is its own name.
-        pub fn tagged(v: anytype, comptime inside: anytype, options: std.json.Stringify.Options, sink: anytype) !void {
+        fn tagged(v: anytype, comptime inside: anytype, options: std.json.Stringify.Options, sink: anytype) !void {
             const T = @TypeOf(v);
             const tag_key = comptime "\"" ++ inside.tag ++ "\":";
             switch (v) {
@@ -209,14 +380,14 @@ pub fn Encoder(comptime Raw: type) type {
 
         /// A type that writes itself, met inside a value this encoder writes
         /// only because it reaches a union tagged inside its object.
-        pub fn hasOwnStringify(comptime T: type) bool {
+        fn hasOwnStringify(comptime T: type) bool {
             return switch (@typeInfo(T)) {
                 .@"struct", .@"union", .@"enum", .@"opaque" => std.meta.hasFn(T, "jsonStringify"),
                 else => false,
             };
         }
 
-        pub fn bufferArray(items: anytype, options: std.json.Stringify.Options, out: *Buffer) BufferError!void {
+        fn bufferArray(items: anytype, options: std.json.Stringify.Options, out: *Buffer) BufferError!void {
             try out.byte('[');
             for (items, 0..) |item, i| {
                 if (i != 0) try out.byte(',');
@@ -227,7 +398,7 @@ pub fn Encoder(comptime Raw: type) type {
 
         /// An enum tag's name as a string. The name is known when this is
         /// compiled, and so is its JSON when it needs no escaping.
-        pub inline fn bufferTagName(comptime name: []const u8, options: std.json.Stringify.Options, out: *Buffer) BufferError!void {
+        inline fn bufferTagName(comptime name: []const u8, options: std.json.Stringify.Options, out: *Buffer) BufferError!void {
             if (comptime safeFieldName(name))
                 try out.write(comptime "\"" ++ name ++ "\"")
             else
@@ -236,28 +407,28 @@ pub fn Encoder(comptime Raw: type) type {
 
         /// A name — a field's, a tag's, an error's — as `std.json` writes it,
         /// whatever its bytes.
-        pub fn bufferString(bytes: []const u8, options: std.json.Stringify.Options, out: *Buffer) BufferError!void {
+        fn bufferString(bytes: []const u8, options: std.json.Stringify.Options, out: *Buffer) BufferError!void {
             if (!try text(out, bytes, options)) try out.stdString(bytes, options);
         }
 
         /// Where a `WriterSink` or a `Buffer` is written to: a byte, a run of bytes,
         /// and a string `std.json` escapes itself.
-        pub const WriterSink = struct {
+        const WriterSink = struct {
             writer: *std.Io.Writer,
 
-            pub fn byte(self: WriterSink, b: u8) std.Io.Writer.Error!void {
+            fn byte(self: WriterSink, b: u8) std.Io.Writer.Error!void {
                 return self.writer.writeByte(b);
             }
-            pub fn write(self: WriterSink, bytes: []const u8) std.Io.Writer.Error!void {
+            fn write(self: WriterSink, bytes: []const u8) std.Io.Writer.Error!void {
                 return self.writer.writeAll(bytes);
             }
-            pub fn stdString(self: WriterSink, bytes: []const u8, options: std.json.Stringify.Options) std.Io.Writer.Error!void {
+            fn stdString(self: WriterSink, bytes: []const u8, options: std.json.Stringify.Options) std.Io.Writer.Error!void {
                 return std.json.Stringify.encodeJsonString(bytes, options, self.writer);
             }
-            pub fn raw(self: WriterSink, bytes: []const u8, options: std.json.Stringify.Options) std.Io.Writer.Error!void {
+            fn raw(self: WriterSink, bytes: []const u8, options: std.json.Stringify.Options) std.Io.Writer.Error!void {
                 return Encoder(Raw).raw(bytes, options, self.writer);
             }
-            pub fn members(self: WriterSink, v: anytype, options: std.json.Stringify.Options) std.Io.Writer.Error!void {
+            fn members(self: WriterSink, v: anytype, options: std.json.Stringify.Options) std.Io.Writer.Error!void {
                 _ = try Encoder(Raw).members(v, options, self.writer, false);
             }
         };
@@ -273,7 +444,7 @@ pub fn Encoder(comptime Raw: type) type {
         /// none of them and nothing past ASCII, which is most, is one scan and one
         /// copy. Under `escape_unicode` a string with anything past ASCII in it is
         /// `std.json`'s.
-        pub fn text(sink: anytype, bytes: []const u8, options: std.json.Stringify.Options) !bool {
+        fn text(sink: anytype, bytes: []const u8, options: std.json.Stringify.Options) !bool {
             const first = nextSpecial(bytes, 0, true);
             if (first == bytes.len) {
                 try sink.byte('"');
@@ -345,7 +516,7 @@ pub fn Encoder(comptime Raw: type) type {
 
         /// Enough for any integer up to 128 bits and its sign. Wider ones are
         /// written by `std.fmt`.
-        pub const decimal_max = 40;
+        const decimal_max = 40;
         comptime {
             // A signed 128-bit magnitude needs 39 decimal digits and its sign.
             std.debug.assert(decimal_max >= 39 + 1);
@@ -356,7 +527,7 @@ pub fn Encoder(comptime Raw: type) type {
         /// Two digits a division, and for an integer past 64 bits, nineteen digits
         /// a 128-bit division and the rest in 64 bits, which is where a `u128`'s
         /// time goes otherwise.
-        pub fn decimal(buffer: *[decimal_max]u8, v: anytype) []const u8 {
+        fn decimal(buffer: *[decimal_max]u8, v: anytype) []const u8 {
             const info = @typeInfo(@TypeOf(v)).int;
             comptime std.debug.assert(info.bits <= 128);
             var at: usize = buffer.len;
@@ -400,12 +571,12 @@ pub fn Encoder(comptime Raw: type) type {
             return at;
         }
 
-        pub fn safeFieldName(bytes: []const u8) bool {
+        fn safeFieldName(bytes: []const u8) bool {
             for (bytes) |b| if (b < 0x20 or b == '"' or b == '\\' or b >= 0x7f) return false;
             return true;
         }
 
-        pub fn array(items: anytype, options: std.json.Stringify.Options, writer: *std.Io.Writer) !void {
+        fn array(items: anytype, options: std.json.Stringify.Options, writer: *std.Io.Writer) !void {
             try writer.writeByte('[');
             for (items, 0..) |item, i| {
                 if (i != 0) try writer.writeByte(',');
@@ -414,7 +585,7 @@ pub fn Encoder(comptime Raw: type) type {
             try writer.writeByte(']');
         }
 
-        pub fn string(bytes: []const u8, options: std.json.Stringify.Options, writer: *std.Io.Writer) !void {
+        fn string(bytes: []const u8, options: std.json.Stringify.Options, writer: *std.Io.Writer) !void {
             try std.json.Stringify.encodeJsonString(bytes, options, writer);
         }
 

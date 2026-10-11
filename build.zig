@@ -2,10 +2,8 @@ const std = @import("std");
 /// airlock's build, for its test seam.
 const airlock_build = @import("airlock");
 
-pub fn build(b: *std.Build) !void {
-    // lazyImport compares every package of the dependency tree at comptime;
-    // a large tree runs past the default quota of 1000 branches.
-    @setEvalBranchQuota(100_000);
+/// What a project that depends on strand builds: the `strand` module, on aegis and airlock.
+pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
@@ -23,16 +21,27 @@ pub fn build(b: *std.Build) !void {
     const airlock_dependency = b.dependency("airlock", .{ .target = target, .optimize = optimize });
     const airlock = airlock_dependency.module("airlock");
     const aegis = b.dependency("aegis", .{ .target = target, .optimize = optimize }).module("aegis");
-    const module = b.addModule("strand", .{
+    _ = b.addModule("strand", .{
         .root_source_file = b.path("src/strand.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{ .{ .name = "aegis", .module = aegis }, .{ .name = "airlock", .module = airlock } },
     });
+}
 
-    // Everything below is strand's own: a project depending on strand
-    // neither builds nor fetches its tests, benchmarks or CI.
-    if (b.pkg_hash.len != 0) return;
+/// strand's development: its tests, examples, checks and benchmarks, under
+/// preflight's gate. Run through bay.
+pub fn dev(b: *std.Build, tools: type) void {
+    const target = b.standardTargetOptions(.{});
+    const optimize = b.standardOptimizeOption(.{});
+    const package = b.dependency("strand", .{ .target = target, .optimize = optimize });
+    const p = package.builder;
+    const preflight = tools.preflight;
+    use_aegis = tools.shakedown.useAegis;
+    const module = package.module("strand");
+    const airlock_dependency = p.dependency("airlock", .{ .target = target, .optimize = optimize });
+    const airlock = airlock_dependency.module("airlock");
+    const aegis = p.dependency("aegis", .{ .target = target, .optimize = optimize }).module("aegis");
 
     //=====================================================================
     // Tests. Every one of them runs under `std.testing.allocator`, so a leak
@@ -41,7 +50,7 @@ pub fn build(b: *std.Build) !void {
 
     // A follower's cancellation is a second task ending a wait the first is
     // in, so it is the one claim here a race detector can check rather than
-    // a reader: `zig build test -Dthread-sanitizer`.
+    // a reader: `bay test -Dthread-sanitizer`.
     const thread_sanitizer = b.option(
         bool,
         "thread-sanitizer",
@@ -53,23 +62,21 @@ pub fn build(b: *std.Build) !void {
         .name = "strand-tests",
         .filters = if (test_filter) |filter| &.{filter} else &.{},
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/tests.zig"),
+            .root_source_file = p.path("src/tests.zig"),
             .target = target,
             .optimize = optimize,
             .sanitize_thread = if (thread_sanitizer) true else null,
             .imports = &.{ .{ .name = "aegis", .module = aegis }, .{ .name = "airlock", .module = airlock } },
         }),
     });
-    // shakedown, and airlock's seam on it, are lazy and test-only: no
-    // module a consumer builds imports them. Their error is returned last,
-    // so one configure pass asks for them and for preflight together.
-    var needed: error{LazyDependencyNeeded}!void = {};
-    if (b.dependencyLazy("shakedown", .{ .target = target, .optimize = optimize })) |shakedown| {
-        tests.root_module.addImport("shakedown", shakedown.module("shakedown"));
-    } else |err| needed = err;
+    // shakedown bound to strand's aegis, so a binary links one aegis; and airlock's seam on it,
+    // which is lazy: its error ends this configure pass until it is fetched.
+    const shakedown = b.dependency("shakedown", .{ .target = target, .optimize = optimize, .aegis = .consumer });
+    use_aegis(shakedown, aegis);
+    tests.root_module.addImport("shakedown", shakedown.module("shakedown"));
     if (airlock_build.testing(airlock_dependency)) |seam| {
         tests.root_module.addImport("airlock.testing", seam);
-    } else |err| needed = err;
+    } else |_| return;
 
     const test_step = b.step("test", "Run strand tests");
     // The assembly reaches every test once, in one executable.
@@ -79,7 +86,7 @@ pub fn build(b: *std.Build) !void {
         .name = "logbook-scratch-tests",
         .filters = if (test_filter) |filter| &.{filter} else &.{},
         .root_module = b.createModule(.{
-            .root_source_file = b.path("examples/scratch.zig"),
+            .root_source_file = p.path("examples/scratch.zig"),
             .target = target,
             .optimize = optimize,
         }),
@@ -97,7 +104,7 @@ pub fn build(b: *std.Build) !void {
     const json_consumer = b.addExecutable(.{
         .name = "json-consumer",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("ci/json-consumer.zig"),
+            .root_source_file = p.path("ci/json-consumer.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{.{ .name = "strand", .module = module }},
@@ -116,7 +123,7 @@ pub fn build(b: *std.Build) !void {
             const rejected = b.addObject(.{
                 .name = b.fmt("clone-rejected-{d}", .{case}),
                 .root_module = b.createModule(.{
-                    .root_source_file = b.path("src/testing/clone_rejected.zig"),
+                    .root_source_file = p.path("src/testing/clone_rejected.zig"),
                     .target = target,
                     .optimize = optimize,
                     .imports = &.{.{ .name = "strand", .module = module }},
@@ -141,7 +148,7 @@ pub fn build(b: *std.Build) !void {
             const rejected = b.addObject(.{
                 .name = b.fmt("core-rejected-{d}", .{case}),
                 .root_module = b.createModule(.{
-                    .root_source_file = b.path("src/testing/core_rejected.zig"),
+                    .root_source_file = p.path("src/testing/core_rejected.zig"),
                     .target = target,
                     .optimize = optimize,
                     .imports = &.{.{ .name = "strand", .module = module }},
@@ -161,7 +168,7 @@ pub fn build(b: *std.Build) !void {
     // only compiled proves the names still resolve; running it is what
     // proves the code does what the text around it says. examples/usage.zig
     // is also where README.md's Usage block comes from — see
-    // zig build docs -- usage — so the snippet a reader copies is code CI
+    // bay docs -- usage — so the snippet a reader copies is code CI
     // executes.
     //=====================================================================
 
@@ -170,7 +177,7 @@ pub fn build(b: *std.Build) !void {
         const example = b.addExecutable(.{
             .name = std.Io.Dir.path.stem(source),
             .root_module = b.createModule(.{
-                .root_source_file = b.path(source),
+                .root_source_file = p.path(source),
                 .target = target,
                 .optimize = optimize,
                 .imports = &.{.{ .name = "strand", .module = module }},
@@ -184,7 +191,7 @@ pub fn build(b: *std.Build) !void {
     //=====================================================================
     // Benchmarks
     //
-    // Never timed by `zig build test`: a number that varies with the
+    // Never timed by `bay test`: a number that varies with the
     // machine is not a thing to fail a build over. preflight's `bench` runs
     // bench/bench.zig in ReleaseFast; the tests run it once with `--smoke`.
     // bench_scratch.zig's own tests check the scratch files it writes.
@@ -199,19 +206,18 @@ pub fn build(b: *std.Build) !void {
     const bench_mode: std.lang.Optimize = if (runs_here or optimize != .debug) .fast else .debug;
 
     // Explicit manual measurement, compiled without timing by the check graph.
-    if (b.dependencyLazy("shakedown", .{ .target = target, .optimize = bench_mode })) |dependency| {
+    {
+        const dependency = boundShakedown(b, target, bench_mode);
         const s2_bench = b.addExecutable(.{
             .name = "strand-s2-bench",
-            .root_module = b.createModule(.{ .root_source_file = b.path("bench/s2.zig"), .target = target, .optimize = bench_mode, .imports = &.{.{ .name = "seam", .module = benchSeam(b, target, bench_mode) }} }),
+            .root_module = b.createModule(.{ .root_source_file = p.path("bench/s2.zig"), .target = target, .optimize = bench_mode, .imports = &.{.{ .name = "seam", .module = benchSeam(b, target, bench_mode) }} }),
         });
         s2_bench.root_module.addImport("shakedown", dependency.module("shakedown"));
-        const prof = b.addExecutable(.{ .name = "strand-prof", .root_module = b.createModule(.{ .root_source_file = .{ .cwd_relative = "/private/tmp/claude-501/-Users-gusto-work-tycho/bafb8972-fd4d-4df5-a8ec-13a1c661e738/scratchpad/prof.zig" }, .target = target, .optimize = bench_mode, .imports = &.{.{ .name = "seam", .module = s2_bench.root_module.import_table.get("seam").? }} }) });
-        b.step("prof-build", "x").dependOn(&b.addInstallArtifact(prof, .{}).step);
         b.step("s2-bench-build", "Compile explicit paired S2 observations").dependOn(&b.addInstallArtifact(s2_bench, .{}).step);
         check_step.dependOn(&s2_bench.step);
         const zon_bench = b.addExecutable(.{
             .name = "strand-zon-bench",
-            .root_module = b.createModule(.{ .root_source_file = b.path("bench/zon.zig"), .target = target, .optimize = bench_mode, .imports = benchImports(b, target, bench_mode) }),
+            .root_module = b.createModule(.{ .root_source_file = p.path("bench/zon.zig"), .target = target, .optimize = bench_mode, .imports = benchImports(b, target, bench_mode) }),
         });
         zon_bench.root_module.addImport("shakedown", dependency.module("shakedown"));
         b.step("zon-bench-build", "Compile explicit paired ZON observations against std.zon").dependOn(&b.addInstallArtifact(zon_bench, .{}).step);
@@ -227,18 +233,18 @@ pub fn build(b: *std.Build) !void {
             schema_options.addOption(bool, "common", comptime std.mem.eql(u8, which, "core"));
             const schema = b.addExecutable(.{
                 .name = "strand-schema-" ++ which,
-                .root_module = b.createModule(.{ .root_source_file = b.path("bench/schema.zig"), .target = target, .optimize = bench_mode, .imports = &.{.{ .name = "seam", .module = s2_bench.root_module.import_table.get("seam").? }} }),
+                .root_module = b.createModule(.{ .root_source_file = p.path("bench/schema.zig"), .target = target, .optimize = bench_mode, .imports = &.{.{ .name = "seam", .module = s2_bench.root_module.import_table.get("seam").? }} }),
             });
             schema.root_module.addOptions("schema_options", schema_options);
             b.step("schema-" ++ which ++ "-build", "Compile ten 100-field checked JSON encoders").dependOn(&b.addInstallArtifact(schema, .{}).step);
             check_step.dependOn(&schema.step);
             test_step.dependOn(&b.addRunArtifact(schema).step);
         }
-        const proof_module = b.createModule(.{ .root_source_file = b.path("src/core_test.zig"), .target = target, .optimize = bench_mode, .imports = &.{ .{ .name = "shakedown", .module = dependency.module("shakedown") }, .{ .name = "aegis", .module = b.dependency("aegis", .{ .target = target, .optimize = bench_mode }).module("aegis") } } });
+        const proof_module = b.createModule(.{ .root_source_file = p.path("src/core_test.zig"), .target = target, .optimize = bench_mode, .imports = &.{ .{ .name = "shakedown", .module = dependency.module("shakedown") }, .{ .name = "aegis", .module = p.dependency("aegis", .{ .target = target, .optimize = bench_mode }).module("aegis") } } });
         const core_bench = b.addExecutable(.{
             .name = "strand-core-bench",
             .root_module = b.createModule(.{
-                .root_source_file = b.path("bench/core.zig"),
+                .root_source_file = p.path("bench/core.zig"),
                 .target = target,
                 .optimize = bench_mode,
                 .imports = &.{
@@ -249,13 +255,13 @@ pub fn build(b: *std.Build) !void {
         });
         b.step("core-bench-build", "Compile paired manual reference observations").dependOn(&b.addInstallArtifact(core_bench, .{}).step);
         check_step.dependOn(&core_bench.step);
-    } else |err| needed = err;
+    }
 
     const bench_tests = b.addTest(.{
         .name = "strand-bench-tests",
         .filters = if (test_filter) |filter| &.{filter} else &.{},
         .root_module = b.createModule(.{
-            .root_source_file = b.path("bench/bench_scratch.zig"),
+            .root_source_file = p.path("bench/bench_scratch.zig"),
             .target = target,
             .optimize = optimize,
         }),
@@ -265,44 +271,46 @@ pub fn build(b: *std.Build) !void {
 
     //=====================================================================
     // CI wiring
-    //
-    // preflight is a lazy dependency, and a lazy package's build.zig can
-    // only be reached through `lazyImport`: a plain `@import` of it fails to
-    // compile in any project that depends on strand and has not fetched
-    // preflight, which is every such project.
     //=====================================================================
 
-    if (b.lazyImport(@This(), "preflight")) |preflight| {
-        preflight.addCi(b, .{
-            .tests = test_step,
-            .portable_tests = true,
-            .bench = .{
-                .programs = &.{.{ .name = "strand-bench", .source = "bench/bench.zig" }},
-                .imports = benchImports,
-                .target = target,
-                .optimize = optimize,
-            },
-        });
-        // A project that depends on strand by path, with airlock and aegis
-        // and nothing else to fetch: the build a consumer gets.
-        preflight.addConsumerCheck(b, .{
-            .package = "strand",
-            .modules = &.{"strand"},
-            .program = b.path("ci/consumer.zig"),
-            .packages = &.{ b.dependency("aegis", .{}), b.dependency("airlock", .{}) },
-        });
-    }
-    return needed;
+    preflight.addCi(b, p, .{
+        .tests = test_step,
+        .portable_tests = true,
+        .bench = .{
+            .programs = &.{.{ .name = "strand-bench", .source = "bench/bench.zig" }},
+            .imports = benchImports,
+            .target = target,
+            .optimize = optimize,
+        },
+    });
+    // A project that depends on strand by path, with airlock and aegis
+    // and nothing else to fetch: the build a consumer gets.
+    preflight.addConsumerCheck(b, p, .{
+        .package = "strand",
+        .modules = &.{"strand"},
+        .program = p.path("ci/consumer.zig"),
+        .packages = &.{ p.dependency("aegis", .{}), p.dependency("airlock", .{}) },
+    });
 }
 
-/// strand and airlock again, in the mode a benchmark builds in: an
-/// imported module keeps its own mode, so a ReleaseFast benchmark over the
-/// Debug module would time the Debug module.
+/// `tools.shakedown.useAegis`, set by `dev` for the benchmark imports, which are built without `tools`.
+var use_aegis: *const fn (*std.Build.Dependency, *std.Build.Module) void = undefined;
+
+/// shakedown bound to strand's aegis in this mode, so a binary links one aegis.
+fn boundShakedown(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize) *std.Build.Dependency {
+    const p = b.dependency("strand", .{ .target = target, .optimize = optimize }).builder;
+    const shakedown = b.dependency("shakedown", .{ .target = target, .optimize = optimize, .aegis = .consumer });
+    use_aegis(shakedown, p.dependency("aegis", .{ .target = target, .optimize = optimize }).module("aegis"));
+    return shakedown;
+}
+
+/// strand again, in the mode a benchmark builds in: an imported module keeps
+/// its own mode, so a ReleaseFast benchmark over the Debug module would time
+/// the Debug module. And shakedown, bound to its aegis.
 fn benchImports(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize) []const std.Build.Module.Import {
-    const airlock = b.dependency("airlock", .{ .target = target, .optimize = optimize }).module("airlock");
-    const aegis = b.dependency("aegis", .{ .target = target, .optimize = optimize }).module("aegis");
-    const strand = b.createModule(.{ .root_source_file = b.path("src/strand.zig"), .target = target, .optimize = optimize, .imports = &.{ .{ .name = "aegis", .module = aegis }, .{ .name = "airlock", .module = airlock } } });
-    return b.allocator.dupe(std.Build.Module.Import, &.{.{ .name = "strand", .module = strand }}) catch @panic("OOM");
+    const strand = b.dependency("strand", .{ .target = target, .optimize = optimize }).module("strand");
+    const shakedown = boundShakedown(b, target, optimize);
+    return b.allocator.dupe(std.Build.Module.Import, &.{ .{ .name = "strand", .module = strand }, .{ .name = "shakedown", .module = shakedown.module("shakedown") } }) catch @panic("OOM");
 }
 
 /// The way below the public API for the two benchmarks that time the wire
@@ -310,9 +318,10 @@ fn benchImports(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.l
 /// they cannot take it beside `strand`: this root names both, and is not part
 /// of the strand module.
 fn benchSeam(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize) *std.Build.Module {
-    const airlock = b.dependency("airlock", .{ .target = target, .optimize = optimize }).module("airlock");
-    const aegis = b.dependency("aegis", .{ .target = target, .optimize = optimize }).module("aegis");
-    return b.createModule(.{ .root_source_file = b.path("src/seam.zig"), .target = target, .optimize = optimize, .imports = &.{ .{ .name = "aegis", .module = aegis }, .{ .name = "airlock", .module = airlock } } });
+    const p = b.dependency("strand", .{ .target = target, .optimize = optimize }).builder;
+    const airlock = p.dependency("airlock", .{ .target = target, .optimize = optimize }).module("airlock");
+    const aegis = p.dependency("aegis", .{ .target = target, .optimize = optimize }).module("aegis");
+    return b.createModule(.{ .root_source_file = p.path("src/seam.zig"), .target = target, .optimize = optimize, .imports = &.{ .{ .name = "aegis", .module = aegis }, .{ .name = "airlock", .module = airlock } } });
 }
 
 /// Every example, listed rather than globbed: a build graph that scans a

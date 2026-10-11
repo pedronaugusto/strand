@@ -215,18 +215,22 @@ path to the field that is the problem. A type with a meaning of its own declares
   and numbers files for a `Follower`.
 - [shakedown](https://github.com/pedronaugusto/shakedown) supplies the tests' doubles:
   faulted and counted `Io` calls and allocators, and airlock's syncs through
-  `airlock.testing`, its test seam. Shakedown is a test dependency.
+  `airlock.testing`, its test seam. Shakedown is a dev dependency.
 - [preflight](https://github.com/pedronaugusto/preflight) runs the source checks,
-  the tests and CI.
+  the tests and CI. It is a dev dependency too: with [bay](https://github.com/pedronaugusto/bay),
+  shakedown and preflight belong to strand's own development, and a project that
+  depends on strand never sees them.
 
 ## Testing
 
-`zig build test` runs the unit suite, scratch tests and examples in Debug by default.
+Development runs through bay.
+
+`bay test` runs the unit suite, scratch tests and examples in Debug by default.
 The suite covers framing, codec agreement with `std.json`, owned copies, rotation,
 cancellation and malformed records. Properties are shakedown `check` runs of seeded
 cases; `SHAKEDOWN_CASES` and `SHAKEDOWN_SEED` select a larger or a repeated run. `zig
 build test --fuzz` runs the coverage-guided targets until stopped. CI also runs
-`zig build lint`.
+`bay lint`.
 
 [CI](.github/workflows/ci.yml) has three tiers. Fast runs the source checks,
 Linux Debug tests and examples, and cross-target compilation. Merge adds the
@@ -234,7 +238,7 @@ configured macOS/Windows SDK links and native Debug test replay. Release adds
 optimized configurations, full configured cross coverage and Linux ThreadSanitizer.
 Merge/release also try Zig master in a non-blocking job. The profile job refreshes
 recorded test durations; it does not run a larger set of generated cases.
-Run one explicitly with `SHAKEDOWN_CASES=20000 zig build test -Doptimize=safe`.
+Run one explicitly with `SHAKEDOWN_CASES=20000 bay test -Doptimize=safe`.
 
 Zig 0.17.0 on aarch64 macOS miscompiles a vector whose size is not a power of two,
 such as `@Vector(3, u128)` (48 bytes), held in an optional or in an aggregate inside
@@ -243,13 +247,12 @@ right. It shows without strand in a dozen lines. `Versioned` keeps its payload a
 value and a flag so that a record with such a field survives it, and the tests compare
 these vectors as arrays. Types you hold in an optional yourself are yours to check.
 
-`zig build bench` times the benchmarks in [bench/](bench/) in ReleaseFast. `zig build
-test` runs them once with `--smoke`, over tiny inputs and without reading a clock.
+`bay bench` times the benchmarks in [bench/](bench/) in ReleaseFast. `bay test` runs them once with `--smoke`, over tiny inputs and without reading a clock.
 Regular correctness gates compile or smoke-run the comparison drivers. The
 `Manual indicative observations` workflow takes hosted observations when
 dispatched; variable wall-clock performance never gates correctness.
 
-`zig build check` compiles without running. CI uses it for `x86_64-linux-gnu`,
+`bay check` compiles without running. CI uses it for `x86_64-linux-gnu`,
 `aarch64-linux-gnu`, `x86_64-linux-musl`, `x86_64-windows-gnu`, `aarch64-windows-gnu`,
 `x86_64-macos` and `aarch64-macos`.
 

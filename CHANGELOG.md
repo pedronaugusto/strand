@@ -8,6 +8,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Breaking
 
+- strand is developed with [bay](https://github.com/pedronaugusto/bay): preflight and shakedown are dev dependencies, and the tests, examples, checks and benchmarks are the development build's (`bay test`, `bay check`, `bay bench`). strand ships with aegis and airlock; what a project that depends on it builds is unchanged.
 - One API. strand reads and writes JSON through `strand.json` alone, and JSON Lines is
   framing around it: the second JSON codec that kept 0.7.0's root API working beside the
   core is gone, and with it every name that was only its. The root names `core`, `json`,

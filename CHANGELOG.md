@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-12
+
 ### Breaking
 
 - The tests build airlock's seam on strand's own shakedown (airlock 0.2.0's `testing`).
@@ -746,7 +748,8 @@ First release: the line layer over `std.json`, and nothing else.
   awkward inputs, with the line numbering checked against an index scan that
   shares no code with the package.
 
-[Unreleased]: https://github.com/pedronaugusto/strand/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/pedronaugusto/strand/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/pedronaugusto/strand/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/pedronaugusto/strand/releases/tag/v0.7.0
 [0.6.1]: https://github.com/pedronaugusto/strand/releases/tag/v0.6.1
 [0.6.0]: https://github.com/pedronaugusto/strand/releases/tag/v0.6.0

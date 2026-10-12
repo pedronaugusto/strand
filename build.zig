@@ -69,14 +69,11 @@ pub fn dev(b: *std.Build, tools: type) void {
             .imports = &.{ .{ .name = "aegis", .module = aegis }, .{ .name = "airlock", .module = airlock } },
         }),
     });
-    // shakedown bound to strand's aegis, so a binary links one aegis; and airlock's seam on it,
-    // which is lazy: its error ends this configure pass until it is fetched.
+    // shakedown bound to strand's aegis, so a binary links one aegis; and airlock's seam built on it.
     const shakedown = b.dependency("shakedown", .{ .target = target, .optimize = optimize, .aegis = .consumer });
     use_aegis(shakedown, aegis);
     tests.root_module.addImport("shakedown", shakedown.module("shakedown"));
-    if (airlock_build.testing(airlock_dependency)) |seam| {
-        tests.root_module.addImport("airlock.testing", seam);
-    } else |_| return;
+    tests.root_module.addImport("airlock.testing", airlock_build.testing(airlock_dependency, shakedown.module("shakedown")));
 
     const test_step = b.step("test", "Run strand tests");
     // The assembly reaches every test once, in one executable.

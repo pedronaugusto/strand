@@ -37,7 +37,6 @@ pub fn dev(b: *std.Build, tools: type) void {
     const package = b.dependency("strand", .{ .target = target, .optimize = optimize });
     const p = package.builder;
     const preflight = tools.preflight;
-    use_aegis = tools.shakedown.useAegis;
     const module = package.module("strand");
     const airlock_dependency = p.dependency("airlock", .{ .target = target, .optimize = optimize });
     const airlock = airlock_dependency.module("airlock");
@@ -69,9 +68,8 @@ pub fn dev(b: *std.Build, tools: type) void {
             .imports = &.{ .{ .name = "aegis", .module = aegis }, .{ .name = "airlock", .module = airlock } },
         }),
     });
-    // shakedown bound to strand's aegis, so a binary links one aegis; and airlock's seam built on it.
-    const shakedown = b.dependency("shakedown", .{ .target = target, .optimize = optimize, .aegis = .consumer });
-    use_aegis(shakedown, aegis);
+    // shakedown, and airlock's seam built on it.
+    const shakedown = b.dependency("shakedown", .{ .target = target, .optimize = optimize });
     tests.root_module.addImport("shakedown", shakedown.module("shakedown"));
     tests.root_module.addImport("airlock.testing", airlock_build.testing(airlock_dependency, shakedown.module("shakedown")));
 
@@ -204,7 +202,7 @@ pub fn dev(b: *std.Build, tools: type) void {
 
     // Explicit manual measurement, compiled without timing by the check graph.
     {
-        const dependency = boundShakedown(b, target, bench_mode);
+        const dependency = b.dependency("shakedown", .{ .target = target, .optimize = bench_mode });
         const s2_bench = b.addExecutable(.{
             .name = "strand-s2-bench",
             .root_module = b.createModule(.{ .root_source_file = p.path("bench/s2.zig"), .target = target, .optimize = bench_mode, .imports = &.{.{ .name = "seam", .module = benchSeam(b, target, bench_mode) }} }),
@@ -290,23 +288,12 @@ pub fn dev(b: *std.Build, tools: type) void {
     });
 }
 
-/// `tools.shakedown.useAegis`, set by `dev` for the benchmark imports, which are built without `tools`.
-var use_aegis: *const fn (*std.Build.Dependency, *std.Build.Module) void = undefined;
-
-/// shakedown bound to strand's aegis in this mode, so a binary links one aegis.
-fn boundShakedown(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize) *std.Build.Dependency {
-    const p = b.dependency("strand", .{ .target = target, .optimize = optimize }).builder;
-    const shakedown = b.dependency("shakedown", .{ .target = target, .optimize = optimize, .aegis = .consumer });
-    use_aegis(shakedown, p.dependency("aegis", .{ .target = target, .optimize = optimize }).module("aegis"));
-    return shakedown;
-}
-
 /// strand again, in the mode a benchmark builds in: an imported module keeps
 /// its own mode, so a ReleaseFast benchmark over the Debug module would time
-/// the Debug module. And shakedown, bound to its aegis.
+/// the Debug module. And shakedown.
 fn benchImports(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize) []const std.Build.Module.Import {
     const strand = b.dependency("strand", .{ .target = target, .optimize = optimize }).module("strand");
-    const shakedown = boundShakedown(b, target, optimize);
+    const shakedown = b.dependency("shakedown", .{ .target = target, .optimize = optimize });
     return b.allocator.dupe(std.Build.Module.Import, &.{ .{ .name = "strand", .module = strand }, .{ .name = "shakedown", .module = shakedown.module("shakedown") } }) catch @panic("OOM");
 }
 

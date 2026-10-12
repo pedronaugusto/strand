@@ -15,16 +15,16 @@
         // Syncing a file and telling files apart. Pinned to a commit; the
         // hash is what the build checks.
         .airlock = .{
-            .url = "git+https://github.com/pedronaugusto/airlock?ref=v0.2.0#bac388a2581bf358114841b7a9dcf77d6473307f",
-            .hash = "airlock-0.2.0-rfvu6GOOBQB5avz0PTXorDKw6v4h2k8tQc_Exo-JWuTq",
+            .url = "git+https://github.com/pedronaugusto/airlock?ref=v0.2.1#f9929e0e44537b00068d4513c3c0a2da074fe8f3",
+            .hash = "airlock-0.2.1-rfvu6NmOBQBVaP82aqCDE13vlQj6wwp0XaHfYo7DtYtF",
         },
 
         // Types that make the checked work in the core safe by construction:
         // finite budgets, checked arithmetic, closed public diagnostics and
         // always-on contracts. std only, pinned to a commit.
         .aegis = .{
-            .url = "git+https://github.com/pedronaugusto/aegis?ref=v0.1.1#16d440dc2c332a0a91c77e3289376273144678a1",
-            .hash = "aegis-0.1.1-rsxouuchBwA8S79ryuJ6kQ-9GZxnJreWgEgBCp46wmF0",
+            .url = "git+https://github.com/pedronaugusto/aegis?ref=v0.1.2#f2fef4ec6595b6357d683ac258debc4c5184884c",
+            .hash = "aegis-0.1.2-rsxougohBwASqdDTGy3Y46Jb6IDW5sOSrgEO5ggjbgpV",
         },
 
         // Test doubles, for the tests alone: no module a consumer builds
@@ -38,8 +38,8 @@
         },
 
         .shakedown = .{
-            .url = "git+https://github.com/pedronaugusto/shakedown?ref=v0.2.6#5becaa0dafaf80d18662bc0df64e92f7676a110d",
-            .hash = "shakedown-0.2.6-BR8U43kqFgA0tls4urweSOXdQXn95gnWgHWfxaao9MZw",
+            .url = "git+https://github.com/pedronaugusto/shakedown?ref=v0.3.0#978965e6499970b5b0ac5e658316ac7917d32f87",
+            .hash = "shakedown-0.3.0-BR8U4wEjFgDarRGeXUKdstYvJneZDgavWzGPh9sT9rVX",
         },
     },
 }

@@ -146,6 +146,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A follower retains the identity measured when it adopts or restarts a file, so later rewrites cannot change a checkpoint of records already read.
 - `Follower` rewinds a half-written record and begins again after a truncation through `LineReader.reset`.
 - The logbook example owns a separate scratch directory per invocation.
+- Pins aegis 0.1.0 and airlock 0.2.0.
 
 ### Fixed
 

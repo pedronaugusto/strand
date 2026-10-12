@@ -15,16 +15,16 @@
         // Syncing a file and telling files apart. Pinned to a commit; the
         // hash is what the build checks.
         .airlock = .{
-            .url = "git+https://github.com/pedronaugusto/airlock#ee193e8d5f467d2c5e1c51fec25a66a8d2ccc5ef",
-            .hash = "airlock-0.1.0-rfvu6ICLBQDWyFYgMh-9NQ7GKNUZXGN6X7hqVHCIFn0Q",
+            .url = "git+https://github.com/pedronaugusto/airlock?ref=v0.2.0#bac388a2581bf358114841b7a9dcf77d6473307f",
+            .hash = "airlock-0.2.0-rfvu6GOOBQB5avz0PTXorDKw6v4h2k8tQc_Exo-JWuTq",
         },
 
         // Types that make the checked work in the core safe by construction:
         // finite budgets, checked arithmetic, closed public diagnostics and
         // always-on contracts. std only, pinned to a commit.
         .aegis = .{
-            .url = "git+https://github.com/pedronaugusto/aegis#bb408fa199e81ef295e0d9eeb4873691b37e9df4",
-            .hash = "aegis-0.0.0-rsxoumUhBwBeTJdwPVd-FOyms_nA80JzANSwBePZTvDS",
+            .url = "git+https://github.com/pedronaugusto/aegis?ref=v0.1.0#94a495a85f88a4d538a5d50fc39abcc7f832b124",
+            .hash = "aegis-0.1.0-rsxoun4hBwCem7Iss6TBSVn55trtZmiq0VPl6pC7FF8B",
         },
 
         // Test doubles, for the tests alone: no module a consumer builds

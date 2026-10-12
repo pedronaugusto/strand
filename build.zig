@@ -293,8 +293,7 @@ pub fn dev(b: *std.Build, tools: type) void {
 /// the Debug module. And shakedown.
 fn benchImports(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize) []const std.Build.Module.Import {
     const strand = b.dependency("strand", .{ .target = target, .optimize = optimize }).module("strand");
-    const shakedown = b.dependency("shakedown", .{ .target = target, .optimize = optimize });
-    return b.allocator.dupe(std.Build.Module.Import, &.{ .{ .name = "strand", .module = strand }, .{ .name = "shakedown", .module = shakedown.module("shakedown") } }) catch @panic("OOM");
+    return b.allocator.dupe(std.Build.Module.Import, &.{.{ .name = "strand", .module = strand }}) catch @panic("OOM");
 }
 
 /// The way below the public API for the two benchmarks that time the wire

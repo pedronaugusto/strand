@@ -15,7 +15,6 @@ const testing = std.testing;
 const shakedown = @import("shakedown");
 const gen = shakedown.gen;
 const Source = shakedown.Source;
-const inputs = @import("inputs.zig");
 const strand = @import("../strand.zig");
 const json = strand.json;
 const jsonl = strand.jsonl;
@@ -1472,7 +1471,7 @@ test "the decoder takes each recorded value" {
 /// accepted is written to bytes that read back as the same bytes.
 fn fuzzDecode(_: void, case: *shakedown.Case) anyerror!void {
     var buffer: [512]u8 = undefined;
-    try checkDecode(inputs.draw(case, &buffer, &decode_examples, 48));
+    try checkDecode(shakedown.gen.mutated(case.source, &buffer, &decode_examples));
 }
 
 fn checkDecode(bytes: []const u8) !void {
@@ -1509,7 +1508,7 @@ test "a string is written as std.json writes it, for each recorded string" {
 /// anything else is refused, with nothing written in its place.
 fn fuzzEncode(_: void, case: *shakedown.Case) anyerror!void {
     var buffer: [512]u8 = undefined;
-    try checkEncodeAll(inputs.draw(case, &buffer, &encode_examples, 48));
+    try checkEncodeAll(shakedown.gen.mutated(case.source, &buffer, &encode_examples));
 }
 
 fn checkEncodeAll(bytes: []const u8) !void {

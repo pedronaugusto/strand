@@ -6,7 +6,6 @@ const std = @import("std");
 const zon = @import("zon.zig");
 const core = @import("core.zig");
 const shakedown = @import("shakedown");
-const inputs = @import("testing/inputs.zig");
 const testing = std.testing;
 
 const Reading = union(enum) { failed, value: []u8 };
@@ -890,7 +889,7 @@ test "fuzz: whatever strand reads of arbitrary bytes is what std.zon reads" {
     try shakedown.check(testing.allocator, {}, struct {
         fn run(_: void, case: *shakedown.Case) anyerror!void {
             var input: [512]u8 = undefined;
-            const data = inputs.draw(case, &input, &seeds, 48);
+            const data = shakedown.gen.mutated(case.source, &input, &seeds);
             try sound(Settings, data);
             try sound(Shape, data);
             try sound([]const i64, data);

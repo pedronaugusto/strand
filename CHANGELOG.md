@@ -6,6 +6,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Fuzz properties for the JSON value read from the front of a buffer (it ends inside the bytes, and alone reads again), for the bridge to `std.json.Value` (it reads exactly what strand's own `Value` reads), and for a number in a CSV field or a form value (it reads as its JSON spelling says): the parsers of untrusted input preflight reported without one.
+
+### Changed
+
+- Pins aegis 0.1.6.
+
 ## [0.10.1] - 2026-10-14
 
 ### Added

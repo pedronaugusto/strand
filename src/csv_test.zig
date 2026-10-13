@@ -257,3 +257,34 @@ fn anyBytes(_: void, case: *shakedown.Case) anyerror!void {
 test "any bytes are rows or refused, within the limits, whole and streamed" {
     try shakedown.check(gpa, {}, anyBytes, .{ .cases = 2000 });
 }
+
+test "fuzz: a number in a CSV field or a form value reads as its JSON spelling says" {
+    const examples = [_][]const u8{ "0", "-12", "9223372036854775807", "-9223372036854775808", "1.5e1", "2e3", "1.0", "01", "+1", "1e400", "-0" };
+    const property = struct {
+        fn holds(input: []const u8) !void {
+            try agrees(@import("csv/Decoder.zig"), input);
+            try agrees(@import("urlencoded/Decoder.zig"), input);
+        }
+        fn agrees(comptime Decoder: type, input: []const u8) !void {
+            var c: @import("core.zig").Context = .init(gpa, .{}, .borrowed);
+            const value = Decoder.parseInteger(i64, input, &c) catch {
+                // Refused: a plain decimal in range, spelled as JSON spells it, never is.
+                const digits = if (input.len > 0 and input[0] == '-') input[1..] else input;
+                const plain = digits.len > 0 and (digits[0] != '0' or digits.len == 1) and for (digits) |byte| {
+                    if (!std.ascii.isDigit(byte)) break false;
+                } else true;
+                if (plain) if (std.fmt.parseInt(i64, input, 10)) |_| return error.TestUnexpectedResult else |_| {};
+                return;
+            };
+            // Read: the spelling is a JSON number, and it is this integer exactly.
+            try std.testing.expectEqual(@as(f128, @floatFromInt(value)), try std.fmt.parseFloat(f128, input));
+            if (std.fmt.parseInt(i64, input, 10)) |plain| try std.testing.expectEqual(plain, value) else |_| {}
+        }
+        fn body(_: void, case: *shakedown.Case) !void {
+            var buffer: [48]u8 = undefined;
+            try holds(gen.mutated(case.source, &buffer, &examples));
+        }
+    };
+    for (examples) |example| try property.holds(example);
+    try shakedown.check(gpa, {}, property.body, .{});
+}

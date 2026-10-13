@@ -472,3 +472,44 @@ test "a write can leave every null optional off its record" {
     try json.write(&output, Pair{ null, 1 }, .{ .nulls = .omit });
     try std.testing.expectEqualStrings("[null,1]", output.buffered());
 }
+test "fuzz: a value read from the front of any bytes ends inside them, and alone reads again" {
+    const examples = [_][]const u8{ "{\"a\":1} tail", "[1,2,3]\n{\"b\":2}", "\"text\" more", "12.5e3,", "{\"a\":", "true false" };
+    const property = struct {
+        fn holds(input: []const u8) !void {
+            var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+            defer arena.deinit();
+            const a = arena.allocator();
+            const prefix = @import("json/api.zig").parsePrefixLeaky(json.Value, a, input, .{}) catch return;
+            try std.testing.expect(prefix.end <= input.len);
+            _ = try json.parseLeaky(json.Value, a, input[0..prefix.end], .{});
+        }
+        fn body(_: void, c: *shakedown.Case) !void {
+            var buffer: [128]u8 = undefined;
+            try holds(shakedown.gen.mutated(c.source, &buffer, &examples));
+        }
+    };
+    for (examples) |example| try property.holds(example);
+    try shakedown.check(std.testing.allocator, {}, property.body, .{});
+}
+test "fuzz: std's value of any bytes is read exactly when strand's is" {
+    const examples = [_][]const u8{ "{\"a\":[1,2.5,\"x\",null,true]}", "[]", "18446744073709551616", "-0.0e-400", "{\"a\":1,\"a\":2}" };
+    const property = struct {
+        fn holds(input: []const u8) !void {
+            var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+            defer arena.deinit();
+            const own = if (json.parseLeaky(json.Value, arena.allocator(), input, .{})) |_| true else |_| false;
+            const standard = json.parseStdValue(std.testing.allocator, input, .{}) catch {
+                try std.testing.expect(!own);
+                return;
+            };
+            defer standard.deinit();
+            try std.testing.expect(own);
+        }
+        fn body(_: void, c: *shakedown.Case) !void {
+            var buffer: [128]u8 = undefined;
+            try holds(shakedown.gen.mutated(c.source, &buffer, &examples));
+        }
+    };
+    for (examples) |example| try property.holds(example);
+    try shakedown.check(std.testing.allocator, {}, property.body, .{});
+}

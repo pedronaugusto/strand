@@ -1,6 +1,5 @@
 const shakedown = @import("shakedown");
 const std = @import("std");
-const inputs = @import("testing/inputs.zig");
 pub const core = @import("core.zig");
 
 test "S1 admission sees rejected inactive branches and recursive data" {
@@ -229,7 +228,7 @@ test "S1 fuzz bounded reference data with testing allocator" {
     try shakedown.check(std.testing.allocator, {}, struct {
         fn run(_: void, case: *shakedown.Case) anyerror!void {
             var input: [4096]u8 = undefined;
-            const data = inputs.draw(case, &input, &.{}, 64);
+            const data = shakedown.gen.bytesInto(case.source, &input);
             var parsed = core.acquire(Record, .owned, std.testing.allocator, data, .{ .input_bytes = 4096, .allocation_bytes = 8192, .work = 16384, .depth = 16 }, decodeRecord) catch return;
             parsed.deinit();
         }

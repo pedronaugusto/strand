@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-10-13
+
 ### Added
 
 - `json.jsonc.parse`, `parseOwned` and `parseLeaky` read JSONC: `//` and `/* */`
@@ -799,7 +801,8 @@ First release: the line layer over `std.json`, and nothing else.
   awkward inputs, with the line numbering checked against an index scan that
   shares no code with the package.
 
-[Unreleased]: https://github.com/pedronaugusto/strand/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/pedronaugusto/strand/compare/v0.9.1...HEAD
+[0.9.1]: https://github.com/pedronaugusto/strand/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/pedronaugusto/strand/compare/v0.8.3...v0.9.0
 [0.8.3]: https://github.com/pedronaugusto/strand/compare/v0.8.2...v0.8.3
 [0.8.2]: https://github.com/pedronaugusto/strand/compare/v0.8.1...v0.8.2

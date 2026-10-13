@@ -7,6 +7,7 @@ test {
     _ = @import("json_shape_test.zig");
     _ = @import("jsonl_test.zig");
     _ = @import("zon_test.zig");
+    _ = @import("urlencoded_test.zig");
     _ = @import("testing/json_suite.zig");
     _ = @import("testing/fuzz_test.zig");
     _ = @import("tail_test.zig");
@@ -20,4 +21,5 @@ test {
     _ = @import("json/api.zig");
     _ = @import("jsonl/api.zig");
     _ = @import("zon/api.zig");
+    _ = @import("urlencoded/api.zig");
 }

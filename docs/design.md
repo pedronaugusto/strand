@@ -1,7 +1,8 @@
-# Serialization core and JSON formats
+# Serialization core and its formats
 
 Strand is one build module, `strand`, whose namespaces are `strand.core`,
-`strand.json`, `strand.jsonl` and `strand.zon`; the root names only those four.
+`strand.json`, `strand.jsonl`, `strand.zon` and `strand.urlencoded`; the root
+names only those five.
 There is one API per thing: JSON is parsed and written by `strand.json` alone,
 and JSON Lines is framing around it, not a codec of its own. A separate build
 module buys something only where it keeps dependencies from users who do not need
@@ -23,6 +24,8 @@ Bounds → semantic vocabulary/schema → mapping → ownership → core facade 
 text primitives → JSON wire → JSON API/facade → JSONL schema and records →
 framing → streams → tail/follow → JSONL API/facade → root. ZON sits beside JSON
 on the core, wire/syntax → ZON API/facade, and imports neither JSON nor JSONL.
+URL-encoded forms sit beside them too, text → wire → API/facade; they import
+JSON's number grammar alone, since a form's number is spelled as JSON spells one.
 Mapping consumes immediate events, including JSON number lexemes; it requires no
 DOM or token tape. JSONL framing shares its line/drain boundary decision between
 the pull reader and the push decoder, and both parse a record with `json`.
@@ -270,6 +273,38 @@ tuple of numbers is not one and a string with bytes that are not UTF-8 needs
 float is rounded to its width once, from its decimal digits, where `std.zon` rounds to
 `f128` first. What strand accepts and `std.zon` does not: integers of any width, and
 a document of any size, within the limits.
+
+## URL-encoded forms
+
+A form is a flat list of `name=value` pairs, split and decoded as the WHATWG URL
+standard's application/x-www-form-urlencoded parser splits them, with one
+difference: a `%` that two hexadecimal digits do not follow is refused, where the
+parser keeps it, since no encoder writes one. The structure is in the names: a
+first segment, then `[segment]` for each level, `[]` adding to a sequence; a name
+that breaks that grammar is a syntax error, and the brackets are found after
+percent-decoding, so `a%5Bb%5D` is `a[b]`.
+
+The decoder reads the pairs once into the operation's arena and then presents them
+as the tree the paths make, as the type asks. A record's members are the pairs under
+its path, wherever they stand in the list, its key the next segment; a member asked
+for as a record opens a frame for that path, one asked for as a sequence collects the
+pairs at that path (`tag=a`) and with `[]` after it (`tag[]=a`). A frame scans the
+pairs from the first one that opened it and takes each pair once, charging its work,
+so a form's cost is bounded by the work limit even when its pairs interleave. A name
+repeated where one value belongs is a second key in its record, which the core's
+duplicate policy refuses by default. Values are text, validated as UTF-8, unless the
+type asks for bytes, a number (a lexeme in JSON's grammar, converted by JSON's exact
+kernels), a boolean (`true` or `false`) or a unit (an empty value). A union tagged
+inside its record would need a value read twice, which flat pairs cannot be: such a
+type does not compile for this format.
+
+The encoder keeps the current path, percent-encoded, in a buffer of its own (scratch
+past 4 KiB), and writes a pair for each value: `name=value`, members as
+`outer%5Binner%5D`, a sequence by repeating its name. A null, an empty sequence and a
+record of nothing write no pair and read back through their defaults; a sequence of
+records or of sequences has no spelling here and is `UnsupportedValue`. The output is
+exactly the WHATWG form serializer's: every byte but ASCII letters, digits and `*-._`
+percent-encoded in uppercase hex, a space as `+`.
 
 ## Format accelerators
 

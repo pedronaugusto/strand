@@ -313,6 +313,7 @@ const example_sources = [_][]const u8{
     "examples/usage.zig",
     "examples/logbook.zig",
     "examples/zon.zig",
+    "examples/form.zig",
 };
 
 // Build-only tooling belongs to a root invocation, never a consumer's dependency graph.

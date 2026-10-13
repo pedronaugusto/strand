@@ -57,6 +57,10 @@ pub const layers: []const gantry.rules.Layer = &.{
     .{ .name = "ZON wire", .patterns = &.{ "src/zon/Decoder.zig", "src/zon/Encoder.zig" } },
     .{ .name = "ZON module", .patterns = &.{"src/zon/api.zig"} },
     .{ .name = "ZON facade", .patterns = &.{"src/zon.zig"} },
+    .{ .name = "URL-encoded text", .patterns = &.{"src/urlencoded/text.zig"} },
+    .{ .name = "URL-encoded wire", .patterns = &.{ "src/urlencoded/Decoder.zig", "src/urlencoded/Encoder.zig" } },
+    .{ .name = "URL-encoded module", .patterns = &.{"src/urlencoded/api.zig"} },
+    .{ .name = "URL-encoded facade", .patterns = &.{"src/urlencoded.zig"} },
     .{ .name = "public", .patterns = &.{
         "src/strand.zig",
     } },

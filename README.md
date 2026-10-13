@@ -1,7 +1,7 @@
 # strand
 
-strand reads and writes Zig values as JSON, JSON Lines and ZON, through one
-mapping core that every format shares. Zig 0.17.0 is required.
+strand reads and writes Zig values as JSON, JSON Lines, ZON and URL-encoded
+forms, through one mapping core that every format shares. Zig 0.17.0 is required.
 
 A value of any plain Zig type is parsed straight into that type, borrowed from
 the input, copied into an owner of its own, or put on an arena the caller holds,
@@ -25,7 +25,7 @@ git+https://github.com/pedronaugusto/strand`, then obtain the `strand` module th
 settings.
 
 The build exposes one module, `strand`, whose namespaces are `strand.core`,
-`strand.json`, `strand.jsonl` and `strand.zon`. Zig analyses only what a program
+`strand.json`, `strand.jsonl`, `strand.zon` and `strand.urlencoded`. Zig analyses only what a program
 names, so a program that names only `strand.json` compiles no JSON Lines or
 airlock code.
 
@@ -184,6 +184,47 @@ its type is an error and never infinity; a byte slice is text, or arbitrary byte
 `.as = .bytes`, and a tuple of numbers is a list of numbers; an untagged union and a
 nested optional have no meaning in ZON and are refused when the type is compiled.
 
+## URL-encoded forms
+
+`strand.urlencoded` reads and writes application/x-www-form-urlencoded: the
+bodies of HTML forms and the query strings of URLs (without the `?`), with
+`parse`, `parseOwned`, `parseLeaky` and `write` and the limits, ownership and
+field policy of the other formats. Pairs are split as the WHATWG URL standard
+splits them, `+` is a space and `%XX` a byte; a `%` not followed by two
+hexadecimal digits is refused rather than kept. A name's bracketed path makes
+the flat pairs a tree, read as the type asks wherever the pairs stand:
+`user[name]` is a member of a record, `tag=a&tag=b` and `tag[]=a&tag[]=b` are a
+sequence of values. Every value is text until the type asks for a number (in
+JSON's spelling), a boolean (`true`, `false`), a name or raw bytes. A form has no
+null and no sequence of records: `write` leaves out a null, an empty sequence and
+a record of nothing, so those fields read back through their defaults, and refuses
+a sequence of records. It writes what a browser's form serializer writes, every
+byte but letters, digits and `*-._` percent-encoded, brackets included.
+[examples/form.zig](examples/form.zig) reads a search query.
+
+<!-- BEGIN GENERATED zig build docs -- form -->
+```zig
+const strand = @import("strand");
+
+// `+` is a space, `%XX` a byte; the brackets may come encoded or not.
+const query = "q=zig+serde&tag=json&filter%5Blang%5D=zig&tag=toml&filter[stars]=100";
+var search = try strand.urlencoded.parse(Search, gpa, query, .{});
+defer search.deinit();
+std.debug.assert(std.mem.eql(u8, search.value.q, "zig serde"));
+std.debug.assert(search.value.tag.len == 2 and search.value.filter.stars.? == 100);
+
+// Written as a browser's form serializer writes it.
+var out: std.Io.Writer.Allocating = .init(gpa);
+try strand.urlencoded.write(&out.writer, search.value, .{});
+std.debug.assert(std.mem.eql(u8, out.written(), "q=zig+serde&page=1&tag=json&tag=toml&filter%5Blang%5D=zig&filter%5Bstars%5D=100"));
+
+// A name given twice where one value belongs is refused.
+if (strand.urlencoded.parse(Search, gpa, "q=a&q=b", .{})) |_| {
+    unreachable; // unreachable: `q` holds one value.
+} else |err| std.debug.assert(err == error.DuplicateField);
+```
+<!-- END GENERATED -->
+
 ## Design
 
 [docs/design.md](docs/design.md) says how the parts are layered, what the core
@@ -206,7 +247,7 @@ and nonzero checks included.
 - It does not index a log or seek to a line by number.
 - It does not read pretty records backwards or decompress a stream.
 - It does not watch the filesystem or flush on a timer.
-- CBOR, MessagePack, TOML, YAML, CSV and URL-encoded forms are later work.
+- CBOR, MessagePack, TOML, YAML and CSV are later work.
 
 ## Built with
 

@@ -6,6 +6,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `strand.urlencoded`: forms and query strings (application/x-www-form-urlencoded)
+  on the core, `parse`, `parseOwned`, `parseLeaky` and `write`. Names' bracketed
+  paths (`user[name]`, `tag[]`) read into nested records and sequences wherever
+  their pairs stand, repeated names into a sequence; values are text, or a number,
+  a boolean, a name or bytes where the type asks. It writes what the WHATWG form
+  serializer writes.
+
 ## [0.9.0] - 2026-10-13
 
 ### Breaking

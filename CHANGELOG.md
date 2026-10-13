@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-10-14
+
 ### Added
 
 - `strand.msgpack`: MessagePack on the core, every format family read and each value

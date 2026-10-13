@@ -6,6 +6,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- aegis scalars are read and written in every format as what they hold, recognized
+  by rebuilding each from the parameters it publishes: `units.Duration` and
+  `units.Bytes` as their text (`"1m30s"`, `"64MiB"`), `int.Checked`,
+  `int.Saturating`, `int.Ranged`, `units.Count`, `units.Bits`, `units.Instant`,
+  `id.Id`, `id.NonZero` and `id.Counter` as their integer, with `Ranged`'s range and
+  `NonZero`'s zero refused as `NumberOutOfRange`. A struct holding one failed to
+  compile, as a nonexhaustive enum, or for `Checked` and `Saturating` was written
+  as an object of their private field.
+
+### Changed
+
+- Pins aegis 0.1.5 and preflight 0.4.4.
+
 ## [0.8.3] - 2026-10-13
 
 ### Changed

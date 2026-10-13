@@ -3,6 +3,7 @@ const std = @import("std");
 const descriptor = @import("descriptor.zig");
 const ctx = @import("context.zig");
 const model = @import("model.zig");
+const scalars = @import("scalars.zig");
 
 /// Backend.next(context, request) must meter wire reads/scratch through context before
 /// doing that work, validate grammar, and distinguish input from scratch spans.
@@ -375,6 +376,10 @@ pub fn Cursor(comptime Backend: type) type {
                 if (!access.used or !access.complete) return error.CustomRejected;
                 return value;
             }
+            if (comptime scalars.kind(T)) |k| {
+                if (k == .text) return scalars.parse(T, try self.textValue());
+                return scalars.fromInteger(T, try self.readInteger(T.Representation));
+            }
             switch (@typeInfo(T)) {
                 .bool => {
                     const event = try self.take();
@@ -602,6 +607,18 @@ pub fn Cursor(comptime Backend: type) type {
             return array;
         }
         /// A name the format spells apart from text where it can: an enum's.
+        /// A value's text, for a type that reads its own (an aegis duration or size).
+        fn textValue(self: *Self) Error![]const u8 {
+            const direct_text = if (comptime @hasDecl(Backend, "text")) try self.direct("text") else null;
+            const span = direct_text orelse switch (try self.take()) {
+                .text => |s| s,
+                else => return error.UnexpectedType,
+            };
+            try self.context.span(span.bytes.len, false);
+            try self.context.chargeWork(span.bytes.len);
+            if (!validText(Backend, span.bytes)) return error.InvalidUtf8;
+            return span.bytes;
+        }
         fn symbolValue(self: *Self) Error![]const u8 {
             self.request = .{ .expected = .symbol };
             const direct_text = if (comptime @hasDecl(Backend, "text")) try self.direct("text") else null;
@@ -1253,6 +1270,7 @@ fn PolicyCompoundAccess(comptime Backend: type, comptime policy: descriptor.Fiel
 }
 
 fn expectedKind(comptime T: type, comptime policy: descriptor.Field) ctx.Diagnostics.Expected {
+    if (comptime scalars.kind(T)) |k| return if (k == .text) .text else .integer;
     return switch (@typeInfo(T)) {
         .bool => .boolean,
         .int => .integer,
@@ -1271,6 +1289,10 @@ fn expectedKind(comptime T: type, comptime policy: descriptor.Field) ctx.Diagnos
 
 fn typeRequest(comptime T: type, comptime policy: descriptor.Field) model.Request {
     var result: model.Request = .{ .expected = expectedKind(T, policy), .exact = policy.exact, .borrow = policy.borrow };
+    if (comptime scalars.kind(T)) |k| {
+        if (k != .text) result.integer_bits = @typeInfo(T.Representation).int.bits;
+        return result;
+    }
     switch (@typeInfo(T)) {
         .int => |i| result.integer_bits = i.bits,
         .float => |i| result.float_bits = i.bits,

@@ -1,6 +1,7 @@
 //! Compile-time type policy; inspection itself never instantiates a codec.
 const std = @import("std");
 const context = @import("context.zig");
+const scalars = @import("scalars.zig");
 pub const Support = enum { supported, conditional, unsupported };
 pub const MapKeys = enum { text_only, scalar, any };
 pub const Capabilities = struct {
@@ -151,6 +152,9 @@ fn inspect(comptime T: type, comptime fmt: Capabilities, comptime seen: []const 
     if (has(T, "strandSerialize") or has(T, "strandDeserialize")) return .{ .support = .conditional, .encode = has(T, "strandSerialize"), .decode = has(T, "strandDeserialize"), .path = path, .reason = "explicit data codec" };
     if (has(T, "jsonParse") or has(T, "jsonStringify")) return rejected(path, "std.json hooks are not read here; declare strandDeserialize and strandSerialize");
     if (has(T, "deinit")) return rejected(path, "resource owner requires an explicit data codec");
+    // An aegis scalar is what it holds: an integer, or a duration or size in
+    // its text form.
+    if (scalars.kind(T)) |k| return if (k == .text) .{} else inspect(T.Representation, fmt, next, path);
     return switch (@typeInfo(T)) {
         .bool, .void => .{},
         // A literal's number, such as a constant of an anonymous struct: written
@@ -417,6 +421,7 @@ pub fn variant(comptime T: type, comptime name: []const u8) Field {
 }
 
 fn scalarKey(comptime T: type) bool {
+    if (scalars.kind(T)) |k| return k != .text;
     return switch (@typeInfo(T)) {
         .bool, .int, .float, .@"enum", .null, .void => true,
         .optional => |i| scalarKey(i.child),

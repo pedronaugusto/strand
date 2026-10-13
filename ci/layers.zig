@@ -5,6 +5,7 @@ pub const layers: []const gantry.rules.Layer = &.{
     .{ .name = "core bounds", .patterns = &.{"src/core/context.zig"} },
     .{ .name = "core vocabulary and schema", .patterns = &.{
         "src/core/model.zig",
+        "src/core/scalars.zig",
         "src/core/descriptor.zig",
         "src/core/codecs.zig",
     } },

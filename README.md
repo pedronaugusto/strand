@@ -195,7 +195,9 @@ alone; JSON Lines adds airlock for syncs and file identity.
 A type that holds resources (an allocator, a file, a lock) or memory with no safe
 data meaning (many-item and C pointers) is refused when it is compiled, with the
 path to the field that is the problem. A type with a meaning of its own declares
-`strandSerialize` and `strandDeserialize`.
+`strandSerialize` and `strandDeserialize`. An aegis scalar is what it holds: a
+duration or a size its text (`"1m30s"`, `"64MiB"`), any other its integer, range
+and nonzero checks included.
 
 ## Scope
 

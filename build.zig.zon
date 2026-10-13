@@ -23,8 +23,8 @@
         // finite budgets, checked arithmetic, closed public diagnostics and
         // always-on contracts. std only, pinned to a commit.
         .aegis = .{
-            .url = "git+https://github.com/pedronaugusto/aegis?ref=v0.1.3#4e37678e9ff0d78ada850ed4dc00f714bbc8441c",
-            .hash = "aegis-0.1.3-rsxouhQiBwCaQ9NGzUiaQ1xdrFSNYoi3u0Z6sLjI5lrv",
+            .url = "git+https://github.com/pedronaugusto/aegis?ref=v0.1.5#ced62c02cfa3be28b834e14e34533aff84b489fd",
+            .hash = "aegis-0.1.5-rsxoujOxBwA9ptJaF5wEA2P5rIM0Xj1S1qps_rgA2txC",
         },
 
         // Test doubles, for the tests alone: no module a consumer builds
@@ -33,8 +33,8 @@
     },
     .dev_dependencies = .{
         .preflight = .{
-            .url = "git+https://github.com/pedronaugusto/preflight?ref=v0.4.1#cad07c151f1a15865b28299698823aec8ac4fadf",
-            .hash = "preflight-0.4.1-LX1Zwl5pDgDaYwJnKLGctaPAEOgz1JpoG325EIz9J-Vx",
+            .url = "git+https://github.com/pedronaugusto/preflight?ref=v0.4.4#7059ac4735977a3b2a6ba7629199d1d65efe5f57",
+            .hash = "preflight-0.4.4-LX1Zwg6UDgBdRptbzIdTBoXi521er_P0zhf25E4Uu-lJ",
         },
 
         .shakedown = .{

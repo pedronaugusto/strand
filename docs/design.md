@@ -131,7 +131,13 @@ an explicit data codec. No container capacity or hash internals are serialized.
 Booleans, arbitrary-width integers, floats, exhaustive enums, tagged unions,
 plain structs (including packed/extern), tuples, arrays, vectors, safe single
 pointers and slices have derived meaning. Nonexhaustive enums need a numeric
-codec. Many/C pointers, volatile/allowzero/non-generic pointers, functions,
+codec. aegis scalars are what they hold, recognized by rebuilding each from the
+parameters it publishes (a type that only looks like one is not taken for it):
+`units.Duration` and `units.Bytes` read and write their exact text form (`1m30s`,
+`64MiB`), and refuse a bare number, whose unit the text would not state; the
+other units, `int.Checked`, `int.Saturating`, `int.Ranged`, and the ids and
+counters are their representation's integer, a `Ranged` out of its range and a
+`NonZero` zero refused as `NumberOutOfRange`. Many/C pointers, volatile/allowzero/non-generic pointers, functions,
 native errors, allocators, Io, files, locks and secret-bearing values are excluded
 from automatic derivation. Pointer-bearing sentinels are excluded. Valid initialized
 values and readable pointers remain the caller's Zig obligations.

@@ -2,6 +2,7 @@
 test {
     _ = @import("strand.zig");
     _ = @import("core_test.zig");
+    _ = @import("scalars_test.zig");
     _ = @import("json_test.zig");
     _ = @import("json_shape_test.zig");
     _ = @import("jsonl_test.zig");

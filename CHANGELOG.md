@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-10-14
+
 ### Breaking
 
 - `core.Event` has two more variants, `tag` (a semantic tag on the value after it)
@@ -826,7 +828,8 @@ First release: the line layer over `std.json`, and nothing else.
   awkward inputs, with the line numbering checked against an index scan that
   shares no code with the package.
 
-[Unreleased]: https://github.com/pedronaugusto/strand/compare/v0.9.1...HEAD
+[Unreleased]: https://github.com/pedronaugusto/strand/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/pedronaugusto/strand/compare/v0.9.1...v0.10.0
 [0.9.1]: https://github.com/pedronaugusto/strand/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/pedronaugusto/strand/compare/v0.8.3...v0.9.0
 [0.8.3]: https://github.com/pedronaugusto/strand/compare/v0.8.2...v0.8.3

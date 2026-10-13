@@ -6,6 +6,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `strand.msgpack`: MessagePack on the core, every format family read and each value
+  written in its smallest format, with `msgpack.Value`, `Ext`, `Timestamp` (extension
+  type -1, all three forms) and a deterministic profile. Checked against golden
+  vectors for every family at its edges and kawanet's msgpack-test-suite.
+- `core.widenFloat` and `core.narrowFloat`: a float to and from an event's `f128` by
+  its bits, so a NaN keeps its sign and payload.
+
+### Fixed
+
+- A float event no longer quiets a signalling NaN: a NaN read from CBOR is the NaN
+  that was written.
+- CBOR's deterministic profiles report an allocation failure of their allocator as
+  `OutOfMemory`, not `AllocationLimit`, and refuse a map that holds more than the
+  output left (`OutputLimit`) while it is held, not after.
+
 ## [0.10.0] - 2026-10-14
 
 ### Breaking

@@ -9,6 +9,7 @@ const std = @import("std");
 const core = @import("../core.zig");
 const Decoder = @import("Decoder.zig");
 const wire = @import("wire.zig");
+const sorted = @import("../binary/sorted.zig");
 pub const Format = Decoder.Format;
 pub const capabilities = Decoder.capabilities;
 pub const canonical = false;
@@ -24,68 +25,27 @@ pub const Profile = enum {
     length_first,
 };
 
-/// A map being held to be sorted: its encoded entries, back to back, and
-/// where each entry's key and value start.
-const Held = struct {
-    bytes: std.ArrayList(u8) = .empty,
-    entries: std.ArrayList(Entry) = .empty,
-    /// Whether the next item written is a key.
-    key_next: bool = true,
-    /// Where the item after a tag starts: at its tag.
-    tag_start: ?usize = null,
-    const Entry = struct { key: usize, value: usize, end: usize = 0 };
-};
-/// What a container is: a map held for sorting, or anything else, written
-/// where it stands.
-const Frame = struct { held: ?Held = null };
-
 writer: *std.Io.Writer,
 profile: Profile,
-allocator: ?std.mem.Allocator,
-frames: std.ArrayList(Frame),
+/// The containers open, in a deterministic profile: each map held until it closes.
+held: ?sorted.Stack,
 const Self = @This();
 
 pub fn init(self: *Self, writer: *std.Io.Writer, profile: Profile, allocator: ?std.mem.Allocator) void {
-    self.* = .{ .writer = writer, .profile = profile, .allocator = allocator, .frames = .empty };
+    self.* = .{ .writer = writer, .profile = profile, .held = if (profile == .preferred) null else .{ .allocator = allocator.? } };
 }
 pub fn deinit(self: *Self) void {
-    if (self.allocator) |a| {
-        for (self.frames.items) |*f| if (f.held) |*h| {
-            h.bytes.deinit(a);
-            h.entries.deinit(a);
-        };
-        self.frames.deinit(a);
-    }
+    if (self.held) |*h| h.deinit();
 }
 
-/// The innermost map held, if any: everything inside it is written there.
-fn heldMap(self: *Self) ?*Held {
-    var i = self.frames.items.len;
-    while (i > 0) {
-        i -= 1;
-        if (self.frames.items[i].held) |*h| return h;
-    }
-    return null;
-}
 fn put(self: *Self, data: []const u8, c: *core.Context) Error!void {
-    if (self.heldMap()) |h| {
-        h.bytes.appendSlice(self.allocator.?, data) catch return error.AllocationLimit;
-        return;
-    }
+    if (self.held) |*stack| if (stack.sink()) |h| return stack.append(h, data, c);
     try c.output(data.len);
     try self.writer.writeAll(data);
 }
 /// Before an item: in a held map, where its entry's key or value starts.
 fn item(self: *Self) Error!void {
-    if (self.frames.items.len == 0) return;
-    const top = &self.frames.items[self.frames.items.len - 1];
-    const h = &(top.held orelse return);
-    const at = h.tag_start orelse h.bytes.items.len;
-    h.tag_start = null;
-    if (h.key_next) {
-        h.entries.append(self.allocator.?, .{ .key = at, .value = at }) catch return error.AllocationLimit;
-    } else h.entries.items[h.entries.items.len - 1].value = at;
-    h.key_next = !h.key_next;
+    if (self.held) |*stack| try stack.item();
 }
 fn putHead(self: *Self, major: wire.Major, argument: u64, c: *core.Context) Error!void {
     var buffer: [9]u8 = undefined;
@@ -140,9 +100,7 @@ pub fn key(self: *Self, value: []const u8, c: *core.Context) Error!void {
 /// A tag on the item after it: no item of its own.
 pub fn tag(self: *Self, number: u64, c: *core.Context) Error!void {
     // The tagged item is the same entry's key or value, starting here.
-    if (self.frames.items.len != 0) if (self.frames.items[self.frames.items.len - 1].held) |*h| {
-        if (h.tag_start == null) h.tag_start = h.bytes.items.len;
-    };
+    if (self.held) |*stack| stack.prefix();
     try self.putHead(.tag, number, c);
 }
 pub fn simple(self: *Self, value: u8, c: *core.Context) Error!void {
@@ -161,42 +119,14 @@ pub fn begin(self: *Self, kind: core.Kind, name: []const u8, len: usize, c: *cor
     }
     // Preferred serialization keeps nothing: every container is written as
     // it comes. A deterministic profile keeps each map until it closes.
-    if (self.profile != .preferred) {
-        const map = kind == .record or kind == .map or kind == .variant;
-        self.frames.append(self.allocator.?, .{ .held = if (map) .{} else null }) catch return error.AllocationLimit;
-    }
+    if (self.held) |*stack| try stack.open(kind == .record or kind == .map or kind == .variant);
     if (kind == .variant) try self.text(name, c);
 }
 pub fn end(self: *Self, c: *core.Context) Error!void {
-    if (self.profile == .preferred) return;
-    var f = self.frames.pop() orelse return error.CustomRejected;
-    const h = &(f.held orelse return);
-    const a = self.allocator.?;
-    defer {
-        h.bytes.deinit(a);
-        h.entries.deinit(a);
-    }
-    const all = h.bytes.items;
-    for (h.entries.items, 0..) |*e, i| e.end = if (i + 1 < h.entries.items.len) h.entries.items[i + 1].key else all.len;
-    const Order = struct {
-        bytes: []const u8,
-        length_first: bool,
-        fn less(o: @This(), x: Held.Entry, y: Held.Entry) bool {
-            const kx = o.bytes[x.key..x.value];
-            const ky = o.bytes[y.key..y.value];
-            if (o.length_first and kx.len != ky.len) return kx.len < ky.len;
-            return std.mem.order(u8, kx, ky) == .lt;
-        }
-    };
-    try c.chargeWork(all.len + h.entries.items.len * 8);
-    std.mem.sort(Held.Entry, h.entries.items, Order{ .bytes = all, .length_first = self.profile == .length_first }, Order.less);
-    for (h.entries.items, 0..) |e, i| {
-        if (i > 0) {
-            const prior = h.entries.items[i - 1];
-            if (std.mem.eql(u8, all[prior.key..prior.value], all[e.key..e.value])) return error.DuplicateField;
-        }
-        try self.put(all[e.key..e.end], c);
-    }
+    const stack = &(self.held orelse return);
+    var entries = (try stack.close(if (self.profile == .length_first) .length_first else .bytewise, c)) orelse return;
+    defer entries.deinit();
+    while (entries.next()) |entry| try self.put(entry, c);
 }
 pub fn validateRaw(_: *Self, payload: []const u8, c: *core.Context) Error!void {
     c.input(payload.len) catch |err| return encodeError(err);

@@ -1,4 +1,5 @@
 //! Semantic events, consumed immediately. This is not a format DOM or token tape.
+const std = @import("std");
 const context = @import("context.zig");
 pub const Kind = enum { sequence, tuple, named_tuple, map, record, variant, newtype, some, named_unit };
 pub const Span = struct { bytes: []const u8, lifetime: context.Lifetime };
@@ -137,4 +138,39 @@ pub fn NamedTuple(comptime T: type, comptime name: []const u8) type {
             try access.namedTuple(self.value, name);
         }
     };
+}
+
+/// `value` as an event holds a float: an `f128` of the same value, a NaN of
+/// the same sign and payload, bit for bit, where a conversion would quiet a
+/// signalling one.
+pub fn widenFloat(value: anytype) f128 {
+    const T = @TypeOf(value);
+    if (comptime !exactNan(T)) return value;
+    if (!std.math.isNan(value)) return value;
+    const bits = @typeInfo(T).float.bits;
+    const fraction = std.math.floatFractionalBits(T);
+    const raw: u128 = @as(@Int(.unsigned, bits), @bitCast(value));
+    const sign = raw >> (bits - 1);
+    const payload = raw & ((@as(u128, 1) << fraction) - 1);
+    return @bitCast(sign << 127 | @as(u128, 0x7fff) << 112 | payload << (112 - fraction));
+}
+/// `value` as a `T`: a float rounded as a conversion rounds it, a NaN of the
+/// same sign and the payload's high bits, or the quiet NaN where none of them
+/// is set, bit for bit.
+pub fn narrowFloat(comptime T: type, value: f128) T {
+    if (comptime !exactNan(T)) return @floatCast(value);
+    if (!std.math.isNan(value)) return @floatCast(value);
+    const bits = @typeInfo(T).float.bits;
+    const fraction = std.math.floatFractionalBits(T);
+    const raw: u128 = @bitCast(value);
+    var payload = (raw & ((@as(u128, 1) << 112) - 1)) >> (112 - fraction);
+    if (payload == 0) payload = @as(u128, 1) << (fraction - 1);
+    const exponent = (@as(u128, 1) << std.math.floatExponentBits(T)) - 1;
+    const U = @Int(.unsigned, bits);
+    return @bitCast(@as(U, @intCast((raw >> 127) << (bits - 1) | exponent << fraction | payload)));
+}
+/// The floats whose NaNs are moved bit for bit: those with no explicit
+/// integer bit, narrower than the event's.
+fn exactNan(comptime T: type) bool {
+    return T == f16 or T == f32 or T == f64;
 }

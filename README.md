@@ -1,7 +1,7 @@
 # strand
 
 strand reads and writes Zig values as JSON, JSON Lines, ZON, URL-encoded forms,
-CSV and CBOR, through one mapping core that every format shares. Zig 0.17.0 is required.
+CSV, CBOR and MessagePack, through one mapping core that every format shares. Zig 0.17.0 is required.
 
 A value of any plain Zig type is parsed straight into that type, borrowed from
 the input, copied into an owner of its own, or put on an arena the caller holds,
@@ -300,6 +300,23 @@ refused. `cbor.Value` holds any item with its distinctions (tags, simple values,
 sorted by their encodings) and `.length_first` its length-first ordering, each on an
 allocator, refusing a key given twice.
 
+## MessagePack
+
+`strand.msgpack` reads every format family of the MessagePack specification and
+writes each value in its smallest format, as the specification asks: the shortest
+integer family, float 32 wherever it holds a float's bits (a NaN's payload included),
+the shortest length header. `parse`, `parseOwned`, `parseLeaky` and `write` keep the
+other formats' limits, ownership and field policy; strings, binaries and extension
+data are borrowed from the input. str is strict UTF-8 and stays apart from bin,
+integers run from -2^63 to 2^64 - 1 and never become floats or enum names, the
+reserved byte 0xc1 is refused, and a length past the input is refused before anything
+is counted for it. `msgpack.Value` holds any value with its distinctions;
+`msgpack.Ext` any extension with its type and data, and `msgpack.Timestamp` the
+timestamp extension (type -1) in all three forms, nanoseconds checked.
+`.profile = .deterministic` sorts each map's entries by their encoded keys, on an
+allocator, and refuses a key given twice: strand's own profile, as MessagePack defines
+none. A tuple of scalars is read and written with no allocation at all.
+
 ## Design
 
 [docs/design.md](docs/design.md) says how the parts are layered, what the core
@@ -322,7 +339,7 @@ and nonzero checks included.
 - It does not index a log or seek to a line by number.
 - It does not read pretty records backwards or decompress a stream.
 - It does not watch the filesystem or flush on a timer.
-- MessagePack, TOML and YAML are later work.
+- TOML and YAML are later work.
 
 ## Built with
 

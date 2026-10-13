@@ -12,6 +12,7 @@ test {
     _ = @import("csv_test.zig");
     _ = @import("jcs_test.zig");
     _ = @import("cbor_test.zig");
+    _ = @import("msgpack_test.zig");
     _ = @import("testing/json_suite.zig");
     _ = @import("testing/fuzz_test.zig");
     _ = @import("tail_test.zig");
@@ -28,4 +29,5 @@ test {
     _ = @import("urlencoded/api.zig");
     _ = @import("csv/text.zig");
     _ = @import("cbor/api.zig");
+    _ = @import("msgpack/api.zig");
 }

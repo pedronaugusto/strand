@@ -1095,3 +1095,17 @@ test "S1 factory text validates before publication and rolls back every allocati
     try std.testing.checkAllAllocationFailures(std.testing.allocator, invalidTextFactorySweep, .{});
     try std.testing.expectError(error.LengthLimit, core.acquire(FactoryRecord, .owned, std.testing.allocator, &.{ 6, 0, 0 }, .{ .string_bytes = 1 }, factoryDecode));
 }
+
+test "a NaN's sign and payload survive an event, signalling ones included" {
+    const signalling: f64 = @bitCast(@as(u64, 0xfff1_cb00_0000_0001));
+    try std.testing.expectEqual(@as(u64, 0xfff1_cb00_0000_0001), @as(u64, @bitCast(core.narrowFloat(f64, core.widenFloat(signalling)))));
+    const single: f32 = @bitCast(@as(u32, 0x7f80_0001));
+    try std.testing.expectEqual(@as(u32, 0x7f80_0001), @as(u32, @bitCast(core.narrowFloat(f32, core.widenFloat(single)))));
+    // A single's payload as a double's high bits, as a widening by bits gives it.
+    try std.testing.expectEqual(@as(u64, 0x7ff0_0000_2000_0000), @as(u64, @bitCast(core.narrowFloat(f64, core.widenFloat(single)))));
+    // The payload's high bits in a half; one only below its precision is the quiet NaN there.
+    try std.testing.expectEqual(@as(u16, 0xfc72), @as(u16, @bitCast(core.narrowFloat(f16, core.widenFloat(signalling)))));
+    const low: f64 = @bitCast(@as(u64, 0x7ff0_0000_0000_0001));
+    try std.testing.expectEqual(@as(u16, 0x7e00), @as(u16, @bitCast(core.narrowFloat(f16, core.widenFloat(low)))));
+    try std.testing.expectEqual(@as(f64, 1.5), core.narrowFloat(f64, core.widenFloat(@as(f32, 1.5))));
+}

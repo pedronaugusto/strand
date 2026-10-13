@@ -1,6 +1,7 @@
 //! The bytes of CBOR (RFC 8949): a data item's head (its major type and its
 //! argument), the shortest head for an argument, and half-precision floats.
 const std = @import("std");
+const core = @import("../core.zig");
 
 pub const Major = enum(u3) { unsigned, negative, bytes, text, array, map, tag, simple };
 
@@ -64,12 +65,13 @@ pub fn encodeHead(buffer: *[9]u8, major: Major, argument: u64) []const u8 {
     return buffer[0 .. 1 + n];
 }
 
-/// The float of a head with major 7 and info 25, 26 or 27.
-pub fn float(h: Head) f64 {
+/// The float of a head with major 7 and info 25, 26 or 27, as an event
+/// holds it: a NaN's payload kept bit for bit.
+pub fn float(h: Head) f128 {
     return switch (h.info) {
-        25 => @floatCast(@as(f16, @bitCast(@as(u16, @truncate(h.argument))))),
-        26 => @floatCast(@as(f32, @bitCast(@as(u32, @truncate(h.argument))))),
-        else => @bitCast(h.argument),
+        25 => core.widenFloat(@as(f16, @bitCast(@as(u16, @truncate(h.argument))))),
+        26 => core.widenFloat(@as(f32, @bitCast(@as(u32, @truncate(h.argument))))),
+        else => core.widenFloat(@as(f64, @bitCast(h.argument))),
     };
 }
 

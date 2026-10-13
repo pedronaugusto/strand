@@ -356,7 +356,7 @@ pub fn Cursor(comptime Backend: type) type {
             // safe: float narrowing is the declared destination's rounding;
             // overflow is explicitly rejected before publishing the result.
             if (!Backend.capabilities.nonfinite_floats and !std.math.isFinite(event.floating)) return error.UnsupportedValue;
-            const value: T = @floatCast(event.floating); // safe: checked destination bounds or Zig-provided typed storage precede this conversion.
+            const value = model.narrowFloat(T, event.floating);
             if (std.math.isFinite(event.floating) and !std.math.isFinite(value)) return error.NumberOutOfRange;
             if (policy.exact and std.math.isFinite(event.floating) and @as(f128, value) != event.floating) return error.InexactNumber;
             return value;

@@ -1,8 +1,8 @@
 # Serialization core and its formats
 
 Strand is one build module, `strand`, whose namespaces are `strand.core`,
-`strand.json`, `strand.jsonl`, `strand.zon` and `strand.urlencoded`; the root
-names only those five.
+`strand.json`, `strand.jsonl`, `strand.zon`, `strand.urlencoded`, `strand.csv`,
+`strand.cbor` and `strand.msgpack`; the root names only those eight.
 There is one API per thing: JSON is parsed and written by `strand.json` alone,
 and JSON Lines is framing around it, not a codec of its own. A separate build
 module buys something only where it keeps dependencies from users who do not need
@@ -26,6 +26,10 @@ framing → streams → tail/follow → JSONL API/facade → root. ZON sits besi
 on the core, wire/syntax → ZON API/facade, and imports neither JSON nor JSONL.
 URL-encoded forms sit beside them too, text → wire → API/facade; they import
 JSON's number grammar alone, since a form's number is spelled as JSON spells one.
+CSV is laid out the same way and reads rows on JSONL's line reader. CBOR and
+MessagePack are bytes → wire → values → API/facade each, and share one kernel below
+them, the map sorting of their deterministic profiles (`src/binary/sorted.zig`); no
+grammar is shared.
 Mapping consumes immediate events, including JSON number lexemes; it requires no
 DOM or token tape. JSONL framing shares its line/drain boundary decision between
 the pull reader and the push decoder, and both parse a record with `json`.
@@ -381,6 +385,47 @@ shortest float that holds the value exactly, a NaN as half precision, definite l
 length-first) hold each map's encoded entries on an allocator until it closes, sort
 them by their encoded keys (a tag's head is part of its key), refuse a key given twice,
 and write them out; nested maps are sorted inside out.
+
+## MessagePack
+
+The decoder reads the specification's formats in one pass and makes an event of each
+value: an integer as its magnitude and sign, from either family, so a non-negative
+int 8 and a positive fixint are the same integer; a float of either width; str (UTF-8,
+checked as it is read, so mapping does not look at it again) and bin as text and
+bytes, borrowed; arrays and maps with their lengths. An extension is the core's
+`tag` event holding its type, sign-extended to 64 bits, followed by its data as
+`bytes`: a typed destination never asks for a tag, so it refuses an extension where it
+stands, and `msgpack.Ext`, `msgpack.Timestamp` and `msgpack.Value` ask for one through
+their access. A length is checked against the input left (every item is a byte at
+least) before the core counts it or anything is allocated; 0xc1 is not MessagePack.
+
+The encoder writes the smallest format for every value, the specification's
+recommendation: the shortest integer family for the value (non-negative values always
+unsigned), float 32 wherever it holds the value's bits exactly, float 64 otherwise,
+the shortest length header, fixext for 1, 2, 4, 8 and 16 bytes of extension data. A
+float is compared by its bits, so a negative zero, an infinity and a NaN's payload
+survive; a typed `f32` is float 32. A tag given to the encoder sets the extension type
+of the bytes written next; anything else after it is refused. The deterministic
+profile is strand's own: MessagePack defines none. It holds each map until it closes
+and writes its entries sorted by their encoded keys, bytewise, refusing a key given
+twice, with the shared map-sorting kernel CBOR's deterministic profiles use
+(`src/binary/sorted.zig`). That kernel is the only code the two binary formats share:
+their grammars have nothing in common. A held map is refused once it holds more than
+the output left.
+
+Float events are `f128`, and the core widens and narrows them by their bits
+(`core.widenFloat`, `core.narrowFloat`), not by conversion, which would quiet a
+signalling NaN: a NaN read from the wire is written back as it came.
+
+The evidence: golden vectors derived from the specification for every format family at
+each of its edges, read and written back and refused when cut short anywhere;
+[msgpack-test-suite](https://github.com/kawanet/msgpack-test-suite) (MIT, vendored at
+`src/corpus/msgpack`), every encoding of each of its 85 values read and ours the
+shortest of each kind; properties over generated values (round trip, every truncation,
+the deterministic profile twice the same) and over arbitrary bytes (read, written in
+no more bytes, read again as the same value). A cross-check against rmpv decoded 200,000
+generated and damaged inputs: both read 71,016 to the same values and the same bytes,
+both refused 128,917, and every disagreement was 0xc1, which rmpv reads as nil.
 
 ## Format accelerators
 

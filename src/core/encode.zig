@@ -279,6 +279,20 @@ fn PolicyAccess(comptime Backend: type, comptime policy: descriptor.Field) type 
             for (values) |v| try emit(.{}, v, self.out, self.context, self.active);
             try self.out.end(self.context);
         }
+        /// A tag on the value written next, by the same access: for a format
+        /// with tags (`Backend.tag`), which any other refuses when it is compiled.
+        pub fn tag(self: *Self, number: u64) Error!void {
+            if (comptime !@hasDecl(Backend, "tag")) @compileError("this format has no tags");
+            if (self.used) return error.CustomRejected;
+            try self.out.tag(number, self.context);
+        }
+        /// A format's simple value (`Backend.simple`).
+        pub fn simple(self: *Self, value: u8) Error!void {
+            if (comptime !@hasDecl(Backend, "simple")) @compileError("this format has no simple values");
+            if (self.used) return error.CustomRejected;
+            self.used = true;
+            try self.out.simple(value, self.context);
+        }
         pub fn chargeWork(self: *Self, n: usize) error{WorkLimit}!void {
             return self.context.chargeWork(n);
         }

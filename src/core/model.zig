@@ -30,6 +30,12 @@ pub const Event = union(enum) {
     unit,
     begin: Compound,
     end,
+    /// A semantic tag on the value that follows (a CBOR tag): a typed
+    /// destination that does not ask for it refuses it.
+    tag: u64,
+    /// A format's simple value that is none of the above (a CBOR simple value,
+    /// `undefined` among them): only a format's own `Value` takes one.
+    simple: u8,
 };
 
 /// Explicit arbitrary bytes, including in type codecs and generic map keys.

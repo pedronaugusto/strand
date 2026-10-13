@@ -359,6 +359,29 @@ core leaves out of a row is an empty field in its column. A document's dialect r
 its decoder inside the acquisition, which takes a decoder value with a `run` method
 for a decoder that carries settings.
 
+## CBOR
+
+The decoder reads RFC 8949 in one pass and makes an event of every well-formed item:
+an integer as its magnitude and sign (so -2^64 reaches a wide enough destination
+exactly), a float of any width, a byte or text string borrowed where it is definite
+and joined in the arena where chunked (each chunk a definite string of the same type,
+text chunks each UTF-8), arrays and maps of either length, and two events the core has
+for formats that need them: `tag`, before the item it tags, and `simple`, for a simple
+value that is no boolean or null (`undefined` among them). A typed destination never
+asks for either, so it refuses them where they stand; `cbor.Value` and the tag codecs
+ask through their access (`tag()`, `simple()`). A definite length is checked against
+the input left (every item is a byte at least) before the core counts it or anything
+is allocated; reserved additional information, an indefinite integer or tag, a break
+with nothing open, a two-byte simple value under 32 and an odd indefinite map are not
+well-formed.
+
+The encoder writes preferred serialization: the shortest head for every argument, the
+shortest float that holds the value exactly, a NaN as half precision, definite lengths
+(the core always knows them). The deterministic profiles (4.2.1 bytewise, 4.2.3
+length-first) hold each map's encoded entries on an allocator until it closes, sort
+them by their encoded keys (a tag's head is part of its key), refuse a key given twice,
+and write them out; nested maps are sorted inside out.
+
 ## Format accelerators
 
 A format may answer the core's most common requests without building an event:

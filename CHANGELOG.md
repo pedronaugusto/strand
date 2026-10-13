@@ -6,8 +6,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Breaking
+
+- `core.Event` has two more variants, `tag` (a semantic tag on the value after it)
+  and `simple` (a format's own simple value), so an exhaustive switch over it needs
+  them.
+
 ### Added
 
+- `strand.cbor`: CBOR (RFC 8949) on the core, every well-formed item read and
+  preferred serialization written, with `cbor.Value`, `Tagged`, `Bignum`, `DateTime`,
+  `Epoch` and the deterministic profiles (core, length-first). Access to tags and
+  simple values for data codecs (`tag`, `simple`).
 - `json.jcs.write` and `json.jcs.canonicalize`: the JSON Canonicalization Scheme
   (RFC 8785), checked against the RFC's number samples and the cyberphone corpus. A
   typed integer past ±(2^53−1) is refused.

@@ -811,6 +811,9 @@ pub fn Cursor(comptime Backend: type) type {
             self.request = .{};
             switch (try self.take()) {
                 .end => return error.SyntaxError,
+                // A tag belongs to the value after it, which goes with it.
+                .tag => return self.skip(),
+                .simple => {},
                 .text => |span| {
                     try self.context.span(span.bytes.len, false);
                     try self.context.chargeWork(span.bytes.len);
@@ -988,6 +991,22 @@ fn PolicyAccess(comptime Backend: type, comptime policy: descriptor.Field) type 
         }
         pub fn reject(self: *Self, code: u32) error{CustomRejected} {
             return self.cursor.context.reject(code);
+        }
+        /// The tag on the value that follows, which the codec then reads.
+        /// It does not use up the access: the tagged value is the one value.
+        pub fn tag(self: *Self) Error!u64 {
+            if (self.used) return error.CustomRejected;
+            const event = try self.cursor.take();
+            if (event != .tag) return error.UnexpectedType;
+            return event.tag;
+        }
+        /// A format's simple value.
+        pub fn simple(self: *Self) Error!u8 {
+            if (self.used) return error.CustomRejected;
+            self.used = true;
+            const event = try self.cursor.take();
+            if (event != .simple) return error.UnexpectedType;
+            return event.simple;
         }
         pub fn readPairs(self: *Self, comptime K: type, comptime V: type) (Errors(K, Backend) || Errors(V, Backend))![]model.Pair(K, V) {
             var map = try self.begin(.map);

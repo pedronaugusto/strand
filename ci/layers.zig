@@ -66,6 +66,11 @@ pub const layers: []const gantry.rules.Layer = &.{
     .{ .name = "CSV wire", .patterns = &.{ "src/csv/Decoder.zig", "src/csv/Encoder.zig" } },
     .{ .name = "CSV module", .patterns = &.{"src/csv/api.zig"} },
     .{ .name = "CSV facade", .patterns = &.{"src/csv.zig"} },
+    .{ .name = "CBOR bytes", .patterns = &.{"src/cbor/wire.zig"} },
+    .{ .name = "CBOR wire", .patterns = &.{ "src/cbor/Decoder.zig", "src/cbor/Encoder.zig" } },
+    .{ .name = "CBOR values", .patterns = &.{ "src/cbor/Value.zig", "src/cbor/codecs.zig" } },
+    .{ .name = "CBOR module", .patterns = &.{"src/cbor/api.zig"} },
+    .{ .name = "CBOR facade", .patterns = &.{"src/cbor.zig"} },
     .{ .name = "public", .patterns = &.{
         "src/strand.zig",
     } },

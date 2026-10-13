@@ -1,7 +1,7 @@
 # strand
 
-strand reads and writes Zig values as JSON, JSON Lines, ZON, URL-encoded forms
-and CSV, through one mapping core that every format shares. Zig 0.17.0 is required.
+strand reads and writes Zig values as JSON, JSON Lines, ZON, URL-encoded forms,
+CSV and CBOR, through one mapping core that every format shares. Zig 0.17.0 is required.
 
 A value of any plain Zig type is parsed straight into that type, borrowed from
 the input, copied into an owner of its own, or put on an arena the caller holds,
@@ -25,7 +25,8 @@ git+https://github.com/pedronaugusto/strand`, then obtain the `strand` module th
 settings.
 
 The build exposes one module, `strand`, whose namespaces are `strand.core`,
-`strand.json`, `strand.jsonl`, `strand.zon`, `strand.urlencoded` and `strand.csv`. Zig analyses only what a program
+`strand.json`, `strand.jsonl`, `strand.zon`, `strand.urlencoded`, `strand.csv` and
+`strand.cbor`. Zig analyses only what a program
 names, so a program that names only `strand.json` compiles no JSON Lines or
 airlock code.
 
@@ -283,6 +284,22 @@ while (try rows.next()) |row| {
 ```
 <!-- END GENERATED -->
 
+## CBOR
+
+`strand.cbor` reads every well-formed RFC 8949 item and writes preferred
+serialization: the shortest heads, the shortest float that holds a value exactly,
+definite lengths. `parse`, `parseOwned`, `parseLeaky` and `write` keep the other
+formats' limits, ownership and field policy; a definite string is borrowed, a chunked
+one joined. Text and byte strings stay apart, integers run from -2^64 to 2^64 - 1, and
+a length past the input is refused before anything is counted for it. A typed value
+takes what it asked for: a tag it did not ask for, `undefined` and a simple value are
+refused. `cbor.Value` holds any item with its distinctions (tags, simple values,
+`undefined`, keys of any kind); `cbor.Tagged(T, n)`, `cbor.Bignum` (tags 2 and 3),
+`cbor.DateTime` (tag 0) and `cbor.Epoch` (tag 1) ask for their tags by name.
+`.profile = .deterministic` writes RFC 8949's core deterministic encoding (map keys
+sorted by their encodings) and `.length_first` its length-first ordering, each on an
+allocator, refusing a key given twice.
+
 ## Design
 
 [docs/design.md](docs/design.md) says how the parts are layered, what the core
@@ -305,7 +322,7 @@ and nonzero checks included.
 - It does not index a log or seek to a line by number.
 - It does not read pretty records backwards or decompress a stream.
 - It does not watch the filesystem or flush on a timer.
-- CBOR, MessagePack, TOML and YAML are later work.
+- MessagePack, TOML and YAML are later work.
 
 ## Built with
 

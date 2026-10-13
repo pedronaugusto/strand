@@ -27,7 +27,8 @@ pub fn main() !void {
     var search = try strand.urlencoded.parse(Search, gpa, query, .{});
     defer search.deinit();
     std.debug.assert(std.mem.eql(u8, search.value.q, "zig serde"));
-    std.debug.assert(search.value.tag.len == 2 and search.value.filter.stars.? == 100);
+    std.debug.assert(search.value.tag.len == 2);
+    std.debug.assert(search.value.filter.stars.? == 100);
 
     // Written as a browser's form serializer writes it.
     var out: std.Io.Writer.Allocating = .init(gpa);

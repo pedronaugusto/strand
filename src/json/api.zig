@@ -2,15 +2,15 @@
 const std = @import("std");
 const core = @import("../core.zig");
 const std_value = @import("std_value.zig");
-const WireDecoder = @import("Decoder.zig");
+const decoding = @import("Decoder.zig");
 const WireEncoder = @import("Encoder.zig");
 const indent = @import("indent.zig");
 const route = @import("route.zig");
 const leading = @import("leading.zig");
 const control = @import("control.zig");
 const work = @import("work.zig");
-pub const Format = WireDecoder.Format;
-pub const capabilities = WireDecoder.capabilities;
+pub const Format = decoding.Dialect(false).Format;
+pub const capabilities = decoding.Dialect(false).capabilities;
 /// One JSON value kept as its bytes: checked when it is read, written back as
 /// it came, and parsed when it is wanted. A carried payload, a request handed
 /// on, the part of a record a reader only routes.
@@ -55,12 +55,16 @@ pub const ParseOptions = struct {
     diagnostics: ?*core.Diagnostics = null,
 };
 fn Decode(comptime T: type) type {
+    return Dialect(T, false);
+}
+fn Dialect(comptime T: type, comptime comments: bool) type {
+    const Wire = decoding.Dialect(comments);
     return struct {
-        const Error = @typeInfo(@TypeOf(core.deserialize(T, @as(*WireDecoder, undefined), @as(*core.Context, undefined)))).error_union.error_set;
+        const Error = @typeInfo(@TypeOf(core.deserialize(T, @as(*Wire, undefined), @as(*core.Context, undefined)))).error_union.error_set;
         fn run(c: *core.Context, input: []const u8) Error!T {
             work.parse();
             try c.input(input.len);
-            var decoder: WireDecoder = undefined;
+            var decoder: Wire = undefined;
             decoder.init(c, input);
             defer decoder.deinit();
             const result = core.deserialize(T, &decoder, c) catch |err| {
@@ -74,10 +78,10 @@ fn Decode(comptime T: type) type {
         fn front(c: *core.Context, input: []const u8) Error!Prefix(T) {
             work.parse();
             try c.input(input.len);
-            var decoder: WireDecoder = undefined;
+            var decoder: Wire = undefined;
             decoder.init(c, input);
             defer decoder.deinit();
-            var cursor: core.Cursor(WireDecoder) = .{ .backend = &decoder, .context = c };
+            var cursor: core.Cursor(Wire) = .{ .backend = &decoder, .context = c };
             const value = cursor.read(T, .{}) catch |err| {
                 if (err == error.OutOfMemory and c.allocation_limited) return error.AllocationLimit;
                 return err;
@@ -101,15 +105,19 @@ fn context(arena: std.mem.Allocator, options: ParseOptions) core.Context {
     return c;
 }
 fn parseWith(comptime T: type, comptime ownership: core.Ownership, gpa: std.mem.Allocator, input: []const u8, options: ParseOptions) @typeInfo(@TypeOf(core.acquireWith(T, ownership, gpa, input, .{}, Decode(T).run))).error_union.error_set!Parsed(T) {
+    return parseDialect(T, false, ownership, gpa, input, options);
+}
+fn parseDialect(comptime T: type, comptime comments: bool, comptime ownership: core.Ownership, gpa: std.mem.Allocator, input: []const u8, options: ParseOptions) @typeInfo(@TypeOf(core.acquireWith(T, ownership, gpa, input, .{}, Dialect(T, comments).run))).error_union.error_set!Parsed(T) {
     if (options.diagnostics) |d| {
         d.* = .{};
         d.format = "json";
     }
-    return core.acquireWith(T, ownership, gpa, input, .{
+    const acquisition: core.AcquisitionOptions = .{
         .limits = options.limits,
         .acceptance = .{ .reject_unknown_fields = !options.ignore_unknown_fields, .reject_duplicates = options.reject_duplicates },
         .diagnostics = options.diagnostics,
-    }, Decode(T).run);
+    };
+    return core.acquireWith(T, ownership, gpa, input, acquisition, Dialect(T, comments).run);
 }
 /// `input` as a `T`, owned by the returned `Parsed`. Strings with nothing to
 /// unescape point into `input`, which must outlive the result.
@@ -124,8 +132,29 @@ pub fn parseOwned(comptime T: type, gpa: std.mem.Allocator, input: []const u8, o
 pub fn parseLeaky(comptime T: type, arena: std.mem.Allocator, input: []const u8, options: ParseOptions) @typeInfo(@TypeOf(Decode(T).run(@as(*core.Context, undefined), input))).error_union.error_set!T {
     var c = context(arena, options);
     if (input.len > options.limits.input_bytes) return error.InputLimit;
-    return Decode(T).run(&c, input);
+    return Dialect(T, false).run(&c, input);
 }
+/// JSONC, the JSON of editors' settings and `tsconfig.json`: `//` and
+/// `/* */` comments wherever whitespace may be, and a comma after a
+/// container's last member or element, read with JSON's options and promises.
+/// A `Raw` read from JSONC keeps its comments, so it is JSONC too. There is no
+/// JSONC writer: what is written is JSON.
+pub const jsonc = struct {
+    /// `json.parse` of JSONC.
+    pub fn parse(comptime T: type, gpa: std.mem.Allocator, input: []const u8, options: ParseOptions) @typeInfo(@TypeOf(parseDialect(T, true, .borrowed, gpa, input, options))).error_union.error_set!Parsed(T) {
+        return parseDialect(T, true, .borrowed, gpa, input, options);
+    }
+    /// `json.parseOwned` of JSONC.
+    pub fn parseOwned(comptime T: type, gpa: std.mem.Allocator, input: []const u8, options: ParseOptions) @typeInfo(@TypeOf(parseDialect(T, true, .owned, gpa, input, options))).error_union.error_set!Parsed(T) {
+        return parseDialect(T, true, .owned, gpa, input, options);
+    }
+    /// `json.parseLeaky` of JSONC.
+    pub fn parseLeaky(comptime T: type, arena: std.mem.Allocator, input: []const u8, options: ParseOptions) @typeInfo(@TypeOf(Dialect(T, true).run(@as(*core.Context, undefined), input))).error_union.error_set!T {
+        var c = context(arena, options);
+        if (input.len > options.limits.input_bytes) return error.InputLimit;
+        return Dialect(T, true).run(&c, input);
+    }
+};
 /// A value read from the front of some bytes, and where it ended.
 pub fn Prefix(comptime T: type) type {
     return struct { value: T, end: usize };
@@ -136,7 +165,7 @@ pub fn Prefix(comptime T: type) type {
 pub fn parsePrefixLeaky(comptime T: type, arena: std.mem.Allocator, input: []const u8, options: ParseOptions) ParseError(T)!Prefix(T) {
     var c = context(arena, options);
     if (input.len > options.limits.input_bytes) return error.InputLimit;
-    return Decode(T).front(&c, input);
+    return Dialect(T, false).front(&c, input);
 }
 /// Bounded bridge with standard dynamic numeric alternatives and standard owner.
 /// Transfers one arena; the stable standard owner permits managed Array mutation.

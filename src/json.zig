@@ -12,6 +12,7 @@ pub const parse = api.parse;
 pub const parseOwned = api.parseOwned;
 pub const parseLeaky = api.parseLeaky;
 pub const parseStdValue = api.parseStdValue;
+pub const jsonc = api.jsonc;
 pub const Whitespace = api.Whitespace;
 pub const WriteOptions = api.WriteOptions;
 pub const WriteError = api.WriteError;

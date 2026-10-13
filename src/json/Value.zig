@@ -1,6 +1,6 @@
 //! JSON-native dynamic values retain validated numeric lexemes and object order.
 const number = @import("number.zig");
-const WireDecoder = @import("Decoder.zig");
+const WireDecoder = @import("Decoder.zig").Dialect(false);
 const core = @import("../core.zig");
 pub const Member = struct { key: []const u8, value: Value };
 pub const Value = union(enum) {

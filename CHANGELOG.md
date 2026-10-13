@@ -8,6 +8,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `json.jsonc.parse`, `parseOwned` and `parseLeaky` read JSONC: `//` and `/* */`
+  comments where whitespace may be and a comma after a container's last member or
+  element, with JSON's options. Writing stays plain JSON.
 - `strand.urlencoded`: forms and query strings (application/x-www-form-urlencoded)
   on the core, `parse`, `parseOwned`, `parseLeaky` and `write`. Names' bracketed
   paths (`user[name]`, `tag[]`) read into nested records and sequences wherever

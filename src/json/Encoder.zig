@@ -2,7 +2,8 @@
 const std = @import("std");
 const core = @import("../core.zig");
 const strings = @import("text.zig");
-const Decoder = @import("Decoder.zig");
+const decoding = @import("Decoder.zig");
+const Decoder = decoding.Dialect(false);
 pub const Format = Decoder.Format;
 pub const capabilities = Decoder.capabilities;
 pub const canonical = false;

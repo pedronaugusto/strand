@@ -89,7 +89,11 @@ checked like the rest. The default limits are 16 MiB of input or output, 128
 levels, 1,048,576 items, 8 MiB strings, 64 KiB keys, 1,024 digits, 32 MiB of
 memory and 128 Mi units of work; `ParseOptions.limits` raises or lowers them.
 `json.Value` is a value of any shape, its numbers kept as written; `parseStdValue`
-reads into `std.json.Value` under the same limits.
+reads into `std.json.Value` under the same limits. `json.jsonc.parse`, `parseOwned`
+and `parseLeaky` read JSONC, the JSON of editors' settings and `tsconfig.json`: `//`
+and `/* */` comments wherever whitespace may be, and a comma after a container's last
+member or element, with JSON's options and promises. Writing is plain JSON whatever
+was read.
 
 `strand.json.write(output, value, options)` writes checked JSON, minified or
 indented. A null optional is written as `null`, or left off with `.nulls = .omit`
@@ -211,7 +215,8 @@ const query = "q=zig+serde&tag=json&filter%5Blang%5D=zig&tag=toml&filter[stars]=
 var search = try strand.urlencoded.parse(Search, gpa, query, .{});
 defer search.deinit();
 std.debug.assert(std.mem.eql(u8, search.value.q, "zig serde"));
-std.debug.assert(search.value.tag.len == 2 and search.value.filter.stars.? == 100);
+std.debug.assert(search.value.tag.len == 2);
+std.debug.assert(search.value.filter.stars.? == 100);
 
 // Written as a browser's form serializer writes it.
 var out: std.Io.Writer.Allocating = .init(gpa);

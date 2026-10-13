@@ -71,6 +71,16 @@ They allocate nothing and answer with views into the line; an answer is not a
 claim that the line is valid. `tagOf` reads the same `strand` declaration the
 parse does: a `tag` member, the arms' names and aliases, and `other`.
 
+JSONC is a dialect of the same decoder, not a codec of its own: the decoder is made
+for a dialect at compile time, and in JSONC's the whitespace between tokens may hold
+`//` and `/* */` comments and a comma may end an object or an array. `json.jsonc` has
+its own entry points rather than a parse option, because a runtime choice between the
+two at JSON's entry measured 3-4% on a 512-byte record (the branch and its call kept
+the context out of registers); JSON's code is the same as before JSONC. A comment
+that never ends stops at its `/`, which the next token then refuses. A `Raw` taken from JSONC is its
+source, comments included, and so is JSONC; writing is always plain JSON, and a `Raw`
+with a comment in it is refused there as any invalid one is.
+
 ## JSON Lines on the core
 
 `jsonl.Reader` frames a line with `LineReader` and parses it with

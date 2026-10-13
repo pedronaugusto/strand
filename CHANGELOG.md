@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-10-13
+
 ### Changed
 
 - The tests take shakedown as bay gives it, with no `.aegis = .consumer` or `useAegis` binding: bay gives a graph one aegis, so shakedown's is this package's.
@@ -758,7 +760,8 @@ First release: the line layer over `std.json`, and nothing else.
   awkward inputs, with the line numbering checked against an index scan that
   shares no code with the package.
 
-[Unreleased]: https://github.com/pedronaugusto/strand/compare/v0.8.1...HEAD
+[Unreleased]: https://github.com/pedronaugusto/strand/compare/v0.8.2...HEAD
+[0.8.2]: https://github.com/pedronaugusto/strand/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/pedronaugusto/strand/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/pedronaugusto/strand/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/pedronaugusto/strand/releases/tag/v0.7.0

@@ -13,6 +13,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `json.jsonc.parse`, `parseOwned` and `parseLeaky` read JSONC: `//` and `/* */`
   comments where whitespace may be and a comma after a container's last member or
   element, with JSON's options. Writing stays plain JSON.
+- `strand.csv`: CSV (RFC 4180) on the core, `parse`, `parseOwned`, `parseLeaky`
+  and `write` for documents and `Reader(T)` and `Writer(T)` for a row at a time, in
+  a `Dialect` (delimiter, quote, header, line ending). Rows are structs by the
+  header's names or tuples and arrays by position; an empty unquoted field is a
+  null where the type takes one.
+- `core.Request.nullable`, set where the type takes a null, for a format whose null
+  depends on the type (an empty CSV field); `core.wireNames(T)`, the names a struct's
+  fields are written under; `core.acquireWith` takes a decoder value with a `run`
+  method, for a decoder that carries settings.
 - `strand.urlencoded`: forms and query strings (application/x-www-form-urlencoded)
   on the core, `parse`, `parseOwned`, `parseLeaky` and `write`. Names' bracketed
   paths (`user[name]`, `tag[]`) read into nested records and sequences wherever

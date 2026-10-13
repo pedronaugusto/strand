@@ -1,7 +1,7 @@
 # strand
 
-strand reads and writes Zig values as JSON, JSON Lines, ZON and URL-encoded
-forms, through one mapping core that every format shares. Zig 0.17.0 is required.
+strand reads and writes Zig values as JSON, JSON Lines, ZON, URL-encoded forms
+and CSV, through one mapping core that every format shares. Zig 0.17.0 is required.
 
 A value of any plain Zig type is parsed straight into that type, borrowed from
 the input, copied into an owner of its own, or put on an arena the caller holds,
@@ -25,7 +25,7 @@ git+https://github.com/pedronaugusto/strand`, then obtain the `strand` module th
 settings.
 
 The build exposes one module, `strand`, whose namespaces are `strand.core`,
-`strand.json`, `strand.jsonl`, `strand.zon` and `strand.urlencoded`. Zig analyses only what a program
+`strand.json`, `strand.jsonl`, `strand.zon`, `strand.urlencoded` and `strand.csv`. Zig analyses only what a program
 names, so a program that names only `strand.json` compiles no JSON Lines or
 airlock code.
 
@@ -230,6 +230,56 @@ if (strand.urlencoded.parse(Search, gpa, "q=a&q=b", .{})) |_| {
 ```
 <!-- END GENERATED -->
 
+## CSV
+
+`strand.csv` reads and writes CSV as RFC 4180 has it, with `parse`, `parseOwned`,
+`parseLeaky` and `write` for a whole document and `Reader(T)` and `Writer(T)` for a
+row at a time, and the limits, ownership and field policy of the other formats. A
+document is a slice of rows: a struct, read by the header's names in whatever order
+the columns stand, or a tuple or an array, read by position where there is no header.
+A `Dialect` names the delimiter, the quote, whether there is a header and the line
+ending written; CRLF and LF both end a record read. A field holding the delimiter, the
+quote or a line break is quoted, its quotes doubled; a quote anywhere else, a field
+count that is not the header's, and a lone carriage return are refused. Every field
+is text until the type asks for a number (in JSON's spelling), a boolean, a name or
+bytes; an empty unquoted field is a null where the type takes one, and the writer
+quotes empty text so it reads back as text. A field holds a value alone: a nested
+record or sequence is refused. `Reader` frames rows on JSON Lines' line reader,
+joining lines while a quoted field is open, held to `max_row_bytes`; a row that is not
+a `T` is `error.MalformedRow`, and the reader reads on.
+[examples/table.zig](examples/table.zig) reads a table of readings.
+
+<!-- BEGIN GENERATED zig build docs -- csv -->
+```zig
+const strand = @import("strand");
+
+// Columns in any order; a quoted field may hold commas, quotes and lines.
+const table =
+    "celsius,station,note\r\n" ++
+    "21.5,\"Lisbon, PT\",\r\n" ++
+    "-3,Oslo,\"wind \"\"strong\"\"\"\r\n";
+var readings = try strand.csv.parse([]const Reading, gpa, table, .{});
+defer readings.deinit();
+std.debug.assert(std.mem.eql(u8, readings.value[0].station, "Lisbon, PT"));
+// An empty field is a null where the type takes one.
+std.debug.assert(readings.value[0].note == null);
+
+// Written in the struct's order, with RFC 4180's quoting.
+var out: std.Io.Writer.Allocating = .init(gpa);
+try strand.csv.write(&out.writer, readings.value, .{});
+std.debug.assert(std.mem.startsWith(u8, out.written(), "station,celsius,note\r\n\"Lisbon, PT\",21.5,\r\n"));
+
+// A row at a time off a reader, numbered, in a dialect of its own.
+var source: std.Io.Reader = .fixed("station;celsius\nRome;30\n");
+var rows: strand.csv.Reader(Reading) = .init(gpa, &source, .{ .parse = .{ .dialect = .{ .delimiter = ';' } } });
+defer rows.deinit();
+while (try rows.next()) |row| {
+    std.debug.assert(row.number == 1);
+    std.debug.assert(row.value.celsius == 30);
+}
+```
+<!-- END GENERATED -->
+
 ## Design
 
 [docs/design.md](docs/design.md) says how the parts are layered, what the core
@@ -252,7 +302,7 @@ and nonzero checks included.
 - It does not index a log or seek to a line by number.
 - It does not read pretty records backwards or decompress a stream.
 - It does not watch the filesystem or flush on a timer.
-- CBOR, MessagePack, TOML, YAML and CSV are later work.
+- CBOR, MessagePack, TOML and YAML are later work.
 
 ## Built with
 

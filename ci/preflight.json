@@ -56,6 +56,13 @@
       "imports": [
         "strand"
       ]
+    },
+    "zig build docs -- csv": {
+      "source": "examples/table.zig",
+      "region": "csv",
+      "imports": [
+        "strand"
+      ]
     }
   },
   "extra_checks": [

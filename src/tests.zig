@@ -9,6 +9,7 @@ test {
     _ = @import("zon_test.zig");
     _ = @import("urlencoded_test.zig");
     _ = @import("jsonc_test.zig");
+    _ = @import("csv_test.zig");
     _ = @import("testing/json_suite.zig");
     _ = @import("testing/fuzz_test.zig");
     _ = @import("tail_test.zig");
@@ -23,4 +24,5 @@ test {
     _ = @import("jsonl/api.zig");
     _ = @import("zon/api.zig");
     _ = @import("urlencoded/api.zig");
+    _ = @import("csv/text.zig");
 }

@@ -1300,6 +1300,7 @@ fn typeRequest(comptime T: type, comptime policy: descriptor.Field) model.Reques
             const child = typeRequest(i.child, policy);
             result.integer_bits = child.integer_bits;
             result.float_bits = child.float_bits;
+            result.nullable = true;
         },
         .pointer => |i| if (i.size == .one) {
             const child = typeRequest(i.child, policy);

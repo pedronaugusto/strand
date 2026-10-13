@@ -61,6 +61,10 @@ pub const layers: []const gantry.rules.Layer = &.{
     .{ .name = "URL-encoded wire", .patterns = &.{ "src/urlencoded/Decoder.zig", "src/urlencoded/Encoder.zig" } },
     .{ .name = "URL-encoded module", .patterns = &.{"src/urlencoded/api.zig"} },
     .{ .name = "URL-encoded facade", .patterns = &.{"src/urlencoded.zig"} },
+    .{ .name = "CSV text", .patterns = &.{"src/csv/text.zig"} },
+    .{ .name = "CSV wire", .patterns = &.{ "src/csv/Decoder.zig", "src/csv/Encoder.zig" } },
+    .{ .name = "CSV module", .patterns = &.{"src/csv/api.zig"} },
+    .{ .name = "CSV facade", .patterns = &.{"src/csv.zig"} },
     .{ .name = "public", .patterns = &.{
         "src/strand.zig",
     } },

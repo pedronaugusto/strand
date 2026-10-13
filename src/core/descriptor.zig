@@ -69,6 +69,18 @@ pub fn field(comptime T: type, comptime name: []const u8) Field {
     }
     return f;
 }
+/// The names a struct's fields are written under, in order, leaving out a
+/// field that is never written (`skip_encode`).
+pub fn wireNames(comptime T: type) []const []const u8 {
+    comptime {
+        var names: []const []const u8 = &.{};
+        for (@typeInfo(T).@"struct".field_names) |name| {
+            const f = field(T, name);
+            if (!f.skip_encode) names = names ++ .{f.name};
+        }
+        return names;
+    }
+}
 pub fn default(comptime T: type, comptime name: []const u8) ?@FieldType(T, name) {
     const opt = options(T);
     if (@hasField(@TypeOf(opt), "fields") and @hasField(@TypeOf(opt.fields), name)) {

@@ -316,6 +316,37 @@ records or of sequences has no spelling here and is `UnsupportedValue`. The outp
 exactly the WHATWG form serializer's: every byte but ASCII letters, digits and `*-._`
 percent-encoded in uppercase hex, a space as `+`.
 
+## CSV
+
+CSV is RFC 4180 in a dialect: the delimiter and the quote are any two bytes but line
+breaks, the header is there or not, and the line ending written is CRLF or LF; either
+ends a record read. The decoder reads a document as a sequence of rows, a row as a
+record whose keys are the header's names, in the order the columns stand (the core
+matches them to fields, refuses a name given twice and an unknown one by default), or,
+asked for a tuple or an array, as a sequence by position. Every row has the header's
+field count. A field is borrowed when it holds no doubled quote, and copied with its
+quotes made single when it does.
+
+CSV has no null and no types: a field is text, read as what the type asks for. A
+number is a lexeme in JSON's grammar, converted by JSON's exact kernels. A null is the
+one thing a field cannot say for itself, so the core tells the format where one is
+taken: `Request.nullable` is set for an optional, and there an empty unquoted field
+is null; anywhere else it is empty text, or for a number a refusal. The writer quotes
+empty text, so null and empty text read back as they were. A field holds one value:
+a record, a sequence or a union in one has no spelling and is refused, so a document
+is a table and not a tree.
+
+`Reader(T)` frames rows on JSON Lines' `LineReader`, with its CRLF handling off so
+that a row keeps its `\r` and a quoted field its line breaks byte for byte: a row is
+a physical line joined with the next while its quotes are odd, a byte-order mark at
+the start is skipped, blank lines are passed over, and a row is held to
+`max_row_bytes`. The header is the first row; each row after it is parsed on an arena
+kept for it alone. `Writer(T)` writes the header before its first row. The header's
+names are the struct's, as the core writes them (`core.wireNames`), so a field the
+core leaves out of a row is an empty field in its column. A document's dialect reaches
+its decoder inside the acquisition, which takes a decoder value with a `run` method
+for a decoder that carries settings.
+
 ## Format accelerators
 
 A format may answer the core's most common requests without building an event:

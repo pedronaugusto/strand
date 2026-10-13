@@ -10,6 +10,9 @@ pub const Request = struct {
     float_bits: usize = 0,
     exact: bool = false,
     borrow: context.Borrow = .prefer,
+    /// The type takes a null here: an optional. A format with no null of its
+    /// own (an empty CSV field) spells one only where this says so.
+    nullable: bool = false,
 };
 /// Unsigned little-endian magnitude. Formats can supply any Zig integer width.
 /// Textual decimal/exponent normalization belongs to the format's checked kernel.

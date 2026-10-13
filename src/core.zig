@@ -13,6 +13,7 @@ pub const acquire = @import("core/owner.zig").acquire;
 pub const Support = @import("core/descriptor.zig").Support;
 pub const Capabilities = @import("core/descriptor.zig").Capabilities;
 pub const describe = @import("core/descriptor.zig").describe;
+pub const wireNames = @import("core/descriptor.zig").wireNames;
 pub const deserialize = @import("core/decode.zig").deserialize;
 pub const Event = @import("core/model.zig").Event;
 pub const Kind = @import("core/model.zig").Kind;

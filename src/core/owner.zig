@@ -44,11 +44,13 @@ pub const AcquisitionOptions = struct {
 };
 /// The callback only receives budgeted context access. No raw backing allocator
 /// or result owner escapes. Caller-arena decoders have their own leaky contract.
-pub fn acquire(comptime T: type, comptime ownership: context.Ownership, gpa: std.mem.Allocator, bytes: []const u8, limits: context.Limits, comptime decode: anytype) (context.DecodeError || CallbackError(decode))!Parsed(T) {
+pub fn acquire(comptime T: type, comptime ownership: context.Ownership, gpa: std.mem.Allocator, bytes: []const u8, limits: context.Limits, comptime decode: anytype) (context.DecodeError || CallbackError(@TypeOf(decode)))!Parsed(T) {
     return acquireWith(T, ownership, gpa, bytes, .{ .limits = limits }, decode);
 }
 /// Adds caller acceptance and diagnostics without retaining either in the owner.
-pub fn acquireWith(comptime T: type, comptime ownership: context.Ownership, gpa: std.mem.Allocator, bytes: []const u8, options: AcquisitionOptions, comptime decode: anytype) (context.DecodeError || CallbackError(decode))!Parsed(T) {
+/// `decode` is a function of the context and the bytes, or a value whose
+/// `run` is, for a decoder that carries settings of its own (a CSV dialect).
+pub fn acquireWith(comptime T: type, comptime ownership: context.Ownership, gpa: std.mem.Allocator, bytes: []const u8, options: AcquisitionOptions, decode: anytype) (context.DecodeError || CallbackError(@TypeOf(decode)))!Parsed(T) {
     const limits = options.limits;
     @setRuntimeSafety(true);
     comptime descriptor.check(T, descriptor.schema_capabilities, true, ownership);
@@ -59,14 +61,15 @@ pub fn acquireWith(comptime T: type, comptime ownership: context.Ownership, gpa:
     var c: context.Context = .init(arena.allocator(), limits, ownership);
     c.acceptance = options.acceptance;
     c.diagnostics = options.diagnostics;
-    const value = decode(&c, bytes) catch |err| return if (backing.limited) error.AllocationLimit else err;
+    const result = if (comptime @typeInfo(@TypeOf(decode)) == .@"fn") decode(&c, bytes) else decode.run(&c, bytes);
+    const value = result catch |err| return if (backing.limited) error.AllocationLimit else err;
     // Only the linked arena state survives. No pointer into stack-local backing
     // or arena/context survives publication; deinit promotes with the original gpa.
     return .{ .value = value, .gpa = gpa, .state = arena.state, .requested_peak = c.allocationRequested(), .retained_bytes = c.allocationRequested(), .allocator_resident_bytes = backing.live, .work_used = c.workUsed() };
 }
 
-fn CallbackError(comptime decode: anytype) type {
-    const result = @typeInfo(@TypeOf(decode)).@"fn".return_type.?;
+fn CallbackError(comptime D: type) type {
+    const result = @typeInfo(if (@typeInfo(D) == .@"fn") D else @TypeOf(D.run)).@"fn".return_type.?;
     const errors = @typeInfo(result).error_union.error_set;
     if (@typeInfo(errors).error_set.error_names == null) @compileError("acquisition callbacks require a named error set");
     return errors;
@@ -74,7 +77,7 @@ fn CallbackError(comptime decode: anytype) type {
 
 /// Caller-arena acquisition has no individual owner. Requests are charged per
 /// operation; failed scratch/result allocations remain until the caller resets.
-pub fn acquireLeaky(comptime T: type, arena: std.mem.Allocator, bytes: []const u8, limits: context.Limits, comptime decode: anytype) (context.DecodeError || CallbackError(decode))!T {
+pub fn acquireLeaky(comptime T: type, arena: std.mem.Allocator, bytes: []const u8, limits: context.Limits, comptime decode: anytype) (context.DecodeError || CallbackError(@TypeOf(decode)))!T {
     comptime descriptor.check(T, descriptor.schema_capabilities, true, .borrowed);
     if (bytes.len > limits.input_bytes) return error.InputLimit;
     var c: context.Context = .init(arena, limits, .borrowed);

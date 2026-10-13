@@ -6,6 +6,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Breaking
+
+- `aegis.int.Checked` and `aegis.int.Saturating` are written and read as their
+  integer, where they were an object of their private field (`{"value":3}`).
+
 ### Fixed
 
 - aegis scalars are read and written in every format as what they hold, recognized
@@ -13,9 +18,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `units.Bytes` as their text (`"1m30s"`, `"64MiB"`), `int.Checked`,
   `int.Saturating`, `int.Ranged`, `units.Count`, `units.Bits`, `units.Instant`,
   `id.Id`, `id.NonZero` and `id.Counter` as their integer, with `Ranged`'s range and
-  `NonZero`'s zero refused as `NumberOutOfRange`. A struct holding one failed to
-  compile, as a nonexhaustive enum, or for `Checked` and `Saturating` was written
-  as an object of their private field.
+  `NonZero`'s zero refused as `NumberOutOfRange`. A struct holding any other
+  failed to compile, as a nonexhaustive enum.
 
 ### Changed
 

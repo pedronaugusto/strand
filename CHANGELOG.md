@@ -6,6 +6,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.8.3] - 2026-10-13
+
+### Changed
+
+- Pins airlock 0.3.1, aegis 0.1.3, preflight 0.4.1 and shakedown 0.3.2.
+
 ## [0.8.2] - 2026-10-13
 
 ### Changed
@@ -760,7 +766,8 @@ First release: the line layer over `std.json`, and nothing else.
   awkward inputs, with the line numbering checked against an index scan that
   shares no code with the package.
 
-[Unreleased]: https://github.com/pedronaugusto/strand/compare/v0.8.2...HEAD
+[Unreleased]: https://github.com/pedronaugusto/strand/compare/v0.8.3...HEAD
+[0.8.3]: https://github.com/pedronaugusto/strand/compare/v0.8.2...v0.8.3
 [0.8.2]: https://github.com/pedronaugusto/strand/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/pedronaugusto/strand/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/pedronaugusto/strand/compare/v0.7.0...v0.8.0

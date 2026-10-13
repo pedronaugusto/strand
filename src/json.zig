@@ -13,6 +13,8 @@ pub const parseOwned = api.parseOwned;
 pub const parseLeaky = api.parseLeaky;
 pub const parseStdValue = api.parseStdValue;
 pub const jsonc = api.jsonc;
+/// The JSON Canonicalization Scheme (RFC 8785).
+pub const jcs = @import("json/canonical.zig");
 pub const Whitespace = api.Whitespace;
 pub const WriteOptions = api.WriteOptions;
 pub const WriteError = api.WriteError;

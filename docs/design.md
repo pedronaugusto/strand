@@ -61,7 +61,7 @@ before a sink, value or limit failure: output is staged in the writer's own
 unused buffer and published a stage at a time, so a value that fits there and
 fails leaves nothing, and a caller-owned output buffer provides transactional
 publication whatever the size. Output, escapes and Raw validation are charged.
-Scratch is caller-supplied; no global allocator is chosen. JCS is not exposed.
+Scratch is caller-supplied; no global allocator is chosen.
 `writeObjectOpen` leaves a struct's closing brace unwritten, for members the
 caller computes over the bytes so far.
 
@@ -80,6 +80,18 @@ the context out of registers); JSON's code is the same as before JSONC. A commen
 that never ends stops at its `/`, which the next token then refuses. A `Raw` taken from JSONC is its
 source, comments included, and so is JSONC; writing is always plain JSON, and a `Raw`
 with a comment in it is refused there as any invalid one is.
+
+`json.jcs` is RFC 8785. Canonical form needs every object's members sorted, which a
+stream cannot do, so it reads the value as a `json.Value` (numbers as their lexemes,
+members in order) and writes that: members sorted by UTF-16 code units, which put a
+name past U+FFFF before one in U+E000 to U+FFFF, a number as the double nearest its
+lexeme spelled as ECMAScript's `Number.prototype.toString` spells it (Ryu's shortest
+digits, placed by ECMA-262's rules), a string with only what `JSON.stringify` escapes
+escaped. JSON text has one kind of number, and every one is a double here, as JCS
+says; a typed value knows its integers, and `write` refuses one past ±(2^53−1) before
+writing anything, through a backend of the core that only looks at integers. The RFC's
+Appendix B samples and the cyberphone corpus are the evidence; a property checks that a
+double's spelling reads back as itself and that canonical form is a fixed point.
 
 ## JSON Lines on the core
 

@@ -13,6 +13,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `json.jsonc.parse`, `parseOwned` and `parseLeaky` read JSONC: `//` and `/* */`
   comments where whitespace may be and a comma after a container's last member or
   element, with JSON's options. Writing stays plain JSON.
+- `json.jcs.write` and `json.jcs.canonicalize`: the JSON Canonicalization Scheme
+  (RFC 8785), checked against the RFC's number samples and the cyberphone corpus. A
+  typed integer past ±(2^53−1) is refused.
 - `strand.csv`: CSV (RFC 4180) on the core, `parse`, `parseOwned`, `parseLeaky`
   and `write` for documents and `Reader(T)` and `Writer(T)` for a row at a time, in
   a `Dialect` (delimiter, quote, header, line ending). Rows are structs by the

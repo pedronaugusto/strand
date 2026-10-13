@@ -32,6 +32,7 @@ pub const layers: []const gantry.rules.Layer = &.{
         "src/json/route.zig",
     } },
     .{ .name = "JSON module", .patterns = &.{"src/json/api.zig"} },
+    .{ .name = "JSON canonical form", .patterns = &.{"src/json/canonical.zig"} },
     .{ .name = "JSON facade", .patterns = &.{"src/json.zig"} },
     .{ .name = "JSONL schema", .patterns = &.{"src/jsonl/versioned.zig"} },
     .{ .name = "records", .patterns = &.{

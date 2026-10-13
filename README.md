@@ -93,7 +93,10 @@ reads into `std.json.Value` under the same limits. `json.jsonc.parse`, `parseOwn
 and `parseLeaky` read JSONC, the JSON of editors' settings and `tsconfig.json`: `//`
 and `/* */` comments wherever whitespace may be, and a comma after a container's last
 member or element, with JSON's options and promises. Writing is plain JSON whatever
-was read.
+was read. `json.jcs.write` and `json.jcs.canonicalize` write the JSON Canonicalization
+Scheme (RFC 8785), one spelling for every value, for hashing and signing: members sorted
+by their names' UTF-16 code units, numbers as ECMAScript writes doubles, no whitespace; a
+name given twice, and a typed integer past ±(2^53−1), are refused.
 
 `strand.json.write(output, value, options)` writes checked JSON, minified or
 indented. A null optional is written as `null`, or left off with `.nulls = .omit`

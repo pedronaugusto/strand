@@ -206,6 +206,8 @@ fn PolicyAccess(comptime Backend: type, comptime policy: descriptor.Field) type 
         active: ?*const Active,
         used: bool = false,
         pub const Error = ctx.EncodeError || Backend.Error;
+        /// The format being written, as the decoding access names it.
+        pub const Format = Backend.Format;
         const Self = @This();
         pub fn named(self: *Self, value: anytype, kind: model.Kind, name: []const u8) Errors(@TypeOf(value), Backend)!void {
             if (self.used) return error.CustomRejected;
@@ -315,8 +317,8 @@ fn PolicyAccess(comptime Backend: type, comptime policy: descriptor.Field) type 
             }
             try self.out.end(self.context);
         }
-        pub fn raw(self: *Self, comptime Format: type, payload: []const u8) (ctx.EncodeError || Backend.Error)!void {
-            if (Backend.Format != Format) @compileError("raw format brand does not match the backend");
+        pub fn raw(self: *Self, comptime Brand: type, payload: []const u8) (ctx.EncodeError || Backend.Error)!void {
+            if (Backend.Format != Brand) @compileError("raw format brand does not match the backend");
             if (self.used) return error.CustomRejected;
             self.used = true;
             if (Backend.canonical) return error.UnsupportedValue;

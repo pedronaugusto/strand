@@ -8,7 +8,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- Fuzz properties for the JSON value read from the front of a buffer (it ends inside the bytes, and alone reads again), for the bridge to `std.json.Value` (it reads exactly what strand's own `Value` reads), and for a number in a CSV field or a form value (it reads as its JSON spelling says): the parsers of untrusted input preflight reported without one.
+- `strand.toml`: TOML 1.1.0, and 1.0.0 with `.version = .v1_0`, on the core. Every rule about defining a table is checked as the document is read; integers are TOML's signed 64 bits and floats binary64, refused past their range; `toml.OffsetDateTime`, `toml.LocalDateTime`, `toml.LocalDate` and `toml.LocalTime` are types of their own (their RFC 3339 text in another format); TOML has no null, so a write refuses one unless `.nulls = .omit`; `toml.Value` holds any document. The writer puts a table's values before its tables, arrays of tables as `[[sections]]`, and its output reads as TOML 1.0 and 1.1. Checked against toml-test's 1.0.0 and 1.1.0 lists (decoder, encoder and invalid documents, nothing skipped).
+- `core.Context.scratch`: working storage on an allocator of the format's choosing, charged to the operation's allocation budget and given back before it ends, apart from the result.
+- `Access.Format` on both directions: a codec whose spelling is a format's own asks which format it is in.
+- Fuzz properties for the JSON value read from the front of a buffer (it ends inside the bytes, and alone reads again), for the bridge to `std.json.Value` (it reads exactly what strand's own `Value` reads), for a number in a CSV field or a form value (it reads as its JSON spelling says) and for percent-decoding: the parsers of untrusted input preflight reported without one.
 
 ### Changed
 

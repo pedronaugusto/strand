@@ -875,6 +875,9 @@ fn PolicyAccess(comptime Backend: type, comptime policy: descriptor.Field) type 
         used: bool = false,
         complete: bool = true,
         pub const Error = ctx.DecodeError || Backend.Error;
+        /// The format being read: a codec whose spelling is a format's own
+        /// (a TOML date, tagged in TOML and text elsewhere) asks which it is.
+        pub const Format = Backend.Format;
         const Self = @This();
         /// Inspection does not consume or expose the backend. The codec must
         /// still consume exactly one value through bounded access.
@@ -1041,8 +1044,8 @@ fn PolicyAccess(comptime Backend: type, comptime policy: descriptor.Field) type 
         pub fn chargeWork(self: *Self, n: usize) ctx.DecodeError!void {
             try self.cursor.context.chargeWork(n);
         }
-        pub fn raw(self: *Self, comptime Format: type) (ctx.DecodeError || Backend.Error)![]const u8 {
-            if (Backend.Format != Format) @compileError("raw format brand does not match the backend");
+        pub fn raw(self: *Self, comptime Brand: type) (ctx.DecodeError || Backend.Error)![]const u8 {
+            if (Backend.Format != Brand) @compileError("raw format brand does not match the backend");
             if (self.used) return error.CustomRejected;
             self.used = true;
             const start = if (self.cursor.pending != null) self.cursor.pending_start else self.cursor.backend.offset();

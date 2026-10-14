@@ -238,6 +238,14 @@ pub const Context = struct {
         const self: *Context = @ptrCast(@alignCast(raw)); // safe: allocator's pointer is its live Context.
         self.storage.rawFree(memory, alignment, address);
     }
+    /// An allocator for a format's working storage, which it gives back
+    /// before the operation ends: taken from `backing`, never from the
+    /// result's storage, and charged to this operation's allocation budget as
+    /// the result's memory is. What is given back is not refunded, so the
+    /// budget bounds all the memory the operation asked for.
+    pub fn scratch(self: *Context, backing: std.mem.Allocator) Scratch {
+        return .{ .context = self, .backing = backing };
+    }
     pub fn reject(self: *Context, code: u32) error{CustomRejected} {
         if (self.diagnostics) |d| d.custom_code = code;
         return error.CustomRejected;
@@ -252,6 +260,52 @@ pub const Context = struct {
         const copy = try self.alloc(u8, bytes.len);
         @memcpy(copy, bytes);
         return copy;
+    }
+};
+
+/// Working storage charged to an operation (`Context.scratch`). A request
+/// past the budget fails as the backing allocator's own failure does, and
+/// marks the context, so that the operation reports `AllocationLimit`.
+pub const Scratch = struct {
+    context: *Context,
+    backing: std.mem.Allocator,
+    pub fn allocator(self: *Scratch) std.mem.Allocator {
+        return .{ .ptr = self, .vtable = &.{ .alloc = allocate, .resize = resize, .remap = remap, .free = release } };
+    }
+    fn charge(self: *Scratch, n: usize) ?bounded.Budget(usize).Reservation {
+        return self.context.allocation_budget.reserve(n) catch {
+            self.context.allocation_limited = true;
+            return null;
+        };
+    }
+    fn allocate(raw: *anyopaque, n: usize, alignment: std.mem.Alignment, address: usize) ?[*]u8 {
+        const self: *Scratch = @ptrCast(@alignCast(raw)); // safe: allocator's pointer is its live Scratch.
+        var reservation = self.charge(n) orelse return null;
+        return self.backing.rawAlloc(n, alignment, address) orelse {
+            reservation.release();
+            return null;
+        };
+    }
+    fn resize(raw: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, address: usize) bool {
+        const self: *Scratch = @ptrCast(@alignCast(raw)); // safe: allocator's pointer is its live Scratch.
+        if (new_len <= memory.len) return self.backing.rawResize(memory, alignment, new_len, address);
+        var reservation = self.charge(new_len - memory.len) orelse return false;
+        if (self.backing.rawResize(memory, alignment, new_len, address)) return true;
+        reservation.release();
+        return false;
+    }
+    fn remap(raw: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, address: usize) ?[*]u8 {
+        const self: *Scratch = @ptrCast(@alignCast(raw)); // safe: allocator's pointer is its live Scratch.
+        if (new_len <= memory.len) return self.backing.rawRemap(memory, alignment, new_len, address);
+        var reservation = self.charge(new_len - memory.len) orelse return null;
+        return self.backing.rawRemap(memory, alignment, new_len, address) orelse {
+            reservation.release();
+            return null;
+        };
+    }
+    fn release(raw: *anyopaque, memory: []u8, alignment: std.mem.Alignment, address: usize) void {
+        const self: *Scratch = @ptrCast(@alignCast(raw)); // safe: allocator's pointer is its live Scratch.
+        self.backing.rawFree(memory, alignment, address);
     }
 };
 

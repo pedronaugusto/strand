@@ -77,6 +77,12 @@ pub const layers: []const gantry.rules.Layer = &.{
     .{ .name = "MessagePack values", .patterns = &.{ "src/msgpack/codecs.zig", "src/msgpack/Value.zig" } },
     .{ .name = "MessagePack module", .patterns = &.{"src/msgpack/api.zig"} },
     .{ .name = "MessagePack facade", .patterns = &.{"src/msgpack.zig"} },
+    .{ .name = "TOML text", .patterns = &.{ "src/toml/text.zig", "src/toml/number.zig", "src/toml/temporal.zig" } },
+    .{ .name = "TOML syntax", .patterns = &.{"src/toml/syntax.zig"} },
+    .{ .name = "TOML wire", .patterns = &.{ "src/toml/Decoder.zig", "src/toml/Encoder.zig" } },
+    .{ .name = "TOML values", .patterns = &.{ "src/toml/codecs.zig", "src/toml/Value.zig" } },
+    .{ .name = "TOML module", .patterns = &.{"src/toml/api.zig"} },
+    .{ .name = "TOML facade", .patterns = &.{"src/toml.zig"} },
     .{ .name = "public", .patterns = &.{
         "src/strand.zig",
     } },

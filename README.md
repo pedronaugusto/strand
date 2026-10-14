@@ -1,7 +1,7 @@
 # strand
 
 strand reads and writes Zig values as JSON, JSON Lines, ZON, URL-encoded forms,
-CSV, CBOR and MessagePack, through one mapping core that every format shares. Zig 0.17.0 is required.
+CSV, CBOR, MessagePack and TOML, through one mapping core that every format shares. Zig 0.17.0 is required.
 
 A value of any plain Zig type is parsed straight into that type, borrowed from
 the input, copied into an owner of its own, or put on an arena the caller holds,
@@ -25,8 +25,8 @@ git+https://github.com/pedronaugusto/strand`, then obtain the `strand` module th
 settings.
 
 The build exposes one module, `strand`, whose namespaces are `strand.core`,
-`strand.json`, `strand.jsonl`, `strand.zon`, `strand.urlencoded`, `strand.csv` and
-`strand.cbor`. Zig analyses only what a program
+`strand.json`, `strand.jsonl`, `strand.zon`, `strand.urlencoded`, `strand.csv`,
+`strand.cbor`, `strand.msgpack` and `strand.toml`. Zig analyses only what a program
 names, so a program that names only `strand.json` compiles no JSON Lines or
 airlock code.
 
@@ -317,6 +317,63 @@ timestamp extension (type -1) in all three forms, nanoseconds checked.
 allocator, and refuses a key given twice: strand's own profile, as MessagePack defines
 none. A tuple of scalars is read and written with no allocation at all.
 
+## TOML
+
+`strand.toml` reads TOML 1.1.0, or 1.0.0 with `.version = .v1_0`, and writes documents
+both read. `parse`, `parseOwned`, `parseLeaky` and `write` keep the other formats'
+limits, ownership and field policy. A document is read whole before its first value is
+handed on, since TOML writes a table in parts (headers, dotted keys, arrays of tables),
+and every rule about defining a table is checked as it is read: a key given twice, a
+table defined twice, a table added to an inline one, a static array extended by
+`[[...]]` are refused whatever the type asks. Integers are TOML's signed 64 bits and
+floats binary64, both refused past their range rather than rounded; an integer reads
+where a float belongs. The four kinds of date and time are types of their own,
+`toml.OffsetDateTime`, `toml.LocalDateTime`, `toml.LocalDate` and `toml.LocalTime`,
+never one read as another or as text, a fraction kept to the nanosecond (finer digits
+truncated, as TOML says); in another format each is its RFC 3339 text. TOML has no
+null: an optional is absent, and a write refuses a null unless `.nulls = .omit` leaves
+it out. `toml.Value` holds any document with its distinctions. The writer, on the
+allocator given, puts a table's values before its tables, each table under its
+`[header]`, an array of tables as `[[sections]]`, anything else inline.
+[examples/config.zig](examples/config.zig) reads a service's configuration.
+
+<!-- BEGIN GENERATED zig build docs -- toml -->
+```zig
+const strand = @import("strand");
+
+const text =
+    \\name = "relay"
+    \\started = 2026-10-14 09:30:00+01:00
+    \\listen = { host = "0.0.0.0", port = 8_443 }
+    \\
+    \\[[jobs]]
+    \\kind = "backup"
+    \\path = "/var/relay"
+    \\
+    \\[[jobs]]
+    \\kind = "report"
+    \\to = "ops@example.com"
+;
+var config = try strand.toml.parse(Config, gpa, text, .{});
+defer config.deinit();
+std.debug.assert(config.value.listen.port == 8443);
+std.debug.assert(config.value.started.offset_minutes == 60);
+std.debug.assert(config.value.jobs[0].backup.keep == 7);
+
+// Written back: values first, then each table under its header. TOML
+// has no null, so a null optional is left out only when asked.
+var out: std.Io.Writer.Allocating = .init(gpa);
+try strand.toml.write(&out.writer, config.value, .{ .allocator = gpa, .nulls = .omit });
+std.debug.assert(std.mem.startsWith(u8, out.written(), "name = \"relay\"\nstarted = 2026-10-14T09:30:00+01:00\n\n[listen]\n"));
+
+// Any document as a value, its four kinds of date and time kept apart.
+var value = try strand.toml.parse(strand.toml.Value, gpa, "day = 2026-10-14\nat = 07:30", .{});
+defer value.deinit();
+std.debug.assert(value.value.get("day").? == .local_date);
+std.debug.assert(value.value.get("at").?.local_time.hour == 7);
+```
+<!-- END GENERATED -->
+
 ## Design
 
 [docs/design.md](docs/design.md) says how the parts are layered, what the core
@@ -339,7 +396,7 @@ and nonzero checks included.
 - It does not index a log or seek to a line by number.
 - It does not read pretty records backwards or decompress a stream.
 - It does not watch the filesystem or flush on a timer.
-- TOML and YAML are later work.
+- YAML is later work.
 
 ## Built with
 

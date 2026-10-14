@@ -63,6 +63,13 @@
       "imports": [
         "strand"
       ]
+    },
+    "zig build docs -- toml": {
+      "source": "examples/config.zig",
+      "region": "toml",
+      "imports": [
+        "strand"
+      ]
     }
   },
   "extra_checks": [

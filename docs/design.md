@@ -2,7 +2,7 @@
 
 Strand is one build module, `strand`, whose namespaces are `strand.core`,
 `strand.json`, `strand.jsonl`, `strand.zon`, `strand.urlencoded`, `strand.csv`,
-`strand.cbor` and `strand.msgpack`; the root names only those eight.
+`strand.cbor`, `strand.msgpack` and `strand.toml`; the root names only those nine.
 There is one API per thing: JSON is parsed and written by `strand.json` alone,
 and JSON Lines is framing around it, not a codec of its own. A separate build
 module buys something only where it keeps dependencies from users who do not need
@@ -29,7 +29,8 @@ JSON's number grammar alone, since a form's number is spelled as JSON spells one
 CSV is laid out the same way and reads rows on JSONL's line reader. CBOR and
 MessagePack are bytes → wire → values → API/facade each, and share one kernel below
 them, the map sorting of their deterministic profiles (`src/binary/sorted.zig`); no
-grammar is shared.
+grammar is shared. TOML is text → syntax → wire → values → API/facade, and imports
+JSON's exact number kernels alone.
 Mapping consumes immediate events, including JSON number lexemes; it requires no
 DOM or token tape. JSONL framing shares its line/drain boundary decision between
 the pull reader and the push decoder, and both parse a record with `json`.
@@ -426,6 +427,56 @@ the deterministic profile twice the same) and over arbitrary bytes (read, writte
 no more bytes, read again as the same value). A cross-check against rmpv decoded 200,000
 generated and damaged inputs: both read 71,016 to the same values and the same bytes,
 both refused 128,917, and every disagreement was 0xc1, which rmpv reads as nil.
+
+## TOML
+
+A TOML table is not written in one piece: `[a]` then `[b]` then `[a.c]`, dotted keys
+that add to a table line by line, arrays of tables that each header extends. A value
+cannot be handed on before its table is complete, so the decoder reads the whole
+document first (`src/toml/syntax.zig`) into one array of 28-byte nodes linked into a
+tree (a container's first member and count, each node's next sibling) and walks it.
+The rules for defining tables are checked as it is read, and refused as syntax whatever
+the type asks: a key given twice; a table defined by a second header, or by a header
+after dotted keys made it; dotted keys reaching into a table a header defined; anything
+added to an inline table or to a static array. Every key is found through one index of
+(table, key), each lookup charged as work, so dotted keys and implicit tables cost what
+they reach. The nodes, the index and the decoded strings are working storage on the
+caller's allocator (the caller's arena in `parseLeaky`), charged to the operation's
+allocation budget through `core.Context.scratch` and given back when the parse ends: a
+decoded string is a transient span, which the core copies into the result where it
+keeps it, and a plain one is borrowed from the input. A document is held below 4 GiB,
+the reach of a node's 32-bit positions.
+
+A place in the walk is a node and a step at it (its key, its value, the text of its
+date, its end), so a union tagged inside its table is read by walking from its place
+again; a failure's offset is where its node was written. A string is text, an integer
+or a float its spelling with `+` and `_` taken out, converted by the format's
+`parseInteger` and `parseFloat` (TOML's signed 64 bits; a decimal float rounded once,
+into its destination, by JSON's exact kernels), and a date or a time the core's `tag`
+naming its kind, then its spelling as text. A typed destination never asks for a tag,
+so a date is refused where text belongs; `toml.OffsetDateTime`, `toml.LocalDateTime`,
+`toml.LocalDate` and `toml.LocalTime` ask for theirs, and in another format, which the
+access names (`Access.Format`), read and write their RFC 3339 text. TOML 1.0 is the same
+reader with four differences turned off: inline tables across lines and with a
+trailing comma, `\e` and `\xHH`, times without seconds; and it lets a lone carriage
+return stand in a multiline string, which 1.1 refuses.
+
+The encoder holds the document as a tree on the allocator the write is given, since a
+table's values must come before the tables under it and a type's members come in
+declaration order, and writes it when the root closes: values as `key = value` lines,
+then each table under its header (one with no values of its own but tables under it is
+left to their headers), an array of tables alone as `[[sections]]`, anything else
+inline on one line. Strings are basic strings with every control character escaped,
+floats the shortest spelling that reads back as the same binary64, with a fraction or
+an exponent, dates and times RFC 3339's spelling with seconds. All of it reads as TOML
+1.0 and 1.1. A null is refused unless the write leaves null optionals out.
+
+The evidence is toml-test (vendored at `src/corpus/toml` with its MIT license), every
+file its 1.0.0 and 1.1.0 lists name, nothing skipped: each valid document read as the
+value its JSON says, each invalid one refused, and each valid document's value written
+and read back as TOML 1.0 to the same value. Properties write generated documents and
+read them back in both versions, cut them anywhere, and read any bytes (examples with
+a few edits) and write back whatever is read.
 
 ## Format accelerators
 

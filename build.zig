@@ -220,6 +220,16 @@ pub fn dev(b: *std.Build, tools: type) void {
         const zon_smoke = b.addRunArtifact(zon_bench);
         zon_smoke.addArg("--smoke");
         test_step.dependOn(&zon_smoke.step);
+        const toml_bench = b.addExecutable(.{
+            .name = "strand-toml-bench",
+            .root_module = b.createModule(.{ .root_source_file = p.path("bench/toml.zig"), .target = target, .optimize = bench_mode, .imports = benchImports(b, target, bench_mode) }),
+        });
+        toml_bench.root_module.addImport("shakedown", dependency.module("shakedown"));
+        b.step("toml-bench-build", "Compile TOML observations").dependOn(&b.addInstallArtifact(toml_bench, .{}).step);
+        check_step.dependOn(&toml_bench.step);
+        const toml_smoke = b.addRunArtifact(toml_bench);
+        toml_smoke.addArg("--smoke");
+        test_step.dependOn(&toml_smoke.step);
         const s2_smoke = b.addRunArtifact(s2_bench);
         s2_smoke.addArg("--smoke");
         test_step.dependOn(&s2_smoke.step);
@@ -315,6 +325,7 @@ const example_sources = [_][]const u8{
     "examples/zon.zig",
     "examples/form.zig",
     "examples/table.zig",
+    "examples/config.zig",
 };
 
 // Build-only tooling belongs to a root invocation, never a consumer's dependency graph.

@@ -21,6 +21,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A string's end is looked for in its first eight bytes in line before the vector search is called, and a number's digits are read eight at a time: keys and short strings, the bulk of a record's tokens, cost less in every JSON read.
 - Dev pins preflight 0.5.3.
 
+### Fixed
+
+- The test of framing's vector lane searches is skipped on a machine with no vectors (riscv64 without V), where framing reads a byte at a time and there are no lanes to count; it failed there.
+
 ## [0.10.4] - 2026-10-14
 
 ### Added

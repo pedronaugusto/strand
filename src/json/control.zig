@@ -221,6 +221,8 @@ test "indexOfControl reads a line by the vector the way it reads it by the byte"
 
 // Long payloads have many empty vectors and only one terminator vector.
 test "framing searches lanes only in a vector that holds a control byte" {
+    // A machine with no vectors (riscv64 without V) frames a byte at a time.
+    if (std.simd.suggestVectorLength(u8) == null) return error.SkipZigTest;
     var counts: work.Counts = .{};
     work.observe(&counts);
     defer work.observe(null);

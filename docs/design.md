@@ -2,7 +2,8 @@
 
 Strand is one build module, `strand`, whose namespaces are `strand.core`,
 `strand.json`, `strand.jsonl`, `strand.zon`, `strand.urlencoded`, `strand.csv`,
-`strand.cbor`, `strand.msgpack` and `strand.toml`; the root names only those nine.
+`strand.cbor`, `strand.msgpack`, `strand.toml` and `strand.yaml`; the root names only
+those ten.
 There is one API per thing: JSON is parsed and written by `strand.json` alone,
 and JSON Lines is framing around it, not a codec of its own. A separate build
 module buys something only where it keeps dependencies from users who do not need
@@ -30,7 +31,9 @@ CSV is laid out the same way and reads rows on JSONL's line reader. CBOR and
 MessagePack are bytes → wire → values → API/facade each, and share one kernel below
 them, the map sorting of their deterministic profiles (`src/binary/sorted.zig`); no
 grammar is shared. TOML is text → syntax → wire → values → API/facade, and imports
-JSON's exact number kernels alone.
+JSON's exact number kernels alone. YAML is text (characters and the core schema) →
+events → nodes → wire → values → API/facade, and imports JSON's exact number kernels
+alone.
 Mapping consumes immediate events, including JSON number lexemes; it requires no
 DOM or token tape. JSONL framing shares its line/drain boundary decision between
 the pull reader and the push decoder, and both parse a record with `json`.
@@ -477,6 +480,86 @@ value its JSON says, each invalid one refused, and each valid document's value w
 and read back as TOML 1.0 to the same value. Properties write generated documents and
 read them back in both versions, cut them anywhere, and read any bytes (examples with
 a few edits) and write back whatever is read.
+
+## YAML
+
+YAML 1.2 is read in three steps. The scanner (`src/yaml/scanner.zig`) makes tokens of
+the text in libyaml's shape: indentation becomes the starts and ends of block
+collections, and an implicit key is found when the `:` after it is, then put before
+the tokens it was made of. It is held to YAML 1.2 where libyaml reads 1.1: an anchor is
+any characters but white space and flow indicators; a `:` inside a plain scalar in a
+flow collection is text unless a space or a flow indicator follows it; a `:` right
+after a JSON-like key (a quoted scalar, a flow collection) is a value indicator even
+with no space after it; a tab is white space between tokens and never indentation (no
+block collection starts after one, and a line's indentation is its spaces alone); a
+block collection starts only at the start of a line or after `- `, `? ` or a `: ` that
+starts its line, never after `key: ` or `---`; the lines of a quoted or plain scalar
+and of a flow collection inside a block are indented past it; a block scalar's leading
+empty line is never indented past its first line of content. The parser
+(`src/yaml/parser.zig`) makes events of the tokens in libyaml's shape too, a stack of
+states, with the rules for documents of YAML 1.2: a bare document after `...`, no
+directive after a document that did not end with `...`, a key in a flow mapping that
+runs over lines and its `:` on a line of its own. Every case of yaml-test-suite reads
+as the events its `test.event` gives, and every invalid one is refused.
+
+The events are read into nodes (`src/yaml/document.zig`) before the first value is
+handed on, because an alias repeats a node that came before: a collection is followed
+by its members and knows where they end, and an alias names the node its anchor is on,
+so the walk repeats that node by going back to it. A node is 20 bytes; the nodes and
+the decoded bytes are working storage charged through `core.Context.scratch` and given
+back when the parse ends, and a decoded string is a transient span the core copies
+where it keeps it. Each collection also knows how many nodes a walk of it reads with
+its aliases repeated, so the whole stream's expansion is held to the item limit as it
+is read: a document whose aliases of aliases would make a billion nodes is refused
+before anything is made, and walking an alias charges its weight as work before it is
+walked. An alias to an anchor never set, or set on a node still open (which would
+repeat itself without end), is refused, and anchors are a document's own. A place in
+the walk is a node, so a union tagged inside its mapping is read by walking from its
+place again, through an alias as well.
+
+What the core schema lacks is refused as the stream is read. A tag must be one of its
+own, `!!str`, `!!int`, `!!float`, `!!bool`, `!!null`, `!!seq` and `!!map`, however it is
+spelled (through a `%TAG` handle, or verbatim), or the non-specific `!`: a local tag
+such as `!Ref` or YAML 1.1's `!!binary`, `!!set` and `!!omap` would make a value of a
+type strand does not read, and dropping it would read the value as something it is
+not. A tagged scalar must be what its tag says. A mapping's scalar keys are each given
+once, compared as the values they are (`a` and `"a"`, `1` and `0x1`, `~` and `null` are
+the same key; `1` and `"1"` are not); a key that is a collection is not compared.
+
+A plain scalar is resolved where it is read, as YAML lets an application resolve one:
+when the type asks for text, a number, a boolean or a unit and the spelling is one, it
+is that; otherwise it is what the core schema says (null, a boolean, an integer, a
+float, else a string), which is also what `yaml.Value` and a skipped value get. A
+quoted or block scalar is always a string. So a string field reads `1.10` as written
+and a float field as 1.1, a null is null only where an optional is read, and `yes` is
+never a boolean. The core asks a map's key for the key's own type (`Pairs(u16, ...)`
+reads `0x10` as 16), which the core now sets before it looks at the key. A number is
+handed on as its spelling and converted by the format's `parseInteger` and
+`parseFloat`: decimal, `0o` and `0x` integers of any width the type has, and floats
+rounded once by JSON's exact kernels; a `!!float` written as an integer is given a
+float's spelling as it is read, so that it reads as a float.
+
+`parse` reads a stream's one document (none is an empty document, null; a second is
+refused where it starts) and `parseStream` reads every document as one element of a
+slice. The writer is streaming: block mappings and sequences indented by two, the
+first member of a collection inside a sequence's entry on the entry's line, an empty
+collection as `{}` or `[]`, a key that is a collection in flow style after `? `, as is a
+key too long for an implicit one. A string is plain only where it reads back as the
+same string under the core schema (and in block or flow context as it stands), and
+double-quoted otherwise, every character that is not printable escaped. A float is the
+shortest spelling that reads back as the same binary64, with a fraction or an
+exponent, or `.inf`, `-.inf`, `.nan`. A map's keys are checked for one given twice as
+the reader compares them. The writer allocates nothing unless a value nests past 64
+levels or a map has more than 128 keys; then it needs `WriteOptions.allocator`.
+
+The evidence is yaml-test-suite (the data-2022-01-17 release, vendored at
+`src/corpus/yaml` with its MIT license): all 402 cases, each valid one read as its
+events and each invalid one refused; each valid case with JSON read as `yaml.Value` as
+its JSON says (263), written and read back as the same values, apart from the 16 whose
+tags the core schema lacks, which are refused (`UnsupportedValue`) and listed by name.
+Properties write generated values (keys of any kind) and read them back, cut them
+anywhere, and read any bytes (examples with a few edits) in all three ownerships and
+write back whatever is read.
 
 ## Format accelerators
 

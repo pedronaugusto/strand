@@ -70,6 +70,13 @@
       "imports": [
         "strand"
       ]
+    },
+    "zig build docs -- yaml": {
+      "source": "examples/deploy.zig",
+      "region": "yaml",
+      "imports": [
+        "strand"
+      ]
     }
   },
   "extra_checks": [

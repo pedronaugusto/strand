@@ -83,6 +83,13 @@ pub const layers: []const gantry.rules.Layer = &.{
     .{ .name = "TOML values", .patterns = &.{ "src/toml/codecs.zig", "src/toml/Value.zig" } },
     .{ .name = "TOML module", .patterns = &.{"src/toml/api.zig"} },
     .{ .name = "TOML facade", .patterns = &.{"src/toml.zig"} },
+    .{ .name = "YAML text", .patterns = &.{ "src/yaml/scanner.zig", "src/yaml/schema.zig" } },
+    .{ .name = "YAML events", .patterns = &.{"src/yaml/parser.zig"} },
+    .{ .name = "YAML nodes", .patterns = &.{"src/yaml/document.zig"} },
+    .{ .name = "YAML wire", .patterns = &.{ "src/yaml/Decoder.zig", "src/yaml/Encoder.zig" } },
+    .{ .name = "YAML values", .patterns = &.{"src/yaml/Value.zig"} },
+    .{ .name = "YAML module", .patterns = &.{"src/yaml/api.zig"} },
+    .{ .name = "YAML facade", .patterns = &.{"src/yaml.zig"} },
     .{ .name = "public", .patterns = &.{
         "src/strand.zig",
     } },

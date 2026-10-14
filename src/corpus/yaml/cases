@@ -1,0 +1,402 @@
+229Q	j	Spec Example 2.4. Sequence of Mappings
+236B	e	Invalid value after mapping
+26DV	j	Whitespace around colon in mappings
+27NA	j	Spec Example 5.9. Directive Indicator
+2AUY	j	Tags in Block Sequence
+2CMS	e	Invalid mapping in plain multiline
+2EBW	j	Allowed characters in keys
+2G84/00	e	Literal modifers
+2G84/01	e	Literal modifers
+2G84/02	j	Literal modifers
+2G84/03	j	Literal modifers
+2JQS	-	Block Mapping with Missing Keys
+2LFX	j	Spec Example 6.13. Reserved Directives [1.3]
+2SXE	j	Anchors With Colon in Name
+2XXW	j	Spec Example 2.25. Unordered Sets
+33X3	j	Three explicit integers in a block sequence
+35KP	j	Tags for Root Objects
+36F6	j	Multiline plain scalar with empty line
+3ALJ	j	Block Sequence in Block Sequence
+3GZX	j	Spec Example 7.1. Alias Nodes
+3HFZ	e	Invalid content after document end marker
+3MYT	j	Plain Scalar looking like key, comment, anchor and tag
+3R3P	j	Single block sequence with anchor
+3RLN/00	j	Leading tabs in double quoted
+3RLN/01	j	Leading tabs in double quoted
+3RLN/02	j	Leading tabs in double quoted
+3RLN/03	j	Leading tabs in double quoted
+3RLN/04	j	Leading tabs in double quoted
+3RLN/05	j	Leading tabs in double quoted
+3UYS	j	Escaped slash in double quotes
+4ABK	-	Flow Mapping Separate Values
+4CQQ	j	Spec Example 2.18. Multi-line Flow Scalars
+4EJS	e	Invalid tabs as indendation in a mapping
+4FJ6	-	Nested implicit complex keys
+4GC6	j	Spec Example 7.7. Single Quoted Characters
+4H7K	e	Flow sequence with invalid extra closing bracket
+4HVU	e	Wrong indendation in Sequence
+4JVG	e	Scalar value with two anchors
+4MUZ/00	j	Flow mapping colon on line after key
+4MUZ/01	j	Flow mapping colon on line after key
+4MUZ/02	j	Flow mapping colon on line after key
+4Q9F	j	Folded Block Scalar [1.3]
+4QFQ	j	Spec Example 8.2. Block Indentation Indicator [1.3]
+4RWC	j	Trailing spaces after flow collection
+4UYU	j	Colon in Double Quoted String
+4V8U	j	Plain scalar with backslashes
+4WA9	j	Literal scalars
+4ZYM	j	Spec Example 6.4. Line Prefixes
+52DL	j	Explicit Non-Specific Tag [1.3]
+54T7	j	Flow Mapping
+55WF	e	Invalid escape in double quoted string
+565N	j	Construct Binary
+57H4	j	Spec Example 8.22. Block Collection Nodes
+58MP	j	Flow mapping edge cases
+5BVJ	j	Spec Example 5.7. Block Scalar Indicators
+5C5M	j	Spec Example 7.15. Flow Mappings
+5GBF	j	Spec Example 6.5. Empty Lines
+5KJE	j	Spec Example 7.13. Flow Sequence
+5LLU	e	Block scalar with wrong indented line after spaces only
+5MUD	j	Colon and adjacent value on next line
+5NYZ	j	Spec Example 6.9. Separated Comment
+5T43	j	Colon at the beginning of adjacent flow scalar
+5TRB	e	Invalid document-start marker in doublequoted tring
+5TYM	j	Spec Example 6.21. Local Tag Prefix
+5U3A	e	Sequence on same Line as Mapping Key
+5WE3	j	Spec Example 8.17. Explicit Block Mapping Entries
+62EZ	e	Invalid block mapping key on same line as previous key
+652Z	j	Question mark at start of flow key
+65WH	j	Single Entry Block Sequence
+6BCT	j	Spec Example 6.3. Separation Spaces
+6BFJ	-	Mapping, key and flow sequence item anchors
+6CA3	j	Tab indented top flow
+6CK3	j	Spec Example 6.26. Tag Shorthands
+6FWR	j	Block Scalar Keep
+6H3V	j	Backslashes in singlequotes
+6HB6	j	Spec Example 6.1. Indentation Spaces
+6JQW	j	Spec Example 2.13. In literals, newlines are preserved
+6JTT	e	Flow sequence without closing bracket
+6JWB	j	Tags for Block Objects
+6KGN	j	Anchor for empty node
+6LVF	j	Spec Example 6.13. Reserved Directives
+6M2F	-	Aliases in Explicit Block Mapping
+6PBE	-	Zero-indented sequences in explicit mapping keys
+6S55	e	Invalid scalar at the end of sequence
+6SLA	j	Allowed characters in quoted mapping key
+6VJK	j	Spec Example 2.15. Folded newlines are preserved for "more indented" and blank lines
+6WLZ	j	Spec Example 6.18. Primary Tag Handle [1.3]
+6WPF	j	Spec Example 6.8. Flow Folding [1.3]
+6XDY	j	Two document start markers
+6ZKB	j	Spec Example 9.6. Stream
+735Y	j	Spec Example 8.20. Block Node Types
+74H7	j	Tags in Implicit Mapping
+753E	j	Block Scalar Strip [1.3]
+7A4E	j	Spec Example 7.6. Double Quoted Lines
+7BMT	j	Node and Mapping Key Anchors [1.3]
+7BUB	j	Spec Example 2.10. Node for “Sammy Sosa” appears twice in this document
+7FWL	j	Spec Example 6.24. Verbatim Tags
+7LBH	e	Multiline double quoted implicit keys
+7MNF	e	Missing colon
+7T8X	j	Spec Example 8.10. Folded Lines - 8.13. Final Empty Lines
+7TMG	j	Comment in flow sequence before comma
+7W2P	j	Block Mapping with Missing Values
+7Z25	j	Bare document after document end marker
+7ZZ5	j	Empty flow collections
+82AN	j	Three dashes and content without space
+87E4	j	Spec Example 7.8. Single Quoted Implicit Keys
+8CWC	j	Plain mapping key ending with colon
+8G76	j	Spec Example 6.10. Comment Lines
+8KB6	j	Multiline plain flow mapping key without value
+8MK2	j	Explicit Non-Specific Tag
+8QBE	j	Block Sequence in Block Mapping
+8UDB	j	Spec Example 7.14. Flow Sequence Entries
+8XDJ	e	Comment in plain multiline value
+8XYN	j	Anchor with unicode character
+93JH	j	Block Mappings in Block Sequence
+93WF	j	Spec Example 6.6. Line Folding [1.3]
+96L6	j	Spec Example 2.14. In the folded scalars, newlines become spaces
+96NN/00	j	Leading tab content in literals
+96NN/01	j	Leading tab content in literals
+98YD	j	Spec Example 5.5. Comment Indicator
+9BXH	j	Multiline doublequoted flow mapping key without value
+9C9N	e	Wrong indented flow sequence
+9CWY	e	Invalid scalar at the end of mapping
+9DXL	j	Spec Example 9.6. Stream [1.3]
+9FMG	j	Multi-level Mapping Indent
+9HCY	e	Need document footer before directives
+9J7A	j	Simple Mapping Indent
+9JBA	e	Invalid comment after end of flow sequence
+9KAX	j	Various combinations of tags and anchors
+9KBC	e	Mapping starting at --- line
+9MAG	e	Flow sequence with invalid comma at the beginning
+9MMA	e	Directive by itself with no document
+9MMW	-	Single Pair Implicit Entries
+9MQT/00	j	Scalar doc with '...' in content
+9MQT/01	ej	Scalar doc with '...' in content
+9SA2	j	Multiline double quoted flow mapping key
+9SHH	j	Spec Example 5.8. Quoted Scalar Indicators
+9TFX	j	Spec Example 7.6. Double Quoted Lines [1.3]
+9U5K	j	Spec Example 2.12. Compact Nested Mapping
+9WXW	j	Spec Example 6.18. Primary Tag Handle
+9YRD	j	Multiline Scalar at Top Level
+A2M4	j	Spec Example 6.2. Indentation Indicators
+A6F9	j	Spec Example 8.4. Chomping Final Line Break
+A984	j	Multiline Scalar in Mapping
+AB8U	j	Sequence entry that looks like two with wrong indentation
+AVM7	j	Empty Stream
+AZ63	j	Sequence With Same Indentation as Parent Mapping
+AZW3	j	Lookahead test cases
+B3HG	j	Spec Example 8.9. Folded Scalar [1.3]
+B63P	e	Directive without document
+BD7L	e	Invalid mapping after sequence
+BEC7	j	Spec Example 6.14. “YAML” directive
+BF9H	e	Trailing comment in multiline plain scalar
+BS4K	e	Comment between plain scalar lines
+BU8L	j	Node Anchor and Tag on Seperate Lines
+C2DT	j	Spec Example 7.18. Flow Mapping Adjacent Values
+C2SP	e	Flow Mapping Key on two lines
+C4HZ	j	Spec Example 2.24. Global Tags
+CC74	j	Spec Example 6.20. Tag Handles
+CFD4	-	Empty implicit key in single pair flow sequences
+CML9	e	Missing comma in flow
+CN3R	j	Various location of anchors in flow sequence
+CPZ3	j	Doublequoted scalar starting with a tab
+CQ3W	e	Double quoted string without closing quote
+CT4Q	j	Spec Example 7.20. Single Pair Explicit Entry
+CTN5	e	Flow sequence with invalid extra comma
+CUP7	j	Spec Example 5.6. Node Property Indicators
+CVW2	e	Invalid comment after comma
+CXX2	e	Mapping with anchor on document start line
+D49Q	e	Multiline single quoted implicit keys
+D83L	j	Block scalar indicator order
+D88J	j	Flow Sequence in Block Mapping
+D9TU	j	Single Pair Block Mapping
+DBG4	j	Spec Example 7.10. Plain Characters
+DC7X	j	Various trailing tabs
+DE56/00	j	Trailing tabs in double quoted
+DE56/01	j	Trailing tabs in double quoted
+DE56/02	j	Trailing tabs in double quoted
+DE56/03	j	Trailing tabs in double quoted
+DE56/04	j	Trailing tabs in double quoted
+DE56/05	j	Trailing tabs in double quoted
+DFF7	-	Spec Example 7.16. Flow Mapping Entries
+DHP8	j	Flow Sequence
+DK3J	j	Zero indented block scalar with line that looks like a comment
+DK4H	e	Implicit key followed by newline
+DK95/00	j	Tabs that look like indentation
+DK95/01	ej	Tabs that look like indentation
+DK95/02	j	Tabs that look like indentation
+DK95/03	j	Tabs that look like indentation
+DK95/04	j	Tabs that look like indentation
+DK95/05	j	Tabs that look like indentation
+DK95/06	ej	Tabs that look like indentation
+DK95/07	j	Tabs that look like indentation
+DK95/08	j	Tabs that look like indentation
+DMG6	e	Wrong indendation in Map
+DWX9	j	Spec Example 8.8. Literal Content
+E76Z	j	Aliases in Implicit Block Mapping
+EB22	e	Missing document-end marker before directive
+EHF6	j	Tags for Flow Objects
+EW3V	e	Wrong indendation in mapping
+EX5H	j	Multiline Scalar at Top Level [1.3]
+EXG3	j	Three dashes and content without space [1.3]
+F2C7	j	Anchors and Tags
+F3CP	j	Nested flow collections on one line
+F6MC	j	More indented lines at the beginning of folded block scalars
+F8F9	j	Spec Example 8.5. Chomping Trailing Lines
+FBC9	j	Allowed characters in plain scalars
+FH7J	-	Tags on Empty Scalars
+FP8R	j	Zero indented block scalar
+FQ7F	j	Spec Example 2.1. Sequence of Scalars
+FRK4	-	Spec Example 7.3. Completely Empty Flow Nodes
+FTA2	j	Single block sequence with anchor and explicit document start
+FUP4	j	Flow Sequence in Flow Sequence
+G4RS	j	Spec Example 2.17. Quoted Scalars
+G5U8	e	Plain dashes in flow sequence
+G7JE	e	Multiline implicit keys
+G992	j	Spec Example 8.9. Folded Scalar
+G9HC	e	Invalid anchor in zero indented sequence
+GDY7	e	Comment that looks like a mapping key
+GH63	j	Mixed Block Mapping (explicit to implicit)
+GT5M	e	Node anchor in sequence
+H2RW	j	Blank lines
+H3Z8	j	Literal unicode
+H7J7	e	Node anchor not indented
+H7TQ	e	Extra words on %YAML directive
+HM87/00	j	Scalars in flow start with syntax char
+HM87/01	j	Scalars in flow start with syntax char
+HMK4	j	Spec Example 2.16. Indentation determines scope
+HMQ5	j	Spec Example 6.23. Node Properties
+HRE5	e	Double quoted scalar with escaped single quote
+HS5T	j	Spec Example 7.12. Plain Lines
+HU3P	e	Invalid Mapping in plain scalar
+HWV9	j	Document-end marker
+J3BT	j	Spec Example 5.12. Tabs and Spaces
+J5UC	j	Multiple Pair Block Mapping
+J7PZ	j	Spec Example 2.26. Ordered Mappings
+J7VC	j	Empty Lines Between Mapping Elements
+J9HZ	j	Spec Example 2.9. Single Document with Two Comments
+JEF9/00	j	Trailing whitespace in streams
+JEF9/01	j	Trailing whitespace in streams
+JEF9/02	j	Trailing whitespace in streams
+JHB9	j	Spec Example 2.7. Two Documents in a Stream
+JKF3	e	Multiline unidented double quoted block key
+JQ4R	j	Spec Example 8.14. Block Sequence
+JR7V	j	Question marks in scalars
+JS2J	j	Spec Example 6.29. Node Anchors
+JTV5	j	Block Mapping with Multiline Scalars
+JY7Z	e	Trailing content that looks like a mapping
+K3WX	j	Colon and adjacent value after comment on next line
+K4SU	j	Multiple Entry Block Sequence
+K527	j	Spec Example 6.6. Line Folding
+K54U	j	Tab after document header
+K858	j	Spec Example 8.6. Empty Scalar Chomping
+KH5V/00	j	Inline tabs in double quoted
+KH5V/01	j	Inline tabs in double quoted
+KH5V/02	j	Inline tabs in double quoted
+KK5P	-	Various combinations of explicit block mappings
+KMK3	j	Block Submapping
+KS4U	e	Invalid item after end of flow sequence
+KSS4	j	Scalars on --- line
+L24T/00	j	Trailing line of spaces
+L24T/01	j	Trailing line of spaces
+L383	j	Two scalar docs with trailing comments
+L94M	j	Tags in Explicit Mapping
+L9U5	j	Spec Example 7.11. Plain Implicit Keys
+LE5A	j	Spec Example 7.24. Flow Nodes
+LHL4	e	Invalid tag
+LP6E	j	Whitespace After Scalars in Flow
+LQZ7	j	Spec Example 7.4. Double Quoted Implicit Keys
+LX3P	-	Implicit Flow Mapping Key on one line
+M29M	j	Literal Block Scalar
+M2N8/00	-	Question mark edge cases
+M2N8/01	-	Question mark edge cases
+M5C3	j	Spec Example 8.21. Block Scalar Nodes
+M5DY	-	Spec Example 2.11. Mapping between Sequences
+M6YH	j	Block sequence indentation
+M7A3	j	Spec Example 9.3. Bare Documents
+M7NX	j	Nested flow collections
+M9B4	j	Spec Example 8.7. Literal Scalar
+MJS9	j	Spec Example 6.7. Block Folding
+MUS6/00	e	Directive variants
+MUS6/01	e	Directive variants
+MUS6/02	j	Directive variants
+MUS6/03	j	Directive variants
+MUS6/04	j	Directive variants
+MUS6/05	j	Directive variants
+MUS6/06	j	Directive variants
+MXS3	j	Flow Mapping in Block Sequence
+MYW6	j	Block Scalar Strip
+MZX3	j	Non-Specific Tags on Scalars
+N4JP	e	Bad indentation in mapping
+N782	e	Invalid document markers in flow style
+NAT4	j	Various empty or newline only quoted strings
+NB6Z	j	Multiline plain value with tabs on empty lines
+NHX8	-	Empty Lines at End of Document
+NJ66	j	Multiline plain flow mapping key
+NKF9	-	Empty keys in block and flow mapping
+NP9H	j	Spec Example 7.5. Double Quoted Line Breaks
+P2AD	j	Spec Example 8.1. Block Scalar Header
+P2EQ	e	Invalid sequene item on same line as previous item
+P76L	j	Spec Example 6.19. Secondary Tag Handle
+P94K	j	Spec Example 6.11. Multi-Line Comments
+PBJ2	j	Spec Example 2.3. Mapping Scalars to Sequences
+PRH3	j	Spec Example 7.9. Single Quoted Lines
+PUW8	j	Document start on last line
+PW8X	-	Anchors on Empty Scalars
+Q4CL	e	Trailing content after quoted value
+Q5MG	j	Tab at beginning of line followed by a flow mapping
+Q88A	j	Spec Example 7.23. Flow Content
+Q8AD	j	Spec Example 7.5. Double Quoted Line Breaks [1.3]
+Q9WF	-	Spec Example 6.12. Separation Spaces
+QB6E	e	Wrong indented multiline quoted scalar
+QF4Y	j	Spec Example 7.19. Single Pair Flow Mappings
+QLJ7	e	Tag shorthand used in documents but only defined in the first
+QT73	j	Comment and document-end marker
+R4YG	j	Spec Example 8.2. Block Indentation Indicator
+R52L	j	Nested flow mapping sequence and mappings
+RHX7	e	YAML directive without document end marker
+RLU9	j	Sequence Indent
+RR7F	j	Mixed Block Mapping (implicit to explicit)
+RTP8	j	Spec Example 9.2. Document Markers
+RXY3	e	Invalid document-end marker in single quoted string
+RZP5	-	Various Trailing Comments [1.3]
+RZT7	j	Spec Example 2.28. Log File
+S3PD	-	Spec Example 8.18. Implicit Block Mapping Entries
+S4GJ	e	Invalid text after block scalar indicator
+S4JQ	j	Spec Example 6.28. Non-Specific Tags
+S4T7	j	Document with footer
+S7BG	j	Colon followed by comma
+S98Z	e	Block scalar with more spaces than first content line
+S9E8	j	Spec Example 5.3. Block Structure Indicators
+SBG9	-	Flow Sequence in Flow Mapping
+SF5V	e	Duplicate YAML directive
+SKE5	j	Anchor before zero indented sequence
+SM9W/00	j	Single character streams
+SM9W/01	-	Single character streams
+SR86	e	Anchor plus Alias
+SSW6	j	Spec Example 7.7. Single Quoted Characters [1.3]
+SU5Z	e	Comment without whitespace after doublequoted scalar
+SU74	e	Anchor and alias as mapping key
+SY6V	e	Anchor before sequence entry on same line
+SYW4	j	Spec Example 2.2. Mapping Scalars to Scalars
+T26H	j	Spec Example 8.8. Literal Content [1.3]
+T4YY	j	Spec Example 7.9. Single Quoted Lines [1.3]
+T5N4	j	Spec Example 8.7. Literal Scalar [1.3]
+T833	e	Flow mapping missing a separating comma
+TD5N	e	Invalid scalar after sequence
+TE2A	j	Spec Example 8.16. Block Mappings
+TL85	j	Spec Example 6.8. Flow Folding
+TS54	j	Folded Block Scalar
+U3C3	j	Spec Example 6.16. “TAG” directive
+U3XV	j	Node and Mapping Key Anchors
+U44R	e	Bad indentation in mapping (2)
+U99R	e	Invalid comma in tag
+U9NS	j	Spec Example 2.8. Play by Play Feed from a Game
+UDM2	j	Plain URL in flow mapping
+UDR7	j	Spec Example 5.4. Flow Collection Indicators
+UGM3	j	Spec Example 2.27. Invoice
+UKK6/00	-	Syntax character edge cases
+UKK6/01	j	Syntax character edge cases
+UKK6/02	-	Syntax character edge cases
+UT92	j	Spec Example 9.4. Explicit Documents
+UV7Q	j	Legal tab after indentation
+V55R	j	Aliases in Block Sequence
+V9D5	-	Spec Example 8.19. Compact Block Mappings
+VJP3/00	e	Flow collections over many lines
+VJP3/01	j	Flow collections over many lines
+W42U	j	Spec Example 8.15. Block Sequence Entry Types
+W4TN	j	Spec Example 9.5. Directives Documents
+W5VH	j	Allowed characters in alias
+W9L4	e	Literal block scalar with more spaces in first line
+WZ62	j	Spec Example 7.2. Empty Content
+X38W	-	Aliases in Flow Objects
+X4QW	e	Comment without whitespace after block scalar indicator
+X8DW	j	Explicit key and value seperated by comment
+XLQ9	j	Multiline scalar that looks like a YAML directive
+XV9V	j	Spec Example 6.5. Empty Lines [1.3]
+XW4D	-	Various Trailing Comments
+Y2GN	j	Anchor with colon in the middle
+Y79Y/000	e	Tabs in various contexts
+Y79Y/001	j	Tabs in various contexts
+Y79Y/002	j	Tabs in various contexts
+Y79Y/003	e	Tabs in various contexts
+Y79Y/004	e	Tabs in various contexts
+Y79Y/005	e	Tabs in various contexts
+Y79Y/006	e	Tabs in various contexts
+Y79Y/007	e	Tabs in various contexts
+Y79Y/008	e	Tabs in various contexts
+Y79Y/009	e	Tabs in various contexts
+Y79Y/010	j	Tabs in various contexts
+YD5X	j	Spec Example 2.5. Sequence of Sequences
+YJV2	e	Dash in flow sequence
+Z67P	j	Spec Example 8.21. Block Scalar Nodes [1.3]
+Z9M4	j	Spec Example 6.22. Global Tag Prefix
+ZCZ6	e	Invalid mapping in plain single line value
+ZF4X	j	Spec Example 2.6. Mapping of Mappings
+ZH7C	j	Anchors in Mapping
+ZK9H	j	Nested top level flow mapping
+ZL4Z	e	Invalid nested mapping
+ZVH3	e	Wrong indented sequence item
+ZWK4	j	Key with anchor after missing explicit mapping value
+ZXT5	e	Implicit key followed by newline and adjacent value

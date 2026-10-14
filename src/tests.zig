@@ -14,8 +14,10 @@ test {
     _ = @import("cbor_test.zig");
     _ = @import("msgpack_test.zig");
     _ = @import("toml_test.zig");
+    _ = @import("yaml_test.zig");
     _ = @import("testing/json_suite.zig");
     _ = @import("testing/toml_suite.zig");
+    _ = @import("testing/yaml_suite.zig");
     _ = @import("testing/fuzz_test.zig");
     _ = @import("tail_test.zig");
     _ = @import("follow_test.zig");
@@ -33,4 +35,5 @@ test {
     _ = @import("cbor/api.zig");
     _ = @import("msgpack/api.zig");
     _ = @import("toml/api.zig");
+    _ = @import("yaml/api.zig");
 }

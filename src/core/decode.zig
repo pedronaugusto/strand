@@ -1230,6 +1230,9 @@ fn PolicyCompoundAccess(comptime Backend: type, comptime policy: descriptor.Fiel
             if (self.count >= policy.max_len) return error.LengthLimit;
             if (self.count >= self.access.cursor.context.limits.container_items) return error.ItemLimit;
             self.key_pending = true;
+            // The key is looked at as what it is read as: a format whose
+            // events follow the type (YAML's plain scalars) makes it that.
+            if (self.access.cursor.pending == null) self.access.cursor.request = typeRequest(T, .{});
             const event = try self.access.cursor.peek();
             if (event == .text) try self.access.cursor.context.span(event.text.bytes.len, true);
             if (event == .bytes) try self.access.cursor.context.span(event.bytes.bytes.len, true);

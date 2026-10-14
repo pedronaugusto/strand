@@ -1,7 +1,7 @@
 # strand
 
 strand reads and writes Zig values as JSON, JSON Lines, ZON, URL-encoded forms,
-CSV, CBOR, MessagePack and TOML, through one mapping core that every format shares. Zig 0.17.0 is required.
+CSV, CBOR, MessagePack, TOML and YAML, through one mapping core that every format shares. Zig 0.17.0 is required.
 
 A value of any plain Zig type is parsed straight into that type, borrowed from
 the input, copied into an owner of its own, or put on an arena the caller holds,
@@ -26,7 +26,7 @@ settings.
 
 The build exposes one module, `strand`, whose namespaces are `strand.core`,
 `strand.json`, `strand.jsonl`, `strand.zon`, `strand.urlencoded`, `strand.csv`,
-`strand.cbor`, `strand.msgpack` and `strand.toml`. Zig analyses only what a program
+`strand.cbor`, `strand.msgpack`, `strand.toml` and `strand.yaml`. Zig analyses only what a program
 names, so a program that names only `strand.json` compiles no JSON Lines or
 airlock code.
 
@@ -374,6 +374,66 @@ std.debug.assert(value.value.get("at").?.local_time.hour == 7);
 ```
 <!-- END GENERATED -->
 
+## YAML
+
+`strand.yaml` reads YAML 1.2 under its core schema and writes block-style documents.
+`parse`, `parseOwned` and `parseLeaky` read a stream's one document (no document is an
+empty one, null; a second is refused), `parseStream` and its owned and arena forms read
+every document, and `write` and `writeStream` write them, all with the other formats'
+limits, ownership and field policy. Block and flow collections, every scalar style,
+directives and multi-document streams are read, and so are anchors and aliases: an
+alias is its anchor's node again. Their expansion is held to the item limit before
+anything is read, so aliases of aliases cannot grow a small document past it. A plain
+scalar is what the field reading it asks for, where its spelling is one (`version: 1.10`
+reads into a string as `1.10` and into a float as 1.1), and otherwise what the core
+schema says: null, a boolean, an integer, a float, else a string. No YAML 1.1 forms:
+`yes`, `on` and `0b1` are strings. A tag the core schema lacks (`!foo`, `!!binary`) is
+refused rather than read with its meaning dropped, and so is a key given twice in a
+mapping. `yaml.Value` holds any document, mapping keys of any kind included. The writer
+quotes a string only where it would read back as something else.
+[examples/deploy.zig](examples/deploy.zig) reads a stream of services.
+
+<!-- BEGIN GENERATED zig build docs -- yaml -->
+```zig
+const strand = @import("strand");
+
+const text =
+    \\name: api
+    \\image: registry.example/api
+    \\version: 1.10        # a string field: read as written
+    \\replicas: 3
+    \\requests: {cpu: 0.25, memory: 128Mi}
+    \\limits: {cpu: 1, memory: 512Mi}
+    \\ports: [8080, 9090]
+    \\---
+    \\name: worker
+    \\image: registry.example/worker
+    \\version: 2.0
+    \\requests: &small {cpu: 0.5, memory: 256Mi}
+    \\limits: *small       # the anchor's mapping again
+    \\debug: true
+;
+var services = try strand.yaml.parseStream(Service, gpa, text, .{});
+defer services.deinit();
+std.debug.assert(services.value.len == 2);
+std.debug.assert(std.mem.eql(u8, services.value[0].version, "1.10"));
+std.debug.assert(services.value[1].limits.cpu == 0.5);
+std.debug.assert(services.value[1].replicas == 1);
+
+// Written back, one document after another: a string that would read
+// as something else is quoted.
+var out: std.Io.Writer.Allocating = .init(gpa);
+try strand.yaml.writeStream(&out.writer, services.value, .{});
+std.debug.assert(std.mem.startsWith(u8, out.written(), "name: api\nimage: registry.example/api\nversion: \"1.10\"\n"));
+
+// Any document as a value, by the core schema: no YAML 1.1 booleans.
+var value = try strand.yaml.parse(strand.yaml.Value, gpa, "on: yes\nretries: 0x10\nratio: .5", .{});
+defer value.deinit();
+std.debug.assert(std.mem.eql(u8, value.value.field("on").?.string, "yes"));
+std.debug.assert(value.value.field("retries").?.integer == 16);
+```
+<!-- END GENERATED -->
+
 ## Design
 
 [docs/design.md](docs/design.md) says how the parts are layered, what the core
@@ -396,7 +456,7 @@ and nonzero checks included.
 - It does not index a log or seek to a line by number.
 - It does not read pretty records backwards or decompress a stream.
 - It does not watch the filesystem or flush on a timer.
-- YAML is later work.
+- It reads no application type from a YAML tag, and does not merge YAML 1.1's `<<` keys.
 
 ## Built with
 
@@ -419,7 +479,7 @@ Development runs through bay.
 
 `bay test` runs the unit suite, scratch tests and examples in Debug by default.
 The suite covers each format's own standard suite (JSONTestSuite, RFC 8785's and the
-cyberphone vectors, RFC 8949's Appendix A, msgpack-test-suite, toml-test), round trips
+cyberphone vectors, RFC 8949's Appendix A, msgpack-test-suite, toml-test, yaml-test-suite), round trips
 through every reader and writer, framing, checked copies, rotation, cancellation and
 malformed records. Properties are shakedown `check` runs of seeded
 cases; `SHAKEDOWN_CASES` and `SHAKEDOWN_SEED` select a larger or a repeated run. `zig

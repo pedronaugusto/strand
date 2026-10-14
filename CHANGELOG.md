@@ -248,6 +248,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A struct's comptime fields are written as members, an anonymous literal's
   constants among them, and a string literal is written as its text; reading a
   record with a comptime field checks the member holds that constant.
+- A `json.Raw` is checked when it is written, with nothing allocated for it, and a
+  line break between its tokens is written as a space, so a record stays one line.
 - A float is written in the shortest spelling that reads back the same: decimals
   from 1e-7 up to 1e21, as JavaScript writes a number, and an exponent outside,
   where decimals run to hundreds of digits.
@@ -265,6 +267,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - A `.pretty` reader no longer starts a record on a first line that is only whitespace (a lone carriage return with `crlf` off), and no longer parses a record that ends with the stream from a line buffer the look for the next line had moved.
 - A character literal cut inside its UTF-8 sequence is refused rather than read past the end of the literal.
+- An integer field narrower than four bits, such as a `u3`, did not compile on the
+  path that reads a number written with a fraction or an exponent.
 - A pointer to an opaque type, such as `*const anyopaque`, stopped the compile inside
   the descriptor's checks with an error about optional opaque types; it is refused as
   having no automatic data meaning, with the path to it.

@@ -418,8 +418,10 @@ and nonzero checks included.
 Development runs through bay.
 
 `bay test` runs the unit suite, scratch tests and examples in Debug by default.
-The suite covers framing, codec agreement with `std.json`, owned copies, rotation,
-cancellation and malformed records. Properties are shakedown `check` runs of seeded
+The suite covers each format's own standard suite (JSONTestSuite, RFC 8785's and the
+cyberphone vectors, RFC 8949's Appendix A, msgpack-test-suite, toml-test), round trips
+through every reader and writer, framing, checked copies, rotation, cancellation and
+malformed records. Properties are shakedown `check` runs of seeded
 cases; `SHAKEDOWN_CASES` and `SHAKEDOWN_SEED` select a larger or a repeated run. `zig
 build test --fuzz` runs the coverage-guided targets until stopped. CI also runs
 `bay lint`.

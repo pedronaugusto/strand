@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.4] - 2026-10-14
+
 ### Added
 
 - `json.intMembersAt`: integer members read off a line's bytes from any offset, each after a `,` (`,"bf":3,"bl":5`), as `leadingIntMembers` reads them from the start.

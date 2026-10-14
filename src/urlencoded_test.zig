@@ -294,3 +294,40 @@ fn anyBytes(_: void, case: *shakedown.Case) anyerror!void {
 test "any bytes are a form or refused, within the limits" {
     try shakedown.check(gpa, {}, anyBytes, .{ .cases = 2000 });
 }
+
+test "fuzz: percent-decoding any bytes is refused at a stray %, or gives what was encoded" {
+    const examples = [_][]const u8{ "plain", "a+b%20c", "%41%7e", "%", "%4", "%zz", "100%25+sure", "\xff%FF" };
+    const property = struct {
+        fn holds(raw: []const u8) !void {
+            const percent = @import("urlencoded/text.zig");
+            // Refused exactly where a `%` lacks its two hexadecimal digits.
+            const stray = for (raw, 0..) |byte, i| {
+                if (byte == '%' and (i + 2 >= raw.len or !std.ascii.isHex(raw[i + 1]) or !std.ascii.isHex(raw[i + 2]))) break true;
+            } else false;
+            const d = percent.decodedLength(raw) catch {
+                try std.testing.expect(stray);
+                return;
+            };
+            try std.testing.expect(!stray);
+            try std.testing.expectEqual(std.mem.findAny(u8, raw, "%+") != null, d.changes);
+            var buffer: [96]u8 = undefined;
+            const decoded = buffer[0..d.len];
+            percent.decode(raw, decoded);
+            if (!d.changes) try std.testing.expectEqualStrings(raw, decoded);
+            // Encoded again, it decodes to the same bytes.
+            var encoded_buffer: [288]u8 = undefined;
+            const encoded = encoded_buffer[0..percent.encodedLength(decoded)];
+            percent.encode(decoded, encoded);
+            const again = try percent.decodedLength(encoded);
+            var again_buffer: [96]u8 = undefined;
+            percent.decode(encoded, again_buffer[0..again.len]);
+            try std.testing.expectEqualStrings(decoded, again_buffer[0..again.len]);
+        }
+        fn body(_: void, case: *shakedown.Case) !void {
+            var buffer: [96]u8 = undefined;
+            try holds(gen.mutated(case.source, &buffer, &examples));
+        }
+    };
+    for (examples) |example| try property.holds(example);
+    try shakedown.check(gpa, {}, property.body, .{});
+}

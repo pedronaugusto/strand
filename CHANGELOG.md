@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-10-14
+
 ### Breaking
 
 - `json.leadingIntMembers`, `json.intMembersAt`, `json.trailingIntMember`, `json.IntMembers` and `json.TrailingInt` are removed. They read integers off a line only in one exact spelling and answered null for any other, so a reader needed a second reader for the rest; `json.Members` reads every spelling.

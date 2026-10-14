@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.3] - 2026-10-14
+
 ### Added
 
 - `strand.yaml`: YAML 1.2 under the core schema, on the core. `parse`, `parseOwned` and `parseLeaky` read a stream's one document, `parseStream` and its owned and arena forms every document, `write` and `writeStream` write them. Block and flow collections, every scalar style, directives, multi-document streams, anchors and aliases are read; aliases' expansion is held to the item limit before anything is read. A plain scalar is what the field reading it asks for where its spelling is one, otherwise the core schema's null, boolean, integer, float or string, and never a YAML 1.1 form. A tag the core schema lacks and a key given twice are refused. `yaml.Value` holds any document, keys of any kind. The writer writes block style and quotes a string only where it would read back as something else. Checked against all 402 cases of yaml-test-suite (data-2022-01-17): events for every valid case, every invalid one refused, and values and a written round trip for every valid case with JSON but the 16 with tags outside the core schema, which are refused.

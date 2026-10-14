@@ -6,7 +6,7 @@ const decoding = @import("Decoder.zig");
 const WireEncoder = @import("Encoder.zig");
 const indent = @import("indent.zig");
 const route = @import("route.zig");
-const leading = @import("leading.zig");
+const object_members = @import("members.zig");
 const control = @import("control.zig");
 const work = @import("work.zig");
 pub const Format = decoding.Dialect(false).Format;
@@ -285,12 +285,11 @@ pub const kindOf = route.kindOf;
 pub const tagOf = route.tagOf;
 pub const memberOf = route.memberOf;
 pub const memberStringOf = route.memberStringOf;
-pub const leadingIntMembers = leading.leadingIntMembers;
-pub const IntMembers = leading.IntMembers;
-pub const intMembersAt = leading.intMembersAt;
-pub const trailingIntMember = leading.trailingIntMember;
-pub const TrailingInt = leading.TrailingInt;
-pub const intOf = leading.intOf;
+pub const Members = object_members.Members;
+pub const Member = object_members.Member;
+pub const MembersOptions = object_members.MembersOptions;
+pub const MembersError = object_members.MembersError;
+pub const intOf = object_members.intOf;
 pub const indexOfControl = control.indexOfControl;
 
 // This root is reached by the test assembly. Name every embedded
@@ -298,7 +297,7 @@ pub const indexOfControl = control.indexOfControl;
 test {
     _ = control;
     _ = indent;
-    _ = leading;
+    _ = object_members;
     _ = route;
     _ = @import("member_scan.zig");
     _ = @import("text.zig");

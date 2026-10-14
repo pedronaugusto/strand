@@ -6,6 +6,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Breaking
+
+- `json.leadingIntMembers`, `json.intMembersAt`, `json.trailingIntMember`, `json.IntMembers` and `json.TrailingInt` are removed. They read integers off a line only in one exact spelling and answered null for any other, so a reader needed a second reader for the rest; `json.Members` reads every spelling.
+
+### Added
+
+- `json.Members`: an object's members read one at a time, on demand, off its bytes, with nothing allocated: each member's name as written, its value's bytes and offsets (the member's start, the value's span, the `,` before it), `Member.is` to compare a name without unescaping a plain one, `Member.which` to say which of several names it is, `Member.nameInto` to unescape one, and `finish` to read to the end and check the bytes are one object. It runs on the decoder every parse uses, with the parser's grammar and limits, for any spelling JSON allows. Property-tested against the parser over objects in every spelling and over any bytes, fuzzed, and held to the parser at each limit's edge.
+
+### Changed
+
+- Every value a parse passes over (an ignored field, a `Raw`, a member `json.Members` is not asked about) is passed over by the decoder itself, checked and charged as before, without an event per token and without unescaping its strings into the operation's storage: a parse that ignores most of a record is faster, and allocates nothing for what it ignores.
+- `json.intOf` reads an integer in one pass over its digits.
+- A string's end is looked for in its first eight bytes in line before the vector search is called, and a number's digits are read eight at a time: keys and short strings, the bulk of a record's tokens, cost less in every JSON read.
+- Dev pins preflight 0.5.3.
+
 ## [0.10.4] - 2026-10-14
 
 ### Added

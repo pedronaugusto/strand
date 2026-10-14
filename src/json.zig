@@ -1,5 +1,5 @@
 //! JSON: bounded parsing into any Zig type, borrowed, owned or on an arena,
-//! checked writing, and reading a line's members off its bytes.
+//! checked writing, and an object's members read one at a time off its bytes.
 const api = @import("json/api.zig");
 pub const Format = api.Format;
 pub const capabilities = api.capabilities;
@@ -25,10 +25,9 @@ pub const kindOf = api.kindOf;
 pub const tagOf = api.tagOf;
 pub const memberOf = api.memberOf;
 pub const memberStringOf = api.memberStringOf;
-pub const leadingIntMembers = api.leadingIntMembers;
-pub const IntMembers = api.IntMembers;
-pub const intMembersAt = api.intMembersAt;
-pub const trailingIntMember = api.trailingIntMember;
-pub const TrailingInt = api.TrailingInt;
+pub const Members = api.Members;
+pub const Member = api.Member;
+pub const MembersOptions = api.MembersOptions;
+pub const MembersError = api.MembersError;
 pub const intOf = api.intOf;
 pub const indexOfControl = api.indexOfControl;

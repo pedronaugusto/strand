@@ -110,10 +110,29 @@ is read, written back as it came (a line break between its tokens as a space, so
 record stays a line), `Raw.null` as a default, `Raw.encode` to make one from a value
 and `raw.parse(T, arena, options)` to read one as a type.
 
-A line can be routed without parsing it: `kindOf` reads its first key, `tagOf` the
-arm of a union it holds, `memberOf` and `memberStringOf` one member wherever it
-is, and `leadingIntMembers` the integers a line opens with, each as a view into
-the line.
+A few fields can be read out of a large JSON value without parsing the rest.
+`json.Members` goes over an object's members one at a time, as they are asked
+for: each member's name, its value as the bytes it is written as, and where both
+lie (the member's start, the value's span, and the `,` before it, so a checksum
+written as a last member covers exactly the bytes before it). It allocates
+nothing, reads any spelling JSON allows (whitespace, escaped names), and checks
+what it reads with the parser's grammar and limits; `member.is("id")` compares a
+name without unescaping it, `member.which(&.{ "id", "kind" })` says which of several
+it is, `json.intOf` reads an integer member, and a reader
+that has what it wants stops, the rest of the line unread. `finish` reads to the
+end and checks the bytes are one object.
+
+```zig
+var members: strand.json.Members = undefined;
+members.init(line, .{});
+while (try members.next()) |member| {
+    if (member.is("seq")) seq = strand.json.intOf(u64, member.value);
+}
+```
+
+A line can also be routed without checking it: `kindOf` reads its first key,
+`tagOf` the arm of a union it holds, and `memberOf` and `memberStringOf` one
+member wherever it is, each as a view into the line.
 
 ## JSON Lines
 

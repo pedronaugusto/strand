@@ -23,6 +23,7 @@ test {
     _ = @import("follow_test.zig");
     _ = @import("versioned_test.zig");
     _ = @import("raw_test.zig");
+    _ = @import("members_test.zig");
     _ = @import("tagging_test.zig");
     _ = @import("clone_test.zig");
     _ = @import("testing/keep_test.zig");

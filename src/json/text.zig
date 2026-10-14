@@ -74,6 +74,18 @@ pub fn special(bytes: []const u8) Special {
     return .{ .at = bytes.len, .non_ascii = non_ascii or (word & high_bits) != 0 };
 }
 
+/// `special` for a run whose interesting byte is likely within its first
+/// eight, as a key's closing quote is: looked for in one word, in line. Null
+/// when the first eight bytes hold none, or there are not eight to read.
+pub inline fn specialNear(bytes: []const u8) ?Special {
+    if (bytes.len < 8) return null;
+    const word = load(bytes);
+    const hits = specialBytes(word);
+    if (hits == 0) return null;
+    const at: usize = @ctz(hits) / 8;
+    return .{ .at = at, .non_ascii = (word & high_bits & below(at)) != 0 };
+}
+
 const ones: u64 = 0x0101010101010101;
 const high_bits: u64 = ones * 0x80;
 inline fn load(bytes: []const u8) u64 {
@@ -233,6 +245,90 @@ pub fn unescape(body: []const u8, out: []u8) usize {
     }
     @memcpy(out[to..][0 .. body.len - from], body[from..]);
     return to + body.len - from;
+}
+
+/// The text a body `end` has checked spells, a byte at a time, with nothing
+/// unescaped anywhere but the escape being read.
+pub const Unescaped = struct {
+    rest: []const u8,
+    pending: [4]u8 = undefined,
+    len: usize = 0,
+    at: usize = 0,
+
+    pub fn next(self: *Unescaped) ?u8 {
+        if (self.at < self.len) {
+            self.at += 1;
+            return self.pending[self.at - 1];
+        }
+        if (self.rest.len == 0) return null;
+        if (self.rest[0] != '\\') {
+            defer self.rest = self.rest[1..];
+            return self.rest[0];
+        }
+        // unreachable: `end` checked every escape in this body.
+        const e = escape(self.rest[1..]) catch unreachable;
+        // unreachable: an escape decodes to a Unicode scalar, never a surrogate half.
+        self.len = std.unicode.utf8Encode(e.scalar, &self.pending) catch unreachable;
+        self.at = 1;
+        self.rest = self.rest[1 + e.len ..];
+        return self.pending[0];
+    }
+};
+
+/// Whether two bodies `end` has checked spell the same text, however each is
+/// escaped.
+pub fn sameText(a: []const u8, b: []const u8) bool {
+    var left: Unescaped = .{ .rest = a };
+    var right: Unescaped = .{ .rest = b };
+    while (true) {
+        const x = left.next();
+        if (x != right.next()) return false;
+        if (x == null) return true;
+    }
+}
+
+/// Whether a body `end` has checked spells `text`, which is taken as it is,
+/// escapes and all. No escape is shorter than what it stands for, so a body
+/// as long as `text` spells it only when it is the same bytes with no escape,
+/// and a shorter one never does; only a longer one is unescaped, a byte at a
+/// time, to be compared.
+pub inline fn spells(body: []const u8, text: []const u8) bool {
+    if (body.len == text.len) return std.mem.eql(u8, body, text) and std.mem.findScalar(u8, text, '\\') == null;
+    if (body.len < text.len) return false;
+    return spellsEscaped(body, text);
+}
+
+fn spellsEscaped(body: []const u8, text: []const u8) bool {
+    var decoded: Unescaped = .{ .rest = body };
+    for (text) |b| if (decoded.next() != b) return false;
+    return decoded.next() == null;
+}
+
+/// How long a body `end` has checked is once unescaped.
+pub fn unescapedLength(body: []const u8) usize {
+    var n: usize = 0;
+    var from: usize = 0;
+    while (std.mem.findScalarPos(u8, body, from, '\\')) |slash| {
+        // unreachable: `end` checked every escape in this body.
+        const e = escape(body[slash + 1 ..]) catch unreachable;
+        // unreachable: an escape decodes to a Unicode scalar, never a surrogate half.
+        n += slash - from + (std.unicode.utf8CodepointSequenceLength(e.scalar) catch unreachable);
+        from = slash + 1 + e.len;
+    }
+    return n + body.len - from;
+}
+
+test spells {
+    try std.testing.expect(spells("seq", "seq"));
+    try std.testing.expect(spells("s\\u0065q", "seq"));
+    try std.testing.expect(spells("\\n", "\n"));
+    try std.testing.expect(!spells("\\n", "\\n"));
+    try std.testing.expect(!spells("se", "seq"));
+    try std.testing.expect(!spells("s\\u0065qq", "seq"));
+    try std.testing.expect(!spells("s\\u0065", "seq"));
+    try std.testing.expect(spells("\\ud83d\\ude00", "\u{1f600}"));
+    try std.testing.expectEqual(@as(usize, 4), unescapedLength("\\ud83d\\ude00"));
+    try std.testing.expect(sameText("\\u0061b", "a\\u0062"));
 }
 
 test special {

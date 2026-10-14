@@ -495,18 +495,23 @@ test "an object written open is the value's bytes, members added, then closed" {
     try empty.close();
     try testing.expectEqualStrings("{\"c\":1,\"d\\\"\":\"x\"}", out.written());
 
-    // And the integers in front of the rest come back off the bytes.
+    // And a member written after the struct's covers the bytes before it.
     out.clearRetainingCapacity();
-    const Head = struct { seq: u64, at: i64 };
     const Line = struct { seq: u64, at: i64, ev: []const u8 };
     var record = try json.writeObjectOpen(&out.writer, Line{ .seq = 42, .at = -1, .ev = "x" }, .{});
+    const covered = out.written().len;
+    try record.member("c", @as(u32, 7));
     try record.close();
-    const head = json.leadingIntMembers(Head, out.written()).?;
-    try testing.expectEqual(Head{ .seq = 42, .at = -1 }, head.value);
-    try testing.expectEqualStrings(",\"ev\":\"x\"}", out.written()[head.end..]);
+    var members: json.Members = undefined;
+    members.init(out.written(), .{});
+    var last: ?json.Member = null;
+    while (try members.next()) |each| last = each;
+    try testing.expect(last.?.is("c"));
+    try testing.expectEqual(covered, last.?.separator);
+    try testing.expectEqual(@as(?u32, 7), json.intOf(u32, last.?.value));
 }
 
-test "leadingIntMembers reads what write writes" {
+test "the members of what write writes read as its fields" {
     const Envelope = struct { seq: u64, at: i64, v: u32, p: u8 };
     var prng: std.Random.DefaultPrng = .init(0x1ead_1e7);
     const random = prng.random();
@@ -514,10 +519,17 @@ test "leadingIntMembers reads what write writes" {
         const want: Envelope = .{ .seq = random.int(u64), .at = random.int(i64), .v = random.int(u32), .p = random.int(u8) };
         var buffer: [256]u8 = undefined;
         var out: std.Io.Writer = .fixed(&buffer);
-        try json.write(&out, want, .{});
-        const got = json.leadingIntMembers(Envelope, out.buffered()).?;
-        try testing.expectEqual(want, got.value);
-        try testing.expectEqual(out.buffered().len - 1, got.end);
+        try json.write(&out, want, .{ .whitespace = if (random.boolean()) .minified else .indent_2 });
+        var got: Envelope = undefined;
+        var members: json.Members = undefined;
+        members.init(out.buffered(), .{});
+        inline for (@typeInfo(Envelope).@"struct".field_names) |name| {
+            const found = (try members.next()).?;
+            try testing.expect(found.is(name));
+            @field(got, name) = json.intOf(@FieldType(Envelope, name), found.value).?;
+        }
+        try testing.expectEqual(want, got);
+        try testing.expectEqual(out.buffered().len, try members.finish());
     }
 }
 

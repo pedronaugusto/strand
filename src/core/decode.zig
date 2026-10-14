@@ -805,6 +805,19 @@ pub fn Cursor(comptime Backend: type) type {
         /// Every ignored value still traverses the complete wire structure.
         pub fn skip(self: *Self) Error!void {
             @setRuntimeSafety(true);
+            // A format that passes over a value itself, checked and charged
+            // as the events below would be, does it without them.
+            if (comptime @hasDecl(Backend, "pass")) if (self.pending == null) {
+                if (self.context.diagnostics) |d| d.offset = self.backend.offset();
+                const passed = self.backend.pass(self.context) catch |err| {
+                    if (self.context.diagnostics) |d| d.offset = self.backend.offset();
+                    return err;
+                };
+                if (passed) {
+                    self.first_event = false;
+                    return;
+                }
+            };
             try self.context.node();
             try self.context.chargeWork(1);
             // Whatever the last request was, an ignored value may be anything.

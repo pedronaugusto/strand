@@ -178,7 +178,7 @@ pub fn Dialect(comptime jsonc: bool) type {
             for (from..self.key_count) |i| {
                 const prior = if (i < self.keys.len) self.keys[i] else self.extra_keys.items[i - self.keys.len];
                 try c.chargeWork(@max(name.len, prior.len));
-                const same = if (self.checking) sameText(name, prior) else std.mem.eql(u8, name, prior);
+                const same = if (self.checking) strings.sameText(name, prior) else std.mem.eql(u8, name, prior);
                 if (same) return error.DuplicateField;
             }
             if (self.key_count < self.keys.len) self.keys[self.key_count] = name else self.extra_keys.append(self.allocator, name) catch |err| return failure(c, err);
@@ -269,6 +269,82 @@ pub fn Dialect(comptime jsonc: bool) type {
             }
             f.state = .value;
             return (try self.key(c, f.check_keys)).text;
+        }
+
+        /// Where one member of the object on top lies: what `memberKey` and
+        /// `pass` find of it, read in one step.
+        pub const MemberSpan = struct {
+            /// The name's body, escapes as written.
+            name: []const u8,
+            /// Whether there is an escape in it.
+            escaped: bool,
+            /// The `,` before the member, or where the object's first member
+            /// begins.
+            separator: usize,
+            value_start: usize,
+            value_end: usize,
+        };
+
+        /// The next member of the object on top, its value passed over as
+        /// `pass` passes over one, or `null` where the object closes, the close
+        /// taken: `memberKey` then `pass`, checked and charged as they are, in
+        /// one step whose position stays in a register for keys, numbers and
+        /// words, the common members of a record.
+        /// `count` is the members read so far, held to `container_items`.
+        pub inline fn passMember(self: *Self, c: *core.Context, count: *usize) Error!?MemberSpan {
+            const f = self.frame();
+            const bytes = self.input;
+            var at = self.at;
+            var separator = at;
+            switch (f.state) {
+                .first => if (at < bytes.len and bytes[at] == '}') {
+                    _ = self.close();
+                    return null;
+                },
+                .member => {},
+                .after => {
+                    if (at >= bytes.len) return error.SyntaxError;
+                    if (bytes[at] == '}') {
+                        _ = self.close();
+                        return null;
+                    }
+                    if (bytes[at] != ',') return error.SyntaxError;
+                    separator = at;
+                    at = self.space(at + 1);
+                    if (jsonc and at < bytes.len and bytes[at] == '}') {
+                        self.at = at;
+                        _ = self.close();
+                        return null;
+                    }
+                },
+                .value => return error.SyntaxError,
+            }
+            // The key.
+            if (at >= bytes.len or bytes[at] != '"') return error.SyntaxError;
+            const body = bytes[at + 1 ..];
+            const found = strings.specialNear(body) orelse strings.special(body);
+            var name_len = found.at;
+            const escaped = !(found.at < body.len and body[found.at] == '"');
+            if (!escaped) {
+                if (found.non_ascii and !std.unicode.utf8ValidateSlice(body[0..found.at])) return error.SyntaxError;
+                try c.span(found.at, true);
+            } else {
+                name_len = (try strings.end(body)).at;
+                try c.span(strings.unescapedLength(body[0..name_len]), true);
+            }
+            const name = body[0..name_len];
+            if (f.check_keys) try self.remember(c, name);
+            if (count.* >= c.limits.container_items) return error.ItemLimit;
+            count.* += 1;
+            try c.node();
+            try c.chargeWork(name_len);
+            at = self.space(at + name_len + 2);
+            if (at >= bytes.len or bytes[at] != ':') return error.SyntaxError;
+            at = self.space(at + 1);
+            // The value.
+            f.state = .after;
+            try self.passAt(c, at);
+            return .{ .name = name, .escaped = escaped, .separator = separator, .value_start = at, .value_end = self.last_end };
         }
 
         /// A key matched against names a schema spells: which of them it is, if any,
@@ -474,6 +550,129 @@ pub fn Dialect(comptime jsonc: bool) type {
             return try self.string(c, false);
         }
 
+        /// Passes over the next value, checked and charged exactly as
+        /// `core.Cursor.skip` checks and charges it through events, without
+        /// making one: an ignored field, a `Raw` and a member of an object
+        /// read on demand go by at the speed of the bytes. Nothing is
+        /// unescaped, so nothing is allocated but the frames past the first
+        /// 128 and the keys remembered to refuse one given twice. False, with
+        /// nothing read, where there is no value to pass, which the event
+        /// path then refuses.
+        pub fn pass(self: *Self, c: *core.Context) Error!bool {
+            if (!try self.toValue()) return false;
+            self.reading();
+            try self.passValue(c);
+            return true;
+        }
+        inline fn passValue(self: *Self, c: *core.Context) Error!void {
+            return self.passAt(c, self.at);
+        }
+        /// The value at `at`, where the cursor is or is about to be: a number or
+        /// a word read with the position in a register, the rest from the cursor.
+        inline fn passAt(self: *Self, c: *core.Context, at: usize) Error!void {
+            const bytes = self.input;
+            try c.node();
+            try c.chargeWork(1);
+            if (at >= bytes.len) return error.SyntaxError;
+            switch (bytes[at]) {
+                '-', '0'...'9' => {
+                    const end = try numberEnd(bytes, at);
+                    if (end - at > c.limits.numeric_bytes) return error.LengthLimit;
+                    try c.chargeWork(end - at);
+                    self.last_end = end;
+                    self.at = self.space(end);
+                },
+                't', 'f', 'n' => {
+                    const spelling: []const u8 = switch (bytes[at]) {
+                        't' => "true",
+                        'f' => "false",
+                        else => "null",
+                    };
+                    if (bytes.len - at < spelling.len or !std.mem.eql(u8, bytes[at..][0..spelling.len], spelling)) return error.SyntaxError;
+                    self.last_end = at + spelling.len;
+                    self.at = self.space(at + spelling.len);
+                },
+                '"' => {
+                    self.at = at;
+                    try self.passString(c);
+                },
+                '{' => {
+                    self.at = at;
+                    try self.passContainer(c, true);
+                },
+                '[' => {
+                    self.at = at;
+                    try self.passContainer(c, false);
+                },
+                else => return error.SyntaxError,
+            }
+        }
+        /// A string passed over, its quote at the cursor: out of line, so that
+        /// the vector registers its search takes are saved only around it.
+        noinline fn passString(self: *Self, c: *core.Context) Error!void {
+            const start = self.at + 1;
+            const body = self.input[start..];
+            const found = strings.specialNear(body) orelse strings.special(body);
+            var len = found.at;
+            var end = found.at;
+            if (found.at < body.len and body[found.at] == '"') {
+                if (found.non_ascii and !std.unicode.utf8ValidateSlice(body[0..found.at])) return error.SyntaxError;
+            } else {
+                end = (try strings.end(body)).at;
+                len = strings.unescapedLength(body[0..end]);
+            }
+            try c.span(len, false);
+            try c.chargeWork(len);
+            self.finish(start + end + 1);
+        }
+        /// An object or an array passed over, the bracket at the cursor.
+        fn passContainer(self: *Self, c: *core.Context, object: bool) Error!void {
+            try c.enter();
+            defer c.leave();
+            try self.push(c, object, object and self.reject_duplicates);
+            self.finish(self.at + 1);
+            var count: usize = 0;
+            if (object) {
+                while (try self.passMember(c, &count)) |_| {}
+            } else {
+                while (try self.passElement(c, &count)) {}
+            }
+        }
+        /// The next element of the array on top passed over, or false where the
+        /// array closes, the close taken.
+        inline fn passElement(self: *Self, c: *core.Context, count: *usize) Error!bool {
+            const f = self.frame();
+            const bytes = self.input;
+            var at = self.at;
+            switch (f.state) {
+                .first => if (at < bytes.len and bytes[at] == ']') {
+                    _ = self.close();
+                    return false;
+                },
+                .member => {},
+                .after => {
+                    if (at >= bytes.len) return error.SyntaxError;
+                    if (bytes[at] == ']') {
+                        _ = self.close();
+                        return false;
+                    }
+                    if (bytes[at] != ',') return error.SyntaxError;
+                    at = self.space(at + 1);
+                    if (jsonc and at < bytes.len and bytes[at] == ']') {
+                        self.at = at;
+                        _ = self.close();
+                        return false;
+                    }
+                },
+                .value => return error.SyntaxError,
+            }
+            if (count.* >= c.limits.container_items) return error.ItemLimit;
+            count.* += 1;
+            f.state = .after;
+            try self.passAt(c, at);
+            return true;
+        }
+
         fn value(self: *Self, c: *core.Context, request: core.Request) Error!core.Event {
             switch (try self.byte()) {
                 '{' => {
@@ -531,7 +730,7 @@ pub fn Dialect(comptime jsonc: bool) type {
             const start = self.at + 1;
             const body = self.input[start..];
             // The common case, a string with no escape, takes one look.
-            const found = strings.special(body);
+            const found = strings.specialNear(body) orelse strings.special(body);
             if (found.at < body.len and body[found.at] == '"') {
                 if (found.non_ascii and !std.unicode.utf8ValidateSlice(body[0..found.at])) return error.SyntaxError;
                 try c.span(found.at, is_key);
@@ -541,7 +740,7 @@ pub fn Dialect(comptime jsonc: bool) type {
             const end = try strings.end(body);
             const escaped = body[0..end.at];
             if (self.checking) {
-                try c.span(unescapedLength(escaped), is_key);
+                try c.span(strings.unescapedLength(escaped), is_key);
                 self.finish(start + end.at + 1);
                 return .{ .bytes = escaped, .lifetime = .borrowed };
             }
@@ -553,60 +752,6 @@ pub fn Dialect(comptime jsonc: bool) type {
             return .{ .bytes = storage[0..n], .lifetime = .owned };
         }
 
-        /// Whether two string bodies `strings.end` has checked spell the same text,
-        /// however each is escaped: compared a byte of text at a time, with nothing
-        /// unescaped anywhere.
-        fn sameText(a: []const u8, b: []const u8) bool {
-            var left: TextBytes = .{ .rest = a };
-            var right: TextBytes = .{ .rest = b };
-            while (true) {
-                const x = left.next();
-                if (x != right.next()) return false;
-                if (x == null) return true;
-            }
-        }
-
-        /// The text a checked string body spells, a byte at a time.
-        const TextBytes = struct {
-            rest: []const u8,
-            pending: [4]u8 = undefined,
-            len: usize = 0,
-            at: usize = 0,
-
-            fn next(self: *TextBytes) ?u8 {
-                if (self.at < self.len) {
-                    self.at += 1;
-                    return self.pending[self.at - 1];
-                }
-                if (self.rest.len == 0) return null;
-                if (self.rest[0] != '\\') {
-                    defer self.rest = self.rest[1..];
-                    return self.rest[0];
-                }
-                // unreachable: `strings.end` checked every escape in this body.
-                const e = strings.escape(self.rest[1..]) catch unreachable;
-                // unreachable: an escape decodes to a Unicode scalar, never a surrogate half.
-                self.len = std.unicode.utf8Encode(e.scalar, &self.pending) catch unreachable;
-                self.at = 1;
-                self.rest = self.rest[1 + e.len ..];
-                return self.pending[0];
-            }
-        };
-
-        /// How long the body of a string `strings.end` has checked is once unescaped.
-        fn unescapedLength(escaped: []const u8) usize {
-            var n: usize = 0;
-            var from: usize = 0;
-            while (std.mem.findScalarPos(u8, escaped, from, '\\')) |slash| {
-                // unreachable: `strings.end` checked every escape in this body.
-                const e = strings.escape(escaped[slash + 1 ..]) catch unreachable;
-                // unreachable: an escape decodes to a Unicode scalar, never a surrogate half.
-                n += slash - from + (std.unicode.utf8CodepointSequenceLength(e.scalar) catch unreachable);
-                from = slash + 1 + e.len;
-            }
-            return n + escaped.len - from;
-        }
-
         /// Where the number that starts at `start` ends; its grammar is checked.
         inline fn numberEnd(bytes: []const u8, start: usize) Error!usize {
             var at = start;
@@ -615,22 +760,36 @@ pub fn Dialect(comptime jsonc: bool) type {
             if (bytes[at] == '0') {
                 at += 1;
             } else if (bytes[at] >= '1' and bytes[at] <= '9') {
-                at += 1;
-                while (at < bytes.len and std.ascii.isDigit(bytes[at])) at += 1;
+                at = digitsEnd(bytes, at + 1);
             } else return error.SyntaxError;
             if (at < bytes.len and bytes[at] == '.') {
-                at += 1;
-                const digits = at;
-                while (at < bytes.len and std.ascii.isDigit(bytes[at])) at += 1;
+                const digits = at + 1;
+                at = digitsEnd(bytes, digits);
                 if (at == digits) return error.SyntaxError;
             }
             if (at < bytes.len and (bytes[at] == 'e' or bytes[at] == 'E')) {
                 at += 1;
                 if (at < bytes.len and (bytes[at] == '+' or bytes[at] == '-')) at += 1;
                 const digits = at;
-                while (at < bytes.len and std.ascii.isDigit(bytes[at])) at += 1;
+                at = digitsEnd(bytes, digits);
                 if (at == digits) return error.SyntaxError;
             }
+            return at;
+        }
+
+        /// Where the run of decimal digits from `from` ends, eight bytes at a
+        /// time where eight are there.
+        inline fn digitsEnd(bytes: []const u8, from: usize) usize {
+            var at = from;
+            while (at + 8 <= bytes.len) : (at += 8) {
+                const x = std.mem.readInt(u64, bytes[at..][0..8], .little) ^ 0x3030303030303030;
+                // A digit is a byte of 0 to 9 now: adding 0x76 leaves its high bit
+                // clear, and sets it in any other (or it was set already). A
+                // carry out of a byte that is no digit only reaches bytes after it.
+                const stops = ((x +% 0x7676767676767676) | x) & 0x8080808080808080;
+                if (stops != 0) return at + @ctz(stops) / 8;
+            }
+            while (at < bytes.len and std.ascii.isDigit(bytes[at])) at += 1;
             return at;
         }
 

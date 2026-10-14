@@ -73,10 +73,32 @@ Scratch is caller-supplied; no global allocator is chosen.
 `writeObjectOpen` leaves a struct's closing brace unwritten, for members the
 caller computes over the bytes so far.
 
+`json.Members` reads an object's members on demand, in the spirit of simdjson's
+On-Demand API: a reader of a few fields of a long line pays for the members up to
+the last one it wants, and nothing after. It is not a tokenizer of its own. It
+drives the JSON decoder every parse uses, in its checking mode (strings validated
+where they lie, never unescaped, keys not remembered), so its grammar and limits are
+the parser's: a member's value is passed over exactly as an ignored field is
+(`Decoder.pass`, which `core.Cursor.skip` takes for every ignored value and `Raw`),
+and the object's punctuation, keys and scalar values are read in one step
+(`Decoder.passMember`) whose position stays in a register. Nothing is allocated: the
+context's allocator fails, nesting is held to the decoder's 128 inline frames
+(`Members.max_depth`), and duplicate names are handed over rather than remembered.
+Names come as written; `Member.is` compares one with a name without unescaping a
+plain one (the decoder says whether a name has an escape as it finds its end),
+`Member.which` picks among names known at compile time with a length check per name,
+and `nameInto` unescapes into the caller's buffer. Offsets are part of
+the answer (the member's start, the value's span, the separator before it), so a
+format that checksums a record up to its last member reads the record once.
+Property tests hold it to the parser: an object generated in every spelling yields
+the members the parser reads, any bytes are taken as an object exactly where a
+parse passing over every member takes them, and each limit holds at its edge as the
+parser's does.
+
 The routing readers (`kindOf`, `tagOf`, `memberOf`, `memberStringOf`,
-`leadingIntMembers`, `indexOfControl`) look at a line's bytes without parsing it.
-They allocate nothing and answer with views into the line; an answer is not a
-claim that the line is valid. `tagOf` reads the same `strand` declaration the
+`indexOfControl`) look at a line's bytes without parsing it. They allocate nothing
+and answer with views into the line; an answer is not a claim that the line is
+valid. `tagOf` reads the same `strand` declaration the
 parse does: a `tag` member, the arms' names and aliases, and `other`.
 
 JSONC is a dialect of the same decoder, not a codec of its own: the decoder is made

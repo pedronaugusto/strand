@@ -287,6 +287,10 @@ pub const memberOf = route.memberOf;
 pub const memberStringOf = route.memberStringOf;
 pub const leadingIntMembers = leading.leadingIntMembers;
 pub const IntMembers = leading.IntMembers;
+pub const intMembersAt = leading.intMembersAt;
+pub const trailingIntMember = leading.trailingIntMember;
+pub const TrailingInt = leading.TrailingInt;
+pub const intOf = leading.intOf;
 pub const indexOfControl = control.indexOfControl;
 
 // This root is reached by the test assembly. Name every embedded

@@ -6,6 +6,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `json.intMembersAt`: integer members read off a line's bytes from any offset, each after a `,` (`,"bf":3,"bl":5`), as `leadingIntMembers` reads them from the start.
+- `json.trailingIntMember`: the integer member a line closes with (`,"c":42}`), read off the end, with where it begins.
+- `json.intOf`: a JSON value's bytes (a `json.Raw` member) as an integer only where they are one written as one.
+- `json.IntMembers` is named at the root, beside `leadingIntMembers`.
+
+### Changed
+
+- Pins airlock 0.3.3.
+
 ## [0.10.3] - 2026-10-14
 
 ### Added

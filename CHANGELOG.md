@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.2] - 2026-10-14
+
 ### Added
 
 - `strand.toml`: TOML 1.1.0, and 1.0.0 with `.version = .v1_0`, on the core. Every rule about defining a table is checked as the document is read; integers are TOML's signed 64 bits and floats binary64, refused past their range; `toml.OffsetDateTime`, `toml.LocalDateTime`, `toml.LocalDate` and `toml.LocalTime` are types of their own (their RFC 3339 text in another format); TOML has no null, so a write refuses one unless `.nulls = .omit`; `toml.Value` holds any document. The writer puts a table's values before its tables, arrays of tables as `[[sections]]`, and its output reads as TOML 1.0 and 1.1. Checked against toml-test's 1.0.0 and 1.1.0 lists (decoder, encoder and invalid documents, nothing skipped).

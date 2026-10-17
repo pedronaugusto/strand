@@ -4,6 +4,8 @@ const WireDecoder = @import("Decoder.zig").Dialect(false);
 const core = @import("../core.zig");
 pub const Member = struct { key: []const u8, value: Value };
 pub const Value = union(enum) {
+    /// Any JSON value: its schema admits everything.
+    pub const strand_json_schema = "true";
     null_value,
     boolean: bool,
     number: []const u8,

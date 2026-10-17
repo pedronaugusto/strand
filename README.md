@@ -110,6 +110,20 @@ is read, written back as it came (a line break between its tokens as a space, so
 record stays a line), `Raw.null` as a default, `Raw.encode` to make one from a value
 and `raw.parse(T, arena, options)` to read one as a type.
 
+`json.schema.of(T, options)` is the JSON Schema (2020-12) of what strand reads for
+`T` (`.direction = .decode`, the default) or writes (`.encode`), made at compile time
+from the same declarations the codec reads: a string constant, nothing at run time. A
+struct is an object whose fields are its properties, those without a default required
+when read and those always written required when written, with no other member unless
+the parse ignores unknown fields; a field's and a type's `description` in its `strand`
+declaration is the schema's; names follow casing and aliases (read, never written);
+integers carry their width's bounds or the field's `range`; an enum is its names; an
+optional admits null; a union follows its tagging (external, internal or adjacent); an
+aegis duration or size is text, any other aegis scalar its integer; `Raw` and `Value`
+admit anything; a type that contains itself is written once, under `$defs`. A type with a
+codec of its own declares `strand_json_schema`, since strand cannot know what the codec
+writes, and one that does not is refused when it is compiled.
+
 A few fields can be read out of a large JSON value without parsing the rest.
 `json.Members` goes over an object's members one at a time, as they are asked
 for: each member's name, its value as the bytes it is written as, and where both

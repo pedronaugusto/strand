@@ -15,6 +15,8 @@ pub const parseStdValue = api.parseStdValue;
 pub const jsonc = api.jsonc;
 /// The JSON Canonicalization Scheme (RFC 8785).
 pub const jcs = @import("json/canonical.zig");
+/// JSON Schema (2020-12) for the JSON a type is read and written as.
+pub const schema = @import("json/schema.zig");
 pub const Whitespace = api.Whitespace;
 pub const WriteOptions = api.WriteOptions;
 pub const WriteError = api.WriteError;

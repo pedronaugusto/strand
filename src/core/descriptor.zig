@@ -215,8 +215,9 @@ fn policyProblem(comptime T: type, comptime path: []const u8) ?Description {
         const opt = options(T);
         if (@typeInfo(@TypeOf(opt)) != .@"struct") return rejected(path, "strand policy must be a struct value");
         for (@typeInfo(@TypeOf(opt)).@"struct".field_names) |option| {
-            if (!std.mem.eql(u8, option, "fields") and !std.mem.eql(u8, option, "unknown_fields") and !std.mem.eql(u8, option, "duplicates") and !std.mem.eql(u8, option, "rename_all") and !std.mem.eql(u8, option, "variants") and !std.mem.eql(u8, option, "tag") and !std.mem.eql(u8, option, "content") and !std.mem.eql(u8, option, "other")) return rejected(path, "container option is not implemented by this S1 candidate");
+            if (!std.mem.eql(u8, option, "fields") and !std.mem.eql(u8, option, "unknown_fields") and !std.mem.eql(u8, option, "duplicates") and !std.mem.eql(u8, option, "rename_all") and !std.mem.eql(u8, option, "variants") and !std.mem.eql(u8, option, "tag") and !std.mem.eql(u8, option, "content") and !std.mem.eql(u8, option, "other") and !std.mem.eql(u8, option, "description")) return rejected(path, "container option is not implemented by this S1 candidate");
         }
+        if (@hasField(@TypeOf(opt), "description") and !isText(@TypeOf(opt.description))) return rejected(path, "description must be text");
         if (@hasField(@TypeOf(opt), "fields")) {
             if (@typeInfo(T) != .@"struct") return rejected(path, "fields policy requires a record or tuple");
             if (@typeInfo(@TypeOf(opt.fields)) != .@"struct") return rejected(path, "fields policy must be a struct value");
@@ -225,14 +226,23 @@ fn policyProblem(comptime T: type, comptime path: []const u8) ?Description {
                 const f = @field(opt.fields, name);
                 if (@typeInfo(@TypeOf(f)) != .@"struct") return rejected(path ++ "." ++ name, "field policy must be a struct value");
                 if (fieldIssue(@FieldType(T, name), f)) |why| return rejected(path ++ "." ++ name, why);
+                if (@hasField(@TypeOf(f), "description") and !isText(@TypeOf(f.description))) return rejected(path ++ "." ++ name, "description must be text");
                 for (@typeInfo(@TypeOf(f)).@"struct".field_names) |option| {
-                    if (!@hasField(Field, option) and !std.mem.eql(u8, option, "default") and !std.mem.eql(u8, option, "codec") and !std.mem.eql(u8, option, "validate") and !std.mem.eql(u8, option, "range") and !std.mem.eql(u8, option, "omit_if") and !std.mem.eql(u8, option, "equal")) return rejected(path ++ "." ++ name, "field option is not implemented by this S1 candidate");
+                    if (!@hasField(Field, option) and !std.mem.eql(u8, option, "default") and !std.mem.eql(u8, option, "codec") and !std.mem.eql(u8, option, "validate") and !std.mem.eql(u8, option, "range") and !std.mem.eql(u8, option, "omit_if") and !std.mem.eql(u8, option, "equal") and !std.mem.eql(u8, option, "description")) return rejected(path ++ "." ++ name, "field option is not implemented by this S1 candidate");
                 }
             }
         }
     }
     return null;
 }
+/// Whether a declared value is text: a string literal or a byte slice.
+fn isText(comptime T: type) bool {
+    const info = @typeInfo(T);
+    if (info != .pointer) return false;
+    if (info.pointer.size == .slice) return info.pointer.child == u8;
+    return info.pointer.size == .one and @typeInfo(info.pointer.child) == .array and @typeInfo(info.pointer.child).array.child == u8;
+}
+
 fn fieldIssue(comptime F: type, comptime opt: anytype) ?[]const u8 {
     if (@hasField(@TypeOf(opt), "codec") and @TypeOf(opt.codec) != type) return "codec must be a type";
     if (@hasField(@TypeOf(opt), "codec") and @hasDecl(opt.codec, "length")) {

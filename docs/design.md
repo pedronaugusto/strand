@@ -206,6 +206,16 @@ are the default; internal and adjacent tags require unique discriminants and
 exact payload boundaries. Unknown capture is explicit format-branded Raw.
 Caller acceptance can tighten unknown-field and duplicate policy.
 
+`json.schema` derives a JSON Schema (2020-12) from the same descriptor at compile
+time, per direction: what `parse` accepts (`required` is the fields without a default,
+aliases are properties, unknown members refused unless the parse ignores them) and what
+`write` writes (`required` is the fields always written). It never guesses a codec's
+shape: a type or field codec declares `strand_json_schema`, and one that does not is a
+compile error. A type reachable from itself is emitted once, under `$defs` (the root as
+`#`). A property test writes values drawn for each test type and holds them to both
+schemas with a checker of the keywords the derivation emits (test support only; a
+validator is not part of strand's API).
+
 ## Ownership and failure
 
 `acquire`/`acquireWith` run one decode callback into a bounded result arena and

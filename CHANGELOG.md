@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.11.2] - 2026-10-17
+
 ### Added
 
 - `json.go`: JSON read into a type as Go's `encoding/json` reads it into the matching Go type (`parseLeaky`, `parseIntoLeaky`, `decodeInto`, `repaired`): members by exact name, then Go's case folding; `null` as Go takes it; a member given twice read into what the first left; integers and floats by `strconv`'s rules; invalid UTF-8 and unpaired surrogate escapes as U+FFFD; `.rest = .any` for a `json.Decoder`'s one value; `strandGoDecode` for a type of its own.

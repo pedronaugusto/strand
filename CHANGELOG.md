@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-10-17
+
 ### Breaking
 
 - `json.go` is removed: it was a second type mapper beside the core's. What it did is now reading choices on the one decode path, below.

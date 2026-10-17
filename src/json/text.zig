@@ -2,7 +2,14 @@
 //! is UTF-8, and what an escape means. The decoder and the encoder share these
 //! and nothing else does.
 const std = @import("std");
+const core = @import("../core.zig");
 const work = @import("work.zig");
+
+/// What a string that is not Unicode is: refused, or read with each byte that
+/// does not begin a UTF-8 sequence, and each surrogate escape without its
+/// pair, as U+FFFD.
+pub const Unicode = core.InvalidUnicode;
+const replacement = "\u{fffd}";
 
 pub const Special = struct { at: usize, non_ascii: bool };
 
@@ -163,10 +170,11 @@ const digit_pairs = blk: {
 
 /// What an escape after a backslash stands for, and how many bytes of input
 /// it took, the backslash not counted. A `\u` escape is a Unicode scalar: a
-/// surrogate half on its own is not one.
+/// surrogate half on its own is not one, and is refused or, under
+/// `.replace`, U+FFFD, the escape after it read on its own.
 pub const Escape = struct { len: usize, scalar: u21 };
 
-pub fn escape(bytes: []const u8) error{SyntaxError}!Escape {
+pub fn escape(bytes: []const u8, unicode: Unicode) error{SyntaxError}!Escape {
     if (bytes.len == 0) return error.SyntaxError;
     const simple: ?u8 = switch (bytes[0]) {
         '"' => '"',
@@ -182,13 +190,18 @@ pub fn escape(bytes: []const u8) error{SyntaxError}!Escape {
     };
     if (simple) |c| return .{ .len = 1, .scalar = c };
     const first = try hexQuad(bytes[1..]);
-    if (std.unicode.utf16IsLowSurrogate(first)) return error.SyntaxError;
+    if (std.unicode.utf16IsLowSurrogate(first)) return lone(unicode);
     if (!std.unicode.utf16IsHighSurrogate(first)) return .{ .len = 5, .scalar = first };
-    if (bytes.len < 7 or bytes[5] != '\\' or bytes[6] != 'u') return error.SyntaxError;
-    const second = try hexQuad(bytes[7..]);
-    if (!std.unicode.utf16IsLowSurrogate(second)) return error.SyntaxError;
+    if (bytes.len < 7 or bytes[5] != '\\' or bytes[6] != 'u') return lone(unicode);
+    const second = hexQuad(bytes[7..]) catch return lone(unicode);
+    if (!std.unicode.utf16IsLowSurrogate(second)) return lone(unicode);
     const pair = [2]u16{ first, second };
     return .{ .len = 11, .scalar = std.unicode.utf16DecodeSurrogatePair(&pair) catch return error.SyntaxError };
+}
+
+/// A surrogate escape without its pair: refused, or U+FFFD.
+fn lone(unicode: Unicode) error{SyntaxError}!Escape {
+    return if (unicode == .replace) .{ .len = 5, .scalar = 0xfffd } else error.SyntaxError;
 }
 
 fn hexQuad(bytes: []const u8) error{SyntaxError}!u16 {
@@ -207,35 +220,39 @@ fn hexQuad(bytes: []const u8) error{SyntaxError}!u16 {
 }
 
 /// Where the string whose body begins at `bytes[0]` ends: the index of its
-/// closing quote, and whether there is an escape before it. Every run is
-/// checked to be UTF-8 and every escape to be one.
+/// closing quote, and whether its body is to be rewritten: there is an escape
+/// in it, or under `.replace` a byte that is not UTF-8. Every run is checked
+/// to be UTF-8 and every escape to be one, as `unicode` says.
 pub const End = struct { at: usize, escaped: bool };
 
-pub fn end(bytes: []const u8) error{SyntaxError}!End {
+pub fn end(bytes: []const u8, unicode: Unicode) error{SyntaxError}!End {
     var at: usize = 0;
     var escaped = false;
     while (true) {
         const found = special(bytes[at..]);
         const stop = at + found.at;
-        if (found.non_ascii and !std.unicode.utf8ValidateSlice(bytes[at..stop])) return error.SyntaxError;
+        if (found.non_ascii and !std.unicode.utf8ValidateSlice(bytes[at..stop])) {
+            if (unicode == .refuse) return error.SyntaxError;
+            escaped = true;
+        }
         if (stop == bytes.len or bytes[stop] < 0x20) return error.SyntaxError;
         if (bytes[stop] == '"') return .{ .at = stop, .escaped = escaped };
         escaped = true;
-        at = stop + 1 + (try escape(bytes[stop + 1 ..])).len;
+        at = stop + 1 + (try escape(bytes[stop + 1 ..], unicode)).len;
     }
 }
 
 /// Writes the body of a string `end` has checked, escapes replaced by what
-/// they stand for, into `out`, which is at least as long as `body`: no escape
-/// is shorter than what it stands for. Returns the length written.
-pub fn unescape(body: []const u8, out: []u8) usize {
+/// they stand for, into `out`, which is at least `unescapedLength` long:
+/// under `.refuse` `body`'s length is enough, no escape being shorter than
+/// what it stands for. Returns the length written.
+pub fn unescape(body: []const u8, out: []u8, unicode: Unicode) usize {
     var from: usize = 0;
     var to: usize = 0;
     while (std.mem.findScalarPos(u8, body, from, '\\')) |slash| {
-        @memcpy(out[to..][0 .. slash - from], body[from..slash]);
-        to += slash - from;
+        to += copyRun(body[from..slash], out[to..], unicode);
         // unreachable: `end` checked every escape in this body.
-        const e = escape(body[slash + 1 ..]) catch unreachable;
+        const e = escape(body[slash + 1 ..], unicode) catch unreachable;
         var encoded: [4]u8 = undefined;
         // unreachable: a scalar `escape` decoded is at most U+10FFFF and no surrogate.
         const n = std.unicode.utf8Encode(e.scalar, &encoded) catch unreachable;
@@ -243,14 +260,54 @@ pub fn unescape(body: []const u8, out: []u8) usize {
         to += n;
         from = slash + 1 + e.len;
     }
-    @memcpy(out[to..][0 .. body.len - from], body[from..]);
-    return to + body.len - from;
+    return to + copyRun(body[from..], out[to..], unicode);
+}
+
+/// A run with no escape copied into `out`, under `.replace` with each byte
+/// that does not begin a UTF-8 sequence as U+FFFD. Returns the length written.
+fn copyRun(run: []const u8, out: []u8, unicode: Unicode) usize {
+    if (unicode == .refuse) {
+        @memcpy(out[0..run.len], run);
+        return run.len;
+    }
+    var from: usize = 0;
+    var to: usize = 0;
+    while (from < run.len) {
+        const n = sequence(run[from..]);
+        if (n == 0) {
+            @memcpy(out[to..][0..replacement.len], replacement);
+            to += replacement.len;
+            from += 1;
+        } else {
+            @memcpy(out[to..][0..n], run[from..][0..n]);
+            to += n;
+            from += n;
+        }
+    }
+    return to;
+}
+
+/// How long the UTF-8 sequence `bytes` begins with is, or 0 where the first
+/// byte begins none: a byte UTF-8 has no place for, a sequence cut short, an
+/// overlong form or a surrogate, each of which reads as U+FFFD a byte at a time.
+fn sequence(bytes: []const u8) usize {
+    if (bytes[0] < 0x80) return 1;
+    const n = std.unicode.utf8ByteSequenceLength(bytes[0]) catch return 0;
+    if (n > bytes.len) return 0;
+    const valid = switch (n) {
+        2 => if (std.unicode.utf8Decode2(bytes[0..2].*)) |_| true else |_| false,
+        3 => if (std.unicode.utf8Decode3(bytes[0..3].*)) |_| true else |_| false,
+        4 => if (std.unicode.utf8Decode4(bytes[0..4].*)) |_| true else |_| false,
+        else => false,
+    };
+    return if (valid) n else 0;
 }
 
 /// The text a body `end` has checked spells, a byte at a time, with nothing
 /// unescaped anywhere but the escape being read.
 pub const Unescaped = struct {
     rest: []const u8,
+    unicode: Unicode = .refuse,
     pending: [4]u8 = undefined,
     len: usize = 0,
     at: usize = 0,
@@ -262,11 +319,22 @@ pub const Unescaped = struct {
         }
         if (self.rest.len == 0) return null;
         if (self.rest[0] != '\\') {
+            if (self.unicode == .replace and self.rest[0] >= 0x80) {
+                // A sequence goes by whole, so that its bytes after the first
+                // are not taken for ones that begin none.
+                const n = sequence(self.rest);
+                const bytes = if (n == 0) replacement else self.rest[0..n];
+                @memcpy(self.pending[0..bytes.len], bytes);
+                self.len = bytes.len;
+                self.at = 1;
+                self.rest = self.rest[@max(n, 1)..];
+                return self.pending[0];
+            }
             defer self.rest = self.rest[1..];
             return self.rest[0];
         }
         // unreachable: `end` checked every escape in this body.
-        const e = escape(self.rest[1..]) catch unreachable;
+        const e = escape(self.rest[1..], self.unicode) catch unreachable;
         // unreachable: an escape decodes to a Unicode scalar, never a surrogate half.
         self.len = std.unicode.utf8Encode(e.scalar, &self.pending) catch unreachable;
         self.at = 1;
@@ -277,9 +345,9 @@ pub const Unescaped = struct {
 
 /// Whether two bodies `end` has checked spell the same text, however each is
 /// escaped.
-pub fn sameText(a: []const u8, b: []const u8) bool {
-    var left: Unescaped = .{ .rest = a };
-    var right: Unescaped = .{ .rest = b };
+pub fn sameText(a: []const u8, b: []const u8, unicode: Unicode) bool {
+    var left: Unescaped = .{ .rest = a, .unicode = unicode };
+    var right: Unescaped = .{ .rest = b, .unicode = unicode };
     while (true) {
         const x = left.next();
         if (x != right.next()) return false;
@@ -305,17 +373,30 @@ fn spellsEscaped(body: []const u8, text: []const u8) bool {
 }
 
 /// How long a body `end` has checked is once unescaped.
-pub fn unescapedLength(body: []const u8) usize {
+pub fn unescapedLength(body: []const u8, unicode: Unicode) usize {
     var n: usize = 0;
     var from: usize = 0;
     while (std.mem.findScalarPos(u8, body, from, '\\')) |slash| {
         // unreachable: `end` checked every escape in this body.
-        const e = escape(body[slash + 1 ..]) catch unreachable;
+        const e = escape(body[slash + 1 ..], unicode) catch unreachable;
         // unreachable: an escape decodes to a Unicode scalar, never a surrogate half.
-        n += slash - from + (std.unicode.utf8CodepointSequenceLength(e.scalar) catch unreachable);
+        n += runLength(body[from..slash], unicode) + (std.unicode.utf8CodepointSequenceLength(e.scalar) catch unreachable);
         from = slash + 1 + e.len;
     }
-    return n + body.len - from;
+    return n + runLength(body[from..], unicode);
+}
+
+/// How long a run with no escape is once copied by `copyRun`.
+fn runLength(run: []const u8, unicode: Unicode) usize {
+    if (unicode == .refuse) return run.len;
+    var n: usize = 0;
+    var from: usize = 0;
+    while (from < run.len) {
+        const len = sequence(run[from..]);
+        n += if (len == 0) replacement.len else len;
+        from += @max(len, 1);
+    }
+    return n;
 }
 
 test spells {
@@ -327,8 +408,8 @@ test spells {
     try std.testing.expect(!spells("s\\u0065qq", "seq"));
     try std.testing.expect(!spells("s\\u0065", "seq"));
     try std.testing.expect(spells("\\ud83d\\ude00", "\u{1f600}"));
-    try std.testing.expectEqual(@as(usize, 4), unescapedLength("\\ud83d\\ude00"));
-    try std.testing.expect(sameText("\\u0061b", "a\\u0062"));
+    try std.testing.expectEqual(@as(usize, 4), unescapedLength("\\ud83d\\ude00", .refuse));
+    try std.testing.expect(sameText("\\u0061b", "a\\u0062", .refuse));
 }
 
 test special {
@@ -368,12 +449,35 @@ test decimal {
 
 test unescape {
     const body = "a\\n\\u00e9\\ud83d\\ude00\\/z";
-    const e = try end(body ++ "\"");
+    const e = try end(body ++ "\"", .refuse);
     try std.testing.expect(e.escaped);
     var out: [body.len]u8 = undefined;
-    try std.testing.expectEqualStrings("a\n\u{e9}\u{1f600}/z", out[0..unescape(body, &out)]);
-    try std.testing.expectError(error.SyntaxError, end("\\ud83d\""));
-    try std.testing.expectError(error.SyntaxError, end("\\x\""));
-    try std.testing.expectError(error.SyntaxError, end("\xff\""));
-    try std.testing.expectError(error.SyntaxError, end("abc"));
+    try std.testing.expectEqualStrings("a\n\u{e9}\u{1f600}/z", out[0..unescape(body, &out, .refuse)]);
+    try std.testing.expectError(error.SyntaxError, end("\\ud83d\"", .refuse));
+    try std.testing.expectError(error.SyntaxError, end("\\x\"", .refuse));
+    try std.testing.expectError(error.SyntaxError, end("\xff\"", .refuse));
+    try std.testing.expectError(error.SyntaxError, end("abc", .refuse));
+}
+
+test "under .replace a byte that is not UTF-8 and a lone surrogate escape are U+FFFD" {
+    const cases = [_]struct { []const u8, []const u8 }{
+        .{ "bad\xff", "bad\u{fffd}" },
+        .{ "\xed\xa0\x80", "\u{fffd}\u{fffd}\u{fffd}" },
+        .{ "\xe2\x82", "\u{fffd}\u{fffd}" },
+        .{ "\\ud800\\udc00\\udc00\\ud800A", "\u{10000}\u{fffd}\u{fffd}A" },
+        .{ "\\ud800\\u0041", "\u{fffd}A" },
+        .{ "\xc3\xa9\\u00e9", "\u{e9}\u{e9}" },
+    };
+    inline for (cases) |case| {
+        const e = try end(case[0] ++ "\"", .replace);
+        try std.testing.expect(e.escaped);
+        try std.testing.expectEqual(case[1].len, unescapedLength(case[0], .replace));
+        var out: [64]u8 = undefined;
+        try std.testing.expectEqualStrings(case[1], out[0..unescape(case[0], &out, .replace)]);
+        var bytes: Unescaped = .{ .rest = case[0], .unicode = .replace };
+        for (case[1]) |b| try std.testing.expectEqual(@as(?u8, b), bytes.next());
+        try std.testing.expectEqual(@as(?u8, null), bytes.next());
+    }
+    try std.testing.expectError(error.SyntaxError, end("\\ud800\\uzzzz\"", .replace));
+    try std.testing.expectError(error.SyntaxError, end("a\x01\"", .replace));
 }

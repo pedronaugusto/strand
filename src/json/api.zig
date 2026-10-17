@@ -48,12 +48,45 @@ pub const Raw = struct {
 };
 pub const Parsed = core.Parsed;
 pub const Value = @import("Value.zig").Value;
+/// How JSON is read. The defaults read it strictly; the rest are the choices
+/// a reader that must take what a more lenient one takes may want (Go's
+/// `encoding/json` reads as `.duplicates = .merge, .names = .fold_case,
+/// .nulls = .keep, .integers = .digits, .invalid_unicode = .replace` with
+/// unknown fields ignored).
 pub const ParseOptions = struct {
     limits: core.Limits = .{},
     ignore_unknown_fields: bool = false,
-    reject_duplicates: bool = true,
+    /// A record's member, or an object's key read as a map's, given twice:
+    /// refused (the default); kept `.first`, `.last`, or `.merge`d, the later
+    /// read into what the earlier left, for every record and map
+    /// (`core.Duplicates`); `null` as each record's type declares
+    /// (`strand.duplicates`), a map's keys all kept.
+    duplicates: ?core.Duplicates = .reject,
+    /// A member's name matched to a field `.exact`ly, or exactly first and
+    /// then by case folding (`.fold_case`, `core.Names`).
+    names: core.Names = .exact,
+    /// `null` where the type has none: refused, or `.keep` the value as it is
+    /// (`core.Nulls`).
+    nulls: core.Nulls = .refuse,
+    /// An integer: any number whose value is whole (`1.0`, `1e2`), or
+    /// `.digits` alone, a minus only for a signed type.
+    integers: core.Integers = .whole,
+    /// A string with a byte that is not UTF-8 or a surrogate escape without
+    /// its pair: refused, or read with each as U+FFFD (`.replace`). Map keys
+    /// and member names are read so too; a `Raw` keeps its bytes as written.
+    invalid_unicode: core.InvalidUnicode = .refuse,
     diagnostics: ?*core.Diagnostics = null,
 };
+fn acceptance(options: ParseOptions) core.Acceptance {
+    return .{
+        .reject_unknown_fields = !options.ignore_unknown_fields,
+        .duplicates = options.duplicates,
+        .names = options.names,
+        .nulls = options.nulls,
+        .integers = options.integers,
+        .invalid_unicode = options.invalid_unicode,
+    };
+}
 fn Decode(comptime T: type) type {
     return Dialect(T, false);
 }
@@ -82,7 +115,7 @@ fn Dialect(comptime T: type, comptime comments: bool) type {
             decoder.init(c, input);
             defer decoder.deinit();
             var cursor: core.Cursor(Wire) = .{ .backend = &decoder, .context = c };
-            const value = cursor.read(T, .{}) catch |err| {
+            const value = cursor.readFresh(T, .{}) catch |err| {
                 if (err == error.OutOfMemory and c.allocation_limited) return error.AllocationLimit;
                 return err;
             };
@@ -100,7 +133,7 @@ fn context(arena: std.mem.Allocator, options: ParseOptions) core.Context {
         d.format = "json";
     }
     var c = core.Context.init(arena, options.limits, .borrowed);
-    c.acceptance = .{ .reject_unknown_fields = !options.ignore_unknown_fields, .reject_duplicates = options.reject_duplicates };
+    c.acceptance = acceptance(options);
     c.diagnostics = options.diagnostics;
     return c;
 }
@@ -114,7 +147,7 @@ fn parseDialect(comptime T: type, comptime comments: bool, comptime ownership: c
     }
     const acquisition: core.AcquisitionOptions = .{
         .limits = options.limits,
-        .acceptance = .{ .reject_unknown_fields = !options.ignore_unknown_fields, .reject_duplicates = options.reject_duplicates },
+        .acceptance = acceptance(options),
         .diagnostics = options.diagnostics,
     };
     return core.acquireWith(T, ownership, gpa, input, acquisition, Dialect(T, comments).run);
@@ -160,8 +193,9 @@ pub fn Prefix(comptime T: type) type {
     return struct { value: T, end: usize };
 }
 /// `parseLeaky` of the value at the front of `input`, where what follows it is
-/// the caller's: a pretty JSON Lines record is read this way out of the bytes
-/// buffered behind it, across the line breaks inside it.
+/// the caller's, as a stream decoder reads one value and leaves the rest: a
+/// pretty JSON Lines record is read this way out of the bytes buffered behind
+/// it, across the line breaks inside it.
 pub fn parsePrefixLeaky(comptime T: type, arena: std.mem.Allocator, input: []const u8, options: ParseOptions) ParseError(T)!Prefix(T) {
     var c = context(arena, options);
     if (input.len > options.limits.input_bytes) return error.InputLimit;
@@ -226,7 +260,7 @@ fn emit(output: *std.Io.Writer, value: anytype, options: WriteOptions, open: boo
 /// `emit` with `storage` for what writing needs beyond the stack.
 fn emitOn(storage: std.mem.Allocator, output: *std.Io.Writer, value: anytype, options: WriteOptions, open: bool) WriteError(@TypeOf(value))!bool {
     var c = core.Context.init(storage, options.limits, .borrowed);
-    c.acceptance.reject_duplicates = true;
+    c.acceptance.duplicates = .reject;
     c.omit_nulls = options.nulls == .omit;
     var encoder: WireEncoder = undefined;
     encoder.init(output);

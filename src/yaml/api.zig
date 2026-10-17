@@ -126,7 +126,7 @@ pub fn write(output: *std.Io.Writer, value: anytype, options: WriteOptions) Writ
     // Writing allocates nothing through the core.
     var fixed: std.heap.FixedBufferAllocator = .init(&.{});
     var c = core.Context.init(fixed.allocator(), options.limits, .borrowed);
-    c.acceptance.reject_duplicates = true;
+    c.acceptance.duplicates = .reject;
     c.omit_nulls = options.nulls == .omit;
     try document(output, value, options, &c);
 }
@@ -135,7 +135,7 @@ pub fn write(output: *std.Io.Writer, value: anytype, options: WriteOptions) Writ
 pub fn writeStream(output: *std.Io.Writer, values: anytype, options: WriteOptions) WriteError(@TypeOf(values[0]))!void {
     var fixed: std.heap.FixedBufferAllocator = .init(&.{});
     var c = core.Context.init(fixed.allocator(), options.limits, .borrowed);
-    c.acceptance.reject_duplicates = true;
+    c.acceptance.duplicates = .reject;
     c.omit_nulls = options.nulls == .omit;
     for (values, 0..) |value, i| {
         if (i > 0) {

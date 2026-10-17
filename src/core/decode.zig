@@ -11,7 +11,7 @@ const scalars = @import("scalars.zig");
 pub fn deserialize(comptime T: type, backend: anytype, c: *ctx.Context) Errors(T, @TypeOf(backend.*))!T {
     comptime descriptor.check(T, @TypeOf(backend.*).capabilities, true, .borrowed);
     var cursor: Cursor(@TypeOf(backend.*)) = .{ .backend = backend, .context = c };
-    const value = try cursor.read(T, .{});
+    const value = try cursor.readFresh(T, .{});
     try backend.endInput(c);
     return value;
 }
@@ -27,6 +27,87 @@ inline fn spelled(name: []const u8, comptime spelling: []const u8) bool {
 
 /// A record member's key, and the field it names.
 const Member = struct { name: []const u8, field: ?usize };
+
+/// The field of `T` a key names by case folding (`Names.fold_case`): the
+/// first of its names, fields in order and then aliases, the key folds to.
+fn foldedField(comptime T: type, key: []const u8, c: *ctx.Context) error{WorkLimit}!?usize {
+    const names = MemberNames(T);
+    inline for (names.spellings, names.fields) |spelling, field_index| {
+        try c.chargeWork(@as(usize, @min(key.len, spelling.len)) + 1);
+        if (foldsTo(key, spelling)) return field_index;
+    }
+    return null;
+}
+
+/// Whether `key`, UTF-8, folds to `spelling`: ASCII letters either case, `ſ`
+/// (U+017F) and the Kelvin sign (U+212A) as `s` and `k`, which Unicode folds
+/// them to, and any other character only as itself.
+fn foldsTo(key: []const u8, spelling: []const u8) bool {
+    var k: usize = 0;
+    var s: usize = 0;
+    while (k < key.len and s < spelling.len) {
+        const want = spelling[s];
+        if (want < 0x80) {
+            const lower = std.ascii.toLower(want);
+            if (key[k] < 0x80) {
+                if (std.ascii.toLower(key[k]) != lower) return false;
+                k += 1;
+            } else if (lower == 's' and std.mem.startsWith(u8, key[k..], "\u{17f}")) {
+                k += 2;
+            } else if (lower == 'k' and std.mem.startsWith(u8, key[k..], "\u{212a}")) {
+                k += 3;
+            } else return false;
+            s += 1;
+            continue;
+        }
+        const n = std.unicode.utf8ByteSequenceLength(want) catch 1;
+        if (s + n > spelling.len or k + n > key.len or !std.mem.eql(u8, key[k..][0..n], spelling[s..][0..n])) return false;
+        k += n;
+        s += n;
+    }
+    return k == key.len and s == spelling.len;
+}
+
+/// Whether `T` reads `null` itself: an optional, a raw value, a type whose
+/// values include null (`strand_nullable`, a dynamic value), or a pointer to
+/// one. Any other value keeps what it holds under `Nulls.keep`.
+fn readsNull(comptime T: type) bool {
+    return switch (@typeInfo(T)) {
+        .optional, .null => true,
+        .pointer => |p| p.size == .one and readsNull(p.child),
+        else => descriptor.has(T, "strandRawFormat") or descriptor.has(T, "strand_nullable"),
+    };
+}
+
+/// Whether `T` is a map of the core's own (`Pairs`).
+fn isPairs(comptime T: type) bool {
+    return @typeInfo(T) == .@"struct" and descriptor.has(T, "strandKeyType") and @hasField(T, "items");
+}
+
+/// Whether `null` empties `T` under `Nulls.keep`: a sequence or a map.
+/// Text and bytes are values, not sequences.
+fn emptiedByNull(comptime T: type) bool {
+    if (comptime isPairs(T)) return true;
+    return switch (@typeInfo(T)) {
+        .pointer => |p| p.size == .slice and p.child != u8,
+        else => false,
+    };
+}
+
+/// Whether reading `T` into a value merges with it (`Duplicates.merge`): a
+/// record, an optional, a pointer, a sequence, an array or a map. Anything
+/// else, a type with a reading of its own among them, is read afresh.
+fn merges(comptime T: type, comptime policy: descriptor.Field) bool {
+    if (comptime isPairs(T)) return true;
+    if (comptime descriptor.has(T, "strandDeserialize") or scalars.kind(T) != null) return false;
+    return switch (@typeInfo(T)) {
+        .optional => true,
+        .pointer => |p| p.size == .one or (p.size == .slice and p.child != u8),
+        .array => policy.as == .normal,
+        .@"struct" => |i| !i.is_tuple,
+        else => false,
+    };
+}
 
 /// The names a record's keys are matched against: every field's, in
 /// declaration order, then the aliases; which field each names; and, for each
@@ -268,13 +349,96 @@ pub fn Cursor(comptime Backend: type) type {
                 try self.context.chargeWork(found.name.len);
                 if (!validText(Backend, found.name)) return error.InvalidUtf8;
                 if (names.fields.len == 0) return .{ .name = found.name, .field = null };
-                return .{ .name = found.name, .field = if (found.index) |k| names.fields[k] else null };
+                if (found.index) |k| return .{ .name = found.name, .field = names.fields[k] };
+                return .{ .name = found.name, .field = try self.folded(T, found.name) };
             };
             const name = (try self.member()) orelse return null;
             inline for (names.spellings, names.fields) |spelling, field_index| {
                 if (spelled(name, spelling)) return .{ .name = name, .field = field_index };
             }
-            return .{ .name = name, .field = null };
+            return .{ .name = name, .field = try self.folded(T, name) };
+        }
+        /// The field a key no name spells exactly finds by case folding, where
+        /// the reading asks for it.
+        inline fn folded(self: *Self, comptime T: type, name: []const u8) Error!?usize {
+            if (self.context.acceptance.names != .fold_case) return null;
+            return foldedField(T, name, self.context);
+        }
+        /// Whether the next value is `null`, taken if it is: by the format's
+        /// own reader where it has one (`none`), else by its event.
+        fn takeNull(self: *Self) Error!bool {
+            if (comptime @hasDecl(Backend, "none")) if (self.pending == null) {
+                if (self.context.diagnostics) |d| d.offset = self.backend.offset();
+                const found = self.backend.none(self.context) catch |err| {
+                    if (self.context.diagnostics) |d| d.offset = self.backend.offset();
+                    return err;
+                };
+                if (found) try self.directDone();
+                return found;
+            };
+            if (try self.peek() != .none) return false;
+            _ = try self.take();
+            return true;
+        }
+        /// What a value read fresh holds where `null` keeps it (`Nulls.keep`):
+        /// its type's zero. A type with none refuses the null.
+        fn zero(self: *Self, comptime T: type) Errors(T, Backend)!T {
+            if (comptime isPairs(T)) return .{ .items = &.{} };
+            switch (@typeInfo(T)) {
+                .bool => return false,
+                .int, .float => return 0,
+                .void => return {},
+                .optional => return null,
+                .pointer => |i| switch (i.size) {
+                    .slice => return try self.context.allocPointer(T, 0),
+                    .one => {
+                        const storage = try self.context.allocPointer(T, 1);
+                        storage.* = try self.zero(i.child);
+                        return storage;
+                    },
+                    else => return error.UnexpectedType,
+                },
+                .array => |i| {
+                    var value: T = undefined;
+                    for (&value) |*element| element.* = try self.zero(i.child);
+                    if (comptime i.sentinel()) |sentinel| value[i.len] = sentinel;
+                    return value;
+                },
+                .@"struct" => |i| {
+                    if (comptime descriptor.has(T, "strandRawFormat") or descriptor.has(T, "strandBytes") or descriptor.has(T, "strandScalar")) return error.UnexpectedType;
+                    var value: T = undefined;
+                    inline for (i.field_names, i.field_attrs) |name, attrs| {
+                        if (attrs.@"comptime") continue;
+                        if (i.is_tuple) {
+                            @field(value, name) = try self.zero(@FieldType(T, name));
+                        } else {
+                            @field(value, name) = try self.defaultOf(T, name);
+                        }
+                    }
+                    return value;
+                },
+                else => return error.UnexpectedType,
+            }
+        }
+        /// A field's default, as a record fills a field no member gave: its
+        /// declared default made, or its literal default copied.
+        fn defaultOf(self: *Self, comptime T: type, comptime name: []const u8) Errors(T, Backend)!@FieldType(T, name) {
+            const F = @FieldType(T, name);
+            const declared = comptime descriptor.fieldOptions(T, name);
+            if (@hasField(@TypeOf(declared), "default") and @typeInfo(@TypeOf(declared.default)) == .@"fn") {
+                const value = try declared.default(self.context);
+                if (comptime @typeInfo(F) == .pointer) {
+                    const pointer = @typeInfo(F).pointer;
+                    if (comptime pointer.size == .slice and pointer.child == u8 and !@hasField(@TypeOf(declared), "codec")) {
+                        try self.context.span(value.len, false);
+                        try self.context.chargeWork(value.len);
+                        if ((comptime descriptor.field(T, name)).as != .bytes and !std.unicode.utf8ValidateSlice(value)) return error.InvalidUtf8;
+                    }
+                }
+                return value;
+            }
+            const default_value = (comptime descriptor.default(T, name)) orelse return error.MissingField;
+            return cloneField(F, comptime descriptor.field(T, name), default_value, self.context);
         }
         fn key(self: *Self) Error![]const u8 {
             self.request = .{ .expected = .text };
@@ -421,10 +585,10 @@ pub fn Cursor(comptime Backend: type) type {
                         storage.* = try self.read(i.child, policy);
                         return storage;
                     },
-                    .slice => return self.slice(T, policy),
+                    .slice => return self.slice(T, policy, null),
                     else => unreachable,
                 },
-                .array, .vector => return self.fixed(T, policy),
+                .array, .vector => return self.fixed(T, policy, null),
                 .@"struct" => |i| {
                     if (i.is_tuple) {
                         const header = try self.start(.tuple);
@@ -437,12 +601,15 @@ pub fn Cursor(comptime Backend: type) type {
                         var value: T = undefined;
                         inline for (i.field_names, i.field_attrs) |name, attrs| {
                             if (attrs.@"comptime") continue;
-                            @field(value, name) = try self.readField(T, name);
+                            const F = @FieldType(T, name);
+                            @field(value, name) = if (try self.keptByNull(F, comptime descriptor.field(T, name))) try self.zero(F) else try self.readField(T, name);
                         }
                         try self.end();
                         return value;
                     }
-                    return self.record(T);
+                    var value: T = undefined;
+                    try self.record(T, &value, true);
+                    return value;
                 },
                 .@"enum" => |i| {
                     const name = try self.symbolValue();
@@ -460,6 +627,70 @@ pub fn Cursor(comptime Backend: type) type {
                 else => @compileError("unsupported core decode type"),
             }
         }
+        /// A value read where it starts from nothing, at the root, as an
+        /// element or as a map's value: a `null` that `Nulls.keep` takes for a
+        /// type without one is the type's zero. A record's field is the
+        /// record's to keep, and an optional's value its own.
+        pub inline fn readFresh(self: *Self, comptime T: type, comptime policy: descriptor.Field) Errors(T, Backend)!T {
+            if (try self.keptByNull(T, policy)) return self.zero(T);
+            return self.read(T, policy);
+        }
+        /// A value read into what `into` holds, as a member given again merges
+        /// (`Duplicates.merge`): a record member by member, an optional's value,
+        /// a pointer's, a sequence's elements by position, an array's, and a
+        /// map's entries, a key given again taking its later value. Anything
+        /// else is read afresh and replaces it. `null` under `Nulls.keep`
+        /// leaves it, or empties a sequence or a map.
+        fn readInto(self: *Self, comptime T: type, comptime policy: descriptor.Field, into: *T) Errors(T, Backend)!void {
+            @setRuntimeSafety(true);
+            if (try self.keptByNull(T, policy)) {
+                if (comptime emptiedByNull(T)) into.* = try self.zero(T);
+                return;
+            }
+            if (comptime !merges(T, policy)) {
+                into.* = try self.read(T, policy);
+                return;
+            }
+            comptime descriptor.check(T, Backend.capabilities, true, .borrowed);
+            self.request = typeRequest(T, policy);
+            if (self.context.diagnostics) |d| d.expected = self.request.expected;
+            try self.context.node();
+            try self.context.chargeWork(1);
+            if (comptime isPairs(T)) {
+                const entry = @typeInfo(@FieldType(T, "items")).pointer.child;
+                try self.context.enterHook();
+                defer self.context.leaveHook();
+                var access: PolicyAccess(Backend, policy) = .{ .cursor = self };
+                into.* = .{ .items = try access.pairsFrom(@FieldType(entry, "key"), @FieldType(entry, "value"), into.items) };
+                if (!access.used or !access.complete) return error.CustomRejected;
+                return;
+            }
+            switch (@typeInfo(T)) {
+                .optional => |i| {
+                    const event = try self.peek();
+                    // A presence is a hint, as `read` counts it.
+                    if (!self.context.replaying) self.context.items -= 1;
+                    if (event != .none and !(event == .begin and event.begin.kind == .some)) {
+                        if (into.*) |*inner| return self.readInto(i.child, policy, inner);
+                    }
+                    into.* = try self.read(T, policy);
+                },
+                .pointer => |i| switch (i.size) {
+                    .one => {
+                        if (!self.context.replaying) self.context.items -= 1;
+                        const storage = try self.context.allocPointer(T, 1);
+                        storage.* = into.*.*;
+                        try self.readInto(i.child, policy, storage);
+                        into.* = storage;
+                    },
+                    .slice => into.* = try self.slice(T, policy, @as(T, into.*)),
+                    else => unreachable,
+                },
+                .array => into.* = try self.fixed(T, policy, @as(*const T, into)),
+                .@"struct" => try self.record(T, into, false),
+                else => unreachable,
+            }
+        }
         fn readUnion(self: *Self, comptime T: type) Errors(T, Backend)!T {
             const i = @typeInfo(T).@"union";
             const opt = comptime descriptor.options(T);
@@ -473,7 +704,7 @@ pub fn Cursor(comptime Backend: type) type {
                 var matches = try self.equals(variant_name, v.name);
                 inline for (v.aliases) |alias| matches = matches or try self.equals(variant_name, alias);
                 if (matches) {
-                    const value = @unionInit(T, name, try self.read(F, .{ .name = name }));
+                    const value = @unionInit(T, name, try self.readFresh(F, .{ .name = name }));
                     try self.end();
                     return value;
                 }
@@ -483,7 +714,7 @@ pub fn Cursor(comptime Backend: type) type {
                 const payload = if (F == void) blk: {
                     try self.skip();
                     break :blk {};
-                } else try self.read(F, .{});
+                } else try self.readFresh(F, .{});
                 try self.end();
                 return @unionInit(T, opt.other, payload);
             }
@@ -566,7 +797,9 @@ pub fn Cursor(comptime Backend: type) type {
             }
             return error.UnknownVariant;
         }
-        fn fixed(self: *Self, comptime T: type, comptime policy: descriptor.Field) Errors(T, Backend)!T {
+        /// An array or a vector; an array read into `prior`, a `*const T` or
+        /// `null` known when compiled, reads each element into the one there.
+        fn fixed(self: *Self, comptime T: type, comptime policy: descriptor.Field, prior: anytype) Errors(T, Backend)!T {
             const i = if (@typeInfo(T) == .array) @typeInfo(T).array else @typeInfo(T).vector;
             if (i.len > policy.max_len) return error.LengthLimit;
 
@@ -600,7 +833,10 @@ pub fn Cursor(comptime Backend: type) type {
             for (&array, 0..) |*element, index| {
                 const mark: ctx.Diagnostics.Checkpoint = if (self.context.diagnostics) |d| d.checkpoint() else .none;
                 if (self.context.diagnostics) |d| d.index(index);
-                element.* = try self.read(i.child, .{ .name = "" });
+                if (comptime @TypeOf(prior) == *const T) {
+                    element.* = prior[index];
+                    try self.readInto(i.child, .{ .name = "" }, element);
+                } else element.* = try self.readFresh(i.child, .{ .name = "" });
                 if (self.context.diagnostics) |d| d.restore(mark);
             }
             try self.end();
@@ -643,7 +879,10 @@ pub fn Cursor(comptime Backend: type) type {
             if (!validText(Backend, event.text.bytes)) return error.InvalidUtf8;
             return event.text;
         }
-        fn slice(self: *Self, comptime T: type, comptime policy: descriptor.Field) Errors(T, Backend)!T {
+        /// A slice: text, bytes or a sequence. A sequence read into `prior`, a
+        /// `T` or `null` known when compiled, reads each element into the one
+        /// at its position there, and the rest afresh.
+        fn slice(self: *Self, comptime T: type, comptime policy: descriptor.Field, prior: anytype) Errors(T, Backend)!T {
             const i = @typeInfo(T).pointer;
             if (i.child == u8) {
                 const direct_text = if (comptime @hasDecl(Backend, "text")) (if (policy.as != .bytes) try self.direct("text") else null) else null;
@@ -668,7 +907,7 @@ pub fn Cursor(comptime Backend: type) type {
             if (header.len) |n| {
                 if (n > policy.max_len) return error.LengthLimit;
                 const values = try self.context.allocPointer(T, n);
-                for (values) |*v| v.* = try self.read(i.child, .{ .name = "" });
+                for (values, 0..) |*v, k| try self.readElement(T, prior, k, v);
                 try self.end();
                 return values;
             }
@@ -684,7 +923,7 @@ pub fn Cursor(comptime Backend: type) type {
                     @memcpy(grown[0..initialized], values[0..initialized]);
                     values = grown;
                 }
-                values[initialized] = try self.read(i.child, .{});
+                try self.readElement(T, prior, initialized, &values[initialized]);
                 initialized += 1;
             }
             try self.end();
@@ -693,6 +932,27 @@ pub fn Cursor(comptime Backend: type) type {
                 return values[0..initialized :sentinel];
             }
             return values[0..initialized];
+        }
+        /// A sequence's element at `k`: read into `prior`'s at `k` where
+        /// there is one, else afresh.
+        inline fn readElement(self: *Self, comptime T: type, prior: anytype, k: usize, slot: *@typeInfo(T).pointer.child) Errors(T, Backend)!void {
+            const E = @typeInfo(T).pointer.child;
+            if (comptime @TypeOf(prior) == T) if (k < prior.len) {
+                slot.* = prior[k];
+                return self.readInto(E, .{}, slot);
+            };
+            slot.* = try self.readFresh(E, .{});
+        }
+        /// A field read into what it holds; one with a codec of its own is
+        /// read afresh.
+        inline fn readFieldInto(self: *Self, comptime T: type, comptime name: []const u8, into: *@FieldType(T, name)) Errors(T, Backend)!void {
+            const declared = comptime descriptor.fieldOptions(T, name);
+            if (@hasField(@TypeOf(declared), "codec")) {
+                into.* = try self.readField(T, name);
+                return;
+            }
+            try self.readInto(@FieldType(T, name), comptime descriptor.field(T, name), into);
+            try descriptor.validate(T, name, into.*);
         }
         inline fn readField(self: *Self, comptime T: type, comptime name: []const u8) Errors(T, Backend)!@FieldType(T, name) {
             const declared = comptime descriptor.fieldOptions(T, name);
@@ -706,17 +966,33 @@ pub fn Cursor(comptime Backend: type) type {
             try descriptor.validate(T, name, value);
             return value;
         }
-        fn record(self: *Self, comptime T: type) Errors(T, Backend)!T {
+        /// A record of `T` read into `value`: `fresh`, a field no member gives
+        /// takes its default; else into what `value` holds, each member merging
+        /// with its field (`Duplicates.merge`).
+        fn record(self: *Self, comptime T: type, value: *T, fresh: bool) Errors(T, Backend)!void {
+            const opt = comptime descriptor.options(T);
+            const declared: descriptor.Duplicates = if (@hasField(@TypeOf(opt), "duplicates")) opt.duplicates else .reject;
+            const duplicates = self.context.acceptance.duplicates orelse declared;
+            // A strict reading takes the path that knows nothing of merging
+            // or kept nulls, so that it pays for neither.
+            if (fresh and duplicates != .merge and self.context.acceptance.nulls != .keep) return self.recordWith(T, value, true, duplicates, false);
+            return self.recordWith(T, value, fresh, duplicates, true);
+        }
+        fn recordWith(self: *Self, comptime T: type, value: *T, fresh: bool, duplicates: descriptor.Duplicates, comptime lenient: bool) Errors(T, Backend)!void {
             const i = @typeInfo(T).@"struct";
             const opt = comptime descriptor.options(T);
-            const unknown: descriptor.Unknown = if (self.context.acceptance.reject_unknown_fields) .reject else if (@hasField(@TypeOf(opt), "unknown_fields")) opt.unknown_fields else .ignore;
-            const duplicates: descriptor.Duplicates = if (self.context.acceptance.reject_duplicates) .reject else if (@hasField(@TypeOf(opt), "duplicates")) opt.duplicates else .reject;
+            const acceptance = self.context.acceptance;
+            const unknown: descriptor.Unknown = if (acceptance.reject_unknown_fields) .reject else if (@hasField(@TypeOf(opt), "unknown_fields")) opt.unknown_fields else .ignore;
             const header = try self.start(.record);
             defer self.context.leave();
-            var value: T = undefined;
-            var seen: [i.field_names.len]bool = @splat(false);
+            // `given`: a member named the field in this record. `filled`: the
+            // field holds a value, which a record read fresh otherwise takes
+            // from its default; it is `given` but where a lenient reading
+            // keeps a null or merges into a value already there.
+            var given: [i.field_names.len]bool = @splat(false);
+            var filled: if (lenient) [i.field_names.len]bool else void = if (lenient) @splat(!fresh) else {};
             // A record's keys are checked here, not by the format: the known
-            // ones by `seen`, the ignored ones by name.
+            // ones by `given`, the ignored ones by name.
             var ignored: Ignored = .{};
             var pairs: usize = 0;
             var hint: usize = 0;
@@ -734,32 +1010,53 @@ pub fn Cursor(comptime Backend: type) type {
                         if (comptime index >= i.field_names.len) unreachable;
                         hint = comptime MemberNames(T).next[index];
                         const field_name = i.field_names[index];
+                        const F = i.field_types[index];
                         const f = comptime descriptor.field(T, field_name);
-                        if (seen[index] and duplicates == .reject) {
+                        const again = given[index];
+                        if (again and duplicates == .reject) {
                             if (diagnostics) |d| d.field(field_name);
                             return error.DuplicateField;
                         }
                         if (comptime i.field_attrs[index].@"comptime") {
                             // A constant of the type: the member, when it is
                             // there, holds that value or the record is not one.
-                            const F = i.field_types[index];
                             const found_value = try self.read(F, f);
                             if (!descriptor.same(F, found_value, @field(@as(T, undefined), field_name))) {
                                 if (diagnostics) |d| d.field(field_name);
                                 return error.UnexpectedType;
                             }
-                            seen[index] = true;
-                        } else if (f.skip_decode or (seen[index] and duplicates == .first)) {
+                            if (lenient) filled[index] = true;
+                        } else if (f.skip_decode or (again and duplicates == .first)) {
                             try self.skip();
+                        } else if (lenient and try self.keptByNull(F, f)) {
+                            // `Nulls.keep`: the field keeps what it holds, or is
+                            // emptied.
+                            if (comptime emptiedByNull(F)) {
+                                @field(value, field_name) = try self.zero(F);
+                                filled[index] = true;
+                            }
+                        } else if (lenient and filled[index] and ((again and duplicates == .merge) or (!again and !fresh))) {
+                            // A field that holds a value merges with it where
+                            // the member comes again under `merge`, or where the
+                            // record is itself read into what it holds. Through a
+                            // copy: a packed record's field has no address.
+                            const mark: ctx.Diagnostics.Checkpoint = if (diagnostics) |d| d.checkpoint() else .none;
+                            if (diagnostics) |d| d.field(field_name);
+                            var held = @field(value, field_name);
+                            try self.readFieldInto(T, field_name, &held);
+                            @field(value, field_name) = held;
+                            if (diagnostics) |d| d.restore(mark);
                         } else if (diagnostics) |d| {
                             const mark = d.checkpoint();
                             d.field(field_name);
                             @field(value, field_name) = try self.readField(T, field_name);
                             d.restore(mark);
+                            if (lenient) filled[index] = true;
                         } else {
                             @field(value, field_name) = try self.readField(T, field_name);
+                            if (lenient) filled[index] = true;
                         }
-                        seen[index] = !f.skip_decode;
+                        given[index] = !f.skip_decode;
                     },
                     else => unreachable,
                 } else {
@@ -767,40 +1064,37 @@ pub fn Cursor(comptime Backend: type) type {
                         if (self.context.diagnostics) |d| d.field(name);
                         return error.UnknownField;
                     }
-                    if (self.context.acceptance.reject_duplicates) try ignored.add(self.context, name);
+                    if (acceptance.duplicates == .reject) try ignored.add(self.context, name);
                     try self.skip();
                 }
             }
             if (header.len) |n| if (n != pairs) return error.SyntaxError;
-            inline for (i.field_names, i.field_types, i.field_attrs, 0..) |name, F, attrs, index| {
+            if (lenient and !fresh) return;
+            inline for (i.field_names, i.field_attrs, 0..) |name, attrs, index| {
                 if (attrs.@"comptime") continue;
-                if (!seen[index]) {
+                if (!(if (lenient) filled[index] else given[index])) {
                     const mark: ctx.Diagnostics.Checkpoint = if (self.context.diagnostics) |d| d.checkpoint() else .none;
                     if (self.context.diagnostics) |d| {
                         d.offset = self.backend.offset();
                         d.field(name);
                     }
-                    const declared = comptime descriptor.fieldOptions(T, name);
-                    if (@hasField(@TypeOf(declared), "default") and @typeInfo(@TypeOf(declared.default)) == .@"fn") {
-                        @field(value, name) = try declared.default(self.context);
-                        if (comptime @typeInfo(F) == .pointer) {
-                            const pointer = @typeInfo(F).pointer;
-                            if (comptime pointer.size == .slice and pointer.child == u8 and !@hasField(@TypeOf(declared), "codec")) {
-                                const bytes = @field(value, name);
-                                try self.context.span(bytes.len, false);
-                                try self.context.chargeWork(bytes.len);
-                                if ((comptime descriptor.field(T, name)).as != .bytes and !std.unicode.utf8ValidateSlice(bytes)) return error.InvalidUtf8;
-                            }
-                        }
-                    } else {
-                        const default_value = (comptime descriptor.default(T, name)) orelse return error.MissingField;
-                        @field(value, name) = try cloneField(F, comptime descriptor.field(T, name), default_value, self.context);
-                    }
+                    @field(value, name) = try self.defaultOf(T, name);
                     try descriptor.validate(T, name, @field(value, name));
                     if (self.context.diagnostics) |d| d.restore(mark);
                 }
             }
-            return value;
+        }
+        /// Whether the next value is a `null` that `Nulls.keep` takes for a
+        /// value of `F`, which has no null of its own: taken and counted, as
+        /// `read` counts a value, if so.
+        inline fn keptByNull(self: *Self, comptime F: type, comptime policy: descriptor.Field) Error!bool {
+            if (comptime readsNull(F)) return false;
+            if (self.context.acceptance.nulls != .keep) return false;
+            self.request = typeRequest(F, policy);
+            if (!try self.takeNull()) return false;
+            try self.context.node();
+            try self.context.chargeWork(1);
+            return true;
         }
         /// Every ignored value still traverses the complete wire structure.
         pub fn skip(self: *Self) Error!void {
@@ -1025,13 +1319,37 @@ fn PolicyAccess(comptime Backend: type, comptime policy: descriptor.Field) type 
             return event.simple;
         }
         pub fn readPairs(self: *Self, comptime K: type, comptime V: type) (Errors(K, Backend) || Errors(V, Backend))![]model.Pair(K, V) {
+            return self.pairsFrom(K, V, &.{});
+        }
+        /// A map's entries after `prior`'s. Where the reading names a choice
+        /// for a key given twice (`Acceptance.duplicates`), a key already
+        /// there keeps its first value (`first`) or takes the later one read
+        /// afresh (`last`, `merge`); otherwise every entry is kept, in order.
+        fn pairsFrom(self: *Self, comptime K: type, comptime V: type, prior: []const model.Pair(K, V)) (Errors(K, Backend) || Errors(V, Backend))![]model.Pair(K, V) {
+            const duplicates = self.cursor.context.acceptance.duplicates;
+            const unique = duplicates != null and duplicates.? != .reject;
             var map = try self.begin(.map);
             defer map.abort();
             var storage: []model.Pair(K, V) = &.{};
             var n: usize = 0;
+            if (prior.len != 0) {
+                storage = try self.alloc(model.Pair(K, V), prior.len);
+                try self.chargeWork(prior.len);
+                @memcpy(storage, prior);
+                n = prior.len;
+            }
             while (try map.hasNext()) {
                 if (n >= policy.max_len) return error.LengthLimit;
                 if (n >= self.cursor.context.limits.container_items) return error.ItemLimit;
+                const key = try map.key(K);
+                if (unique) if (try self.entryOf(K, V, storage[0..n], key)) |entry| {
+                    if (duplicates.? == .first) {
+                        _ = try map.hold();
+                    } else {
+                        entry.value = try map.element(V);
+                    }
+                    continue;
+                };
                 if (n == storage.len) {
                     const capacity = try ctx.Context.grownCapacity(n, @min(policy.max_len, self.cursor.context.limits.container_items));
                     const next = try self.alloc(model.Pair(K, V), capacity);
@@ -1039,11 +1357,19 @@ fn PolicyAccess(comptime Backend: type, comptime policy: descriptor.Field) type 
                     @memcpy(next[0..n], storage[0..n]);
                     storage = next;
                 }
-                storage[n] = .{ .key = try map.key(K), .value = try map.element(V) };
+                storage[n] = .{ .key = key, .value = try map.element(V) };
                 n += 1;
             }
             try map.finish();
             return storage[0..n];
+        }
+        /// The entry of `entries` whose key is `key`, each comparison charged.
+        fn entryOf(self: *Self, comptime K: type, comptime V: type, entries: []model.Pair(K, V), key: K) ctx.DecodeError!?*model.Pair(K, V) {
+            for (entries) |*entry| {
+                try self.chargeWork(if (comptime @typeInfo(K) == .pointer and @typeInfo(K).pointer.size == .slice) @min(key.len, entry.key.len) + 1 else 1);
+                if (descriptor.same(K, entry.key, key)) return entry;
+            }
+            return null;
         }
         pub fn read(self: *Self, comptime T: type) Errors(T, Backend)!T {
             if (self.used) return error.CustomRejected;
@@ -1260,7 +1586,7 @@ fn PolicyCompoundAccess(comptime Backend: type, comptime policy: descriptor.Fiel
             if (self.count >= self.access.cursor.context.limits.container_items) return error.ItemLimit;
             self.key_pending = false;
             self.count += 1;
-            return self.access.cursor.read(T, field_policy);
+            return self.access.cursor.readFresh(T, field_policy);
         }
         /// Where a member's value lies, checked and passed over, to be read
         /// later by `readHeld`: a value whose type depends on a member that

@@ -1597,7 +1597,7 @@ test "a repeated key is refused, kept first or kept last, as asked" {
         };
         var source: std.Io.Reader = .fixed(line);
         var reader: jsonl.Reader(Keeping) = .init(testing.allocator, &source, .{
-            .parse = .{ .reject_duplicates = false },
+            .parse = .{ .duplicates = null },
         });
         defer reader.deinit();
         try testing.expectEqualStrings(case[1], (try reader.next()).?.value.kind);

@@ -613,7 +613,7 @@ fn checkPrettyInPlace(comptime T: type, input: []const u8, options: jsonl.Reader
     var used = options;
     used.format = .pretty;
     used.parse.ignore_unknown_fields = true;
-    if (T == json.Value) used.parse.reject_duplicates = false;
+    if (T == json.Value) used.parse.duplicates = null;
     var whole: std.Io.Reader = .fixed(input);
     var buffer: [4]u8 = undefined;
     var chunks: fixtures.Chunked = .init(input, &buffer, 3);
@@ -1478,7 +1478,7 @@ fn checkDecode(bytes: []const u8) !void {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    const any: json.ParseOptions = .{ .reject_duplicates = false };
+    const any: json.ParseOptions = .{ .duplicates = null };
     const value = json.parseLeaky(json.Value, a, bytes, any);
     if (isShallow(bytes)) {
         const valid = try std.json.validate(testing.allocator, bytes);

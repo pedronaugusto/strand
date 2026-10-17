@@ -126,12 +126,12 @@ fn spellObject(s: *Source, out: *Out, depth: u8, record: ?*std.ArrayList(Written
 
 /// Any parse into `json.Value`: repeated names kept, as the iterator keeps
 /// them.
-const any: json.ParseOptions = .{ .reject_duplicates = false };
+const any: json.ParseOptions = .{ .duplicates = null };
 
 /// An object read for none of its members: every one passed over, as the
 /// iterator passes over a member's value, and checked as it is.
 const Nothing = struct {};
-const passing: json.ParseOptions = .{ .reject_duplicates = false, .ignore_unknown_fields = true };
+const passing: json.ParseOptions = .{ .duplicates = null, .ignore_unknown_fields = true };
 
 fn fuzzSpelled(_: void, case: *shakedown.Case) anyerror!void {
     const s = case.source;

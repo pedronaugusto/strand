@@ -4,6 +4,8 @@ const WireDecoder = @import("Decoder.zig").Dialect(false);
 const core = @import("../core.zig");
 pub const Member = struct { key: []const u8, value: Value };
 pub const Value = union(enum) {
+    /// Null is one of its values: it reads null itself.
+    pub const strand_nullable = true;
     /// Any JSON value: its schema admits everything.
     pub const strand_json_schema = "true";
     null_value,

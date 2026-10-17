@@ -5,6 +5,8 @@ const std = @import("std");
 pub const Entry = struct { key: Value, value: Value };
 pub const Tagged = struct { number: u64, value: *const Value };
 pub const Value = union(enum) {
+    /// Null is one of its values: it reads null itself.
+    pub const strand_nullable = true;
     unsigned: u64,
     /// -1 - n.
     negative: u64,

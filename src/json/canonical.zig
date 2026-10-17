@@ -63,7 +63,7 @@ const IntegerCheck = struct {
 
 /// The JSON text `input`, canonical.
 pub fn canonicalize(gpa: std.mem.Allocator, output: *std.Io.Writer, input: []const u8, options: Options) Error!void {
-    var parsed = try api.parse(Value, gpa, input, .{ .limits = options.limits, .reject_duplicates = true });
+    var parsed = try api.parse(Value, gpa, input, .{ .limits = options.limits, .duplicates = .reject });
     defer parsed.deinit();
     var arena: std.heap.ArenaAllocator = .init(gpa);
     defer arena.deinit();

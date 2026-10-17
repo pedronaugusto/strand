@@ -46,7 +46,9 @@ pub fn Dialect(comptime jsonc: bool) type {
         keys: [128][]const u8,
         extra_keys: std.ArrayList([]const u8),
         key_count: usize,
-        reject_duplicates: bool,
+        /// What the reading accepts of the text: whether an object's keys are
+        /// checked for one given twice, and what text that is not Unicode is.
+        accepting: Accepting,
         root_done: bool,
         /// Whether the input is only being checked, as a value about to be written
         /// as it is: a string with an escape in it is checked and its length
@@ -54,15 +56,19 @@ pub fn Dialect(comptime jsonc: bool) type {
         /// apart by what they spell, escapes read as they go.
         checking: bool,
         const Self = @This();
+        const Accepting = struct { reject_duplicates: bool, unicode: strings.Unicode };
 
         /// Starts `self` over `bytes`, which the caller has charged to `c.input`. It
         /// is built where it lies, field by field: its frames and keys are kilobytes
         /// that a struct literal would build elsewhere and copy, unread.
         pub fn init(self: *Self, c: *core.Context, bytes: []const u8) void {
-            self.begin(bytes, 0, c.allocator(), c.acceptance.reject_duplicates);
+            self.begin(bytes, 0, c.allocator(), .{
+                .reject_duplicates = c.acceptance.duplicates == .reject,
+                .unicode = c.acceptance.invalid_unicode,
+            });
         }
         /// Starts over `bytes`, reading from where the whitespace after `from` ends.
-        fn begin(self: *Self, bytes: []const u8, from: usize, allocator: std.mem.Allocator, reject_duplicates: bool) void {
+        fn begin(self: *Self, bytes: []const u8, from: usize, allocator: std.mem.Allocator, accepting: Accepting) void {
             self.input = bytes;
             self.at = self.space(from);
             self.last_end = self.at;
@@ -71,7 +77,7 @@ pub fn Dialect(comptime jsonc: bool) type {
             self.depth = 0;
             self.extra_keys = .empty;
             self.key_count = 0;
-            self.reject_duplicates = reject_duplicates;
+            self.accepting = accepting;
             self.root_done = false;
             self.checking = false;
         }
@@ -95,7 +101,7 @@ pub fn Dialect(comptime jsonc: bool) type {
         /// Starts `into` over a value already read, as the root of its own input.
         pub fn replay(self: *const Self, into: *Self, from: usize, end: usize) void {
             const bounded = self.input[0..end];
-            into.begin(bounded, from, self.allocator, self.reject_duplicates);
+            into.begin(bounded, from, self.allocator, self.accepting);
             into.at = into.leading(from);
             into.last_end = into.at;
         }
@@ -178,7 +184,7 @@ pub fn Dialect(comptime jsonc: bool) type {
             for (from..self.key_count) |i| {
                 const prior = if (i < self.keys.len) self.keys[i] else self.extra_keys.items[i - self.keys.len];
                 try c.chargeWork(@max(name.len, prior.len));
-                const same = if (self.checking) strings.sameText(name, prior) else std.mem.eql(u8, name, prior);
+                const same = if (self.checking) strings.sameText(name, prior, self.accepting.unicode) else std.mem.eql(u8, name, prior);
                 if (same) return error.DuplicateField;
             }
             if (self.key_count < self.keys.len) self.keys[self.key_count] = name else self.extra_keys.append(self.allocator, name) catch |err| return failure(c, err);
@@ -324,13 +330,17 @@ pub fn Dialect(comptime jsonc: bool) type {
             const body = bytes[at + 1 ..];
             const found = strings.specialNear(body) orelse strings.special(body);
             var name_len = found.at;
-            const escaped = !(found.at < body.len and body[found.at] == '"');
+            var escaped = !(found.at < body.len and body[found.at] == '"');
+            if (!escaped and found.non_ascii and !std.unicode.utf8ValidateSlice(body[0..found.at])) {
+                if (self.accepting.unicode == .refuse) return error.SyntaxError;
+                // Read again below, its bad bytes as U+FFFD.
+                escaped = true;
+            }
             if (!escaped) {
-                if (found.non_ascii and !std.unicode.utf8ValidateSlice(body[0..found.at])) return error.SyntaxError;
                 try c.span(found.at, true);
             } else {
-                name_len = (try strings.end(body)).at;
-                try c.span(strings.unescapedLength(body[0..name_len]), true);
+                name_len = (try strings.end(body, self.accepting.unicode)).at;
+                try c.span(strings.unescapedLength(body[0..name_len], self.accepting.unicode), true);
             }
             const name = body[0..name_len];
             if (f.check_keys) try self.remember(c, name);
@@ -480,9 +490,20 @@ pub fn Dialect(comptime jsonc: bool) type {
             if (!try self.toValue()) return null;
             if (try self.byte() != @as(u8, if (object) '{' else '[')) return null;
             self.reading();
-            try self.push(c, object, object and self.reject_duplicates and request.expected != .record);
+            try self.push(c, object, object and self.accepting.reject_duplicates and request.expected != .record);
             self.finish(self.at + 1);
             return .{ .kind = if (!object) .sequence else if (request.expected == .map) .map else .record };
+        }
+
+        /// Whether the next value is `null`, read if it is; false, with nothing
+        /// read, for anything else.
+        pub inline fn none(self: *Self, c: *core.Context) Error!bool {
+            _ = c;
+            if (!try self.toValue()) return false;
+            if (try self.byte() != 'n') return false;
+            self.reading();
+            _ = try self.word("null", .none);
+            return true;
         }
 
         /// The next value's lexeme if it is a number, read; `null`, with nothing read,
@@ -526,7 +547,9 @@ pub fn Dialect(comptime jsonc: bool) type {
             };
             if (digits > c.limits.numeric_bytes) return null;
             const result: T = if (@typeInfo(T).int.signedness == .unsigned) result: {
-                if (negative and magnitude != 0) return null;
+                // `-0` is an unsigned zero unless integers are to be written as
+                // one, which the lexeme path then refuses.
+                if (negative and (magnitude != 0 or c.acceptance.integers == .digits)) return null;
                 break :result std.math.cast(T, magnitude) orelse return null;
             } else result: {
                 if (negative) {
@@ -615,11 +638,12 @@ pub fn Dialect(comptime jsonc: bool) type {
             const found = strings.specialNear(body) orelse strings.special(body);
             var len = found.at;
             var end = found.at;
-            if (found.at < body.len and body[found.at] == '"') {
-                if (found.non_ascii and !std.unicode.utf8ValidateSlice(body[0..found.at])) return error.SyntaxError;
-            } else {
-                end = (try strings.end(body)).at;
-                len = strings.unescapedLength(body[0..end]);
+            const plain = found.at < body.len and body[found.at] == '"';
+            const valid = !plain or !found.non_ascii or std.unicode.utf8ValidateSlice(body[0..found.at]);
+            if (!valid and self.accepting.unicode == .refuse) return error.SyntaxError;
+            if (!plain or !valid) {
+                end = (try strings.end(body, self.accepting.unicode)).at;
+                len = strings.unescapedLength(body[0..end], self.accepting.unicode);
             }
             try c.span(len, false);
             try c.chargeWork(len);
@@ -629,7 +653,7 @@ pub fn Dialect(comptime jsonc: bool) type {
         fn passContainer(self: *Self, c: *core.Context, object: bool) Error!void {
             try c.enter();
             defer c.leave();
-            try self.push(c, object, object and self.reject_duplicates);
+            try self.push(c, object, object and self.accepting.reject_duplicates);
             self.finish(self.at + 1);
             var count: usize = 0;
             if (object) {
@@ -686,7 +710,7 @@ pub fn Dialect(comptime jsonc: bool) type {
                             return .unit;
                         }
                     }
-                    try self.push(c, true, self.reject_duplicates and request.expected != .record);
+                    try self.push(c, true, self.accepting.reject_duplicates and request.expected != .record);
                     self.finish(self.at + 1);
                     return .{ .begin = .{ .kind = if (request.expected == .map) .map else .record } };
                 },
@@ -731,22 +755,28 @@ pub fn Dialect(comptime jsonc: bool) type {
             const body = self.input[start..];
             // The common case, a string with no escape, takes one look.
             const found = strings.specialNear(body) orelse strings.special(body);
-            if (found.at < body.len and body[found.at] == '"') {
-                if (found.non_ascii and !std.unicode.utf8ValidateSlice(body[0..found.at])) return error.SyntaxError;
+            if (found.at < body.len and body[found.at] == '"') plain: {
+                if (found.non_ascii and !std.unicode.utf8ValidateSlice(body[0..found.at])) {
+                    if (self.accepting.unicode == .refuse) return error.SyntaxError;
+                    // Rewritten below, its bad bytes as U+FFFD.
+                    break :plain;
+                }
                 try c.span(found.at, is_key);
                 self.finish(start + found.at + 1);
                 return .{ .bytes = body[0..found.at], .lifetime = .borrowed };
             }
-            const end = try strings.end(body);
+            const unicode = self.accepting.unicode;
+            const end = try strings.end(body, unicode);
             const escaped = body[0..end.at];
             if (self.checking) {
-                try c.span(strings.unescapedLength(escaped), is_key);
+                try c.span(strings.unescapedLength(escaped, unicode), is_key);
                 self.finish(start + end.at + 1);
                 return .{ .bytes = escaped, .lifetime = .borrowed };
             }
-            // Nothing is shorter unescaped, so the escaped length bounds the copy.
-            const storage = try c.alloc(u8, escaped.len);
-            const n = strings.unescape(escaped, storage);
+            // Nothing is shorter unescaped, so the escaped length bounds the
+            // copy; a bad byte made U+FFFD is longer, so then it is counted.
+            const storage = try c.alloc(u8, if (unicode == .refuse) escaped.len else strings.unescapedLength(escaped, unicode));
+            const n = strings.unescape(escaped, storage, unicode);
             try c.span(n, is_key);
             self.finish(start + end.at + 1);
             return .{ .bytes = storage[0..n], .lifetime = .owned };

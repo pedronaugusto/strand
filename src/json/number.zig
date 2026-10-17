@@ -2,9 +2,25 @@
 const std = @import("std");
 const aegis = @import("aegis");
 const core = @import("../core.zig");
+/// A number as a `T`: any number whose value is whole and in range, or under
+/// `Integers.digits` only one written as an integer (digits, a minus only for
+/// a signed type), anything else `UnexpectedType`.
 pub inline fn integer(comptime T: type, text: []const u8, c: *core.Context) core.DecodeError!T {
     try c.chargeWork(text.len);
-    if (plain(T, text)) |value| return value;
+    if (plain(T, text)) |value| {
+        // Only `-0` is a plain unsigned with a sign.
+        if (@typeInfo(T).int.signedness == .unsigned and text[0] == '-' and c.acceptance.integers == .digits) return error.UnexpectedType;
+        return value;
+    }
+    return lexeme(T, text, c);
+}
+
+/// An integer in any other spelling, as the reading takes it.
+fn lexeme(comptime T: type, text: []const u8, c: *core.Context) core.DecodeError!T {
+    if (c.acceptance.integers == .digits) {
+        if (std.mem.findAny(u8, text, ".eE") != null) return error.UnexpectedType;
+        if (@typeInfo(T).int.signedness == .unsigned and text[0] == '-') return error.UnexpectedType;
+    }
     return spelled(T, text);
 }
 

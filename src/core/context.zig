@@ -15,7 +15,47 @@ pub const EncodeError = LimitError || error{ DuplicateField, InvalidRaw, Invalid
 pub const Lifetime = enum { borrowed, transient, owned };
 pub const Ownership = enum { borrowed, owned };
 pub const Borrow = enum { prefer, copy, require };
-pub const Acceptance = struct { reject_unknown_fields: bool = false, reject_duplicates: bool = false };
+/// What a record member given twice does: refused, the first kept, the last
+/// kept, or the later read into what the earlier left (`merge`): a record
+/// member by member, an optional's value, a sequence's elements by position
+/// and a map's entries, a key given again taking its later value; anything
+/// else the later replaces. A map's key given twice follows the same choice.
+pub const Duplicates = enum { reject, first, last, merge };
+/// How a record member's name finds its field: `exact`ly, or by an exact name
+/// first and then by case folding (`fold_case`): the first field, in
+/// declaration order and then aliases, whose name the member's folds to. ASCII
+/// letters fold either case, as do `ſ` (U+017F) and the Kelvin sign (U+212A),
+/// which Unicode folds onto `s` and `k`; a letter outside ASCII in a field's
+/// name matches only itself.
+pub const Names = enum { exact, fold_case };
+/// What `null` does where a value without a null of its own is read:
+/// `refuse`d, or `keep` the value as it is. A record's field keeps what it
+/// held (its default, or what a member before left), a sequence and a map are
+/// emptied, and a value read fresh, an element or a map's value, is its type's
+/// zero: false, 0, empty text, null, a record of its fields' defaults (a type
+/// with no zero still refuses it). An optional, a raw value and a type that
+/// declares `strand_nullable` (a dynamic value) read null themselves.
+pub const Nulls = enum { refuse, keep };
+/// How a number becomes an integer: any number whose value is whole and in
+/// range (`whole`: `1.0` and `1e2` are integers), or one written as an
+/// integer alone (`digits`: digits, with a minus only for a signed type).
+pub const Integers = enum { whole, digits };
+/// Text that is not Unicode: `refuse`d, or each byte that does not begin a
+/// UTF-8 sequence and each surrogate escape without its pair `replace`d by
+/// U+FFFD.
+pub const InvalidUnicode = enum { refuse, replace };
+/// What a reading accepts beyond a type's own declarations. A format reads
+/// the parts that are about its text (integers, invalid Unicode).
+pub const Acceptance = struct {
+    reject_unknown_fields: bool = false,
+    /// `null` leaves it to each record's type (`strand.duplicates`, refused
+    /// where it declares nothing).
+    duplicates: ?Duplicates = null,
+    names: Names = .exact,
+    nulls: Nulls = .refuse,
+    integers: Integers = .whole,
+    invalid_unicode: InvalidUnicode = .refuse,
+};
 
 pub const Limits = struct {
     input_bytes: usize = 16 * 1024 * 1024,

@@ -124,16 +124,17 @@ admit anything; a type that contains itself is written once, under `$defs`. A ty
 codec of its own declares `strand_json_schema`, since strand cannot know what the codec
 writes, and one that does not is refused when it is compiled.
 
-`json.go.parseLeaky(T, arena, bytes, options)` reads JSON into `T` as Go's
-`encoding/json` reads it into the matching Go type, for a program that must take what a
-Go program takes: a member matches its field exactly, else by Go's case folding; `null`
-leaves a value as it is and empties an optional, a slice or a map; a member given twice is
-read into what the first left; an integer is a number written as one and in range; a byte
-that is not UTF-8 and an unpaired surrogate escape read as U+FFFD; unknown members are
-passed over. `.rest = .any` reads the first value and leaves what follows, as a Go
-`json.Decoder` does. Every field has a default (Go's zero value), and a type of its own
-declares `strandGoDecode`, Go's `json.Unmarshaler`. Held to Go 1.27 over 120 000 random
-documents.
+A reading can accept more than the strict default, each choice a field of
+`json.ParseOptions` honoured by the one decode path: `.duplicates = .merge` reads a
+member given again into what the first left (`.first` and `.last` keep one;
+`null` leaves it to each type), `.names = .fold_case` matches a name exactly and then
+by case folding, `.nulls = .keep` lets `null` keep a value that has no null (a
+sequence or map emptied, a fresh value its type's zero), `.integers = .digits` takes
+an integer only as written as one, and `.invalid_unicode = .replace` reads a byte
+that is not UTF-8 and a lone surrogate escape as U+FFFD. Together, with unknown
+fields ignored, they read as Go's `encoding/json` reads into the matching Go type,
+held to Go 1.27 over 120 000 random documents. `json.parsePrefixLeaky` reads one
+value off the front of its input and says where it ended, leaving the rest.
 
 A few fields can be read out of a large JSON value without parsing the rest.
 `json.Members` goes over an object's members one at a time, as they are asked

@@ -72,7 +72,7 @@ pub const WriteOptions = struct {
 pub fn write(output: *std.Io.Writer, value: anytype, options: WriteOptions) @typeInfo(@TypeOf(core.serialize(value, @as(*WireEncoder, undefined), @as(*core.Context, undefined)))).error_union.error_set!void {
     var fixed: std.heap.FixedBufferAllocator = .init(options.scratch);
     var c = core.Context.init(fixed.allocator(), options.limits, .borrowed);
-    c.acceptance.reject_duplicates = true;
+    c.acceptance.duplicates = .reject;
     var encoder: WireEncoder = undefined;
     encoder.init(output, c.allocator());
     defer encoder.deinit();

@@ -206,6 +206,37 @@ are the default; internal and adjacent tags require unique discriminants and
 exact payload boundaries. Unknown capture is explicit format-branded Raw.
 Caller acceptance can tighten unknown-field and duplicate policy.
 
+A reading may also accept more than a type declares, as a reader that must take
+what a lenient writer's reader takes needs to (Go's `encoding/json` is the one held
+to): every choice is a field of `core.Acceptance` that the one mapping kernel or the
+format's own text reading honours, never a second mapper beside them. `duplicates`
+overrides each record's own policy for the whole reading; its `merge` reads a member
+given again into what the earlier one left (`Cursor.readInto`): a record member by
+member, an optional's value, a pointer's, a sequence's elements by position (the rest
+read afresh), an array's, a map's entries with a key given again taking its later
+value read afresh; anything else, a type with a codec of its own among them, is read
+afresh and replaces it. A map's keys follow the same choice (`first`, `last`, `merge`)
+where the reading names one, and are all kept where it leaves it to the types.
+`names = .fold_case` matches a key no name spells exactly by case folding, the first
+of the record's names in declaration order (fields, then aliases) it folds to: ASCII
+letters, and `ſ` and the Kelvin sign that Unicode folds onto two of them; a letter
+outside ASCII in a field's name matches only itself (full folding would need
+xenoglyph's tables). `nulls = .keep` takes a null where the type has none: a record's
+field keeps what it held (its default, or an earlier member's value), a sequence and a
+map are emptied, a value read fresh (an element, a map's value, the root) is its type's
+zero (false, 0, empty, null, a record of its defaults; a type with none refuses it). The
+check is made before a type's own codec, which therefore never sees such a null and needs
+no prior value to keep; a type whose values include null reads it itself: an optional, a
+raw value, and a type that declares `strand_nullable` (each format's dynamic `Value`).
+JSON adds two of its text: `integers = .digits` takes an integer only as written as one
+(no fraction or exponent, a minus only for a signed type), and `invalid_unicode =
+.replace` reads a byte that begins no UTF-8 sequence and a surrogate escape without its
+pair as U+FFFD, in values, keys and passed-over values alike, a byte at a time as Go's
+decoder does; a `Raw` keeps its bytes as written. Every choice costs a strict reading
+one predictable branch where it is checked; a string is rewritten only on the slow path
+an escape already takes. `json.parsePrefixLeaky` reads one value off the front of its
+input and says where it ended, as a stream decoder leaves the rest.
+
 `json.schema` derives a JSON Schema (2020-12) from the same descriptor at compile
 time, per direction: what `parse` accepts (`required` is the fields without a default,
 aliases are properties, unknown members refused unless the parse ignores them) and what

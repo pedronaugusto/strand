@@ -11,12 +11,12 @@ pub const ParseError = api.ParseError;
 pub const parse = api.parse;
 pub const parseOwned = api.parseOwned;
 pub const parseLeaky = api.parseLeaky;
+pub const Prefix = api.Prefix;
+pub const parsePrefixLeaky = api.parsePrefixLeaky;
 pub const parseStdValue = api.parseStdValue;
 pub const jsonc = api.jsonc;
 /// The JSON Canonicalization Scheme (RFC 8785).
 pub const jcs = @import("json/canonical.zig");
-/// JSON read as Go's `encoding/json` reads it into the matching Go type.
-pub const go = @import("json/go.zig");
 /// JSON Schema (2020-12) for the JSON a type is read and written as.
 pub const schema = @import("json/schema.zig");
 pub const Whitespace = api.Whitespace;

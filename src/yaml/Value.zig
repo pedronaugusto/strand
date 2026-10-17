@@ -5,6 +5,8 @@ const std = @import("std");
 const schema = @import("schema.zig");
 pub const Entry = struct { key: Value, value: Value };
 pub const Value = union(enum) {
+    /// Null is one of its values: it reads null itself.
+    pub const strand_nullable = true;
     null,
     boolean: bool,
     integer: i128,

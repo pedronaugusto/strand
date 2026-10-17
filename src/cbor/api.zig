@@ -90,7 +90,7 @@ pub fn write(output: *std.Io.Writer, value: anytype, options: WriteOptions) @typ
     var no_scratch: [0]u8 = .{};
     var fixed: std.heap.FixedBufferAllocator = .init(&no_scratch);
     var c = core.Context.init(fixed.allocator(), options.limits, .borrowed);
-    c.acceptance.reject_duplicates = true;
+    c.acceptance.duplicates = .reject;
     var encoder: WireEncoder = undefined;
     encoder.init(output, options.profile, options.allocator);
     defer encoder.deinit();

@@ -6,6 +6,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Breaking
+
+- `json.go` is removed: it was a second type mapper beside the core's. What it did is now reading choices on the one decode path, below.
+- `json.ParseOptions.reject_duplicates` is `duplicates: ?core.Duplicates` (`.reject` by default; `null` is the old `false`, each type's own policy). `core.Acceptance.reject_duplicates` is `duplicates` likewise.
+
+### Added
+
+- Reading choices in `json.ParseOptions` and `core.Acceptance`: `duplicates = .merge` (a member given again read into what the first left; also a type's `strand.duplicates`), `.first` and `.last` for every record and map; `names = .fold_case`; `nulls = .keep`; `integers = .digits`; `invalid_unicode = .replace`. With unknown fields ignored they read as Go's `encoding/json` does, held to Go 1.27 over 120 000 random documents.
+- `strand_nullable`, declared by a type whose values include null (each format's `Value`): it reads null itself under `nulls = .keep`.
+- `json.parsePrefixLeaky` and `json.Prefix` on the JSON surface: one value read off the front, and where it ended.
+
 ## [0.11.2] - 2026-10-17
 
 ### Added

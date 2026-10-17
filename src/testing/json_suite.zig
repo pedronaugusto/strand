@@ -326,7 +326,7 @@ const cases = [_]struct { name: []const u8, input: []const u8, accept: bool }{
 };
 test "S2 complete JSONTestSuite grammar and implementation policies" {
     for (cases) |case| {
-        if (json.parse(json.Value, std.testing.allocator, case.input, .{ .reject_duplicates = false })) |owner| {
+        if (json.parse(json.Value, std.testing.allocator, case.input, .{ .duplicates = null })) |owner| {
             var result = owner;
             defer result.deinit();
             if (!case.accept) {

@@ -585,7 +585,7 @@ test "S1 strict caller policy tightens schema and diagnostics survive input muta
     };
     var diagnostics: core.Diagnostics = .{};
     var c: core.Context = .init(std.testing.failing_allocator, .{}, .borrowed);
-    c.acceptance = .{ .reject_duplicates = true, .reject_unknown_fields = true };
+    c.acceptance = .{ .duplicates = .reject, .reject_unknown_fields = true };
     c.diagnostics = &diagnostics;
     try std.testing.expectError(error.DuplicateField, decoded(Loose, &c, &.{ 6, 2, 3, 2, 'i', 'd', 2, 1, 3, 2, 'i', 'd', 2, 2, 0 }));
     try std.testing.expectEqual(@as(usize, 1), diagnostics.path.len);

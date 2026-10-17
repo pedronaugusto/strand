@@ -5,6 +5,8 @@ const std = @import("std");
 const Ext = @import("codecs.zig").Ext;
 pub const Entry = struct { key: Value, value: Value };
 pub const Value = union(enum) {
+    /// Null is one of its values: it reads null itself.
+    pub const strand_nullable = true;
     nil,
     boolean: bool,
     /// An integer from 0.

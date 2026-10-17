@@ -78,8 +78,8 @@ pub const Member = struct {
     /// The name unescaped into `buffer`; `error.NoSpaceLeft` when it does not
     /// fit. A buffer as long as `name` always holds it.
     pub fn nameInto(member: Member, buffer: []u8) error{NoSpaceLeft}![]u8 {
-        if (buffer.len < member.name.len and buffer.len < strings.unescapedLength(member.name)) return error.NoSpaceLeft;
-        if (buffer.len >= member.name.len) return buffer[0..strings.unescape(member.name, buffer)];
+        if (buffer.len < member.name.len and buffer.len < strings.unescapedLength(member.name, .refuse)) return error.NoSpaceLeft;
+        if (buffer.len >= member.name.len) return buffer[0..strings.unescape(member.name, buffer, .refuse)];
         // Shorter than the name as written, and long enough for its text.
         var decoded: strings.Unescaped = .{ .rest = member.name };
         var n: usize = 0;

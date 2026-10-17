@@ -241,6 +241,7 @@ pub const Context = struct {
         var charge = self.allocation_budget.reserve(bytes.raw()) catch return error.AllocationLimit;
         errdefer charge.release();
         const memory = try self.storage.alloc(T, n);
+        charge.consume();
         return memory;
     }
     /// Preserve actual pointer alignment/sentinel using typed allocation. The
@@ -256,6 +257,7 @@ pub const Context = struct {
         var charge = self.allocation_budget.reserve(bytes.raw()) catch return error.AllocationLimit;
         errdefer charge.release();
         const memory = try self.storage.allocWithOptions(info.child, n, .fromByteUnits(alignment), sentinel);
+        charge.consume();
         return if (info.size == .one) &memory[0] else memory;
     }
     /// Temporary adapter for format scratch. It cannot outlive the operation.
@@ -269,10 +271,12 @@ pub const Context = struct {
             self.allocation_limited = true;
             return null;
         };
-        return self.storage.rawAlloc(n, alignment, address) orelse {
+        const memory = self.storage.rawAlloc(n, alignment, address) orelse {
             charge.release();
             return null;
         };
+        charge.consume();
+        return memory;
     }
     fn scratchFree(raw: *anyopaque, memory: []u8, alignment: std.mem.Alignment, address: usize) void {
         const self: *Context = @ptrCast(@alignCast(raw)); // safe: allocator's pointer is its live Context.
@@ -321,16 +325,21 @@ pub const Scratch = struct {
     fn allocate(raw: *anyopaque, n: usize, alignment: std.mem.Alignment, address: usize) ?[*]u8 {
         const self: *Scratch = @ptrCast(@alignCast(raw)); // safe: allocator's pointer is its live Scratch.
         var reservation = self.charge(n) orelse return null;
-        return self.backing.rawAlloc(n, alignment, address) orelse {
+        const memory = self.backing.rawAlloc(n, alignment, address) orelse {
             reservation.release();
             return null;
         };
+        reservation.consume();
+        return memory;
     }
     fn resize(raw: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, address: usize) bool {
         const self: *Scratch = @ptrCast(@alignCast(raw)); // safe: allocator's pointer is its live Scratch.
         if (new_len <= memory.len) return self.backing.rawResize(memory, alignment, new_len, address);
         var reservation = self.charge(new_len - memory.len) orelse return false;
-        if (self.backing.rawResize(memory, alignment, new_len, address)) return true;
+        if (self.backing.rawResize(memory, alignment, new_len, address)) {
+            reservation.consume();
+            return true;
+        }
         reservation.release();
         return false;
     }
@@ -338,10 +347,12 @@ pub const Scratch = struct {
         const self: *Scratch = @ptrCast(@alignCast(raw)); // safe: allocator's pointer is its live Scratch.
         if (new_len <= memory.len) return self.backing.rawRemap(memory, alignment, new_len, address);
         var reservation = self.charge(new_len - memory.len) orelse return null;
-        return self.backing.rawRemap(memory, alignment, new_len, address) orelse {
+        const moved = self.backing.rawRemap(memory, alignment, new_len, address) orelse {
             reservation.release();
             return null;
         };
+        reservation.consume();
+        return moved;
     }
     fn release(raw: *anyopaque, memory: []u8, alignment: std.mem.Alignment, address: usize) void {
         const self: *Scratch = @ptrCast(@alignCast(raw)); // safe: allocator's pointer is its live Scratch.

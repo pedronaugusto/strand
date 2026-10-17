@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- aegis 0.1.13. An allocation's charge to the allocation budget is consumed once the allocation succeeds (`Budget.Reservation.consume`), in `Context.alloc`, `allocPointer`, the context's allocator and `Context.scratch`'s, where a live reservation was dropped. The accounting is unchanged; the reservation is now discharged where it ends, which glint's A003 checks.
+
 ## [0.12.0] - 2026-10-17
 
 ### Breaking

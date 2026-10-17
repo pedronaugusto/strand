@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-10-17
+
 ### Added
 
 - `json.schema.of(T, options)`: the JSON Schema (2020-12) of the JSON strand reads (`.decode`) or writes (`.encode`) for `T`, a compile-time string built from the type's `strand` declaration (names, casing, aliases, defaults, skips, ranges, tagging, aegis scalars); a recursive type goes under `$defs`. A type with a codec of its own declares `strand_json_schema`.

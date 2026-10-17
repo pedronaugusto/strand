@@ -42,7 +42,7 @@ pub const Event = union(enum) {
 /// Explicit arbitrary bytes, including in type codecs and generic map keys.
 pub const Bytes = struct {
     value: []const u8,
-    pub const strandBytes = true;
+    pub const strand_bytes = true;
     pub const strand = .{ .fields = .{ .value = .{ .as = .bytes } } };
     pub fn strandDeserialize(access: anytype) @TypeOf(access.*).Error!Bytes {
         return .{ .value = try access.bytes(.prefer) };
@@ -58,7 +58,7 @@ pub fn Raw(comptime Format: type) type {
     return struct {
         bytes: []const u8,
         const Self = @This();
-        pub const strandRawFormat = Format;
+        pub const StrandRawFormat = Format;
         pub const strand = .{ .fields = .{ .bytes = .{ .as = .bytes } } };
         pub fn strandDeserialize(access: anytype) @TypeOf(access.*).Error!Self {
             return .{ .bytes = try access.raw(Format) };
@@ -73,7 +73,7 @@ pub fn Raw(comptime Format: type) type {
 pub const Scalar = struct {
     value: u21,
     pub const Self = Scalar;
-    pub const strandScalar = true;
+    pub const strand_scalar = true;
     pub fn strandDeserialize(access: anytype) @TypeOf(access.*).Error!Self {
         return .{ .value = try access.scalar() };
     }
@@ -88,7 +88,7 @@ pub fn Pair(comptime K: type, comptime V: type) type {
 pub fn Pairs(comptime K: type, comptime V: type) type {
     return struct {
         items: []const Pair(K, V),
-        pub const strandKeyType = K;
+        pub const StrandKey = K;
         pub const Self = @This();
         pub fn strandDeserialize(access: anytype) @typeInfo(@TypeOf(access.readPairs(K, V))).error_union.error_set!Self {
             return .{ .items = try access.readPairs(K, V) };
@@ -103,7 +103,7 @@ pub fn Pairs(comptime K: type, comptime V: type) type {
 pub fn NamedUnit(comptime name: []const u8) type {
     return struct {
         pub const Self = @This();
-        pub const strandNamedShape = true;
+        pub const strand_named_shape = true;
         pub fn strandDeserialize(access: anytype) @TypeOf(access.*).Error!Self {
             try access.namedUnit(name);
             return .{};
@@ -117,7 +117,7 @@ pub fn Newtype(comptime T: type, comptime name: []const u8) type {
     return struct {
         value: T,
         pub const Self = @This();
-        pub const strandNamedShape = true;
+        pub const strand_named_shape = true;
         pub fn strandDeserialize(access: anytype) @typeInfo(@TypeOf(access.named(T, .newtype, name))).error_union.error_set!Self {
             return .{ .value = try access.named(T, .newtype, name) };
         }
@@ -130,7 +130,7 @@ pub fn NamedTuple(comptime T: type, comptime name: []const u8) type {
     return struct {
         value: T,
         pub const Self = @This();
-        pub const strandNamedShape = true;
+        pub const strand_named_shape = true;
         pub fn strandDeserialize(access: anytype) @typeInfo(@TypeOf(access.namedTuple(T, name))).error_union.error_set!Self {
             return .{ .value = try access.namedTuple(T, name) };
         }

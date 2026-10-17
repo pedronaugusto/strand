@@ -75,13 +75,13 @@ fn readsNull(comptime T: type) bool {
     return switch (@typeInfo(T)) {
         .optional, .null => true,
         .pointer => |p| p.size == .one and readsNull(p.child),
-        else => descriptor.has(T, "strandRawFormat") or descriptor.has(T, "strand_nullable"),
+        else => descriptor.has(T, "StrandRawFormat") or descriptor.has(T, "strand_nullable"),
     };
 }
 
 /// Whether `T` is a map of the core's own (`Pairs`).
 fn isPairs(comptime T: type) bool {
-    return @typeInfo(T) == .@"struct" and descriptor.has(T, "strandKeyType") and @hasField(T, "items");
+    return @typeInfo(T) == .@"struct" and descriptor.has(T, "StrandKey") and @hasField(T, "items");
 }
 
 /// Whether `null` empties `T` under `Nulls.keep`: a sequence or a map.
@@ -405,7 +405,7 @@ pub fn Cursor(comptime Backend: type) type {
                     return value;
                 },
                 .@"struct" => |i| {
-                    if (comptime descriptor.has(T, "strandRawFormat") or descriptor.has(T, "strandBytes") or descriptor.has(T, "strandScalar")) return error.UnexpectedType;
+                    if (comptime descriptor.has(T, "StrandRawFormat") or descriptor.has(T, "strand_bytes") or descriptor.has(T, "strand_scalar")) return error.UnexpectedType;
                     var value: T = undefined;
                     inline for (i.field_names, i.field_attrs) |name, attrs| {
                         if (attrs.@"comptime") continue;

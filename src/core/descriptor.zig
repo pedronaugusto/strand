@@ -152,11 +152,11 @@ fn inspect(comptime T: type, comptime fmt: Capabilities, comptime seen: []const 
     for (seen) |v| if (T == v) return .{};
     const next = seen ++ .{T};
     if (policyProblem(T, path)) |problem| return problem;
-    if (has(T, "strandBytes") and !fmt.bytes) return rejected(path, "format has no native byte codec");
-    if (has(T, "strandScalar") and !fmt.unicode_scalar) return rejected(path, "format has no Unicode scalar codec");
-    if (has(T, "strandNamedShape") and !fmt.named_shapes) return rejected(path, "format has no named shape codec");
-    if (has(T, "strandKeyType")) {
-        const K = T.strandKeyType;
+    if (has(T, "strand_bytes") and !fmt.bytes) return rejected(path, "format has no native byte codec");
+    if (has(T, "strand_scalar") and !fmt.unicode_scalar) return rejected(path, "format has no Unicode scalar codec");
+    if (has(T, "strand_named_shape") and !fmt.named_shapes) return rejected(path, "format has no named shape codec");
+    if (has(T, "StrandKey")) {
+        const K = T.StrandKey;
         if (fmt.map_keys == .text_only and !(@typeInfo(K) == .pointer and @typeInfo(K).pointer.size == .slice and @typeInfo(K).pointer.child == u8)) return rejected(path, "format requires text map keys");
         if (fmt.map_keys == .scalar and !scalarKey(K)) return rejected(path, "format requires scalar map keys");
     }
@@ -351,7 +351,7 @@ fn checkOptions(comptime T: type, comptime ownership: context.Ownership, comptim
                         for (f.aliases) |alias| if (std.mem.eql(u8, alias, opt.tag)) @compileError("tag collides with payload alias");
                     }
                 }
-                if (@hasField(@TypeOf(opt), "other") and std.mem.eql(u8, name, opt.other) and F != void and !has(F, "strandRawFormat")) @compileError("other payload requires void or format branded Raw");
+                if (@hasField(@TypeOf(opt), "other") and std.mem.eql(u8, name, opt.other) and F != void and !has(F, "StrandRawFormat")) @compileError("other payload requires void or format branded Raw");
                 checkOptions(F, ownership, next);
             };
         },
@@ -403,7 +403,7 @@ pub fn validate(comptime T: type, comptime name: []const u8, value: @FieldType(T
     }
     if (@hasField(@TypeOf(opt), "codec")) {
         if (@hasDecl(opt.codec, "length") and opt.codec.length(value) > policy.max_len) return error.LengthLimit;
-    } else if (comptime has(@TypeOf(value), "strandBytes")) {
+    } else if (comptime has(@TypeOf(value), "strand_bytes")) {
         if (value.value.len > policy.max_len) return error.LengthLimit;
     }
     if (@hasField(@TypeOf(opt), "range")) {
@@ -448,7 +448,7 @@ fn scalarKey(comptime T: type) bool {
         .bool, .int, .float, .@"enum", .null, .void => true,
         .optional => |i| scalarKey(i.child),
         .pointer => |i| if (i.size == .one) scalarKey(i.child) else i.size == .slice and i.child == u8,
-        .@"struct" => has(T, "strandScalar") or has(T, "strandBytes"),
+        .@"struct" => has(T, "strand_scalar") or has(T, "strand_bytes"),
         else => false,
     };
 }

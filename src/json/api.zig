@@ -18,7 +18,7 @@ pub const Raw = struct {
     /// One complete JSON value, with nothing before or after it.
     bytes: []const u8,
 
-    pub const strandRawFormat = Format;
+    pub const StrandRawFormat = Format;
     pub const strand = .{ .fields = .{ .bytes = .{ .as = .bytes } } };
     /// JSON `null`, as a default: `data: strand.json.Raw = .null`.
     pub const @"null": Raw = .{ .bytes = "null" };

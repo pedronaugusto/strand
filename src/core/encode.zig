@@ -311,7 +311,7 @@ fn PolicyAccess(comptime Backend: type, comptime policy: descriptor.Field) type 
             defer self.context.leave();
             for (values) |v| {
                 if (@typeInfo(@TypeOf(v.key)) == .pointer and @typeInfo(@TypeOf(v.key)).pointer.size == .slice and @typeInfo(@TypeOf(v.key)).pointer.child == u8) try self.context.span(v.key.len, true);
-                if (comptime descriptor.has(@TypeOf(v.key), "strandBytes")) try self.context.span(v.key.value.len, true);
+                if (comptime descriptor.has(@TypeOf(v.key), "strand_bytes")) try self.context.span(v.key.value.len, true);
                 try emit(.{}, v.key, self.out, self.context, self.active);
                 try emit(.{}, v.value, self.out, self.context, self.active);
             }

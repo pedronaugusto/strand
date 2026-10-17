@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Breaking
+
+- The markers strand's own types declare follow Zig's naming, one convention with `strand_nullable` and `strand_json_schema`: the values `strandBytes`, `strandScalar` and `strandNamedShape` are `strand_bytes`, `strand_scalar` and `strand_named_shape`; the types `strandKeyType` and `strandRawFormat` are `StrandKey` and `StrandRawFormat`. A type of your own that declared one renames it.
+
 ## [0.12.0] - 2026-10-17
 
 ### Breaking

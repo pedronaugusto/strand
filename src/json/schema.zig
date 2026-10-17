@@ -80,8 +80,8 @@ const Gen = struct {
 
     fn body(comptime g: Gen, comptime T: type, comptime path: []const u8, comptime policy: descriptor.Field) []const u8 {
         if (descriptor.has(T, "strand_json_schema")) return T.strand_json_schema;
-        if (descriptor.has(T, "strandRawFormat")) return "true";
-        if (descriptor.has(T, "strandSerialize") or descriptor.has(T, "strandDeserialize") or descriptor.has(T, "strandKeyType") or descriptor.has(T, "strandScalar") or descriptor.has(T, "strandBytes") or descriptor.has(T, "strandNamedShape"))
+        if (descriptor.has(T, "StrandRawFormat")) return "true";
+        if (descriptor.has(T, "strandSerialize") or descriptor.has(T, "strandDeserialize") or descriptor.has(T, "StrandKey") or descriptor.has(T, "strand_scalar") or descriptor.has(T, "strand_bytes") or descriptor.has(T, "strand_named_shape"))
             @compileError(path ++ ": a type with a codec of its own declares its schema as `strand_json_schema`");
         if (scalars.kind(T)) |k| return switch (k) {
             .text => "{\"type\":\"string\"}",
@@ -337,7 +337,7 @@ fn shortName(comptime T: type) []const u8 {
 /// The struct and union types reachable from `T` that reach themselves.
 fn findRecursive(comptime T: type, comptime stack: []const type, comptime found: []const type) []const type {
     for (stack) |S| if (S == T) return if (containsType(found, T)) found else found ++ .{T};
-    if (descriptor.has(T, "strand_json_schema") or descriptor.has(T, "strandRawFormat")) return found;
+    if (descriptor.has(T, "strand_json_schema") or descriptor.has(T, "StrandRawFormat")) return found;
     if (scalars.kind(T) != null) return found;
     var result = found;
     switch (@typeInfo(T)) {

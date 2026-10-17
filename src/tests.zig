@@ -25,6 +25,7 @@ test {
     _ = @import("raw_test.zig");
     _ = @import("members_test.zig");
     _ = @import("json_schema_test.zig");
+    _ = @import("json_go_test.zig");
     _ = @import("tagging_test.zig");
     _ = @import("clone_test.zig");
     _ = @import("testing/keep_test.zig");

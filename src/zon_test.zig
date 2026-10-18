@@ -853,17 +853,22 @@ fn soupAgrees(_: void, case: *shakedown.Case) anyerror!void {
     };
     for (wrapped) |text| {
         try agree(Point, text);
-        try agree(Shape, text);
         try agree([]const i32, text);
-        try agree(struct { x: ?u8 = null, y: []const u8 = "" }, text);
-        try agree([2]f32, text);
+        // A byte slice is text, never a tuple of numbers as std also reads it,
+        // and a float past its type is an error, never infinity (README): where
+        // a type holds one, strand is the stricter.
+        try sound(Shape, text);
+        try sound(struct { x: ?u8 = null, y: []const u8 = "" }, text);
+        try sound([2]f32, text);
         try agree(Color, text);
     }
 }
 test "token soup is read as std.zon reads it, or refused where strand differs" {
     try shakedown.check(testing.allocator, {}, soupAgrees, .{ .cases = 1500, .seed = 0x7a6f6e536f757031 });
     // The soup is not all nonsense: a good part of it is a value of some type here.
-    try testing.expect(accepted_by_both > 100);
+    // A fuzzing run hands the property its inputs one at a time, so only the
+    // seeded run counts.
+    if (!@import("builtin").fuzz) try testing.expect(accepted_by_both > 100);
 }
 
 /// What strand reads, `std.zon` reads as the same value: strand is the stricter.

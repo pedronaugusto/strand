@@ -14,12 +14,5 @@
   ],
   "compile_once": true,
   "fast_shards": 2,
-  "jobs": [
-    {
-      "name": "ThreadSanitizer (Linux)",
-      "step": "test",
-      "args": ["-Dthread-sanitizer=true", "-Doptimize=debug", "-Dci-lint=false"],
-      "tiers": ["release"]
-    }
-  ]
+  "hardened": true
 }

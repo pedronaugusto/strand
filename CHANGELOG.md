@@ -6,6 +6,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- airlock 0.5.0 (from 0.3.5).
+- Development: the suite runs under the release tier's hardened profile (`bay hardened`, `bay hardened-fuzz`, `bay hardened-tsan`), which takes the place of the `thread-sanitizer` build option and its declared ThreadSanitizer job. The ZON token-soup property holds a type with a byte slice or a float to soundness (a byte slice is text, never the tuple of numbers std also reads it from, and a float past its type is an error, never infinity), and counts what both readers accept only on its seeded run, not per fuzzing input.
+
 ## [0.13.0] - 2026-10-17
 
 ### Breaking

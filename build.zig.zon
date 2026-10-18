@@ -15,8 +15,8 @@
         // Syncing a file and telling files apart. Pinned to a commit; the
         // hash is what the build checks.
         .airlock = .{
-            .url = "git+https://github.com/pedronaugusto/airlock?ref=v0.3.5#110a80319449523ebf71b28da0ea001bd8e66f54",
-            .hash = "airlock-0.3.5-rfvu6Jf2BQCDxSnzkPb84Cay4j7ZvQFmhTyfGQJh-1O3",
+            .url = "git+https://github.com/pedronaugusto/airlock?ref=v0.5.0#7f762143644bc2464e7a7e1544af7c5572f5f5a7",
+            .hash = "airlock-0.5.0-rfvu6Bq4BgClxCu1P8SDSU9WW0WOMd6jYDjtfasSIGEi",
         },
 
         // Types that make the checked work in the core safe by construction:

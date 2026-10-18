@@ -534,7 +534,10 @@ build test --fuzz` runs the coverage-guided targets until stopped. CI also runs
 [CI](.github/workflows/ci.yml) has three tiers. Fast runs the source checks,
 Linux Debug tests and examples, and cross-target compilation. Merge adds the
 configured macOS/Windows SDK links and native Debug test replay. Release adds
-optimized configurations, full configured cross coverage and Linux ThreadSanitizer.
+optimized configurations, full configured cross coverage and the hardened profile:
+`bay hardened` (safety on, `std.testing.allocator` on shakedown's quarantine),
+`bay hardened-fuzz` (the properties under Zig's fuzzer) and `bay hardened-tsan` (the
+suite under ThreadSanitizer, on x86_64 or aarch64 Linux).
 Merge/release also try Zig master in a non-blocking job. The profile job refreshes
 recorded test durations; it does not run a larger set of generated cases.
 Run one explicitly with `SHAKEDOWN_CASES=20000 bay test -Doptimize=safe`.

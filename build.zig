@@ -47,15 +47,6 @@ pub fn dev(b: *std.Build, tools: type) void {
     // or a double free is a failing test rather than a silent habit.
     //=====================================================================
 
-    // A follower's cancellation is a second task ending a wait the first is
-    // in, so it is the one claim here a race detector can check rather than
-    // a reader: `bay test -Dthread-sanitizer`.
-    const thread_sanitizer = b.option(
-        bool,
-        "thread-sanitizer",
-        "Build the tests with ThreadSanitizer",
-    ) orelse false;
-
     const test_filter = b.option([]const u8, "test-filter", "Select tests by name");
     const tests = b.addTest(.{
         .name = "strand-tests",
@@ -64,7 +55,6 @@ pub fn dev(b: *std.Build, tools: type) void {
             .root_source_file = p.path("src/tests.zig"),
             .target = target,
             .optimize = optimize,
-            .sanitize_thread = if (thread_sanitizer) true else null,
             .imports = &.{ .{ .name = "aegis", .module = aegis }, .{ .name = "airlock", .module = airlock } },
         }),
     });
@@ -290,6 +280,11 @@ pub fn dev(b: *std.Build, tools: type) void {
 
     preflight.addCi(b, p, .{
         .tests = test_step,
+        // The release tier fuzzes the properties and runs the suite under
+        // ThreadSanitizer: a follower's cancellation is a second task ending a
+        // wait the first is in, a claim a race detector checks rather than a
+        // reader (`bay hardened-tsan` on Linux).
+        .hardened = .{ .fuzz_step = "test", .tsan_step = "test" },
         .portable_tests = true,
         .bench = .{
             .programs = &.{.{ .name = "strand-bench", .source = "bench/bench.zig" }},

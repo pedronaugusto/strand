@@ -12,7 +12,6 @@ const strand = @import("strand.zig");
 const json = strand.json;
 const core = strand.core;
 
-const Allocator = std.mem.Allocator;
 const Out = std.Io.Writer.Allocating;
 
 /// Names worth spelling: plain, empty, quoted, escaped, beyond ASCII, and

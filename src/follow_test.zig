@@ -1,6 +1,5 @@
 //! follow scenarios through the public API.
 const std = @import("std");
-const Allocator = std.mem.Allocator;
 const strand = @import("strand.zig");
 const json = strand.json;
 const jsonl = strand.jsonl;

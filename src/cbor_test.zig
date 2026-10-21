@@ -14,9 +14,6 @@ fn bytesOf(comptime hex: []const u8) [hex.len / 2]u8 {
     _ = std.fmt.hexToBytes(&out, hex) catch unreachable;
     return out;
 }
-fn nanValue() Value {
-    return .{ .float = std.math.nan(f64) };
-}
 const tagged_text: Value = .{ .text = "2013-03-21T20:04:00Z" };
 const tagged_seconds: Value = .{ .unsigned = 1363896240 };
 const tagged_fraction: Value = .{ .float = 1363896240.5 };

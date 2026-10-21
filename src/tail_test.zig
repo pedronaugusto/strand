@@ -1,13 +1,11 @@
 //! tail scenarios through the public API.
 const builtin = @import("builtin");
 const std = @import("std");
-const Allocator = std.mem.Allocator;
 const strand = @import("strand.zig");
 const json = strand.json;
 const jsonl = strand.jsonl;
 const Tail = jsonl.Tail;
 const line_mod = @import("jsonl/line.zig");
-const Fault = line_mod.Fault;
 const Line = line_mod.Line;
 const testing = std.testing;
 const shakedown = @import("shakedown");

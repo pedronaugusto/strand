@@ -241,6 +241,7 @@ pub const Context = struct {
         var charge = self.allocation_budget.reserve(bytes.raw()) catch return error.AllocationLimit;
         errdefer charge.release();
         const memory = try self.storage.alloc(T, n);
+        charge.consume();
         return memory;
     }
     /// Preserve actual pointer alignment/sentinel using typed allocation. The
@@ -256,6 +257,7 @@ pub const Context = struct {
         var charge = self.allocation_budget.reserve(bytes.raw()) catch return error.AllocationLimit;
         errdefer charge.release();
         const memory = try self.storage.allocWithOptions(info.child, n, .fromByteUnits(alignment), sentinel);
+        charge.consume();
         return if (info.size == .one) &memory[0] else memory;
     }
     /// Temporary adapter for format scratch. It cannot outlive the operation.
@@ -269,10 +271,12 @@ pub const Context = struct {
             self.allocation_limited = true;
             return null;
         };
-        return self.storage.rawAlloc(n, alignment, address) orelse {
+        const memory = self.storage.rawAlloc(n, alignment, address) orelse {
             charge.release();
             return null;
         };
+        charge.consume();
+        return memory;
     }
     fn scratchFree(raw: *anyopaque, memory: []u8, alignment: std.mem.Alignment, address: usize) void {
         const self: *Context = @ptrCast(@alignCast(raw)); // safe: allocator's pointer is its live Context.

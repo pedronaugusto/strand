@@ -23,8 +23,8 @@
         // finite budgets, checked arithmetic, closed public diagnostics and
         // always-on contracts. std only, pinned to a commit.
         .aegis = .{
-            .url = "git+https://github.com/pedronaugusto/aegis?ref=v0.1.9#6ae6059de8309b3ea71a2e01ef962e9c1c5c4281",
-            .hash = "aegis-0.1.9-rsxoun7hBwB6dsQGTo_QzsSkvYfkgPc4pWQmc7Lga-N6",
+            .url = "git+https://github.com/pedronaugusto/aegis?ref=v0.1.14#5852ab956e97a47926af73abbb7dced5361f9267",
+            .hash = "aegis-0.1.14-rsxouiwFCACpt6FVOECFUhpjUaetlNneWpaDTj95q514",
         },
 
         // Test doubles, for the tests alone: no module a consumer builds

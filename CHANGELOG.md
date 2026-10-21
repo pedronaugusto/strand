@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- A charge an operation takes before allocating (`Context.alloc`, `allocPointer`, the scratch allocator) is given back if the allocation fails and consumed once it succeeds (aegis 0.1.14's `Reservation.consume`), so the reservation is discharged on every path where it was left held.
+
 ## [0.13.1] - 2026-10-18
 
 ### Changed

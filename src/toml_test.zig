@@ -384,31 +384,31 @@ test "limits at their edges: a document exactly at a limit is read, one past it 
     var at_nested = try toml.parse(Nested, gpa, nested, .{ .limits = .{ .depth = 4 } });
     at_nested.deinit();
     const text = "s = \"abc\\t\"";
-    try std.testing.expectError(error.LengthLimit, toml.parse(Value, gpa, text, .{ .limits = .{ .string_bytes = 3 } }));
-    var at_text = try toml.parse(Value, gpa, text, .{ .limits = .{ .string_bytes = 4 } });
+    try std.testing.expectError(error.LengthLimit, toml.parse(Value, gpa, text, .{ .limits = .{ .string_bytes = .fromRaw(3) } }));
+    var at_text = try toml.parse(Value, gpa, text, .{ .limits = .{ .string_bytes = .fromRaw(4) } });
     at_text.deinit();
-    try std.testing.expectError(error.LengthLimit, toml.parse(Value, gpa, "abcd = 1", .{ .limits = .{ .key_bytes = 3 } }));
-    var at_key = try toml.parse(Value, gpa, "abc = 1", .{ .limits = .{ .key_bytes = 3 } });
+    try std.testing.expectError(error.LengthLimit, toml.parse(Value, gpa, "abcd = 1", .{ .limits = .{ .key_bytes = .fromRaw(3) } }));
+    var at_key = try toml.parse(Value, gpa, "abc = 1", .{ .limits = .{ .key_bytes = .fromRaw(3) } });
     at_key.deinit();
     const four = "a = [1, 2, 3, 4]";
     try std.testing.expectError(error.ItemLimit, toml.parse(Value, gpa, four, .{ .limits = .{ .container_items = 3 } }));
     var at_items = try toml.parse(Value, gpa, four, .{ .limits = .{ .container_items = 4 } });
     at_items.deinit();
     try std.testing.expectError(error.ItemLimit, toml.parse(Value, gpa, "a = 1\nb = 2\nc = 3\nd = 4", .{ .limits = .{ .container_items = 3 } }));
-    try std.testing.expectError(error.LengthLimit, toml.parse(Value, gpa, "n = 1_000", .{ .limits = .{ .numeric_bytes = 3 } }));
-    var at_number = try toml.parse(Value, gpa, "n = 1_000", .{ .limits = .{ .numeric_bytes = 4 } });
+    try std.testing.expectError(error.LengthLimit, toml.parse(Value, gpa, "n = 1_000", .{ .limits = .{ .numeric_bytes = .fromRaw(3) } }));
+    var at_number = try toml.parse(Value, gpa, "n = 1_000", .{ .limits = .{ .numeric_bytes = .fromRaw(4) } });
     at_number.deinit();
-    try std.testing.expectError(error.InputLimit, toml.parse(Value, gpa, four, .{ .limits = .{ .input_bytes = four.len - 1 } }));
-    var at_input = try toml.parse(Value, gpa, four, .{ .limits = .{ .input_bytes = four.len } });
+    try std.testing.expectError(error.InputLimit, toml.parse(Value, gpa, four, .{ .limits = .{ .input_bytes = .fromRaw(four.len - 1) } }));
+    var at_input = try toml.parse(Value, gpa, four, .{ .limits = .{ .input_bytes = .fromRaw(four.len) } });
     at_input.deinit();
     // Dotted keys and implicit tables are work like any other.
     try std.testing.expectError(error.WorkLimit, toml.parse(Value, gpa, "a.b.c.d.e.f.g.h = 1", .{ .limits = .{ .work = 40 } }));
-    try std.testing.expectError(error.AllocationLimit, toml.parse(Value, gpa, four, .{ .limits = .{ .allocation_bytes = 64 } }));
+    try std.testing.expectError(error.AllocationLimit, toml.parse(Value, gpa, four, .{ .limits = .{ .allocation_bytes = .fromRaw(64) } }));
     var buffer: [16]u8 = undefined;
     var fixed: std.Io.Writer = .fixed(&buffer);
-    try std.testing.expectError(error.OutputLimit, toml.write(&fixed, .{ .a = 1 }, .{ .allocator = gpa, .limits = .{ .output_bytes = 5 } }));
+    try std.testing.expectError(error.OutputLimit, toml.write(&fixed, .{ .a = 1 }, .{ .allocator = gpa, .limits = .{ .output_bytes = .fromRaw(5) } }));
     fixed = .fixed(&buffer);
-    try toml.write(&fixed, .{ .a = 1 }, .{ .allocator = gpa, .limits = .{ .output_bytes = 6 } });
+    try toml.write(&fixed, .{ .a = 1 }, .{ .allocator = gpa, .limits = .{ .output_bytes = .fromRaw(6) } });
     try std.testing.expectEqualStrings("a = 1\n", fixed.buffered());
 }
 

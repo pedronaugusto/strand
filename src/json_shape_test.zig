@@ -77,10 +77,10 @@ fn expectRoundTrip(expected: anytype) !void {
     const framed = try std.mem.concat(a, u8, &.{ bytes, "\n" });
     var fixture = try fixtures.Fixture.init(framed, 1);
     defer fixture.deinit();
-    var tail: jsonl.Tail(T) = try .init(testing.allocator, &fixture.reader, .{ .block_bytes = 1 });
+    var tail: jsonl.Tail(T) = try .init(testing.allocator, &fixture.reader, .{ .block_bytes = .fromRaw(1) });
     defer tail.deinit();
     try testing.expectEqualDeep(expected, (try tail.prev()).?.value);
-    var batch_tail: jsonl.Tail(T) = try .init(testing.allocator, &fixture.reader, .{ .block_bytes = 1 });
+    var batch_tail: jsonl.Tail(T) = try .init(testing.allocator, &fixture.reader, .{ .block_bytes = .fromRaw(1) });
     defer batch_tail.deinit();
     var batch = try batch_tail.last(testing.allocator, 1);
     defer batch.deinit();

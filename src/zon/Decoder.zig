@@ -6,6 +6,7 @@
 //! can run: no identifier but `true`, `false`, `null`, `inf` and `nan`, no
 //! import, call or operator but the minus of a number.
 const std = @import("std");
+const limit = @import("../core/limit.zig");
 const core = @import("../core.zig");
 const number = @import("number.zig");
 const text = @import("text.zig");
@@ -254,7 +255,7 @@ fn value(self: *Self, c: *core.Context, request: core.Request) Error!core.Event 
         '0'...'9' => {
             const start = self.at;
             const end = text.numberEnd(self.input, start);
-            if (end - start > c.limits.numeric_bytes) return error.LengthLimit;
+            if (limit.exceeds(end - start, c.limits.numeric_bytes)) return error.LengthLimit;
             self.at = end;
             return self.numberEvent(self.input[start..end], .borrowed);
         },
@@ -289,7 +290,7 @@ fn negative(self: *Self, c: *core.Context) Error!core.Event {
     const b = self.peek() orelse return error.SyntaxError;
     if (std.ascii.isDigit(b)) {
         const end = text.numberEnd(self.input, self.at);
-        if (end - self.at + 1 > c.limits.numeric_bytes) return error.LengthLimit;
+        if (limit.exceeds(end - self.at + 1, c.limits.numeric_bytes)) return error.LengthLimit;
         // A minus and its number are one spelling when they touch.
         if (start + 1 == self.at) {
             self.at = end;

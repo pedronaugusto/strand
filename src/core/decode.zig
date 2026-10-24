@@ -1,9 +1,11 @@
 //! One bounded typed mapping kernel over immediate semantic events.
 const std = @import("std");
+const limit = @import("limit.zig");
 const descriptor = @import("descriptor.zig");
 const ctx = @import("context.zig");
 const model = @import("model.zig");
 const scalars = @import("scalars.zig");
+const xenoglyph = @import("xenoglyph");
 
 /// Backend.next(context, request) must meter wire reads/scratch through context before
 /// doing that work, validate grammar, and distinguish input from scratch spans.
@@ -39,31 +41,30 @@ fn foldedField(comptime T: type, key: []const u8, c: *ctx.Context) error{WorkLim
     return null;
 }
 
-/// Whether `key`, UTF-8, folds to `spelling`: ASCII letters either case, `ſ`
-/// (U+017F) and the Kelvin sign (U+212A) as `s` and `k`, which Unicode folds
-/// them to, and any other character only as itself.
+/// Whether `key`, UTF-8, folds to `spelling`: code point by code point under
+/// Unicode's simple case folding (CaseFolding.txt C and S), as Go's
+/// `encoding/json` matches names, so `ſ` and the Kelvin sign fold to `s` and
+/// `k` and `Σ`, `σ` and `ς` to one another. A sequence that is not UTF-8
+/// matches only the same bytes.
 fn foldsTo(key: []const u8, spelling: []const u8) bool {
     var k: usize = 0;
     var s: usize = 0;
     while (k < key.len and s < spelling.len) {
-        const want = spelling[s];
-        if (want < 0x80) {
-            const lower = std.ascii.toLower(want);
-            if (key[k] < 0x80) {
-                if (std.ascii.toLower(key[k]) != lower) return false;
-                k += 1;
-            } else if (lower == 's' and std.mem.startsWith(u8, key[k..], "\u{17f}")) {
-                k += 2;
-            } else if (lower == 'k' and std.mem.startsWith(u8, key[k..], "\u{212a}")) {
-                k += 3;
-            } else return false;
+        if (key[k] < 0x80 and spelling[s] < 0x80) {
+            if (std.ascii.toLower(key[k]) != std.ascii.toLower(spelling[s])) return false;
+            k += 1;
             s += 1;
             continue;
         }
-        const n = std.unicode.utf8ByteSequenceLength(want) catch 1;
-        if (s + n > spelling.len or k + n > key.len or !std.mem.eql(u8, key[k..][0..n], spelling[s..][0..n])) return false;
-        k += n;
-        s += n;
+        const a = xenoglyph.utf8.decode(key[k..]);
+        const b = xenoglyph.utf8.decode(spelling[s..]);
+        const same = if (a.code_point == xenoglyph.utf8.replacement or b.code_point == xenoglyph.utf8.replacement)
+            std.mem.eql(u8, key[k..][0..a.len], spelling[s..][0..b.len])
+        else
+            xenoglyph.case.simpleFold(a.code_point) == xenoglyph.case.simpleFold(b.code_point);
+        if (!same) return false;
+        k += a.len;
+        s += b.len;
     }
     return k == key.len and s == spelling.len;
 }
@@ -454,7 +455,7 @@ pub fn Cursor(comptime Backend: type) type {
             @setRuntimeSafety(true);
             const i = @typeInfo(T).int;
             const U = @Int(.unsigned, i.bits);
-            if (number.magnitude.len > self.context.limits.numeric_bytes) return error.LengthLimit;
+            if (limit.exceeds(number.magnitude.len, self.context.limits.numeric_bytes)) return error.LengthLimit;
             try self.context.chargeWork(number.magnitude.len);
             var value: U = 0;
             var n = number.magnitude.len;
@@ -1133,11 +1134,11 @@ pub fn Cursor(comptime Backend: type) type {
                 .scalar => |v| if (!std.unicode.utf8ValidCodepoint(v)) return error.InvalidUtf8,
                 .floating => |v| if (!Backend.capabilities.nonfinite_floats and !std.math.isFinite(v)) return error.UnsupportedValue,
                 .number => |n| {
-                    if (n.bytes.len > self.context.limits.numeric_bytes) return error.LengthLimit;
+                    if (limit.exceeds(n.bytes.len, self.context.limits.numeric_bytes)) return error.LengthLimit;
                     try self.context.chargeWork(n.bytes.len);
                 },
                 .integer => |n| {
-                    if (n.magnitude.len > self.context.limits.numeric_bytes) return error.LengthLimit;
+                    if (limit.exceeds(n.magnitude.len, self.context.limits.numeric_bytes)) return error.LengthLimit;
                     try self.context.chargeWork(n.magnitude.len);
                 },
                 .begin => |header| {

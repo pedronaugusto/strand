@@ -312,7 +312,7 @@ test "a versioned log read backwards is migrated the same way" {
     // One line per block, so that the backwards read really does go back to
     // the file for each of them.
     var tail: jsonl.Tail(Versioned(Event)) = try .init(testing.allocator, &fixture.reader, .{
-        .block_bytes = 16,
+        .block_bytes = .fromRaw(16),
     });
     defer tail.deinit();
 

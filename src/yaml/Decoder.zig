@@ -15,6 +15,7 @@
 //! inside its mapping) by walking from its place again; a failure's place in
 //! the text is where its node was written (`place`).
 const std = @import("std");
+const limit = @import("../core/limit.zig");
 const core = @import("../core.zig");
 const document = @import("document.zig");
 const schema = @import("schema.zig");
@@ -220,7 +221,7 @@ fn scalar(d: *const document.Document, node: document.Node, request: core.Reques
     };
 }
 fn number(span: core.Span, c: *core.Context) Error!core.Event {
-    if (span.bytes.len > c.limits.numeric_bytes) return error.LengthLimit;
+    if (limit.exceeds(span.bytes.len, c.limits.numeric_bytes)) return error.LengthLimit;
     return .{ .number = span };
 }
 

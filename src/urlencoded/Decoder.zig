@@ -11,6 +11,7 @@
 //! repeated where one value belongs is a duplicate field, which the core
 //! refuses unless told otherwise.
 const std = @import("std");
+const limit = @import("../core/limit.zig");
 const core = @import("../core.zig");
 const text = @import("text.zig");
 const numbers = @import("../json/number.zig");
@@ -274,7 +275,7 @@ fn value(self: *Self, c: *core.Context, i: usize, request: core.Request) Error!c
     switch (request.expected) {
         .bytes => return .{ .bytes = span },
         .integer, .floating => {
-            if (span.bytes.len > c.limits.numeric_bytes) return error.LengthLimit;
+            if (limit.exceeds(span.bytes.len, c.limits.numeric_bytes)) return error.LengthLimit;
             return .{ .number = span };
         },
         .boolean => {

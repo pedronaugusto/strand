@@ -54,7 +54,7 @@ fn keepParsed(comptime direction: Direction) !void {
         {
             var reader = switch (direction) {
                 .reader => jsonl.Reader(T).init(testing.allocator, &fixture.reader.interface, .{}),
-                .tail => try jsonl.Tail(T).init(testing.allocator, &fixture.reader, .{ .block_bytes = 4 }),
+                .tail => try jsonl.Tail(T).init(testing.allocator, &fixture.reader, .{ .block_bytes = .fromRaw(4) }),
                 .follower => jsonl.Follower(T).init(testing.allocator, &fixture.reader, .{}),
             };
             defer if (direction == .follower) reader.deinit(testing.io) else reader.deinit();
@@ -112,7 +112,7 @@ fn lastOwned(a: std.mem.Allocator) !void {
     defer fixture.deinit();
     var batch: strand.core.Parsed([]LastData) = undefined;
     {
-        var tail = try jsonl.Tail(LastData).init(testing.allocator, &fixture.reader, .{ .block_bytes = 4 });
+        var tail = try jsonl.Tail(LastData).init(testing.allocator, &fixture.reader, .{ .block_bytes = .fromRaw(4) });
         defer tail.deinit();
         batch = try tail.last(a, 3);
     }

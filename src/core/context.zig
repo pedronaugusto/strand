@@ -5,6 +5,7 @@
 //! the reasons written at each.
 const std = @import("std");
 const aegis = @import("aegis");
+const limit = @import("limit.zig");
 const bounded = aegis.bounded;
 const err = aegis.err;
 const int = aegis.int;
@@ -23,10 +24,10 @@ pub const Borrow = enum { prefer, copy, require };
 pub const Duplicates = enum { reject, first, last, merge };
 /// How a record member's name finds its field: `exact`ly, or by an exact name
 /// first and then by case folding (`fold_case`): the first field, in
-/// declaration order and then aliases, whose name the member's folds to. ASCII
-/// letters fold either case, as do `ſ` (U+017F) and the Kelvin sign (U+212A),
-/// which Unicode folds onto `s` and `k`; a letter outside ASCII in a field's
-/// name matches only itself.
+/// declaration order and then aliases, whose name the member's folds to under
+/// Unicode's simple case folding, code point by code point (xenoglyph's
+/// `case.simpleFold`), as Go's `encoding/json` matches names: `É` with `é`,
+/// `ſ` and the Kelvin sign with `s` and `k`, but `ß` with no `ss`.
 pub const Names = enum { exact, fold_case };
 /// What `null` does where a value without a null of its own is read:
 /// `refuse`d, or `keep` the value as it is. A record's field keeps what it
@@ -57,16 +58,22 @@ pub const Acceptance = struct {
     invalid_unicode: InvalidUnicode = .refuse,
 };
 
+/// A size in bytes: aegis's, read and written in its text form (`64KiB`,
+/// `16MiB`, `1.5GB`) and logged with `{f}`. Every byte limit and bound strand
+/// is given is one.
+const Bytes = aegis.units.Bytes(usize);
+
+/// What one operation may take: its sizes as aegis `Bytes`, the rest counts.
 pub const Limits = struct {
-    input_bytes: usize = 16 * 1024 * 1024,
-    output_bytes: usize = 16 * 1024 * 1024,
+    input_bytes: Bytes = .literal("16MiB"),
+    output_bytes: Bytes = .literal("16MiB"),
     depth: usize = 128,
     items: usize = 1024 * 1024,
     container_items: usize = 1024 * 1024,
-    string_bytes: usize = 8 * 1024 * 1024,
-    key_bytes: usize = 64 * 1024,
-    numeric_bytes: usize = 1024,
-    allocation_bytes: usize = 32 * 1024 * 1024,
+    string_bytes: Bytes = .literal("8MiB"),
+    key_bytes: Bytes = .literal("64KiB"),
+    numeric_bytes: Bytes = .literal("1KiB"),
+    allocation_bytes: Bytes = .literal("32MiB"),
     work: usize = 128 * 1024 * 1024,
 };
 
@@ -107,6 +114,14 @@ pub const Diagnostics = struct {
         /// The mark of an operation that keeps no diagnostics.
         pub const none: Checkpoint = .{ .steps = 0, .truncated = false };
     };
+    /// Sets `line` and `column` from `offset` in `input`, the text a format
+    /// read: both count from 1, the column in bytes since the line's start.
+    pub fn locate(self: *Diagnostics, input: []const u8) void {
+        const at = @min(self.offset, input.len);
+        const start = if (std.mem.findScalarLast(u8, input[0..at], '\n')) |newline| newline + 1 else 0;
+        self.line = std.mem.countScalar(u8, input[0..start], '\n') + 1;
+        self.column = at - start + 1;
+    }
     pub fn checkpoint(self: *const Diagnostics) Checkpoint {
         return .{ .steps = self.path.len, .truncated = self.path.truncated };
     }
@@ -160,9 +175,9 @@ pub const Context = struct {
             .limits = limits,
             .ownership = ownership,
             .work_budget = .init(limits.work),
-            .input_budget = .init(limits.input_bytes),
-            .output_budget = .init(limits.output_bytes),
-            .allocation_budget = .init(limits.allocation_bytes),
+            .input_budget = .init(limits.input_bytes.raw()),
+            .output_budget = .init(limits.output_bytes.raw()),
+            .allocation_budget = .init(limits.allocation_bytes.raw()),
         };
     }
     /// Units of work charged so far.
@@ -171,11 +186,11 @@ pub const Context = struct {
     }
     /// Bytes written so far.
     pub fn outputUsed(self: *const Context) usize {
-        return self.limits.output_bytes - self.output_budget.remaining();
+        return self.output_budget.charged();
     }
     /// Bytes requested of the operation's allocator so far.
     pub fn allocationRequested(self: *const Context) usize {
-        return self.limits.allocation_bytes - self.allocation_budget.remaining();
+        return self.allocation_budget.charged();
     }
     /// Takes over what another operation has already been charged, as the
     /// first charge of a fresh context.
@@ -218,7 +233,7 @@ pub const Context = struct {
         if (n > self.limits.container_items or (!self.replaying and n > self.limits.items - self.items)) return error.ItemLimit;
     }
     pub inline fn span(self: *Context, n: usize, key: bool) error{LengthLimit}!void {
-        if (n > if (key) self.limits.key_bytes else self.limits.string_bytes) return error.LengthLimit;
+        if (limit.exceeds(n, if (key) self.limits.key_bytes else self.limits.string_bytes)) return error.LengthLimit;
     }
     pub inline fn chargeWork(self: *Context, n: usize) error{WorkLimit}!void {
         self.work_budget.consume(n) catch return error.WorkLimit;

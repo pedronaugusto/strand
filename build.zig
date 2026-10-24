@@ -21,11 +21,12 @@ pub fn build(b: *std.Build) void {
     const airlock_dependency = b.dependency("airlock", .{ .target = target, .optimize = optimize });
     const airlock = airlock_dependency.module("airlock");
     const aegis = b.dependency("aegis", .{ .target = target, .optimize = optimize }).module("aegis");
+    const xenoglyph = b.dependency("xenoglyph", .{ .target = target, .optimize = optimize }).module("xenoglyph");
     _ = b.addModule("strand", .{
         .root_source_file = b.path("src/strand.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{ .{ .name = "aegis", .module = aegis }, .{ .name = "airlock", .module = airlock } },
+        .imports = &.{ .{ .name = "aegis", .module = aegis }, .{ .name = "airlock", .module = airlock }, .{ .name = "xenoglyph", .module = xenoglyph } },
     });
 }
 
@@ -41,6 +42,7 @@ pub fn dev(b: *std.Build, tools: type) void {
     const airlock_dependency = p.dependency("airlock", .{ .target = target, .optimize = optimize });
     const airlock = airlock_dependency.module("airlock");
     const aegis = p.dependency("aegis", .{ .target = target, .optimize = optimize }).module("aegis");
+    const xenoglyph = p.dependency("xenoglyph", .{ .target = target, .optimize = optimize }).module("xenoglyph");
 
     //=====================================================================
     // Tests. Every one of them runs under `std.testing.allocator`, so a leak
@@ -55,7 +57,7 @@ pub fn dev(b: *std.Build, tools: type) void {
             .root_source_file = p.path("src/tests.zig"),
             .target = target,
             .optimize = optimize,
-            .imports = &.{ .{ .name = "aegis", .module = aegis }, .{ .name = "airlock", .module = airlock } },
+            .imports = &.{ .{ .name = "aegis", .module = aegis }, .{ .name = "airlock", .module = airlock }, .{ .name = "xenoglyph", .module = xenoglyph } },
         }),
     });
     // shakedown, and airlock's seam built on it.
@@ -298,13 +300,13 @@ pub fn dev(b: *std.Build, tools: type) void {
             .optimize = optimize,
         },
     });
-    // A project that depends on strand by path, with airlock and aegis
+    // A project that depends on strand by path, with airlock, aegis and xenoglyph
     // and nothing else to fetch: the build a consumer gets.
     preflight.addConsumerCheck(b, p, .{
         .package = "strand",
         .modules = &.{"strand"},
         .program = p.path("ci/consumer.zig"),
-        .packages = &.{ p.dependency("aegis", .{}), p.dependency("airlock", .{}) },
+        .packages = &.{ p.dependency("aegis", .{}), p.dependency("airlock", .{}), p.dependency("xenoglyph", .{}) },
     });
 }
 
@@ -324,7 +326,8 @@ fn benchSeam(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang
     const p = b.dependency("strand", .{ .target = target, .optimize = optimize }).builder;
     const airlock = p.dependency("airlock", .{ .target = target, .optimize = optimize }).module("airlock");
     const aegis = p.dependency("aegis", .{ .target = target, .optimize = optimize }).module("aegis");
-    return b.createModule(.{ .root_source_file = p.path("src/seam.zig"), .target = target, .optimize = optimize, .imports = &.{ .{ .name = "aegis", .module = aegis }, .{ .name = "airlock", .module = airlock } } });
+    const xenoglyph = p.dependency("xenoglyph", .{ .target = target, .optimize = optimize }).module("xenoglyph");
+    return b.createModule(.{ .root_source_file = p.path("src/seam.zig"), .target = target, .optimize = optimize, .imports = &.{ .{ .name = "aegis", .module = aegis }, .{ .name = "airlock", .module = airlock }, .{ .name = "xenoglyph", .module = xenoglyph } } });
 }
 
 /// Every example, listed rather than globbed: a build graph that scans a

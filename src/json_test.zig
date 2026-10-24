@@ -23,7 +23,7 @@ test "S2 JSON strict limits reach ignored and Raw values" {
     const T = struct {};
     try std.testing.expectError(error.DepthLimit, json.parse(T, std.testing.allocator, "{\"x\":[[]]}", .{ .ignore_unknown_fields = true, .limits = .{ .depth = 2 } }));
     try std.testing.expectError(error.DuplicateField, json.parse(T, std.testing.allocator, "{\"x\":1,\"x\":2}", .{ .ignore_unknown_fields = true }));
-    try std.testing.expectError(error.LengthLimit, json.parse(json.Raw, std.testing.allocator, "[\"long\"]", .{ .limits = .{ .string_bytes = 3 } }));
+    try std.testing.expectError(error.LengthLimit, json.parse(json.Raw, std.testing.allocator, "[\"long\"]", .{ .limits = .{ .string_bytes = .fromRaw(3) } }));
     var raw = try json.parse(json.Raw, std.testing.allocator, "[1e99999]", .{});
     defer raw.deinit();
     try std.testing.expectEqualStrings("[1e99999]", raw.value.bytes);
@@ -97,7 +97,7 @@ test "S2 JSONL every chunk boundary and independent keep" {
     }
 }
 test "S2 JSONL drain cap across calls and final policy" {
-    var decoder = jsonl.Decoder(u8).init(std.testing.allocator, .{ .max_line_bytes = 2, .recovery_bytes = 3 });
+    var decoder = jsonl.Decoder(u8).init(std.testing.allocator, .{ .max_line_bytes = .fromRaw(2), .recovery_bytes = .fromRaw(3) });
     defer decoder.deinit();
     const input = "123456789\n7\n";
     var result = decoder.push(input);
@@ -138,7 +138,7 @@ fn decoderAllocationSweep(gpa: std.mem.Allocator) !void {
 test "S2 NoResize rollback across every JSON and decoder allocation" {
     try std.testing.checkAllAllocationFailures(std.testing.allocator, jsonAllocationSweep, .{});
     try std.testing.checkAllAllocationFailures(std.testing.allocator, decoderAllocationSweep, .{});
-    try std.testing.expectError(error.AllocationLimit, json.parseOwned([]const u8, std.testing.allocator, "\"data\"", .{ .limits = .{ .allocation_bytes = 0 } }));
+    try std.testing.expectError(error.AllocationLimit, json.parseOwned([]const u8, std.testing.allocator, "\"data\"", .{ .limits = .{ .allocation_bytes = .fromRaw(0) } }));
 }
 
 test "S2 constructed Value emission validates lexemes and duplicate keys" {
@@ -163,7 +163,7 @@ test "S2 std Value bridge uses bounded context and standard numeric alternatives
     var round = try json.parseStdValue(std.testing.allocator, output.buffered(), .{});
     defer round.deinit();
     try std.testing.expectEqual(@as(i64, 1), round.value.object.get("a").?.array.items[0].integer);
-    try std.testing.expectError(error.AllocationLimit, json.parseStdValue(std.testing.allocator, "[1]", .{ .limits = .{ .allocation_bytes = 0 } }));
+    try std.testing.expectError(error.AllocationLimit, json.parseStdValue(std.testing.allocator, "[1]", .{ .limits = .{ .allocation_bytes = .fromRaw(0) } }));
 }
 
 test "a union tagged inside its object reads its tag anywhere and writes it first" {
@@ -190,7 +190,7 @@ test "S2 standard bridge rollback every allocation" {
 }
 
 test "S2 push buffer and arena share the resident allocation cap" {
-    var decoder = jsonl.Decoder(json.Value).init(std.testing.allocator, .{ .parse = .{ .limits = .{ .allocation_bytes = 128 } } });
+    var decoder = jsonl.Decoder(json.Value).init(std.testing.allocator, .{ .parse = .{ .limits = .{ .allocation_bytes = .fromRaw(128) } } });
     defer decoder.deinit();
     const result = decoder.push("[\"a\\nb\"]\n");
     try std.testing.expectEqual(error.AllocationLimit, result.status.failure);
@@ -215,7 +215,8 @@ test "S2 every strict limit at zero, exact boundary and one below" {
         const boundary: usize = if (comptime std.mem.eql(u8, name, "work")) 3 else 1;
         for ([_]usize{ 0, boundary - 1, boundary }) |limit| {
             var limits: core.Limits = .{};
-            @field(limits, name) = limit;
+            const Field = @FieldType(core.Limits, name);
+            @field(limits, name) = if (Field == usize) limit else Field.fromRaw(limit);
             const parsed = json.parse(u8, std.testing.allocator, "1", .{ .limits = limits });
             if (limit == boundary) {
                 var owner = try parsed;
@@ -231,21 +232,21 @@ test "S2 every strict limit at zero, exact boundary and one below" {
         if (limit == 2) {
             var owner = try json.parse(json.Raw, std.testing.allocator, "[[1,2]]", .{ .limits = .{ .depth = limit, .container_items = limit } });
             owner.deinit();
-            var text = try json.parse([]const u8, std.testing.allocator, "\"ab\"", .{ .limits = .{ .string_bytes = limit } });
+            var text = try json.parse([]const u8, std.testing.allocator, "\"ab\"", .{ .limits = .{ .string_bytes = .fromRaw(limit) } });
             text.deinit();
-            var key = try json.parse(struct {}, std.testing.allocator, "{\"ab\":1}", .{ .ignore_unknown_fields = true, .limits = .{ .key_bytes = limit } });
+            var key = try json.parse(struct {}, std.testing.allocator, "{\"ab\":1}", .{ .ignore_unknown_fields = true, .limits = .{ .key_bytes = .fromRaw(limit) } });
             key.deinit();
         } else {
             try std.testing.expectError(error.DepthLimit, json.parse(json.Raw, std.testing.allocator, "[[1,2]]", .{ .limits = .{ .depth = limit } }));
             try std.testing.expectError(error.ItemLimit, json.parse(json.Raw, std.testing.allocator, "[1,2]", .{ .limits = .{ .container_items = limit } }));
-            try std.testing.expectError(error.LengthLimit, json.parse([]const u8, std.testing.allocator, "\"ab\"", .{ .limits = .{ .string_bytes = limit } }));
-            try std.testing.expectError(error.LengthLimit, json.parse(struct {}, std.testing.allocator, "{\"ab\":1}", .{ .ignore_unknown_fields = true, .limits = .{ .key_bytes = limit } }));
+            try std.testing.expectError(error.LengthLimit, json.parse([]const u8, std.testing.allocator, "\"ab\"", .{ .limits = .{ .string_bytes = .fromRaw(limit) } }));
+            try std.testing.expectError(error.LengthLimit, json.parse(struct {}, std.testing.allocator, "{\"ab\":1}", .{ .ignore_unknown_fields = true, .limits = .{ .key_bytes = .fromRaw(limit) } }));
         }
     }
     var memory: [8]u8 = undefined;
     for ([_]usize{ 0, 2, 3 }) |limit| {
         var output = std.Io.Writer.fixed(&memory);
-        if (limit == 3) try json.write(&output, @as(u8, 123), .{ .limits = .{ .output_bytes = limit } }) else try std.testing.expectError(error.OutputLimit, json.write(&output, @as(u8, 123), .{ .limits = .{ .output_bytes = limit } }));
+        if (limit == 3) try json.write(&output, @as(u8, 123), .{ .limits = .{ .output_bytes = .fromRaw(limit) } }) else try std.testing.expectError(error.OutputLimit, json.write(&output, @as(u8, 123), .{ .limits = .{ .output_bytes = .fromRaw(limit) } }));
     }
 }
 const Generated = struct { n: u64, text: []const u8 };
@@ -368,7 +369,7 @@ test "S2 push BOM stays at stream start after oversized recovery" {
     const input = "222222222222222222222\n\xef\xbb\xbf2\n";
     for (0..input.len + 1) |split| {
         var no_resize: shakedown.alloc.NoResize = .init(std.testing.allocator);
-        var decoder = jsonl.Decoder(u8).init(no_resize.allocator(), .{ .max_line_bytes = 16 });
+        var decoder = jsonl.Decoder(u8).init(no_resize.allocator(), .{ .max_line_bytes = .fromRaw(16) });
         defer decoder.deinit();
         var oversized: usize = 0;
         var malformed: usize = 0;
@@ -409,7 +410,7 @@ test "S2 caller-arena JSON diagnostics reset across operations and early limits"
     try std.testing.expectEqual(@as(usize, 0), diagnostics.path.len);
     try std.testing.expectError(error.UnknownField, json.parseLeaky(T, arena.allocator(), "{\"again\":1}", options));
     var limited = options;
-    limited.limits.input_bytes = 0;
+    limited.limits.input_bytes = .fromRaw(0);
     try std.testing.expectError(error.InputLimit, json.parseLeaky(T, arena.allocator(), "{}", limited));
     try std.testing.expectEqualStrings("json", diagnostics.format);
     try std.testing.expectEqual(@as(usize, 0), diagnostics.path.len);

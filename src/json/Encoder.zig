@@ -1,5 +1,6 @@
 //! JSON wire emission. Shape and field policy belong to core.
 const std = @import("std");
+const limit = @import("../core/limit.zig");
 const core = @import("../core.zig");
 const strings = @import("text.zig");
 const decoding = @import("Decoder.zig");
@@ -159,7 +160,7 @@ pub fn integer(self: *Self, value: anytype, c: *core.Context) Error!void {
     const bits = @typeInfo(@TypeOf(value)).int.bits;
     var buffer: [bits / 3 + 3]u8 = undefined;
     const spelling = if (bits <= 128) strings.decimal(&buffer, value) else buffer[0..std.fmt.printInt(&buffer, value, 10, .lower, .{})];
-    if (spelling.len > c.limits.numeric_bytes) return error.LengthLimit;
+    if (limit.exceeds(spelling.len, c.limits.numeric_bytes)) return error.LengthLimit;
     try self.before(c);
     try self.put(spelling, c);
 }
@@ -171,7 +172,7 @@ pub fn floating(self: *Self, value: anytype, c: *core.Context) Error!void {
     const magnitude = @abs(value);
     const decimals = magnitude == 0 or (magnitude >= 1e-7 and magnitude < 1e21);
     const spelling = (if (decimals) std.mem.print(&buffer, "{}", .{value}) else std.mem.print(&buffer, "{e}", .{value})) catch return error.NumberOutOfRange;
-    if (spelling.len > c.limits.numeric_bytes) return error.LengthLimit;
+    if (limit.exceeds(spelling.len, c.limits.numeric_bytes)) return error.LengthLimit;
     try self.before(c);
     try self.put(spelling, c);
 }

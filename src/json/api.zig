@@ -1,5 +1,6 @@
 //! JSON on strand's shared type mapping and ownership core.
 const std = @import("std");
+const limit = @import("../core/limit.zig");
 const core = @import("../core.zig");
 const std_value = @import("std_value.zig");
 const decoding = @import("Decoder.zig");
@@ -164,7 +165,7 @@ pub fn parseOwned(comptime T: type, gpa: std.mem.Allocator, input: []const u8, o
 /// Bounds requests per operation; caller-owned arena backing and reset are external.
 pub fn parseLeaky(comptime T: type, arena: std.mem.Allocator, input: []const u8, options: ParseOptions) @typeInfo(@TypeOf(Decode(T).run(@as(*core.Context, undefined), input))).error_union.error_set!T {
     var c = context(arena, options);
-    if (input.len > options.limits.input_bytes) return error.InputLimit;
+    if (limit.exceeds(input.len, options.limits.input_bytes)) return error.InputLimit;
     return Dialect(T, false).run(&c, input);
 }
 /// JSONC, the JSON of editors' settings and `tsconfig.json`: `//` and
@@ -184,7 +185,7 @@ pub const jsonc = struct {
     /// `json.parseLeaky` of JSONC.
     pub fn parseLeaky(comptime T: type, arena: std.mem.Allocator, input: []const u8, options: ParseOptions) @typeInfo(@TypeOf(Dialect(T, true).run(@as(*core.Context, undefined), input))).error_union.error_set!T {
         var c = context(arena, options);
-        if (input.len > options.limits.input_bytes) return error.InputLimit;
+        if (limit.exceeds(input.len, options.limits.input_bytes)) return error.InputLimit;
         return Dialect(T, true).run(&c, input);
     }
 };
@@ -198,7 +199,7 @@ pub fn Prefix(comptime T: type) type {
 /// it, across the line breaks inside it.
 pub fn parsePrefixLeaky(comptime T: type, arena: std.mem.Allocator, input: []const u8, options: ParseOptions) ParseError(T)!Prefix(T) {
     var c = context(arena, options);
-    if (input.len > options.limits.input_bytes) return error.InputLimit;
+    if (limit.exceeds(input.len, options.limits.input_bytes)) return error.InputLimit;
     return Dialect(T, false).front(&c, input);
 }
 /// Bounded bridge with standard dynamic numeric alternatives and standard owner.

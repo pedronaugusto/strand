@@ -1,5 +1,6 @@
 //! Push JSON Lines decoder. One owner for its bounded record buffer and arena.
 const std = @import("std");
+const limit = @import("../core/limit.zig");
 const aegis = @import("aegis");
 const json = @import("../json.zig");
 const core = @import("../core.zig");
@@ -26,8 +27,8 @@ pub fn Decoder(comptime T: type) type {
         const ParseError = @typeInfo(@TypeOf(json.parseLeaky(T, @as(std.mem.Allocator, undefined), "", .{}))).error_union.error_set;
         pub const Error = ParseError || error{ LineTooLong, RecoveryLimit, TruncatedRecord, Finished };
         pub const Options = struct {
-            max_line_bytes: usize = 1 << 20,
-            recovery_bytes: usize = 16 * 1024 * 1024,
+            max_line_bytes: aegis.units.Bytes(usize) = .literal("1MiB"),
+            recovery_bytes: aegis.units.Bytes(usize) = .literal("16MiB"),
             skip_blank: bool = true,
             skip_bom: bool = true,
             crlf: bool = true,
@@ -59,19 +60,26 @@ pub fn Decoder(comptime T: type) type {
             }
             _ = self.arena.reset(.retain_capacity);
         }
+        /// What the allocation limit leaves a record once the line buffer
+        /// holds its share.
+        fn allocationLeft(self: *const Self) aegis.units.Bytes(usize) {
+            // unreachable: the buffer was grown only within the limit
+            return limit.left(self.options.parse.limits.allocation_bytes, self.buffer.len) orelse unreachable;
+        }
         fn append(self: *Self, bytes: []const u8, backing: *core.Backing) Error!void {
-            const cap = (aegis.int.Checked(usize).init(@min(self.options.max_line_bytes, self.options.parse.limits.input_bytes)).add(4) catch return error.InputLimit).raw();
+            const cap = (aegis.int.Checked(usize).init(@min(self.options.max_line_bytes.raw(), self.options.parse.limits.input_bytes.raw())).add(4) catch return error.InputLimit).raw();
             if (bytes.len > cap - self.used) return error.LineTooLong;
             const needed = self.used + bytes.len;
             if (needed > self.buffer.len) {
                 const capacity = @min(cap, @max(needed, @max(@as(usize, 64), self.buffer.len *| 2)));
-                const available = self.options.parse.limits.allocation_bytes - backing.live;
+                const available = (limit.left(self.options.parse.limits.allocation_bytes, backing.live) orelse return error.AllocationLimit).raw();
                 if (self.buffer.len > available or capacity > available - self.buffer.len) return error.AllocationLimit;
                 const next = try self.gpa.alloc(u8, capacity);
                 @memcpy(next[0..self.used], self.buffer[0..self.used]);
                 self.gpa.free(self.buffer);
                 self.buffer = next;
-                backing.limit = self.options.parse.limits.allocation_bytes - capacity;
+                // unreachable: capacity is within what is available, which is within the limit
+                backing.limit = (limit.left(self.options.parse.limits.allocation_bytes, capacity) orelse unreachable).raw();
             }
             @memcpy(self.buffer[self.used..][0..bytes.len], bytes);
             self.used = needed;
@@ -88,13 +96,13 @@ pub fn Decoder(comptime T: type) type {
                 }
             }
             self.ready = true;
-            if (bytes.len > self.options.max_line_bytes) {
+            if (limit.exceeds(bytes.len, self.options.max_line_bytes)) {
                 self.fault = error.LineTooLong;
                 return .{ .failure = error.LineTooLong };
             }
             if (self.options.skip_blank and line.isBlank(bytes)) return .need_input;
             var options = self.options.parse;
-            options.limits.allocation_bytes -= self.buffer.len;
+            options.limits.allocation_bytes = self.allocationLeft();
             const value = json.parseLeaky(T, self.arena.allocator(), bytes, options) catch |failure| {
                 const err = if (failure == error.OutOfMemory and backing.limited) error.AllocationLimit else failure;
                 self.fault = err;
@@ -107,7 +115,7 @@ pub fn Decoder(comptime T: type) type {
             return .{ .record = .{ .value = value, .line = bytes, .number = self.number, .offset = self.record_offset } };
         }
         pub fn push(self: *Self, chunk: []const u8) Result {
-            var backing: core.Backing = .{ .gpa = self.gpa, .limit = self.options.parse.limits.allocation_bytes - self.buffer.len, .live = self.arena_resident_bytes };
+            var backing: core.Backing = .{ .gpa = self.gpa, .limit = self.allocationLeft().raw(), .live = self.arena_resident_bytes };
             self.arena.child_allocator = backing.allocator();
             defer {
                 self.arena.child_allocator = self.gpa;
@@ -121,7 +129,8 @@ pub fn Decoder(comptime T: type) type {
             var at: usize = 0;
             var recovery: usize = 0;
             while (at < chunk.len) {
-                const part = framing.part(chunk[at..], if (self.discarding) self.options.recovery_bytes - recovery else chunk.len - at);
+                // unreachable: discarding stops once recovery reaches its limit
+                const part = framing.part(chunk[at..], if (self.discarding) (limit.left(self.options.recovery_bytes, recovery) orelse unreachable).raw() else chunk.len - at);
                 if (self.discarding) {
                     at += part.consumed;
                     self.consumed += part.consumed;
@@ -129,7 +138,7 @@ pub fn Decoder(comptime T: type) type {
                     if (part.terminated) {
                         self.discarding = false;
                         self.record_offset = self.consumed;
-                    } else if (recovery == self.options.recovery_bytes) return .{ .consumed = at, .status = .{ .failure = error.RecoveryLimit } };
+                    } else if (aegis.units.Bytes(usize).fromRaw(recovery).eql(self.options.recovery_bytes)) return .{ .consumed = at, .status = .{ .failure = error.RecoveryLimit } };
                     continue;
                 }
                 const payload = chunk[at..][0 .. part.consumed - @intFromBool(part.terminated)];
@@ -153,7 +162,7 @@ pub fn Decoder(comptime T: type) type {
         }
         pub fn finish(self: *Self) Result {
             if (self.finished) return .{ .consumed = 0, .status = .need_input };
-            var backing: core.Backing = .{ .gpa = self.gpa, .limit = self.options.parse.limits.allocation_bytes - self.buffer.len, .live = self.arena_resident_bytes };
+            var backing: core.Backing = .{ .gpa = self.gpa, .limit = self.allocationLeft().raw(), .live = self.arena_resident_bytes };
             self.arena.child_allocator = backing.allocator();
             defer {
                 self.arena.child_allocator = self.gpa;

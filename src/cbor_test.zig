@@ -273,7 +273,7 @@ test "a length past the input is refused before anything is counted for it" {
     try std.testing.expectError(error.SyntaxError, cbor.parse([]const u64, gpa, &bytesOf("9bffffffffffffffff00"), .{}));
     try std.testing.expectError(error.SyntaxError, cbor.parse(Value, gpa, &bytesOf("bb7fffffffffffffff0000"), .{}));
     try std.testing.expectError(error.DepthLimit, cbor.parse(Value, gpa, &bytesOf("8181818100"), .{ .limits = .{ .depth = 3 } }));
-    try std.testing.expectError(error.LengthLimit, cbor.parse(Value, gpa, &bytesOf("6461626364"), .{ .limits = .{ .string_bytes = 3 } }));
+    try std.testing.expectError(error.LengthLimit, cbor.parse(Value, gpa, &bytesOf("6461626364"), .{ .limits = .{ .string_bytes = .fromRaw(3) } }));
 }
 
 /// A generated item: every kind, nested a few levels.

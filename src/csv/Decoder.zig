@@ -5,6 +5,7 @@
 //! unquoted field is where the type takes one. A quoted field with no doubled
 //! quote, and every unquoted one, is borrowed from the input.
 const std = @import("std");
+const limit = @import("../core/limit.zig");
 const core = @import("../core.zig");
 const text = @import("text.zig");
 const numbers = @import("../json/number.zig");
@@ -224,7 +225,7 @@ fn value(self: *Self, c: *core.Context, request: core.Request) Error!core.Event 
     switch (request.expected) {
         .bytes => return .{ .bytes = s },
         .integer, .floating => {
-            if (s.bytes.len > c.limits.numeric_bytes) return error.LengthLimit;
+            if (limit.exceeds(s.bytes.len, c.limits.numeric_bytes)) return error.LengthLimit;
             return .{ .number = s };
         },
         .boolean => {

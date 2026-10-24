@@ -8,6 +8,7 @@
 //! `.nan`. A key that is a collection is written in flow style after `? `, as
 //! is a key too long for an implicit one. No tags, anchors or comments.
 const std = @import("std");
+const limit = @import("../core/limit.zig");
 const core = @import("../core.zig");
 const Decoder = @import("Decoder.zig");
 const schema = @import("schema.zig");
@@ -302,7 +303,7 @@ pub fn integer(self: *Self, value: anytype, c: *core.Context) Error!void {
     if (std.math.cast(i128, value)) |n| try self.checkKey(.{ .kind = .integer, .bits = @bitCast(n) }, c);
     var buffer: [48]u8 = undefined;
     const spelled = std.mem.print(&buffer, "{d}", .{value}) catch return error.NumberOutOfRange;
-    if (spelled.len > c.limits.numeric_bytes) return error.LengthLimit;
+    if (limit.exceeds(spelled.len, c.limits.numeric_bytes)) return error.LengthLimit;
     try self.scalarValue(spelled, c);
 }
 /// The shortest spelling that reads back as the same binary64, with a
@@ -317,7 +318,7 @@ pub fn floating(self: *Self, value: anytype, c: *core.Context) Error!void {
     const magnitude = @abs(v);
     const decimals = magnitude == 0 or (magnitude >= 1e-5 and magnitude < 1e16);
     const spelled = (if (decimals) std.mem.print(&buffer, "{d}", .{v}) else std.mem.print(&buffer, "{e}", .{v})) catch return error.NumberOutOfRange;
-    if (spelled.len > c.limits.numeric_bytes) return error.LengthLimit;
+    if (limit.exceeds(spelled.len, c.limits.numeric_bytes)) return error.LengthLimit;
     if (std.mem.findAny(u8, spelled, ".e") != null) return self.scalarValue(spelled, c);
     var with_fraction: [66]u8 = undefined;
     @memcpy(with_fraction[0..spelled.len], spelled);

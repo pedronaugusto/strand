@@ -1,5 +1,6 @@
 //! CBOR (RFC 8949) on Strand's shared type mapping and ownership core.
 const std = @import("std");
+const limit = @import("../core/limit.zig");
 const aegis = @import("aegis");
 const core = @import("../core.zig");
 const WireDecoder = @import("Decoder.zig");
@@ -67,7 +68,7 @@ pub fn parseLeaky(comptime T: type, arena: std.mem.Allocator, input: []const u8,
         d.* = .{};
         d.format = "cbor";
     }
-    if (input.len > options.limits.input_bytes) return error.InputLimit;
+    if (limit.exceeds(input.len, options.limits.input_bytes)) return error.InputLimit;
     var c = core.Context.init(arena, options.limits, .borrowed);
     c.acceptance = acceptance(options);
     c.diagnostics = options.diagnostics;

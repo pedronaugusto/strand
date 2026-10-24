@@ -1,6 +1,7 @@
 //! Forms and query strings (application/x-www-form-urlencoded) on Strand's
 //! shared type mapping and ownership core.
 const std = @import("std");
+const limit = @import("../core/limit.zig");
 const core = @import("../core.zig");
 const WireDecoder = @import("Decoder.zig");
 const WireEncoder = @import("Encoder.zig");
@@ -55,7 +56,7 @@ pub fn parseLeaky(comptime T: type, arena: std.mem.Allocator, input: []const u8,
         d.* = .{};
         d.format = "urlencoded";
     }
-    if (input.len > options.limits.input_bytes) return error.InputLimit;
+    if (limit.exceeds(input.len, options.limits.input_bytes)) return error.InputLimit;
     var c = core.Context.init(arena, options.limits, .borrowed);
     c.acceptance = .{ .reject_unknown_fields = !options.ignore_unknown_fields };
     c.diagnostics = options.diagnostics;

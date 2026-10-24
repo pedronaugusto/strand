@@ -20,6 +20,8 @@ const core = @import("../core.zig");
 const json = @import("../json/api.zig");
 
 const std = @import("std");
+const limit = @import("../core/limit.zig");
+const aegis = @import("aegis");
 const Allocator = std.mem.Allocator;
 const assert = std.debug.assert;
 const testing = std.testing;
@@ -80,7 +82,7 @@ const shared = struct {
         /// with the line before it. The terminator and a leading
         /// byte-order mark are excluded. In separator mode only the JSON
         /// payload counts: the separator and discarded torn prefix do not.
-        max_line_bytes: usize = 1 << 20,
+        max_line_bytes: aegis.units.Bytes(usize) = .literal("1MiB"),
         /// When true, a line that is empty or all spaces and tabs is
         /// passed over. Its number is still counted.
         skip_blank: bool = true,
@@ -109,7 +111,7 @@ const shared = struct {
         /// one of these plus the line being assembled, so this trades a
         /// syscall per block against the memory a `Tail` costs while it
         /// is open. Zero means the smallest supported block, one byte.
-        block_bytes: usize = 64 * 1024,
+        block_bytes: aegis.units.Bytes(usize) = .literal("64KiB"),
     };
 
     /// What `init` can report: the file could not be measured. A stream
@@ -218,7 +220,7 @@ pub fn Tail(comptime T: type) type {
         /// the tail opened.
         pub fn init(gpa: Allocator, source: *std.Io.File.Reader, options: Options) InitError!Self {
             var normalized = options;
-            if (normalized.block_bytes == 0) normalized.block_bytes = 1;
+            if (normalized.block_bytes.eql(.fromRaw(0))) normalized.block_bytes = .fromRaw(1);
             if (source.size_err) |err| return err;
             const stat = try source.file.stat(source.io);
             // A pipe or a socket has no end to start from, whatever size the
@@ -432,11 +434,11 @@ pub fn Tail(comptime T: type) type {
                     // At most the bound plus the possible CR is retained.
                     // Once that suffix is full, all earlier bytes are only
                     // scanned; they cannot be part of an accepted payload.
-                    const room = (self.options.max_line_bytes +| 1) - self.record.items.len;
+                    const room = (self.options.max_line_bytes.raw() +| 1) - self.record.items.len;
                     const take = @min(room, chunk.len);
                     if (take != 0) {
                         const kept = self.record.items.len;
-                        const capacity = @min(self.options.max_line_bytes +| 1, @max(kept + take, self.record.capacity *| 2));
+                        const capacity = @min(self.options.max_line_bytes.raw() +| 1, @max(kept + take, self.record.capacity *| 2));
                         try self.record.ensureTotalCapacityPrecise(self.gpa, capacity);
                         self.record.items.len = kept + take;
                         @memmove(self.record.items[take..], self.record.items[0..kept]);
@@ -462,7 +464,7 @@ pub fn Tail(comptime T: type) type {
                     self.skipped += torn;
                     self.fault.framing(self.number);
                 }
-                if (length > self.options.max_line_bytes) {
+                if (limit.exceeds(length, self.options.max_line_bytes)) {
                     self.fault.framing(self.number);
                     return error.LineTooLong;
                 }
@@ -494,7 +496,7 @@ pub fn Tail(comptime T: type) type {
                     self.number += 1;
                     return self.emit(line, over);
                 }
-                if (!over and self.end > self.options.max_line_bytes +| line_mod.bom.len +| 1) {
+                if (!over and self.end > self.options.max_line_bytes.raw() +| line_mod.bom.len +| 1) {
                     // Longer than the bound allows to be held: drop what has
                     // been read of it and keep scanning back for where it
                     // began, so that the line before it is still reachable.
@@ -519,7 +521,7 @@ pub fn Tail(comptime T: type) type {
                 {
                     record = record[line_mod.bom.len..];
                 }
-                if (record.len <= self.options.max_line_bytes) return line;
+                if (!limit.exceeds(record.len, self.options.max_line_bytes)) return line;
             }
             self.fault.framing(self.number);
             return error.LineTooLong;
@@ -530,7 +532,7 @@ pub fn Tail(comptime T: type) type {
             assert(self.lo > 0);
             assert(self.end <= self.buf.items.len);
             const old_lo = self.lo;
-            const take: usize = @intCast(@min(self.options.block_bytes, self.lo));
+            const take: usize = @intCast(@min(self.options.block_bytes.raw(), self.lo));
             const kept = self.end;
 
             self.buf.items.len = kept;

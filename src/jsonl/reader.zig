@@ -1,5 +1,6 @@
 //! `Reader`: a `*std.Io.Reader` as a stream of typed lines.
 const std = @import("std");
+const aegis = @import("aegis");
 const Allocator = std.mem.Allocator;
 const core = @import("../core.zig");
 const json = @import("../json/api.zig");
@@ -30,7 +31,7 @@ const shared = struct {
         /// can be called again to continue with the line after it. This
         /// bound is the reader's memory bound, and it is independent of
         /// the size of `input`'s buffer.
-        max_line_bytes: usize = 1 << 20,
+        max_line_bytes: aegis.units.Bytes(usize) = .literal("1MiB"),
         /// When true, a line that is empty or all spaces and tabs is
         /// consumed and not returned. Its number is still counted.
         skip_blank: bool = true,

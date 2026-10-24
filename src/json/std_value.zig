@@ -1,6 +1,7 @@
 //! The standard dynamic Value bridge uses the same bounded operation context.
 //! Precision follows std.json.Value's integer/float/number_string alternatives.
 const std = @import("std");
+const limit = @import("../core/limit.zig");
 const core = @import("../core.zig");
 const native = @import("Value.zig");
 pub fn fromNative(value: native.Value, c: *core.Context) core.DecodeError!std.json.Value {
@@ -74,11 +75,14 @@ pub fn toNative(value: std.json.Value, c: *core.Context) core.EncodeError!native
 /// Move, never duplicate, the core arena into the standard dynamic owner.
 pub fn take(source: *core.Parsed(native.Value), limits: core.Limits) core.DecodeError!std.json.Parsed(std.json.Value) {
     const overhead = @sizeOf(std.heap.ArenaAllocator);
-    if (overhead > limits.allocation_bytes - source.requested_peak or overhead > limits.allocation_bytes - source.allocator_resident_bytes) return error.AllocationLimit;
+    const after_peak = limit.left(limits.allocation_bytes, source.requested_peak) orelse return error.AllocationLimit;
+    const after_resident = limit.left(limits.allocation_bytes, source.allocator_resident_bytes) orelse return error.AllocationLimit;
+    if (limit.exceeds(overhead, after_peak) or limit.exceeds(overhead, after_resident)) return error.AllocationLimit;
     const gpa = source.gpa;
     const arena = try gpa.create(std.heap.ArenaAllocator);
     errdefer gpa.destroy(arena);
-    var backing: core.Backing = .{ .gpa = gpa, .limit = limits.allocation_bytes - overhead, .live = source.allocator_resident_bytes };
+    // unreachable: overhead is within what the peak left of the limit, checked above
+    var backing: core.Backing = .{ .gpa = gpa, .limit = (limit.left(limits.allocation_bytes, overhead) orelse unreachable).raw(), .live = source.allocator_resident_bytes };
     const moved = source.take();
     arena.* = moved.state.?.promote(backing.allocator());
     errdefer arena.deinit();

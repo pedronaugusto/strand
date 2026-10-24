@@ -4,6 +4,8 @@ const framing = @import("../framing.zig");
 const member_scan_module = @import("../../json/member_scan.zig");
 
 const std = @import("std");
+const limit = @import("../../core/limit.zig");
+const aegis = @import("aegis");
 const Allocator = std.mem.Allocator;
 
 const line_mod = @import("../line.zig");
@@ -126,7 +128,7 @@ pub const LineReader = struct {
         /// discarded, so `next` can be called again to continue with the line
         /// after it. This bound is the reader's memory bound, and it is
         /// independent of the size of `input`'s buffer.
-        max_line_bytes: usize = 1 << 20,
+        max_line_bytes: aegis.units.Bytes(usize) = .literal("1MiB"),
         /// When true, a line that is empty or all spaces and tabs is consumed
         /// and not returned. Its number is still counted.
         skip_blank: bool = true,
@@ -388,7 +390,7 @@ pub const LineReader = struct {
         std.debug.assert(first <= end);
         std.debug.assert(end < rest.len);
         std.debug.assert(rest[end] == '\n');
-        if (end > self.options.max_line_bytes) return null;
+        if (limit.exceeds(end, self.options.max_line_bytes)) return null;
         const lines = newlinesAfter(rest[first .. end + 1]) orelse return null;
         self.input.toss(end - first);
         self.consumed += end - first;
@@ -584,7 +586,7 @@ pub const LineReader = struct {
         var line: SeparatedLine = .{ .scan = if (self.options.oversized_member) |name| .init(name) else null };
         // A record of exactly the bound may still carry the `\r` half of
         // its terminator.
-        const room = self.options.max_line_bytes +| 1;
+        const room = self.options.max_line_bytes.raw() +| 1;
         var pending = prefix.slice();
         while (true) {
             const from_prefix = pending.len != 0;
@@ -713,7 +715,7 @@ pub const LineReader = struct {
         self.record_offset = offset;
         self.record_number = self.number - 1;
         const record = if (self.options.crlf) trimCr(bytes) else bytes;
-        if (line.over or record.len > self.options.max_line_bytes) {
+        if (line.over or limit.exceeds(record.len, self.options.max_line_bytes)) {
             self.fault.framing(self.number);
             self.offset = offset;
             self.noteOversized(if (line.scan) |*scan| scan else null);
@@ -771,7 +773,7 @@ pub const LineReader = struct {
             self.record_offset = self.consumed;
             self.record_number = self.number;
             if (self.frameBuffered()) |frame| {
-                return self.takeFrame(frame, self.options.max_line_bytes);
+                return self.takeFrame(frame, self.options.max_line_bytes.raw());
             }
         }
         return self.readStreamed();
@@ -801,7 +803,7 @@ pub const LineReader = struct {
             self.record_offset = self.consumed;
             self.record_number = self.number;
         }
-        const max = self.options.max_line_bytes;
+        const max = self.options.max_line_bytes.raw();
         // One past the bound, so that a record of exactly `max` bytes is
         // accepted and the first byte over it is what trips the limit.
         // Saturating, because `Limit` reads a saturated `usize` as

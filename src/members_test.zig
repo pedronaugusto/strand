@@ -271,7 +271,12 @@ fn expectEdge(bytes: []const u8, limits: core.Limits, comptime field: []const u8
     try testing.expectEqual(@as(?json.MembersError, null), at.iterator);
     try testing.expectEqual(@as(?anyerror, null), at.parser);
     var tighter = limits;
-    @field(tighter, field) -= 1;
+    const Field = @FieldType(core.Limits, field);
+    if (Field == usize) {
+        @field(tighter, field) -= 1;
+    } else {
+        @field(tighter, field) = try @field(limits, field).sub(.fromRaw(1));
+    }
     const past = try verdicts(bytes, tighter);
     try testing.expectEqual(@as(?json.MembersError, refusal), past.iterator);
     try testing.expectEqual(@as(?anyerror, refusal), past.parser);
@@ -279,15 +284,15 @@ fn expectEdge(bytes: []const u8, limits: core.Limits, comptime field: []const u8
 
 test "each limit holds at its edge as the parser's does" {
     try expectEdge("{\"a\":[[{}]]}", .{ .depth = 4 }, "depth", error.DepthLimit);
-    try expectEdge("{\"abcd\":1}", .{ .key_bytes = 4 }, "key_bytes", error.LengthLimit);
+    try expectEdge("{\"abcd\":1}", .{ .key_bytes = .fromRaw(4) }, "key_bytes", error.LengthLimit);
     // A name is as long as its text, however it is escaped.
-    try expectEdge("{\"\\u0061bc\\u0064\":1}", .{ .key_bytes = 4 }, "key_bytes", error.LengthLimit);
-    try expectEdge("{\"a\":\"abcde\"}", .{ .string_bytes = 5 }, "string_bytes", error.LengthLimit);
-    try expectEdge("{\"a\":-1.25}", .{ .numeric_bytes = 5 }, "numeric_bytes", error.LengthLimit);
+    try expectEdge("{\"\\u0061bc\\u0064\":1}", .{ .key_bytes = .fromRaw(4) }, "key_bytes", error.LengthLimit);
+    try expectEdge("{\"a\":\"abcde\"}", .{ .string_bytes = .fromRaw(5) }, "string_bytes", error.LengthLimit);
+    try expectEdge("{\"a\":-1.25}", .{ .numeric_bytes = .fromRaw(5) }, "numeric_bytes", error.LengthLimit);
     try expectEdge("{\"a\":1,\"b\":2,\"c\":3}", .{ .container_items = 3 }, "container_items", error.ItemLimit);
     try expectEdge("{\"a\":[1,2,3]}", .{ .container_items = 3 }, "container_items", error.ItemLimit);
     const object = "{\"a\":[1,{\"b\":2}],\"c\":3}";
-    try expectEdge(object, .{ .input_bytes = object.len }, "input_bytes", error.InputLimit);
+    try expectEdge(object, .{ .input_bytes = .fromRaw(object.len) }, "input_bytes", error.InputLimit);
     try expectEdge(object, .{ .items = itemsOf(object) }, "items", error.ItemLimit);
 }
 

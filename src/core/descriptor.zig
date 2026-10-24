@@ -166,7 +166,7 @@ fn inspect(comptime T: type, comptime fmt: Capabilities, comptime seen: []const 
     if (has(T, "deinit")) return rejected(path, "resource owner requires an explicit data codec");
     // An aegis scalar is what it holds: an integer, or a duration or size in
     // its text form.
-    if (scalars.kind(T)) |k| return if (k == .text) .{} else inspect(T.Representation, fmt, next, path);
+    if (scalars.kind(T)) |k| return if (k == .text) .{} else inspect(scalars.Representation(T), fmt, next, path);
     return switch (@typeInfo(T)) {
         .bool, .void => .{},
         // A literal's number, such as a constant of an anonymous struct: written

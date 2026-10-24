@@ -64,6 +64,15 @@ pub export fn rejected() void {
         8 => {
             core.serialize(StdHooks{}, &backend, &c) catch unreachable;
         },
+        9 => {
+            // An aegis scalar of a later contract than strand reads: refused by
+            // its number, never read as contract 1.
+            const Later = enum(u16) {
+                pub const aegis_scalar = .{ .contract = 2, .kind = .ranged, .representation = u16, .minimum = 1, .maximum = 64 };
+                _,
+            };
+            core.serialize(@as(Later, @fromBackingInt(@intCast(1))), &backend, &c) catch unreachable;
+        },
         else => unreachable,
     }
 }

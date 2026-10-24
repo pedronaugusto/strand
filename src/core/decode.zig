@@ -542,7 +542,7 @@ pub fn Cursor(comptime Backend: type) type {
             }
             if (comptime scalars.kind(T)) |k| {
                 if (k == .text) return scalars.parse(T, try self.textValue());
-                return scalars.fromInteger(T, try self.readInteger(T.Representation));
+                return scalars.fromInteger(T, try self.readInteger(scalars.Representation(T)));
             }
             switch (@typeInfo(T)) {
                 .bool => {
@@ -1654,7 +1654,7 @@ fn expectedKind(comptime T: type, comptime policy: descriptor.Field) ctx.Diagnos
 fn typeRequest(comptime T: type, comptime policy: descriptor.Field) model.Request {
     var result: model.Request = .{ .expected = expectedKind(T, policy), .exact = policy.exact, .borrow = policy.borrow };
     if (comptime scalars.kind(T)) |k| {
-        if (k != .text) result.integer_bits = @typeInfo(T.Representation).int.bits;
+        if (k != .text) result.integer_bits = @typeInfo(scalars.Representation(T)).int.bits;
         return result;
     }
     switch (@typeInfo(T)) {

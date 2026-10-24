@@ -1,8 +1,10 @@
-//! The aegis scalars, read and written as what they hold. Each publishes the
-//! parameters it was made from (its `Representation`, and a `Scale`,
-//! `Domain`, `Clock` or range where it has one), so a type is recognized by
-//! rebuilding it from them: a type that only looks like one, or another
-//! revision of aegis, is not taken for it.
+//! The aegis scalars, read and written as what they hold. Each says which it
+//! is in its `aegis_scalar` declaration (aegis 0.1.18, contract 1), by which a
+//! type is recognized and its integer and range read, never by its name or its
+//! shape: a program pinning another aegis version than strand's builds another
+//! copy of aegis, whose types are never equal to the ones strand's copy makes
+//! but declare the same. A value is made only through its own checked
+//! functions, as the contract names them.
 const std = @import("std");
 const aegis = @import("aegis");
 
@@ -21,43 +23,41 @@ pub const Kind = enum {
     text,
 };
 
-/// What `T` is as an aegis scalar, or null when it is none.
+/// What `T` is as an aegis scalar, or null when it is none. A contract other
+/// than 1, the one this strand reads, does not compile: its fields or the
+/// functions a value is made with may have changed.
 pub fn kind(comptime T: type) ?Kind {
     switch (@typeInfo(T)) {
         .@"struct", .@"enum" => {},
         else => return null,
     }
-    if (!@hasDecl(T, "Representation") or @TypeOf(T.Representation) != type) return null;
-    const R = T.Representation;
-    if (@typeInfo(R) != .int) return null;
-    if (@hasDecl(T, "minimum") and @hasDecl(T, "maximum")) {
-        return if (T == aegis.int.Ranged(R, T.minimum, T.maximum)) .ranged else null;
-    }
-    if (@hasDecl(T, "Scale")) {
-        if (@hasDecl(T, "Clock")) return if (T == aegis.units.Instant(T.Clock, T.Scale, R)) .integer else null;
-        return if (T == aegis.units.Duration(T.Scale, R)) .text else null;
-    }
-    if (@hasDecl(T, "Domain")) {
-        const D = T.Domain;
-        if (T == aegis.units.Count(D, R) or T == aegis.id.Id(D, R)) return .integer;
-        if (T == aegis.id.NonZero(D, R)) return .nonzero;
-        if (T == aegis.id.Counter(D, R)) return .counter;
-        return null;
-    }
-    if (T == aegis.units.Bytes(R)) return .text;
-    if (T == aegis.units.Bits(R) or T == aegis.int.Checked(R) or T == aegis.int.Saturating(R)) return .integer;
+    if (!@hasDecl(T, "aegis_scalar")) return null;
+    const declared = T.aegis_scalar;
+    if (@typeInfo(@TypeOf(declared)) != .@"struct" or !@hasField(@TypeOf(declared), "contract")) return null;
+    if (declared.contract != 1) @compileError(std.fmt.comptimePrint("strand: {s} is an aegis scalar of contract {d}; this strand reads contract 1", .{ @typeName(T), declared.contract }));
+    const scalar = declared.kind;
+    if (scalar == .ranged) return .ranged;
+    if (scalar == .nonzero) return .nonzero;
+    if (scalar == .counter) return .counter;
+    if (scalar == .duration or scalar == .bytes) return .text;
+    if (scalar == .checked or scalar == .saturating or scalar == .count or scalar == .bits or scalar == .instant or scalar == .id) return .integer;
     return null;
 }
 
+/// The integer an aegis scalar is held in, as its declaration states it.
+pub fn Representation(comptime T: type) type {
+    return T.aegis_scalar.representation;
+}
+
 /// The integer a scalar of an integer kind holds.
-pub fn integer(value: anytype) @TypeOf(value).Representation {
+pub fn integer(value: anytype) Representation(@TypeOf(value)) {
     const T = @TypeOf(value);
     if (comptime kind(T) == .counter) return if (value.last()) |id| id.raw() else 0;
     return value.raw();
 }
 
 /// The scalar of an integer kind that holds `n`.
-pub fn fromInteger(comptime T: type, n: T.Representation) error{NumberOutOfRange}!T {
+pub fn fromInteger(comptime T: type, n: Representation(T)) error{NumberOutOfRange}!T {
     return switch (comptime kind(T).?) {
         .ranged => T.init(n) catch error.NumberOutOfRange,
         .nonzero => T.fromRaw(n) catch error.NumberOutOfRange,

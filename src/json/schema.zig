@@ -85,9 +85,9 @@ const Gen = struct {
             @compileError(path ++ ": a type with a codec of its own declares its schema as `strand_json_schema`");
         if (scalars.kind(T)) |k| return switch (k) {
             .text => "{\"type\":\"string\"}",
-            .ranged => integer(T.minimum, T.maximum),
-            .nonzero => merge(bounds(T.Representation), "\"not\":{\"const\":0}"),
-            .integer, .counter => integer(std.math.minInt(T.Representation), std.math.maxInt(T.Representation)),
+            .ranged => integer(T.aegis_scalar.minimum, T.aegis_scalar.maximum),
+            .nonzero => merge(bounds(scalars.Representation(T)), "\"not\":{\"const\":0}"),
+            .integer, .counter => integer(std.math.minInt(scalars.Representation(T)), std.math.maxInt(scalars.Representation(T))),
         };
         return switch (@typeInfo(T)) {
             .bool => "{\"type\":\"boolean\"}",

@@ -514,3 +514,42 @@ test "fuzz: std's value of any bytes is read exactly when strand's is" {
     for (examples) |example| try property.holds(example);
     try shakedown.check(std.testing.allocator, {}, property.body, .{});
 }
+
+/// A name an operating system gives: text when it is UTF-8, else bytes.
+const OsName = struct {
+    name: []const u8,
+    id: [4]u8 = "none".*,
+    pub const strand = .{ .fields = .{ .name = .{ .as = .text_or_bytes }, .id = .{ .as = .text_or_bytes } } };
+};
+
+test "text_or_bytes writes text when the bytes are UTF-8 and their byte values otherwise, as std.json does, and reads both back" {
+    var state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer state.deinit();
+    const a = state.allocator();
+    const cases = [_]OsName{
+        .{ .name = "caf\u{e9}" },
+        .{ .name = "" },
+        .{ .name = "a\xffb", .id = "\x00\xc3\x28\x7f".* },
+        .{ .name = "\xed\xa0\x80" },
+    };
+    for (cases) |case| {
+        var buffer: [256]u8 = undefined;
+        var out = std.Io.Writer.fixed(&buffer);
+        try json.write(&out, case, .{});
+        // One spelling for given bytes: std.json's.
+        const standard = try std.json.Stringify.valueAlloc(a, case, .{});
+        try std.testing.expectEqualStrings(standard, out.buffered());
+        var again = std.Io.Writer.fixed(buffer[out.end..]);
+        try json.write(&again, case, .{});
+        try std.testing.expectEqualStrings(out.buffered(), again.buffered());
+        const read = try json.parseLeaky(OsName, a, out.buffered(), .{});
+        try std.testing.expectEqualSlices(u8, case.name, read.name);
+        try std.testing.expectEqualSlices(u8, &case.id, &read.id);
+    }
+    // Either spelling reads; text that is not UTF-8 never does.
+    const spelled = try json.parseLeaky(OsName, a, "{\"name\":[104,105],\"id\":\"abcd\"}", .{});
+    try std.testing.expectEqualStrings("hi", spelled.name);
+    try std.testing.expectError(error.SyntaxError, json.parseLeaky(OsName, a, "{\"name\":\"\xff\"}", .{}));
+    try std.testing.expectError(error.UnexpectedType, json.parseLeaky(OsName, a, "{\"name\":\"x\",\"id\":[1,2,3]}", .{}));
+    try std.testing.expectError(error.NumberOutOfRange, json.parseLeaky(OsName, a, "{\"name\":[256]}", .{}));
+}

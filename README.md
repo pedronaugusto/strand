@@ -99,6 +99,12 @@ Scheme (RFC 8785), one spelling for every value, for hashing and signing: member
 by their names' UTF-16 code units, numbers as ECMAScript writes doubles, no whitespace; a
 name given twice, and a typed integer past ±(2^53−1), are refused.
 
+A field of bytes that an operating system gives, a file name or a path, is usually
+text and need not be: `.as = .text_or_bytes` writes it as a string when it is UTF-8 and
+otherwise as the array of its byte values, as `std.json` does, and reads either back
+(CBOR and MessagePack write the second as a byte string). The same bytes always take the
+same form.
+
 `strand.json.write(output, value, options)` writes checked JSON, minified or
 indented. A null optional is written as `null`, or left off with `.nulls = .omit`
 (one field says the same for itself with `.omit = .null_value`). Output is published a stage at a time, so a failure can leave a prefix

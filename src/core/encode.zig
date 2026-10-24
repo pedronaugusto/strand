@@ -29,6 +29,15 @@ fn emitScalar(comptime policy: descriptor.Field, value: anytype, out: anytype, c
 fn checksText(comptime Out: type) bool {
     return @hasDecl(Out, "validates_text") and Out.validates_text;
 }
+/// Bytes that are not UTF-8, under `.text_or_bytes`: bytes where the format
+/// has them, and otherwise the sequence of their byte values.
+fn octets(value: []const u8, out: anytype, c: *ctx.Context, active: ?*const Active) Errors([]const u8, @TypeOf(out.*))!void {
+    if (comptime @TypeOf(out.*).capabilities.bytes) return out.bytes(value, c);
+    try begin(out, c, .sequence, "", value.len);
+    defer c.leave();
+    for (value) |b| try emit(.{}, b, out, c, active);
+    try out.end(c);
+}
 fn emit(comptime policy: descriptor.Field, value: anytype, out: anytype, c: *ctx.Context, active: ?*const Active) Errors(@TypeOf(value), @TypeOf(out.*))!void {
     @setRuntimeSafety(true);
     const T = @TypeOf(value);
@@ -94,7 +103,9 @@ fn emit(comptime policy: descriptor.Field, value: anytype, out: anytype, c: *ctx
                 if (i.child == u8) {
                     try c.span(value.len, false);
                     try c.chargeWork(value.len);
-                    if (policy.as == .bytes) try out.bytes(value, c) else {
+                    if (policy.as == .bytes) try out.bytes(value, c) else if (policy.as == .text_or_bytes and !std.unicode.utf8ValidateSlice(value)) {
+                        try octets(value, out, c, active);
+                    } else {
                         if (!checksText(@TypeOf(out.*)) and !std.unicode.utf8ValidateSlice(value)) return error.InvalidUtf8;
                         try out.text(value, c);
                     }
@@ -115,7 +126,9 @@ fn emit(comptime policy: descriptor.Field, value: anytype, out: anytype, c: *ctx
                 if (i.len > policy.max_len) return error.LengthLimit;
                 try c.span(i.len, false);
                 try c.chargeWork(i.len);
-                if (policy.as == .bytes) try out.bytes(&values, c) else {
+                if (policy.as == .bytes) try out.bytes(&values, c) else if (policy.as == .text_or_bytes and !std.unicode.utf8ValidateSlice(&values)) {
+                    try octets(&values, out, c, active);
+                } else {
                     if (!checksText(@TypeOf(out.*)) and !std.unicode.utf8ValidateSlice(&values)) return error.InvalidUtf8;
                     try out.text(&values, c);
                 }

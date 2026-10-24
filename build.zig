@@ -62,6 +62,10 @@ pub fn dev(b: *std.Build, tools: type) void {
     const shakedown = b.dependency("shakedown", .{ .target = target, .optimize = optimize });
     tests.root_module.addImport("shakedown", shakedown.module("shakedown"));
     tests.root_module.addImport("airlock.testing", airlock_build.testing(airlock_dependency, shakedown.module("shakedown")));
+    // A second copy of aegis, from its sources at another path: what a program
+    // pinning another aegis version than strand's builds beside strand's.
+    const aegis_sources = b.addWriteFiles().addCopyDirectory(p.dependency("aegis", .{ .target = target, .optimize = optimize }).path("src"), "aegis", .{});
+    tests.root_module.addImport("other_aegis", b.createModule(.{ .root_source_file = aegis_sources.path(b, "root.zig"), .target = target, .optimize = optimize }));
 
     const test_step = b.step("test", "Run strand tests");
     // The assembly reaches every test once, in one executable.
@@ -123,9 +127,10 @@ pub fn dev(b: *std.Build, tools: type) void {
 
     if (test_filter == null or std.mem.find(u8, "S1", test_filter.?) != null) {
         const expected = [_][]const u8{
-            "error: : resource or secret is not automatic data", "error: wire alias collision at left",               "error: owned decoding conflicts with borrow.require at label",
-            "error: : explicit data codec",                      "error: : resource or secret is not automatic data", "error: : pointer has no safe data meaning",
-            "error: tag collides with payload alias",            "error: data codecs require a named error set",      "error: : std.json hooks are not read here; declare strandDeserialize and strandSerialize",
+            "error: : resource or secret is not automatic data",              "error: wire alias collision at left",               "error: owned decoding conflicts with borrow.require at label",
+            "error: : explicit data codec",                                   "error: : resource or secret is not automatic data", "error: : pointer has no safe data meaning",
+            "error: tag collides with payload alias",                         "error: data codecs require a named error set",      "error: : std.json hooks are not read here; declare strandDeserialize and strandSerialize",
+            "is an aegis scalar of contract 2; this strand reads contract 1",
         };
         for (expected, 0..) |message, case| {
             const rejection_options = b.addOptions();

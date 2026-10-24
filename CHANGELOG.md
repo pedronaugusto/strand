@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- An aegis scalar from a program pinning another aegis version than strand's was refused, a `Ranged` as a non-exhaustive enum with no numeric codec: strand recognized aegis's scalars by rebuilding them with its own copy of aegis, and two versions under a plain `zig build` are two copies whose types are never equal. It now reads the `aegis_scalar` declaration each carries (aegis 0.1.18), the same in every copy, at contract 1: its integer and range come from it, a value is made only through the type's own checked functions, and a later contract does not compile, named by its number.
+
 ### Changed
 
 - A charge an operation takes before allocating (`Context.alloc`, `allocPointer`, the scratch allocator) is given back if the allocation fails and consumed once it succeeds (aegis 0.1.14's `Reservation.consume`), so the reservation is discharged on every path where it was left held.

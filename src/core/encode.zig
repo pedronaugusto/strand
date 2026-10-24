@@ -112,7 +112,7 @@ fn emit(comptime policy: descriptor.Field, value: anytype, out: anytype, c: *ctx
                 } else {
                     try begin(out, c, .sequence, "", value.len);
                     defer c.leave();
-                    for (value) |v| try emit(.{}, v, out, c, active);
+                    for (value) |v| try emit(comptime descriptor.element(policy, i.child), v, out, c, active);
                     try out.end(c);
                 }
             },

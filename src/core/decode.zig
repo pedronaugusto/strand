@@ -915,7 +915,7 @@ pub fn Cursor(comptime Backend: type) type {
             if (header.len) |n| {
                 if (n > policy.max_len) return error.LengthLimit;
                 const values = try self.context.allocPointer(T, n);
-                for (values, 0..) |*v, k| try self.readElement(T, prior, k, v);
+                for (values, 0..) |*v, k| try self.readElement(T, policy, prior, k, v);
                 try self.end();
                 return values;
             }
@@ -931,7 +931,7 @@ pub fn Cursor(comptime Backend: type) type {
                     @memcpy(grown[0..initialized], values[0..initialized]);
                     values = grown;
                 }
-                try self.readElement(T, prior, initialized, &values[initialized]);
+                try self.readElement(T, policy, prior, initialized, &values[initialized]);
                 initialized += 1;
             }
             try self.end();
@@ -943,13 +943,14 @@ pub fn Cursor(comptime Backend: type) type {
         }
         /// A sequence's element at `k`: read into `prior`'s at `k` where
         /// there is one, else afresh.
-        inline fn readElement(self: *Self, comptime T: type, prior: anytype, k: usize, slot: *@typeInfo(T).pointer.child) Errors(T, Backend)!void {
+        inline fn readElement(self: *Self, comptime T: type, comptime policy: descriptor.Field, prior: anytype, k: usize, slot: *@typeInfo(T).pointer.child) Errors(T, Backend)!void {
             const E = @typeInfo(T).pointer.child;
+            const each = comptime descriptor.element(policy, E);
             if (comptime @TypeOf(prior) == T) if (k < prior.len) {
                 slot.* = prior[k];
-                return self.readInto(E, .{}, slot);
+                return self.readInto(E, each, slot);
             };
-            slot.* = try self.readFresh(E, .{});
+            slot.* = try self.readFresh(E, each);
         }
         /// A field read into what it holds; one with a codec of its own is
         /// read afresh.

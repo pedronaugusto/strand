@@ -109,7 +109,7 @@ const Gen = struct {
             .optional => |i| nullable(g.schema(i.child, policy, path)),
             .pointer => |i| switch (i.size) {
                 .one => if (@typeInfo(i.child) == .array and @typeInfo(i.child).array.child == u8) text(policy, path) else g.schema(i.child, policy, path),
-                .slice => if (i.child == u8) text(policy, path) else "{\"type\":\"array\",\"items\":" ++ g.schema(i.child, .{}, path ++ "[]") ++ maxItems(policy) ++ "}",
+                .slice => if (i.child == u8) text(policy, path) else "{\"type\":\"array\",\"items\":" ++ g.schema(i.child, descriptor.element(policy, i.child), path ++ "[]") ++ maxItems(policy) ++ "}",
                 else => @compileError(path ++ ": pointer has no data meaning"),
             },
             inline .array, .vector => |i| if (policy.as != .normal)

@@ -12,7 +12,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- `.as = .text_or_bytes`, a field policy for bytes an operating system gives (file names, paths): written as text when they are UTF-8 and otherwise as bytes, or in JSON, which has none, as the array of their byte values, as `std.json` writes them; read in any of those forms. The same bytes always take the same form.
+- `.as = .text_or_bytes`, a field policy for bytes an operating system gives (file names, paths): written as text when they are UTF-8 and otherwise as bytes, or in JSON, which has none, as the array of their byte values, as `std.json` writes them; read in any of those forms. The same bytes always take the same form. On a list of byte strings it spells each of them so; so do `.text` and `.bytes`.
 - `core.Limits.sized(bytes)`: the defaults raised where a document of that size needs more, for a reader that bounds what it reads by its size alone (chronicle's journal, lookout's checkpoints).
 - `core.Diagnostics.locate`: the line and column of a diagnostic's offset in the text read. TOML, YAML and ZON set them through it, in place of a copy each.
 

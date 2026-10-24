@@ -242,7 +242,7 @@ fn anyBytes(_: void, case: *shakedown.Case) anyerror!void {
         parsed.deinit();
     } else |_| {}
     var source: std.Io.Reader = .fixed(input);
-    var reader: csv.Reader(Generated) = .init(case.gpa, &source, .{ .max_row_bytes = 64 });
+    var reader: csv.Reader(Generated) = .init(case.gpa, &source, .{ .max_row_bytes = .fromRaw(64) });
     defer reader.deinit();
     var budget: usize = 64;
     while (budget > 0) : (budget -= 1) {

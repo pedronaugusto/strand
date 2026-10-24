@@ -154,7 +154,7 @@ test "an over-long line finished after it was refused is not read twice" {
     defer fixture.deinit();
 
     var follower: Follower(Event) = .init(testing.allocator, &fixture.reader, .{
-        .reader = .{ .max_line_bytes = 16 },
+        .reader = .{ .max_line_bytes = .fromRaw(16) },
         .wait = .{ .poll = .fromMicroseconds(100) },
     });
     defer follower.deinit(testing.io);
@@ -176,7 +176,7 @@ test "an over-long line finished while the follower waits is not read twice" {
     defer fixture.deinit();
 
     var follower: Follower(Event) = .init(testing.allocator, &fixture.reader, .{
-        .reader = .{ .max_line_bytes = 16 },
+        .reader = .{ .max_line_bytes = .fromRaw(16) },
         .wait = .{ .poll = .fromMicroseconds(100) },
     });
     defer follower.deinit(testing.io);

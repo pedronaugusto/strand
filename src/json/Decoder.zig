@@ -3,6 +3,7 @@
 //! event. A container's frame says what may come next in it; a string is found
 //! a vector at a time and borrowed from the input unless it has an escape.
 const std = @import("std");
+const limit = @import("../core/limit.zig");
 const core = @import("../core.zig");
 const numbers = @import("number.zig");
 const strings = @import("text.zig");
@@ -515,7 +516,7 @@ pub fn Dialect(comptime jsonc: bool) type {
             self.reading();
             const from = self.at;
             const end = try numberEnd(self.input, from);
-            if (end - from > c.limits.numeric_bytes) return error.LengthLimit;
+            if (limit.exceeds(end - from, c.limits.numeric_bytes)) return error.LengthLimit;
             self.finish(end);
             return self.input[from..end];
         }
@@ -545,7 +546,7 @@ pub fn Dialect(comptime jsonc: bool) type {
                 '0'...'9', '.', 'e', 'E' => return null,
                 else => {},
             };
-            if (digits > c.limits.numeric_bytes) return null;
+            if (limit.exceeds(digits, c.limits.numeric_bytes)) return null;
             const result: T = if (@typeInfo(T).int.signedness == .unsigned) result: {
                 // `-0` is an unsigned zero unless integers are to be written as
                 // one, which the lexeme path then refuses.
@@ -600,7 +601,7 @@ pub fn Dialect(comptime jsonc: bool) type {
             switch (bytes[at]) {
                 '-', '0'...'9' => {
                     const end = try numberEnd(bytes, at);
-                    if (end - at > c.limits.numeric_bytes) return error.LengthLimit;
+                    if (limit.exceeds(end - at, c.limits.numeric_bytes)) return error.LengthLimit;
                     try c.chargeWork(end - at);
                     self.last_end = end;
                     self.at = self.space(end);
@@ -730,7 +731,7 @@ pub fn Dialect(comptime jsonc: bool) type {
                 '-', '0'...'9' => {
                     const start = self.at;
                     const end = try numberEnd(self.input, start);
-                    if (end - start > c.limits.numeric_bytes) return error.LengthLimit;
+                    if (limit.exceeds(end - start, c.limits.numeric_bytes)) return error.LengthLimit;
                     self.finish(end);
                     self.ended();
                     return .{ .number = .{ .bytes = self.input[start..end], .lifetime = .borrowed } };

@@ -1,5 +1,6 @@
 //! An arena result owns storage, never the caller's input or an Io.
 const std = @import("std");
+const limit = @import("limit.zig");
 const aegis = @import("aegis");
 const context = @import("context.zig");
 const descriptor = @import("descriptor.zig");
@@ -54,8 +55,8 @@ pub fn acquireWith(comptime T: type, comptime ownership: context.Ownership, gpa:
     const limits = options.limits;
     @setRuntimeSafety(true);
     comptime descriptor.check(T, descriptor.schema_capabilities, true, ownership);
-    if (bytes.len > limits.input_bytes) return error.InputLimit;
-    var backing: context.Backing = .{ .gpa = gpa, .limit = limits.allocation_bytes };
+    if (limit.exceeds(bytes.len, limits.input_bytes)) return error.InputLimit;
+    var backing: context.Backing = .{ .gpa = gpa, .limit = limits.allocation_bytes.raw() };
     var arena: std.heap.ArenaAllocator = .init(backing.allocator());
     errdefer arena.deinit();
     var c: context.Context = .init(arena.allocator(), limits, ownership);
@@ -79,7 +80,7 @@ fn CallbackError(comptime D: type) type {
 /// operation; failed scratch/result allocations remain until the caller resets.
 pub fn acquireLeaky(comptime T: type, arena: std.mem.Allocator, bytes: []const u8, limits: context.Limits, comptime decode: anytype) (context.DecodeError || CallbackError(@TypeOf(decode)))!T {
     comptime descriptor.check(T, descriptor.schema_capabilities, true, .borrowed);
-    if (bytes.len > limits.input_bytes) return error.InputLimit;
+    if (limit.exceeds(bytes.len, limits.input_bytes)) return error.InputLimit;
     var c: context.Context = .init(arena, limits, .borrowed);
     return decode(&c, bytes);
 }
@@ -100,7 +101,7 @@ pub fn clone(gpa: std.mem.Allocator, value: anytype, limits: context.Limits) con
     const T = @TypeOf(value);
     comptime cloneCheck(T, &.{});
     comptime descriptor.check(T, descriptor.schema_capabilities, true, .owned);
-    var backing: context.Backing = .{ .gpa = gpa, .limit = limits.allocation_bytes };
+    var backing: context.Backing = .{ .gpa = gpa, .limit = limits.allocation_bytes.raw() };
     var arena: std.heap.ArenaAllocator = .init(backing.allocator());
     errdefer arena.deinit();
     var c: context.Context = .init(arena.allocator(), limits, .owned);

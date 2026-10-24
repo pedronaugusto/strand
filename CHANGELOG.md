@@ -6,7 +6,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Breaking
+
+- Every byte limit and bound strand is given is an aegis `Bytes(usize)`, read and written in aegis's text form and logged with `{f}`: `core.Limits`' `input_bytes`, `output_bytes`, `string_bytes`, `key_bytes`, `numeric_bytes` and `allocation_bytes` (its counts, `depth`, `items`, `container_items` and `work`, stay counts), and the `max_line_bytes`, `recovery_bytes`, `max_row_bytes` and `block_bytes` of the JSON Lines readers, decoder, line reader and tail and the CSV reader. Write `.literal("64KiB")` or `.fromRaw(65536)` where a number was, and read one with `.raw()`.
+
+### Added
+
+- `core.Diagnostics.locate`: the line and column of a diagnostic's offset in the text read. TOML, YAML and ZON set them through it, in place of a copy each.
+
 ### Changed
+
+- `names = .fold_case` folds every letter by Unicode's simple case folding, code point by code point, as Go's `encoding/json` matches names: `É` finds a field named `é`, and `Σ`, `σ` and `ς` find one another. Before, only ASCII letters, `ſ` and the Kelvin sign folded. The folding is xenoglyph's (`case.simpleFold`), a new dependency (xenoglyph 0.4.1).
 
 - A charge an operation takes before allocating (`Context.alloc`, `allocPointer`, the scratch allocator) is given back if the allocation fails and consumed once it succeeds (aegis 0.1.14's `Reservation.consume`), so the reservation is discharged on every path where it was left held.
 

@@ -91,7 +91,7 @@ test "the block size does not change what is read" {
         var fixture = try Fixture.init(input.written(), 64);
         defer fixture.deinit();
 
-        var tail: Tail(Event) = try .init(testing.allocator, &fixture.reader, .{ .block_bytes = block });
+        var tail: Tail(Event) = try .init(testing.allocator, &fixture.reader, .{ .block_bytes = .fromRaw(block) });
         defer tail.deinit();
 
         var expected: u64 = 500;
@@ -108,7 +108,7 @@ test "a zero block size uses the smallest supported block" {
     var fixture = try Fixture.init("{\"kind\":\"only\"}\n", 64);
     defer fixture.deinit();
 
-    var tail: Tail(Event) = try .init(testing.allocator, &fixture.reader, .{ .block_bytes = 0 });
+    var tail: Tail(Event) = try .init(testing.allocator, &fixture.reader, .{ .block_bytes = .fromRaw(0) });
     defer tail.deinit();
     try testing.expectEqualStrings("only", (try tail.prev()).?.value.kind);
 }
@@ -118,7 +118,7 @@ test "the tail bound excludes CRLF and a leading byte-order mark" {
     defer fixture.deinit();
 
     var tail: Tail(json.Value) = try .init(testing.allocator, &fixture.reader, .{
-        .max_line_bytes = 2,
+        .max_line_bytes = .fromRaw(2),
     });
     defer tail.deinit();
     const line = (try tail.prev()).?;
@@ -135,7 +135,7 @@ test "last(n) reads the end of the file and nothing else" {
     var fixture = try Fixture.init(input.written(), 64);
     defer fixture.deinit();
 
-    var tail: Tail(Event) = try .init(testing.allocator, &fixture.reader, .{ .block_bytes = 512 });
+    var tail: Tail(Event) = try .init(testing.allocator, &fixture.reader, .{ .block_bytes = .fromRaw(512) });
     defer tail.deinit();
 
     var got = try tail.last(testing.allocator, 5);
@@ -208,8 +208,8 @@ test "an over-long line is discarded whole and the one before it is still read" 
         defer fixture.deinit();
 
         var tail: Tail(Event) = try .init(testing.allocator, &fixture.reader, .{
-            .max_line_bytes = 64,
-            .block_bytes = block,
+            .max_line_bytes = .fromRaw(64),
+            .block_bytes = .fromRaw(block),
         });
         defer tail.deinit();
 
@@ -242,7 +242,7 @@ test "keep is what makes a value outlive its line" {
         var fixture = try Fixture.init("{\"kind\":\"a\"}\n{\"kind\":\"b\\u0063\"}\n", 64);
         defer fixture.deinit();
 
-        var tail: Tail(Event) = try .init(testing.allocator, &fixture.reader, .{ .block_bytes = 4 });
+        var tail: Tail(Event) = try .init(testing.allocator, &fixture.reader, .{ .block_bytes = .fromRaw(4) });
         defer tail.deinit();
 
         kept = try tail.keep(testing.allocator, (try tail.prev()).?);
@@ -276,7 +276,7 @@ test "a line read backwards knows the offset it began at" {
         var fixture = try Fixture.init(input, 64);
         defer fixture.deinit();
 
-        var tail: Tail(Event) = try .init(testing.allocator, &fixture.reader, .{ .block_bytes = block });
+        var tail: Tail(Event) = try .init(testing.allocator, &fixture.reader, .{ .block_bytes = .fromRaw(block) });
         defer tail.deinit();
 
         while (try tail.prev()) |line| {
@@ -325,7 +325,7 @@ test "a separated file is read backwards the same way" {
 
     var tail: Tail(Event) = try .init(testing.allocator, &fixture.reader, .{
         .record_separator = true,
-        .block_bytes = 8,
+        .block_bytes = .fromRaw(8),
     });
     defer tail.deinit();
 
@@ -373,7 +373,7 @@ test "a file that shrinks under a tail is reported rather than misread" {
     // that empties the file under it is a fact it can state rather than a
     // block of some other file spliced onto the last one read.
     // One line per block, so that every `prev` has to go back to the file.
-    var tail: Tail(Event) = try .init(testing.allocator, &reader, .{ .block_bytes = 13 });
+    var tail: Tail(Event) = try .init(testing.allocator, &reader, .{ .block_bytes = .fromRaw(13) });
     defer tail.deinit();
     try testing.expectEqualStrings("a", (try tail.prev()).?.value.kind);
 
@@ -395,8 +395,8 @@ test "a separated tail bounds only its JSON payload" {
         var source = file.reader(testing.io, &.{});
         var tail = try Tail(struct {}).init(testing.allocator, &source, .{
             .record_separator = true,
-            .max_line_bytes = 2,
-            .block_bytes = block_bytes,
+            .max_line_bytes = .fromRaw(2),
+            .block_bytes = .fromRaw(block_bytes),
         });
         defer tail.deinit();
         const last = (try tail.prev()).?;
@@ -423,8 +423,8 @@ test "a separated tail accepts the exact payload bound and refuses the next byte
         var source = file.reader(testing.io, &.{});
         var tail = try Tail(struct {}).init(testing.allocator, &source, .{
             .record_separator = true,
-            .max_line_bytes = 2,
-            .block_bytes = block_bytes,
+            .max_line_bytes = .fromRaw(2),
+            .block_bytes = .fromRaw(block_bytes),
         });
         defer tail.deinit();
         try testing.expectError(error.LineTooLong, tail.prev());
@@ -446,7 +446,7 @@ test "a backward read takes the record after a torn one on its line" {
         var source = file.reader(testing.io, &.{});
         var tail = try Tail(Event).init(testing.allocator, &source, .{
             .record_separator = true,
-            .block_bytes = block_bytes,
+            .block_bytes = .fromRaw(block_bytes),
         });
         defer tail.deinit();
         const b = (try tail.prev()).?;
@@ -478,7 +478,7 @@ test "separated forward and backward framing agree at every payload boundary" {
                         var forward_source: std.Io.Reader = .fixed(input);
                         var forward: jsonl.LineReader = .init(testing.allocator, &forward_source, .{
                             .record_separator = true,
-                            .max_line_bytes = max,
+                            .max_line_bytes = .fromRaw(max),
                             .crlf = crlf,
                             .skip_blank = skip_blank,
                         });
@@ -486,8 +486,8 @@ test "separated forward and backward framing agree at every payload boundary" {
                         var source = file.reader(testing.io, &.{});
                         var tail = try Tail(struct {}).init(testing.allocator, &source, .{
                             .record_separator = true,
-                            .max_line_bytes = max,
-                            .block_bytes = block_bytes,
+                            .max_line_bytes = .fromRaw(max),
+                            .block_bytes = .fromRaw(block_bytes),
                             .crlf = crlf,
                             .skip_blank = skip_blank,
                         });

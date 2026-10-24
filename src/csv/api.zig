@@ -1,6 +1,7 @@
 //! CSV (RFC 4180) on Strand's shared type mapping and ownership core: whole
 //! documents, and rows streamed off a reader on JSON Lines' line framing.
 const std = @import("std");
+const limit = @import("../core/limit.zig");
 const aegis = @import("aegis");
 const core = @import("../core.zig");
 const WireDecoder = @import("Decoder.zig");
@@ -73,7 +74,7 @@ pub fn parseLeaky(comptime T: type, arena: std.mem.Allocator, input: []const u8,
         d.* = .{};
         d.format = "csv";
     }
-    if (input.len > options.limits.input_bytes) return error.InputLimit;
+    if (limit.exceeds(input.len, options.limits.input_bytes)) return error.InputLimit;
     var c = core.Context.init(arena, options.limits, .borrowed);
     c.acceptance = acceptance(options);
     c.diagnostics = options.diagnostics;
@@ -147,7 +148,7 @@ pub fn Reader(comptime T: type) type {
             parse: ParseOptions = .{},
             /// The longest row accepted, its line breaks included. A longer
             /// one is `error.LineTooLong`, and the reader moves on past it.
-            max_row_bytes: usize = 1 << 20,
+            max_row_bytes: aegis.units.Bytes(usize) = .literal("1MiB"),
         };
         pub const Row = struct {
             value: T,

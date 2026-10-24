@@ -218,10 +218,11 @@ value read afresh; anything else, a type with a codec of its own among them, is 
 afresh and replaces it. A map's keys follow the same choice (`first`, `last`, `merge`)
 where the reading names one, and are all kept where it leaves it to the types.
 `names = .fold_case` matches a key no name spells exactly by case folding, the first
-of the record's names in declaration order (fields, then aliases) it folds to: ASCII
-letters, and `ſ` and the Kelvin sign that Unicode folds onto two of them; a letter
-outside ASCII in a field's name matches only itself (full folding would need
-xenoglyph's tables). `nulls = .keep` takes a null where the type has none: a record's
+of the record's names in declaration order (fields, then aliases) it folds to, code
+point by code point under Unicode's simple case folding (xenoglyph's `case.simpleFold`),
+as Go's `encoding/json` matches names: `É` with `é`, the three sigmas with one another,
+`ſ` and the Kelvin sign with `s` and `k`; `ß` folds to no `ss`, which is full folding,
+and a sequence that is not UTF-8 matches only the same bytes. `nulls = .keep` takes a null where the type has none: a record's
 field keeps what it held (its default, or an earlier member's value), a sequence and a
 map are emptied, a value read fresh (an element, a map's value, the root) is its type's
 zero (false, 0, empty, null, a record of its defaults; a type with none refuses it). The

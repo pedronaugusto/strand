@@ -190,5 +190,5 @@ test "a copy is held to its limits" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
     const source: []const []const u8 = &.{ "one", "two", "three" };
-    try testing.expectError(error.AllocationLimit, core.clone(testing.allocator, source, .{ .allocation_bytes = 16 }));
+    try testing.expectError(error.AllocationLimit, core.clone(testing.allocator, source, .{ .allocation_bytes = .fromRaw(16) }));
 }

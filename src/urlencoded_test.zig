@@ -149,8 +149,8 @@ test "a map of names to values" {
 }
 
 test "limits hold on forms" {
-    try std.testing.expectError(error.InputLimit, form.parse(Signup, gpa, "name=a&age=1", .{ .limits = .{ .input_bytes = 4 } }));
-    try std.testing.expectError(error.LengthLimit, form.parse(Signup, gpa, "name=abcdef&age=1", .{ .limits = .{ .string_bytes = 3 } }));
+    try std.testing.expectError(error.InputLimit, form.parse(Signup, gpa, "name=a&age=1", .{ .limits = .{ .input_bytes = .fromRaw(4) } }));
+    try std.testing.expectError(error.LengthLimit, form.parse(Signup, gpa, "name=abcdef&age=1", .{ .limits = .{ .string_bytes = .fromRaw(3) } }));
     try std.testing.expectError(error.DepthLimit, form.parse(Account, gpa, "id=1&user[name]=a&user[address][city]=b", .{ .limits = .{ .depth = 2 } }));
 }
 

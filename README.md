@@ -49,7 +49,7 @@ try log.write(.{ .kind = "close", .at = 3 });
 var source: std.Io.Reader = .fixed(out.written());
 var events: strand.jsonl.Reader(Event) = .init(arena, &source, .{
     .parse = .{ .ignore_unknown_fields = true },
-    .max_line_bytes = 64 * 1024,
+    .max_line_bytes = .literal("64KiB"),
     .on_malformed = .fail,
 });
 defer events.deinit();

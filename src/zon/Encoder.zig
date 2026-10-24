@@ -4,6 +4,7 @@
 //! trailing comma; one of one or two stays on its line; a union is `.arm` with
 //! no payload and `.{ .arm = payload }` with one.
 const std = @import("std");
+const limit = @import("../core/limit.zig");
 const core = @import("../core.zig");
 const Decoder = @import("Decoder.zig");
 pub const Format = Decoder.Format;
@@ -238,7 +239,7 @@ pub fn integer(self: *Self, value: anytype, c: *core.Context) Error!void {
     const bits = @typeInfo(@TypeOf(value)).int.bits;
     var buffer: [bits / 3 + 3]u8 = undefined;
     const spelling = if (comptime bits <= 128) decimal(&buffer, value) else buffer[0..std.fmt.printInt(&buffer, value, 10, .lower, .{})];
-    if (spelling.len > c.limits.numeric_bytes) return error.LengthLimit;
+    if (limit.exceeds(spelling.len, c.limits.numeric_bytes)) return error.LengthLimit;
     try self.before(c);
     try self.put(spelling, c);
 }
@@ -286,7 +287,7 @@ fn decimalDigits(buffer: []u8, stop: usize, number: u64) usize {
 pub fn floating(self: *Self, value: anytype, c: *core.Context) Error!void {
     var buffer: [5200]u8 = undefined;
     const spelling = if (std.math.isNan(value)) "nan" else if (std.math.isPositiveInf(value)) "inf" else if (std.math.isNegativeInf(value)) "-inf" else if (std.math.isNegativeZero(value)) "-0.0" else std.mem.print(&buffer, "{d}", .{value}) catch return error.NumberOutOfRange;
-    if (spelling.len > c.limits.numeric_bytes) return error.LengthLimit;
+    if (limit.exceeds(spelling.len, c.limits.numeric_bytes)) return error.LengthLimit;
     try self.before(c);
     try self.put(spelling, c);
 }

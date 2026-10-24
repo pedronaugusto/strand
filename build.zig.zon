@@ -27,6 +27,12 @@
             .hash = "aegis-0.1.14-rsxouiwFCACpt6FVOECFUhpjUaetlNneWpaDTj95q514",
         },
 
+        // Unicode's simple case folding, for member names read by folding.
+        .xenoglyph = .{
+            .url = "git+https://github.com/pedronaugusto/xenoglyph?ref=v0.4.1#6f6b2573831104a09ab7ab6e5a28efee01a6da44",
+            .hash = "xenoglyph-0.4.1-YKXZlbAoGwCDz2rgL2E8FDIYuuzo2iAi_ZskokH6K1E1",
+        },
+
         // Test doubles, for the tests alone: no module a consumer builds
         // imports it, and a consumer never fetches it.
 

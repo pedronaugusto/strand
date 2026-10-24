@@ -12,6 +12,7 @@
 //! TOML has no null: a null is refused, unless the write leaves optional
 //! fields that are null out of their tables (`WriteOptions.nulls`).
 const std = @import("std");
+const limit = @import("../core/limit.zig");
 const core = @import("../core.zig");
 const Decoder = @import("Decoder.zig");
 const strings = @import("text.zig");
@@ -105,7 +106,7 @@ pub fn floating(self: *Self, value: anytype, c: *core.Context) Error!void {
     const magnitude = @abs(v);
     const decimals = magnitude == 0 or (magnitude >= 1e-5 and magnitude < 1e16);
     const spelled = (if (decimals) std.mem.print(&buffer, "{d}", .{v}) else std.mem.print(&buffer, "{e}", .{v})) catch return error.NumberOutOfRange;
-    if (spelled.len > c.limits.numeric_bytes) return error.LengthLimit;
+    if (limit.exceeds(spelled.len, c.limits.numeric_bytes)) return error.LengthLimit;
     const float = std.mem.findAny(u8, spelled, ".e") != null;
     try self.spell("{s}{s}", .{ spelled, if (float) "" else ".0" });
 }

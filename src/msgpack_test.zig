@@ -510,12 +510,12 @@ test "the deterministic profile sorts each map by its encoded keys and refuses a
 
 test "limits at their edges: a value exactly at a limit is read, one past it refused" {
     const text = bytesOf("a3616263");
-    try std.testing.expectError(error.LengthLimit, msgpack.parse(Value, gpa, &text, .{ .limits = .{ .string_bytes = 2 } }));
-    var at = try msgpack.parse(Value, gpa, &text, .{ .limits = .{ .string_bytes = 3 } });
+    try std.testing.expectError(error.LengthLimit, msgpack.parse(Value, gpa, &text, .{ .limits = .{ .string_bytes = .fromRaw(2) } }));
+    var at = try msgpack.parse(Value, gpa, &text, .{ .limits = .{ .string_bytes = .fromRaw(3) } });
     at.deinit();
     const ext = bytesOf("c70301616263");
-    try std.testing.expectError(error.LengthLimit, msgpack.parse(Value, gpa, &ext, .{ .limits = .{ .string_bytes = 2 } }));
-    var ext_at = try msgpack.parse(Value, gpa, &ext, .{ .limits = .{ .string_bytes = 3 } });
+    try std.testing.expectError(error.LengthLimit, msgpack.parse(Value, gpa, &ext, .{ .limits = .{ .string_bytes = .fromRaw(2) } }));
+    var ext_at = try msgpack.parse(Value, gpa, &ext, .{ .limits = .{ .string_bytes = .fromRaw(3) } });
     ext_at.deinit();
     const nested = bytesOf("91919100");
     const Nested = []const []const []const u32;
@@ -526,20 +526,20 @@ test "limits at their edges: a value exactly at a limit is read, one past it ref
     try std.testing.expectError(error.ItemLimit, msgpack.parse([]const u32, gpa, &four, .{ .limits = .{ .container_items = 3 } }));
     var items = try msgpack.parse([]const u32, gpa, &four, .{ .limits = .{ .container_items = 4 } });
     items.deinit();
-    try std.testing.expectError(error.InputLimit, msgpack.parse([]const u32, gpa, &four, .{ .limits = .{ .input_bytes = 4 } }));
-    var input = try msgpack.parse([]const u32, gpa, &four, .{ .limits = .{ .input_bytes = 5 } });
+    try std.testing.expectError(error.InputLimit, msgpack.parse([]const u32, gpa, &four, .{ .limits = .{ .input_bytes = .fromRaw(4) } }));
+    var input = try msgpack.parse([]const u32, gpa, &four, .{ .limits = .{ .input_bytes = .fromRaw(5) } });
     input.deinit();
     var buffer: [8]u8 = undefined;
     var fixed: std.Io.Writer = .fixed(&buffer);
-    try std.testing.expectError(error.OutputLimit, msgpack.write(&fixed, "abcd", .{ .limits = .{ .output_bytes = 4 } }));
+    try std.testing.expectError(error.OutputLimit, msgpack.write(&fixed, "abcd", .{ .limits = .{ .output_bytes = .fromRaw(4) } }));
     fixed = .fixed(&buffer);
-    try msgpack.write(&fixed, "abcd", .{ .limits = .{ .output_bytes = 5 } });
+    try msgpack.write(&fixed, "abcd", .{ .limits = .{ .output_bytes = .fromRaw(5) } });
     // A map held for sorting is refused once it holds more than the output left.
     const map: Value = .{ .map = &.{.{ .key = .{ .str = "abcdefgh" }, .value = .nil }} };
     var sink: std.Io.Writer.Allocating = .init(gpa);
     defer sink.deinit();
-    try std.testing.expectError(error.OutputLimit, msgpack.write(&sink.writer, map, .{ .profile = .deterministic, .allocator = gpa, .limits = .{ .output_bytes = 8 } }));
-    try msgpack.write(&sink.writer, map, .{ .profile = .deterministic, .allocator = gpa, .limits = .{ .output_bytes = 11 } });
+    try std.testing.expectError(error.OutputLimit, msgpack.write(&sink.writer, map, .{ .profile = .deterministic, .allocator = gpa, .limits = .{ .output_bytes = .fromRaw(8) } }));
+    try msgpack.write(&sink.writer, map, .{ .profile = .deterministic, .allocator = gpa, .limits = .{ .output_bytes = .fromRaw(11) } });
 }
 
 fn sweep(a: std.mem.Allocator) !void {

@@ -610,27 +610,27 @@ test "every limit holds at its boundary, and reaches ignored and raw data" {
     defer testing.allocator.free(hidden);
     try testing.expectError(error.DepthLimit, zon.parse(struct { a: u8 }, testing.allocator, hidden, .{ .ignore_unknown_fields = true }));
     // Input bytes, at the byte.
-    try testing.expectError(error.InputLimit, zon.parse(u8, testing.allocator, "12", .{ .limits = .{ .input_bytes = 1 } }));
-    var two = try zon.parse(u8, testing.allocator, "12", .{ .limits = .{ .input_bytes = 2 } });
+    try testing.expectError(error.InputLimit, zon.parse(u8, testing.allocator, "12", .{ .limits = .{ .input_bytes = .fromRaw(1) } }));
+    var two = try zon.parse(u8, testing.allocator, "12", .{ .limits = .{ .input_bytes = .fromRaw(2) } });
     two.deinit();
-    try testing.expectError(error.InputLimit, zon.parseLeaky(u8, testing.allocator, "12", .{ .limits = .{ .input_bytes = 1 } }));
+    try testing.expectError(error.InputLimit, zon.parseLeaky(u8, testing.allocator, "12", .{ .limits = .{ .input_bytes = .fromRaw(1) } }));
     // Strings: decoded length, whether the literal is escaped or not.
-    try testing.expectError(error.LengthLimit, zon.parse([]const u8, testing.allocator, "\"abc\"", .{ .limits = .{ .string_bytes = 2 } }));
-    var abc = try zon.parse([]const u8, testing.allocator, "\"abc\"", .{ .limits = .{ .string_bytes = 3 } });
+    try testing.expectError(error.LengthLimit, zon.parse([]const u8, testing.allocator, "\"abc\"", .{ .limits = .{ .string_bytes = .fromRaw(2) } }));
+    var abc = try zon.parse([]const u8, testing.allocator, "\"abc\"", .{ .limits = .{ .string_bytes = .fromRaw(3) } });
     abc.deinit();
-    try testing.expectError(error.LengthLimit, zon.parse([]const u8, testing.allocator, "\"a\\nb\"", .{ .limits = .{ .string_bytes = 2 } }));
-    var escaped = try zon.parse([]const u8, testing.allocator, "\"a\\nb\"", .{ .limits = .{ .string_bytes = 3 } });
+    try testing.expectError(error.LengthLimit, zon.parse([]const u8, testing.allocator, "\"a\\nb\"", .{ .limits = .{ .string_bytes = .fromRaw(2) } }));
+    var escaped = try zon.parse([]const u8, testing.allocator, "\"a\\nb\"", .{ .limits = .{ .string_bytes = .fromRaw(3) } });
     escaped.deinit();
-    try testing.expectError(error.LengthLimit, zon.parse([]const u8, testing.allocator, "\\\\ab\n\\\\cd", .{ .limits = .{ .string_bytes = 4 } }));
+    try testing.expectError(error.LengthLimit, zon.parse([]const u8, testing.allocator, "\\\\ab\n\\\\cd", .{ .limits = .{ .string_bytes = .fromRaw(4) } }));
     // Keys: ignored fields have keys too.
-    try testing.expectError(error.LengthLimit, zon.parse(Skipper, testing.allocator, ".{ .a = 1, .long_name = 2 }", .{ .ignore_unknown_fields = true, .limits = .{ .key_bytes = 5 } }));
-    try testing.expectError(error.LengthLimit, zon.parse(Skipper, testing.allocator, ".{ .a = 1, .@\"escaped\\x20name\" = 2 }", .{ .ignore_unknown_fields = true, .limits = .{ .key_bytes = 5 } }));
+    try testing.expectError(error.LengthLimit, zon.parse(Skipper, testing.allocator, ".{ .a = 1, .long_name = 2 }", .{ .ignore_unknown_fields = true, .limits = .{ .key_bytes = .fromRaw(5) } }));
+    try testing.expectError(error.LengthLimit, zon.parse(Skipper, testing.allocator, ".{ .a = 1, .@\"escaped\\x20name\" = 2 }", .{ .ignore_unknown_fields = true, .limits = .{ .key_bytes = .fromRaw(5) } }));
     // Numbers: the spelling.
-    try testing.expectError(error.LengthLimit, zon.parse(u64, testing.allocator, "1_000_000", .{ .limits = .{ .numeric_bytes = 8 } }));
-    var spelled = try zon.parse(u64, testing.allocator, "1_000_000", .{ .limits = .{ .numeric_bytes = 9 } });
+    try testing.expectError(error.LengthLimit, zon.parse(u64, testing.allocator, "1_000_000", .{ .limits = .{ .numeric_bytes = .fromRaw(8) } }));
+    var spelled = try zon.parse(u64, testing.allocator, "1_000_000", .{ .limits = .{ .numeric_bytes = .fromRaw(9) } });
     spelled.deinit();
-    try testing.expectError(error.LengthLimit, zon.parse(i64, testing.allocator, "-1_000_000", .{ .limits = .{ .numeric_bytes = 9 } }));
-    try testing.expectError(error.LengthLimit, zon.parse(i64, testing.allocator, "- 1_000_000", .{ .limits = .{ .numeric_bytes = 8 } }));
+    try testing.expectError(error.LengthLimit, zon.parse(i64, testing.allocator, "-1_000_000", .{ .limits = .{ .numeric_bytes = .fromRaw(9) } }));
+    try testing.expectError(error.LengthLimit, zon.parse(i64, testing.allocator, "- 1_000_000", .{ .limits = .{ .numeric_bytes = .fromRaw(8) } }));
     // Items and work, which a skipped list still counts.
     try testing.expectError(error.ItemLimit, zon.parse([]const u8, testing.allocator, "\"x\"", .{ .limits = .{ .items = 0 } }));
     try testing.expectError(error.ItemLimit, zon.parse(Skipper, testing.allocator, ".{ .a = 1, .z = .{ 1, 2, 3, 4 } }", .{ .ignore_unknown_fields = true, .limits = .{ .items = 6 } }));
@@ -641,15 +641,15 @@ test "every limit holds at its boundary, and reaches ignored and raw data" {
     // Requested allocation.
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
-    try testing.expectError(error.AllocationLimit, zon.parseLeaky([]const u8, arena.allocator(), "\"a\\nb\"", .{ .limits = .{ .allocation_bytes = 2 } }));
-    try testing.expectEqualStrings("a\nb", try zon.parseLeaky([]const u8, arena.allocator(), "\"a\\nb\"", .{ .limits = .{ .allocation_bytes = 3 } }));
-    try testing.expectError(error.AllocationLimit, zon.parse([]const u8, testing.allocator, "\"a\\nb\"", .{ .limits = .{ .allocation_bytes = 0 } }));
+    try testing.expectError(error.AllocationLimit, zon.parseLeaky([]const u8, arena.allocator(), "\"a\\nb\"", .{ .limits = .{ .allocation_bytes = .fromRaw(2) } }));
+    try testing.expectEqualStrings("a\nb", try zon.parseLeaky([]const u8, arena.allocator(), "\"a\\nb\"", .{ .limits = .{ .allocation_bytes = .fromRaw(3) } }));
+    try testing.expectError(error.AllocationLimit, zon.parse([]const u8, testing.allocator, "\"a\\nb\"", .{ .limits = .{ .allocation_bytes = .fromRaw(0) } }));
     // Output.
     var memory: [16]u8 = undefined;
     var out = std.Io.Writer.fixed(&memory);
-    try testing.expectError(error.OutputLimit, zon.write(&out, @as([]const u8, "abcdef"), .{ .limits = .{ .output_bytes = 7 } }));
+    try testing.expectError(error.OutputLimit, zon.write(&out, @as([]const u8, "abcdef"), .{ .limits = .{ .output_bytes = .fromRaw(7) } }));
     out = std.Io.Writer.fixed(&memory);
-    try zon.write(&out, @as([]const u8, "abcdef"), .{ .limits = .{ .output_bytes = 8 } });
+    try zon.write(&out, @as([]const u8, "abcdef"), .{ .limits = .{ .output_bytes = .fromRaw(8) } });
     try testing.expectEqualStrings("\"abcdef\"", out.buffered());
     // Written depth.
     const NestedOut = struct {
@@ -901,7 +901,7 @@ test "fuzz: whatever strand reads of arbitrary bytes is what std.zon reads" {
             try sound([3]f32, data);
             try sound(struct { u: u128, i: i128, n: ?[]const u8 }, data);
             // And bounded, whatever it is: no limit is a thing it can run past.
-            var owner = zon.parseOwned(zon.Raw, testing.allocator, data, .{ .limits = .{ .depth = 8, .work = 4096, .allocation_bytes = 4096 } }) catch return;
+            var owner = zon.parseOwned(zon.Raw, testing.allocator, data, .{ .limits = .{ .depth = 8, .work = 4096, .allocation_bytes = .fromRaw(4096) } }) catch return;
             owner.deinit();
         }
     }.run, .{});

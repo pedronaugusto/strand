@@ -166,8 +166,8 @@ fn benchBigLine(gpa: std.mem.Allocator, io: std.Io, stdout: *std.Io.Writer, size
     // The default limits are a megabyte-sized line's; this one is told.
     const room = size.big_line_bytes + 1024;
     var reader: strand.jsonl.Reader(Event) = .init(gpa, &file_reader.interface, .{
-        .max_line_bytes = room,
-        .parse = .{ .limits = .{ .input_bytes = room, .string_bytes = room, .allocation_bytes = 2 * room, .work = 4 * room } },
+        .max_line_bytes = .fromRaw(room),
+        .parse = .{ .limits = .{ .input_bytes = .fromRaw(room), .string_bytes = .fromRaw(room), .allocation_bytes = .fromRaw(2 * room), .work = 4 * room } },
     });
     defer reader.deinit();
 

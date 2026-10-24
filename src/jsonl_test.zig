@@ -230,7 +230,7 @@ test "a malformed line says where in it the parse gave up" {
 
 test "an over-long line has no offset in it to report" {
     var source: std.Io.Reader = .fixed("{\"kind\":\"far too long for this\"}\n{\"kind\":\"ok\"}\n");
-    var reader: jsonl.Reader(Event) = .init(testing.allocator, &source, .{ .max_line_bytes = 8 });
+    var reader: jsonl.Reader(Event) = .init(testing.allocator, &source, .{ .max_line_bytes = .fromRaw(8) });
     defer reader.deinit();
 
     // The line never reached `std.json`, so there is nothing to have a
@@ -317,7 +317,7 @@ test "max_line_bytes is enforced, and the reader continues after the long line" 
     ;
 
     var source: std.Io.Reader = .fixed(input);
-    var reader: jsonl.Reader(Event) = .init(testing.allocator, &source, .{ .max_line_bytes = 32 });
+    var reader: jsonl.Reader(Event) = .init(testing.allocator, &source, .{ .max_line_bytes = .fromRaw(32) });
     defer reader.deinit();
 
     try testing.expectEqualStrings("short", (try reader.next()).?.value.kind);
@@ -334,12 +334,12 @@ test "max_line_bytes is enforced, and the reader continues after the long line" 
     const exact = "{\"kind\":\"0123456789012345\"}";
     try testing.expectEqual(@as(usize, 27), exact.len);
     var tight: std.Io.Reader = .fixed(exact);
-    var strict: jsonl.Reader(Event) = .init(testing.allocator, &tight, .{ .max_line_bytes = exact.len });
+    var strict: jsonl.Reader(Event) = .init(testing.allocator, &tight, .{ .max_line_bytes = .fromRaw(exact.len) });
     defer strict.deinit();
     try testing.expectEqualStrings("0123456789012345", (try strict.next()).?.value.kind);
 
     var tighter: std.Io.Reader = .fixed(exact);
-    var too_strict: jsonl.Reader(Event) = .init(testing.allocator, &tighter, .{ .max_line_bytes = exact.len - 1 });
+    var too_strict: jsonl.Reader(Event) = .init(testing.allocator, &tighter, .{ .max_line_bytes = .fromRaw(exact.len - 1) });
     defer too_strict.deinit();
     try testing.expectError(error.LineTooLong, too_strict.next());
 }
@@ -365,7 +365,7 @@ test "a line reader answers a line past its bound and reads on" {
     {
         var socket: fixtures.Chunked = .init(bytes, buffer, 4096);
         const bound = 64 * 1024;
-        var lines: jsonl.LineReader = .init(testing.allocator, &socket.interface, .{ .max_line_bytes = bound });
+        var lines: jsonl.LineReader = .init(testing.allocator, &socket.interface, .{ .max_line_bytes = .fromRaw(bound) });
         defer lines.deinit();
 
         try testing.expectEqualStrings("{\"kind\":\"before\"}", (try lines.next()).?.line);
@@ -385,7 +385,7 @@ test "a line reader answers a line past its bound and reads on" {
     // reads it arrived in.
     {
         var socket: fixtures.Chunked = .init(bytes, buffer, 4096);
-        var lines: jsonl.LineReader = .init(testing.allocator, &socket.interface, .{ .max_line_bytes = 16 << 20 });
+        var lines: jsonl.LineReader = .init(testing.allocator, &socket.interface, .{ .max_line_bytes = .fromRaw(16 << 20) });
         defer lines.deinit();
 
         _ = (try lines.next()).?;
@@ -421,7 +421,7 @@ test "a line past the bound keeps the member it is answered under" {
         var buffer: [buffer_len]u8 = undefined;
         var stream = fixtures.Chunked.init(input, &buffer, 7);
         var requests: jsonl.Reader(Request) = .init(testing.allocator, &stream.interface, .{
-            .max_line_bytes = 128,
+            .max_line_bytes = .fromRaw(128),
             .oversized_member = "id",
             .parse = .{ .ignore_unknown_fields = true },
         });
@@ -446,7 +446,7 @@ test "a line past the bound keeps the member it is answered under" {
 
     // Not asked for, nothing is kept.
     var whole: std.Io.Reader = .fixed(input);
-    var lines: jsonl.LineReader = .init(testing.allocator, &whole, .{ .max_line_bytes = 128 });
+    var lines: jsonl.LineReader = .init(testing.allocator, &whole, .{ .max_line_bytes = .fromRaw(128) });
     defer lines.deinit();
     _ = try lines.next();
     try testing.expectError(error.LineTooLong, lines.next());
@@ -585,13 +585,13 @@ test "a line reader says when the stream ended inside a record" {
 
         // Past the bound, with the stream ending inside the line and not.
         var long_cut = fixtures.Chunked.init("{}\nxxxxxxxxxxxx", &buffer, 2);
-        var over: jsonl.LineReader = .init(testing.allocator, &long_cut.interface, .{ .require_terminator = true, .max_line_bytes = 4 });
+        var over: jsonl.LineReader = .init(testing.allocator, &long_cut.interface, .{ .require_terminator = true, .max_line_bytes = .fromRaw(4) });
         defer over.deinit();
         _ = try over.next();
         try testing.expectError(error.LineTooLong, over.next());
         try testing.expect(over.unfinished);
         var long_whole = fixtures.Chunked.init("xxxxxxxxxxxx\n{}\n", &buffer, 2);
-        var over_whole: jsonl.LineReader = .init(testing.allocator, &long_whole.interface, .{ .require_terminator = true, .max_line_bytes = 4 });
+        var over_whole: jsonl.LineReader = .init(testing.allocator, &long_whole.interface, .{ .require_terminator = true, .max_line_bytes = .fromRaw(4) });
         defer over_whole.deinit();
         try testing.expectError(error.LineTooLong, over_whole.next());
         try testing.expect(!over_whole.unfinished);
@@ -623,7 +623,7 @@ test "without crlf a carriage return is a byte of the line" {
 
         // The bound counts it.
         var bound = fixtures.Chunked.init(input, &buffer, 2);
-        var tight: jsonl.LineReader = .init(testing.allocator, &bound.interface, .{ .crlf = false, .reject_control_bytes = false, .max_line_bytes = 7 });
+        var tight: jsonl.LineReader = .init(testing.allocator, &bound.interface, .{ .crlf = false, .reject_control_bytes = false, .max_line_bytes = .fromRaw(7) });
         defer tight.deinit();
         try testing.expectError(error.LineTooLong, tight.next());
     }
@@ -661,7 +661,7 @@ test "the line bound excludes a CRLF terminator" {
     {
         var source: std.Io.Reader = .fixed("{}\r\n");
         var reader: jsonl.Reader(json.Value) = .init(testing.allocator, &source, .{
-            .max_line_bytes = 2,
+            .max_line_bytes = .fromRaw(2),
         });
         defer reader.deinit();
         try testing.expect((try reader.next()).?.value == .object);
@@ -670,7 +670,7 @@ test "the line bound excludes a CRLF terminator" {
     var buffer: [2]u8 = undefined;
     var chunked: fixtures.Chunked = .init("{}\r\n", &buffer, 1);
     var streamed: jsonl.Reader(json.Value) = .init(testing.allocator, &chunked.interface, .{
-        .max_line_bytes = 2,
+        .max_line_bytes = .fromRaw(2),
     });
     defer streamed.deinit();
     try testing.expect((try streamed.next()).?.value == .object);
@@ -1151,7 +1151,7 @@ test "pretty: the bound is on the record, not on one of its lines" {
     var reader: jsonl.Reader(Event) = .init(testing.allocator, &source, .{
         .format = .pretty,
         // Every physical line of the record fits; the record does not.
-        .max_line_bytes = 24,
+        .max_line_bytes = .fromRaw(24),
     });
     defer reader.deinit();
     try testing.expectError(error.LineTooLong, reader.next());
@@ -1352,7 +1352,7 @@ test "a very large line is read without copying its strings" {
 
     var source: std.Io.Reader = .fixed(input.written());
     var reader: jsonl.Reader(Event) = .init(testing.allocator, &source, .{
-        .max_line_bytes = payload_len + 1024,
+        .max_line_bytes = .fromRaw(payload_len + 1024),
     });
     defer reader.deinit();
 
@@ -1421,7 +1421,7 @@ test "an offset names the line a reader refused" {
 
     // And an over-long line, which never reaches `std.json` at all.
     var long: std.Io.Reader = .fixed("{\"kind\":\"x\"}\n{\"kind\":\"" ++ @as([200]u8, @splat('y')) ++ "\"}\n{\"kind\":\"z\"}\n");
-    var bounded: jsonl.Reader(Event) = .init(testing.allocator, &long, .{ .max_line_bytes = 64 });
+    var bounded: jsonl.Reader(Event) = .init(testing.allocator, &long, .{ .max_line_bytes = .fromRaw(64) });
     defer bounded.deinit();
     _ = (try bounded.next()).?;
     try testing.expectError(error.LineTooLong, bounded.next());
@@ -1696,7 +1696,7 @@ test "a torn record followed by a whole one on its line loses only itself" {
             var reader: jsonl.Reader(Event) = .init(testing.allocator, if (streamed) &chunked.interface else &fixed, .{
                 .record_separator = true,
                 .on_malformed = policy,
-                .max_line_bytes = 16,
+                .max_line_bytes = .fromRaw(16),
             });
             defer reader.deinit();
 
@@ -1721,7 +1721,7 @@ test "a torn record longer than the bound does not refuse the record after it" {
         var fixed: std.Io.Reader = .fixed(input);
         var lines: jsonl.LineReader = .init(testing.allocator, if (streamed) &chunked.interface else &fixed, .{
             .record_separator = true,
-            .max_line_bytes = 16,
+            .max_line_bytes = .fromRaw(16),
         });
         defer lines.deinit();
         const b = (try lines.next()).?;
@@ -1744,7 +1744,7 @@ test "a torn prefix does not count against a separated record's bound" {
         var source: std.Io.Reader = .fixed(input.written());
         var reader: jsonl.Reader(json.Value) = .init(testing.allocator, &source, .{
             .record_separator = true,
-            .max_line_bytes = 2,
+            .max_line_bytes = .fromRaw(2),
         });
         defer reader.deinit();
         try testing.expect((try reader.next()).?.value == .object);
@@ -1754,7 +1754,7 @@ test "a torn prefix does not count against a separated record's bound" {
     var chunked: fixtures.Chunked = .init(input.written(), &buffer, 3);
     var streamed: jsonl.Reader(json.Value) = .init(testing.allocator, &chunked.interface, .{
         .record_separator = true,
-        .max_line_bytes = 2,
+        .max_line_bytes = .fromRaw(2),
     });
     defer streamed.deinit();
     try testing.expect((try streamed.next()).?.value == .object);
@@ -1768,7 +1768,7 @@ test "a separated framing failure keeps the record start" {
         var fixed: std.Io.Reader = .fixed(input);
         var lines: jsonl.LineReader = .init(testing.allocator, if (streamed) &chunked.interface else &fixed, .{
             .record_separator = true,
-            .max_line_bytes = 2,
+            .max_line_bytes = .fromRaw(2),
         });
         defer lines.deinit();
         try testing.expectEqualStrings("{}", (try lines.next()).?.line);
@@ -1827,7 +1827,7 @@ test "a writer can be held to the bound its readers are held to" {
 
         var source: std.Io.Reader = .fixed(out.written());
         var reader: jsonl.Reader(Event) = .init(testing.allocator, &source, .{
-            .max_line_bytes = bound,
+            .max_line_bytes = .fromRaw(bound),
         });
         defer reader.deinit();
         try testing.expectError(error.LineTooLong, reader.next());
@@ -1854,7 +1854,7 @@ test "a writer can be held to the bound its readers are held to" {
     try testing.expectEqual(@as(u64, 2), log.count);
 
     var source: std.Io.Reader = .fixed(out.written());
-    var reader: jsonl.Reader(Event) = .init(testing.allocator, &source, .{ .max_line_bytes = bound });
+    var reader: jsonl.Reader(Event) = .init(testing.allocator, &source, .{ .max_line_bytes = .fromRaw(bound) });
     defer reader.deinit();
     try testing.expectEqualStrings("open", (try reader.next()).?.value.kind);
     try testing.expectEqualStrings("close", (try reader.next()).?.value.kind);
@@ -2450,7 +2450,7 @@ test "a schemaless line nested past the depth limit is one refused line, not a c
 
     var source: std.Io.Reader = .fixed(input.written());
     var reader: jsonl.Reader(json.Value) = .init(testing.allocator, &source, .{
-        .max_line_bytes = 4 * depth,
+        .max_line_bytes = .fromRaw(4 * depth),
     });
     defer reader.deinit();
     try testing.expectError(error.MalformedLine, reader.next());
@@ -3171,7 +3171,7 @@ test "a pretty prefix at its byte bound ends without inventing a joined line" {
                 var reader: jsonl.Reader(json.Value) = .init(testing.allocator, if (streamed) &chunks.interface else &fixed, .{
                     .format = .pretty,
                     .record_separator = separated,
-                    .max_line_bytes = 1,
+                    .max_line_bytes = .fromRaw(1),
                     .require_terminator = require_terminator,
                 });
                 defer reader.deinit();
@@ -3199,7 +3199,7 @@ test "a pretty join past its byte bound counts the discarded physical line" {
         var chunks: fixtures.Chunked = .init(input, &buffer, 1);
         var reader: jsonl.Reader(json.Value) = .init(testing.allocator, if (streamed) &chunks.interface else &fixed, .{
             .format = .pretty,
-            .max_line_bytes = 1,
+            .max_line_bytes = .fromRaw(1),
         });
         defer reader.deinit();
         try testing.expectError(error.LineTooLong, reader.next());
@@ -3217,7 +3217,7 @@ test "an unfinished pretty record keeps its rewind point after complete records"
     defer fixture.deinit();
     var reader: jsonl.Reader(json.Value) = .init(testing.allocator, &fixture.reader.interface, .{
         .format = .pretty,
-        .max_line_bytes = 3,
+        .max_line_bytes = .fromRaw(3),
         .require_terminator = true,
     });
     defer reader.deinit();

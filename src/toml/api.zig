@@ -1,5 +1,6 @@
 //! TOML on Strand's shared type mapping and ownership core.
 const std = @import("std");
+const limit = @import("../core/limit.zig");
 const core = @import("../core.zig");
 const WireDecoder = @import("Decoder.zig");
 const WireEncoder = @import("Encoder.zig");
@@ -39,27 +40,13 @@ fn Decode(comptime T: type) type {
             return core.deserialize(T, &decoder, c) catch |err| {
                 if (c.diagnostics) |d| {
                     d.offset = decoder.place(d.offset);
-                    locate(d, input);
+                    d.locate(input);
                 }
                 if (err == error.OutOfMemory and c.allocation_limited) return error.AllocationLimit;
                 return err;
             };
         }
     };
-}
-/// Where in the text a failure is: the line and column of its offset.
-fn locate(d: *core.Diagnostics, input: []const u8) void {
-    const at = @min(d.offset, input.len);
-    var line: usize = 1;
-    var column: usize = 1;
-    for (input[0..at]) |byte| {
-        if (byte == '\n') {
-            line += 1;
-            column = 1;
-        } else column += 1;
-    }
-    d.line = line;
-    d.column = column;
 }
 fn parseWith(comptime T: type, comptime ownership: core.Ownership, gpa: std.mem.Allocator, input: []const u8, options: ParseOptions) @typeInfo(@TypeOf(core.acquireWith(T, ownership, gpa, input, .{}, Decode(T){ .version = .v1_1, .backing = gpa }))).error_union.error_set!Parsed(T) {
     if (options.diagnostics) |d| {
@@ -88,7 +75,7 @@ pub fn parseLeaky(comptime T: type, arena: std.mem.Allocator, input: []const u8,
         d.* = .{};
         d.format = "toml";
     }
-    if (input.len > options.limits.input_bytes) return error.InputLimit;
+    if (limit.exceeds(input.len, options.limits.input_bytes)) return error.InputLimit;
     var c = core.Context.init(arena, options.limits, .borrowed);
     c.acceptance = .{ .reject_unknown_fields = !options.ignore_unknown_fields };
     c.diagnostics = options.diagnostics;

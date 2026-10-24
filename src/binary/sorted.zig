@@ -54,7 +54,7 @@ pub const Stack = struct {
     /// written in the end: a map that holds more than the output left is
     /// refused while it is held.
     pub fn append(self: *Stack, held: *Held, data: []const u8, c: *const core.Context) Error!void {
-        if (data.len > (c.limits.output_bytes - c.outputUsed()) -| held.bytes.items.len) return error.OutputLimit;
+        if (data.len > c.output_budget.remaining() -| held.bytes.items.len) return error.OutputLimit;
         try held.bytes.appendSlice(self.allocator, data);
     }
     /// Before an item: in a held map, where its entry's key or value starts.

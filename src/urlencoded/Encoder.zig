@@ -5,6 +5,7 @@
 //! so an optional reads back through its default. A form holds no sequence
 //! of records or of sequences: writing one is `UnsupportedValue`.
 const std = @import("std");
+const limit = @import("../core/limit.zig");
 const core = @import("../core.zig");
 const Decoder = @import("Decoder.zig");
 const percent = @import("text.zig");
@@ -149,14 +150,14 @@ pub fn integer(self: *Self, value: anytype, c: *core.Context) Error!void {
     const bits = @typeInfo(@TypeOf(value)).int.bits;
     var buffer: [bits / 3 + 3]u8 = undefined;
     const spelling = buffer[0..std.fmt.printInt(&buffer, value, 10, .lower, .{})];
-    if (spelling.len > c.limits.numeric_bytes) return error.LengthLimit;
+    if (limit.exceeds(spelling.len, c.limits.numeric_bytes)) return error.LengthLimit;
     try self.pair(spelling, false, c);
 }
 pub fn floating(self: *Self, value: anytype, c: *core.Context) Error!void {
     if (!std.math.isFinite(value)) return error.UnsupportedValue;
     var buffer: [5200]u8 = undefined;
     const spelling = std.mem.print(&buffer, "{d}", .{value}) catch return error.NumberOutOfRange;
-    if (spelling.len > c.limits.numeric_bytes) return error.LengthLimit;
+    if (limit.exceeds(spelling.len, c.limits.numeric_bytes)) return error.LengthLimit;
     try self.pair(spelling, false, c);
 }
 pub fn text(self: *Self, value: []const u8, c: *core.Context) Error!void {

@@ -112,7 +112,7 @@ fn checkReaderFail(input: []const u8, max_line_bytes: usize) !void {
 fn checkReaderFailOver(source: *std.Io.Reader, input: []const u8, max_line_bytes: usize) !void {
     var reader: jsonl.Reader(Event) = .init(testing.allocator, source, .{
         .parse = event_parse,
-        .max_line_bytes = max_line_bytes,
+        .max_line_bytes = .fromRaw(max_line_bytes),
         // The oracle counts bytes, and a mark the reader drops is bytes the
         // oracle would still be counting. `a byte-order mark belongs to the
         // file` in the suite is where dropping it is checked.
@@ -204,7 +204,7 @@ fn checkLineReaderOver(
     on_malformed: @FieldType(jsonl.LineReader.Options, "on_malformed"),
 ) !void {
     var reader: jsonl.LineReader = .init(testing.allocator, source, .{
-        .max_line_bytes = max_line_bytes,
+        .max_line_bytes = .fromRaw(max_line_bytes),
         .on_malformed = on_malformed,
         // The oracle counts bytes, and a mark the reader drops is bytes the
         // oracle would still be counting.
@@ -266,7 +266,7 @@ fn checkReaderSkip(input: []const u8) !void {
         .parse = event_parse,
         .on_malformed = .skip,
         // Long enough that no line can trip it: `.skip` is about parsing.
-        .max_line_bytes = input.len + 1,
+        .max_line_bytes = .fromRaw(input.len + 1),
         // The oracle counts bytes, and a mark the reader drops is bytes the
         // oracle would still be counting.
         .skip_bom = false,
@@ -909,7 +909,7 @@ fn checkTail(input: []const u8) !void {
         .on_malformed = .skip,
         // A bound the generated input can reach, so that an over-long line is
         // part of the property.
-        .max_line_bytes = 96,
+        .max_line_bytes = .fromRaw(96),
         // The forward reader takes the mark off the stream and the backwards
         // one off the line, which is the same line but a different length,
         // and the bound above would see the difference.
@@ -951,10 +951,10 @@ fn checkTail(input: []const u8) !void {
     var tail: jsonl.Tail(Event) = try .init(testing.allocator, &file_reader, .{
         .parse = event_parse,
         .on_malformed = .skip,
-        .max_line_bytes = options.max_line_bytes,
+        .max_line_bytes = .fromRaw(options.max_line_bytes.raw()),
         .skip_bom = options.skip_bom,
         // Small enough that a line spans several of them.
-        .block_bytes = 13,
+        .block_bytes = .fromRaw(13),
     });
     defer tail.deinit();
 
@@ -1370,7 +1370,7 @@ fn fuzzPrettyInPlace(_: void, case: *shakedown.Case) anyerror!void {
         try checkPrettyInPlace(T, input, .{ .on_malformed = .skip });
         try checkPrettyInPlace(T, input, .{});
         try checkPrettyInPlace(T, input, .{ .require_terminator = true });
-        try checkPrettyInPlace(T, input, .{ .max_line_bytes = 24 });
+        try checkPrettyInPlace(T, input, .{ .max_line_bytes = .fromRaw(24) });
         try checkPrettyInPlace(T, input, .{ .reject_control_bytes = false, .crlf = false });
     }
 }

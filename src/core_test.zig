@@ -14,7 +14,7 @@ test "S1 admission sees rejected inactive branches and recursive data" {
 }
 
 test "S1 finite budgets include borrowed spans and full wire frames" {
-    var c: core.Context = .init(std.testing.allocator, .{ .depth = 1, .items = 2, .string_bytes = 3, .work = 8 }, .borrowed);
+    var c: core.Context = .init(std.testing.allocator, .{ .depth = 1, .items = 2, .string_bytes = .fromRaw(3), .work = 8 }, .borrowed);
     try c.enter();
     try std.testing.expectError(error.DepthLimit, c.enter());
     c.leave();
@@ -72,11 +72,11 @@ test "S1 reference traverses ignored wire values with limits and exact payload e
     const nested = [_]u8{ 6, 2, 3, 1, 'i', 2, 2, 3, 1, 'x', 5, 1, 5, 1, 2, 1, 0, 0, 0 };
     try std.testing.expectError(error.DepthLimit, core.acquire(Record, .owned, std.testing.allocator, &nested, .{ .depth = 2 }, decodeRecord));
     try std.testing.expectError(error.ItemLimit, core.acquire(Record, .owned, std.testing.allocator, &nested, .{ .items = 5 }, decodeRecord));
-    try std.testing.expectError(error.LengthLimit, core.acquire(Record, .owned, std.testing.allocator, &record_bytes, .{ .string_bytes = 1 }, decodeRecord));
+    try std.testing.expectError(error.LengthLimit, core.acquire(Record, .owned, std.testing.allocator, &record_bytes, .{ .string_bytes = .fromRaw(1) }, decodeRecord));
     try std.testing.expectError(error.SyntaxError, core.acquire(Record, .owned, std.testing.allocator, record_bytes[0 .. record_bytes.len - 1], .{}, decodeRecord));
     try std.testing.expectError(error.SyntaxError, core.acquire(Record, .owned, std.testing.allocator, &(record_bytes ++ .{7}), .{}, decodeRecord));
-    try std.testing.expectError(error.AllocationLimit, core.acquire(Record, .owned, std.testing.allocator, &record_bytes, .{ .allocation_bytes = 1 }, decodeRecord));
-    try std.testing.expectError(error.InputLimit, core.acquire(Record, .owned, std.testing.allocator, &record_bytes, .{ .input_bytes = 1 }, decodeRecord));
+    try std.testing.expectError(error.AllocationLimit, core.acquire(Record, .owned, std.testing.allocator, &record_bytes, .{ .allocation_bytes = .fromRaw(1) }, decodeRecord));
+    try std.testing.expectError(error.InputLimit, core.acquire(Record, .owned, std.testing.allocator, &record_bytes, .{ .input_bytes = .fromRaw(1) }, decodeRecord));
     try std.testing.expectError(error.WorkLimit, core.acquire(Record, .owned, std.testing.allocator, &record_bytes, .{ .work = 1 }, decodeRecord));
 }
 
@@ -106,7 +106,7 @@ test "S1 semantic encoder fixed buffer zero allocations and same typed round tri
     try std.testing.expectEqual(@as(u8, 42), result.value.id);
     try std.testing.expectEqualStrings("ok", result.value.label);
     try std.testing.expectEqual(@as(usize, 0), result.requested_peak);
-    c = .init(std.testing.failing_allocator, .{ .output_bytes = 2 }, .borrowed);
+    c = .init(std.testing.failing_allocator, .{ .output_bytes = .fromRaw(2) }, .borrowed);
     out.used = 0;
     try std.testing.expectError(error.OutputLimit, core.serialize(Record{ .id = 1 }, &out, &c));
 }
@@ -229,7 +229,7 @@ test "S1 fuzz bounded reference data with testing allocator" {
         fn run(_: void, case: *shakedown.Case) anyerror!void {
             var input: [4096]u8 = undefined;
             const data = shakedown.gen.bytesInto(case.source, &input);
-            var parsed = core.acquire(Record, .owned, std.testing.allocator, data, .{ .input_bytes = 4096, .allocation_bytes = 8192, .work = 16384, .depth = 16 }, decodeRecord) catch return;
+            var parsed = core.acquire(Record, .owned, std.testing.allocator, data, .{ .input_bytes = .fromRaw(4096), .allocation_bytes = .fromRaw(8192), .work = 16384, .depth = 16 }, decodeRecord) catch return;
             parsed.deinit();
         }
     }.run, .{});
@@ -380,7 +380,7 @@ fn factorySweep(gpa: std.mem.Allocator) !void {
 }
 test "S1 missing default factory has budgeted allocation and complete failure rollback" {
     try std.testing.checkAllAllocationFailures(std.testing.allocator, factorySweep, .{});
-    try std.testing.expectError(error.AllocationLimit, core.acquire(FactoryRecord, .owned, std.testing.allocator, &.{ 6, 0, 0 }, .{ .allocation_bytes = 1 }, factoryDecode));
+    try std.testing.expectError(error.AllocationLimit, core.acquire(FactoryRecord, .owned, std.testing.allocator, &.{ 6, 0, 0 }, .{ .allocation_bytes = .fromRaw(1) }, factoryDecode));
     try std.testing.expectError(error.UnexpectedType, core.acquire(FactoryRecord, .owned, std.testing.allocator, &.{ 6, 1, 3, 7, 'p', 'a', 'y', 'l', 'o', 'a', 'd', 7, 0 }, .{}, factoryDecode));
 }
 
@@ -527,8 +527,8 @@ fn cloneSweep(gpa: std.mem.Allocator) !void {
 }
 test "S1 checked clone separates input lifetime preserves fixed shape and rolls back" {
     try std.testing.checkAllAllocationFailures(std.testing.allocator, cloneSweep, .{});
-    try std.testing.expectError(error.AllocationLimit, core.clone(std.testing.allocator, @as([]const u8, "too long"), .{ .allocation_bytes = 1 }));
-    try std.testing.expectError(error.LengthLimit, core.clone(std.testing.allocator, @as([]const u8, "too long"), .{ .string_bytes = 1 }));
+    try std.testing.expectError(error.AllocationLimit, core.clone(std.testing.allocator, @as([]const u8, "too long"), .{ .allocation_bytes = .fromRaw(1) }));
+    try std.testing.expectError(error.LengthLimit, core.clone(std.testing.allocator, @as([]const u8, "too long"), .{ .string_bytes = .fromRaw(1) }));
 }
 test "a checked clone onto a caller's arena is bounded per copy and independent of its source" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
@@ -539,8 +539,8 @@ test "a checked clone onto a caller's arena is bounded per copy and independent 
     bytes[0] = 'x';
     try std.testing.expectEqualStrings("ok", copy.text);
     try std.testing.expectEqualSlices(u16, &.{ 1, 2, 3 }, copy.items);
-    try std.testing.expectError(error.LengthLimit, core.cloneLeaky(arena.allocator(), @as([]const u8, "too long"), .{ .string_bytes = 1 }));
-    try std.testing.expectError(error.AllocationLimit, core.cloneLeaky(arena.allocator(), @as([]const u8, "too long"), .{ .allocation_bytes = 1 }));
+    try std.testing.expectError(error.LengthLimit, core.cloneLeaky(arena.allocator(), @as([]const u8, "too long"), .{ .string_bytes = .fromRaw(1) }));
+    try std.testing.expectError(error.AllocationLimit, core.cloneLeaky(arena.allocator(), @as([]const u8, "too long"), .{ .allocation_bytes = .fromRaw(1) }));
 }
 test "an adopted arena is released by its owner" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
@@ -562,7 +562,7 @@ test "S1 caller arena accounting failures publish no result and reset cleans ret
     try std.testing.checkAllAllocationFailures(std.testing.allocator, leakySweep, .{});
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
-    try std.testing.expectError(error.AllocationLimit, core.acquireLeaky(FactoryRecord, arena.allocator(), &.{ 6, 0, 0 }, .{ .allocation_bytes = 1 }, factoryDecode));
+    try std.testing.expectError(error.AllocationLimit, core.acquireLeaky(FactoryRecord, arena.allocator(), &.{ 6, 0, 0 }, .{ .allocation_bytes = .fromRaw(1) }, factoryDecode));
 }
 
 test "S1 nominal semantic wrappers retain unit newtype and fixed tuple distinctions" {
@@ -612,13 +612,13 @@ test "S1 diagnostics hold no raw control byte from a hostile unknown field name"
     try std.testing.expectEqualStrings("a\\x0a\\x1b[2J", diagnostics.path.frames()[0].name.view());
 }
 test "S1 a refused or failed request is not charged and the totals report what was" {
-    var c: core.Context = .init(std.testing.failing_allocator, .{ .allocation_bytes = 64 }, .borrowed);
+    var c: core.Context = .init(std.testing.failing_allocator, .{ .allocation_bytes = .fromRaw(64) }, .borrowed);
     try std.testing.expectError(error.OutOfMemory, c.alloc(u8, 16));
     try std.testing.expectEqual(@as(usize, 0), c.allocationRequested());
     try std.testing.expectError(error.AllocationLimit, c.alloc(u8, 65));
     try std.testing.expectError(error.AllocationLimit, c.alloc(u64, std.math.maxInt(usize)));
     try std.testing.expectEqual(@as(usize, 0), c.allocationRequested());
-    var ok: core.Context = .init(std.testing.allocator, .{ .allocation_bytes = 64, .work = 10 }, .borrowed);
+    var ok: core.Context = .init(std.testing.allocator, .{ .allocation_bytes = .fromRaw(64), .work = 10 }, .borrowed);
     const memory = try ok.alloc(u8, 40);
     defer std.testing.allocator.free(memory);
     try std.testing.expectEqual(@as(usize, 40), ok.allocationRequested());
@@ -627,7 +627,7 @@ test "S1 a refused or failed request is not charged and the totals report what w
     try ok.chargeWork(10);
     try std.testing.expectError(error.WorkLimit, ok.chargeWork(1));
     try std.testing.expectEqual(@as(usize, 10), ok.workUsed());
-    var fresh: core.Context = .init(std.testing.allocator, .{ .allocation_bytes = 8, .work = 3 }, .borrowed);
+    var fresh: core.Context = .init(std.testing.allocator, .{ .allocation_bytes = .fromRaw(8), .work = 3 }, .borrowed);
     try fresh.adopt(3, 8);
     try std.testing.expectError(error.WorkLimit, fresh.adopt(1, 0));
     try std.testing.expectError(error.AllocationLimit, fresh.adopt(0, 1));
@@ -763,7 +763,7 @@ test "S1 reference numeric semantics preserve wide signed minima floats and sent
         const result = try decoded(@TypeOf(value), &c, memory[0..out.used]);
         try std.testing.expectEqual(value, result);
         if (@typeInfo(@TypeOf(value)) == .float and value == 0) try std.testing.expect(std.math.signbit(result));
-        c = .init(std.testing.failing_allocator, .{ .numeric_bytes = 0 }, .borrowed);
+        c = .init(std.testing.failing_allocator, .{ .numeric_bytes = .fromRaw(0) }, .borrowed);
         try std.testing.expectError(error.LengthLimit, decoded(@TypeOf(value), &c, memory[0..out.used]));
     }
     const Shape = core.NamedTuple([2:9]u8, "pair");
@@ -899,7 +899,7 @@ fn indefiniteSweep(gpa: std.mem.Allocator) !void {
 test "S1 indefinite numeric sequence grows without resize and rolls back on limits" {
     try std.testing.checkAllAllocationFailures(std.testing.allocator, indefiniteSweep, .{});
     inline for (.{ @as(usize, 0), @as(usize, 1), @as(usize, 4) }) |limit| try std.testing.expectError(error.ItemLimit, core.acquire(NumericSequence, .owned, std.testing.allocator, &indefinite_sequence, .{ .container_items = limit }, decodeSequence));
-    try std.testing.expectError(error.AllocationLimit, core.acquire(NumericSequence, .owned, std.testing.allocator, &indefinite_sequence, .{ .allocation_bytes = 4 }, decodeSequence));
+    try std.testing.expectError(error.AllocationLimit, core.acquire(NumericSequence, .owned, std.testing.allocator, &indefinite_sequence, .{ .allocation_bytes = .fromRaw(4) }, decodeSequence));
 }
 
 pub const DelegatingLoop = struct {
@@ -953,12 +953,12 @@ test "S1 explicit byte visits compose with codecs ownership and scalar key limit
     var c: core.Context = .init(std.testing.failing_allocator, .{}, .borrowed);
     try core.serialize(borrowed.value, &out, &c);
     try std.testing.expectEqualSlices(u8, &input, memory[0..out.used]);
-    c = .init(std.testing.failing_allocator, .{ .key_bytes = 1 }, .borrowed);
+    c = .init(std.testing.failing_allocator, .{ .key_bytes = .fromRaw(1) }, .borrowed);
     const values = [_]core.Pair(core.Bytes, u8){.{ .key = .{ .value = &.{ 0xff, 0 } }, .value = 1 }};
     out.used = 0;
     try std.testing.expectError(error.LengthLimit, core.serialize(core.Pairs(core.Bytes, u8){ .items = &values }, &out, &c));
-    c = .init(std.testing.failing_allocator, .{ .key_bytes = 1 }, .borrowed);
-    try std.testing.expectError(error.LengthLimit, core.acquire(core.Pairs(core.Bytes, u8), .owned, std.testing.allocator, &.{ 13, 1, 4, 2, 0xff, 0, 2, 1, 0 }, .{ .key_bytes = 1 }, struct {
+    c = .init(std.testing.failing_allocator, .{ .key_bytes = .fromRaw(1) }, .borrowed);
+    try std.testing.expectError(error.LengthLimit, core.acquire(core.Pairs(core.Bytes, u8), .owned, std.testing.allocator, &.{ 13, 1, 4, 2, 0xff, 0, 2, 1, 0 }, .{ .key_bytes = .fromRaw(1) }, struct {
         fn decode(context: *core.Context, bytes: []const u8) core.DecodeError!core.Pairs(core.Bytes, u8) {
             return decoded(core.Pairs(core.Bytes, u8), context, bytes);
         }
@@ -1092,7 +1092,7 @@ fn invalidTextFactorySweep(gpa: std.mem.Allocator) !void {
 }
 test "S1 factory text validates before publication and rolls back every allocation" {
     try std.testing.checkAllAllocationFailures(std.testing.allocator, invalidTextFactorySweep, .{});
-    try std.testing.expectError(error.LengthLimit, core.acquire(FactoryRecord, .owned, std.testing.allocator, &.{ 6, 0, 0 }, .{ .string_bytes = 1 }, factoryDecode));
+    try std.testing.expectError(error.LengthLimit, core.acquire(FactoryRecord, .owned, std.testing.allocator, &.{ 6, 0, 0 }, .{ .string_bytes = .fromRaw(1) }, factoryDecode));
 }
 
 test "a NaN's sign and payload survive an event, signalling ones included" {

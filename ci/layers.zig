@@ -2,7 +2,7 @@
 const gantry = @import("gantry");
 
 pub const layers: []const gantry.rules.Layer = &.{
-    .{ .name = "core bounds", .patterns = &.{"src/core/context.zig"} },
+    .{ .name = "core bounds", .patterns = &.{ "src/core/context.zig", "src/core/limit.zig" } },
     .{ .name = "core vocabulary and schema", .patterns = &.{
         "src/core/model.zig",
         "src/core/scalars.zig",
@@ -114,6 +114,7 @@ pub const references: []const gantry.rules.ReferenceRule = &.{
             "rejection_options",
             "shakedown",
             "std",
+            "xenoglyph",
         },
     },
     .{ .name = "source siblings", .suffix = ".zig", .relative = true, .except_targets = &.{"src/**"} },

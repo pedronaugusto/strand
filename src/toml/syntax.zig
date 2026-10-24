@@ -8,6 +8,7 @@
 //! operation is charged for and gives back when the parse ends; what the
 //! result keeps is copied out of it by the core.
 const std = @import("std");
+const limit = @import("../core/limit.zig");
 const core = @import("../core.zig");
 const text = @import("text.zig");
 const number = @import("number.zig");
@@ -436,7 +437,7 @@ const Reader = struct {
         if (std.mem.eql(u8, token, "true")) return self.node(.{ .kind = .true, .at = start }, depth);
         if (std.mem.eql(u8, token, "false")) return self.node(.{ .kind = .false, .at = start }, depth);
         const scanned = number.scan(token) orelse return error.SyntaxError;
-        if (scanned.len > self.c.limits.numeric_bytes) return error.LengthLimit;
+        if (limit.exceeds(scanned.len, self.c.limits.numeric_bytes)) return error.LengthLimit;
         const ref: Ref = if (scanned.len == token.len) .{ .start = start, .len = self.here() - start } else try self.decode(scanned.len, .{ .number = token });
         const spelling = self.keyBytes(ref);
         // Outside TOML's signed 64 bits, or past a binary64's range, a number

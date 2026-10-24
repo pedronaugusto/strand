@@ -76,13 +76,25 @@ test "a member finds its field by exact name, then by case folding" {
     // By default a name is exact.
     try testing.expectError(error.UnknownField, json.parseLeaky(K, a, "{\"KIND\":4}", .{}));
     try testing.expectEqual(@as(u8, 0), (try json.parseLeaky(K, a, "{\"KIND\":4}", .{ .ignore_unknown_fields = true })).kind);
-    // A letter outside ASCII in a field's name matches only itself.
+    // A letter outside ASCII folds as Unicode's simple folding has it, as
+    // Go's `encoding/json` matches it: `É` with `é`, the three sigmas with
+    // one another; `ß` folds to no `ss` (that is full folding).
     const E = struct {
         name: u8 = 0,
-        pub const strand = .{ .fields = .{ .name = .{ .name = "\u{e9}t\u{e9}" } } };
+        sigma: u8 = 0,
+        strasse: u8 = 0,
+        pub const strand = .{ .fields = .{
+            .name = .{ .name = "\u{e9}t\u{e9}" },
+            .sigma = .{ .name = "\u{3c3}" },
+            .strasse = .{ .name = "stra\u{df}e" },
+        } };
     };
     try testing.expectEqual(@as(u8, 1), (try json.parseLeaky(E, a, "{\"\u{e9}T\u{e9}\":1}", .{ .names = .fold_case })).name);
-    try testing.expectError(error.UnknownField, json.parseLeaky(E, a, "{\"\u{c9}T\u{c9}\":1}", .{ .names = .fold_case }));
+    try testing.expectEqual(@as(u8, 2), (try json.parseLeaky(E, a, "{\"\u{c9}T\u{c9}\":2}", .{ .names = .fold_case })).name);
+    try testing.expectEqual(@as(u8, 3), (try json.parseLeaky(E, a, "{\"\u{3a3}\":3}", .{ .names = .fold_case })).sigma);
+    try testing.expectEqual(@as(u8, 4), (try json.parseLeaky(E, a, "{\"\u{3c2}\":4}", .{ .names = .fold_case })).sigma);
+    try testing.expectEqual(@as(u8, 5), (try json.parseLeaky(E, a, "{\"STRA\u{df}E\":5}", .{ .names = .fold_case })).strasse);
+    try testing.expectError(error.UnknownField, json.parseLeaky(E, a, "{\"STRASSE\":6}", .{ .names = .fold_case }));
 }
 
 test "null keeps a value as it is and empties an optional, a sequence and a map" {

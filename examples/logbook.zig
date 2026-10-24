@@ -306,7 +306,7 @@ fn protocol(gpa: std.mem.Allocator, arena: std.mem.Allocator) !void {
 
     // The lines, framed and bounded. What a line means is the server's own
     // business, so nothing here is parsed until the server parses it.
-    var requests: jsonl.LineReader = .init(gpa, &socket, .{ .max_line_bytes = 64 * 1024 });
+    var requests: jsonl.LineReader = .init(gpa, &socket, .{ .max_line_bytes = .literal("64KiB") });
     defer requests.deinit();
     while (true) {
         const raw = requests.next() catch |err| switch (err) {

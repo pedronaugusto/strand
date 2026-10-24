@@ -281,6 +281,26 @@ fn PolicyAccess(comptime Backend: type, comptime policy: descriptor.Field) type 
             for (values) |v| try emit(.{}, v, self.out, self.context, self.active);
             try self.out.end(self.context);
         }
+        /// The `count` values of `T` an iterator gives (anything with
+        /// `next() ?T`), as one sequence: for a codec whose elements are not
+        /// held in a slice. An iterator that gives fewer or more than `count`
+        /// is `error.CustomRejected`.
+        pub fn writeSequenceOf(self: *Self, comptime T: type, count: usize, iterator: anytype) Errors(T, Backend)!void {
+            comptime descriptor.check(T, Backend.capabilities, false, .borrowed);
+            if (self.used) return error.CustomRejected;
+            self.used = true;
+            if (count > policy.max_len) return error.LengthLimit;
+            try begin(self.out, self.context, .sequence, "", count);
+            defer self.context.leave();
+            var written: usize = 0;
+            while (iterator.next()) |v| : (written += 1) {
+                if (written == count) return error.CustomRejected;
+                const value: T = v;
+                try emit(.{}, value, self.out, self.context, self.active);
+            }
+            if (written != count) return error.CustomRejected;
+            try self.out.end(self.context);
+        }
         /// A tag on the value written next, by the same access: for a format
         /// with tags (`Backend.tag`), which any other refuses when it is compiled.
         pub fn tag(self: *Self, number: u64) Error!void {

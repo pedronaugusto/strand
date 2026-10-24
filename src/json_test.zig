@@ -514,3 +514,30 @@ test "fuzz: std's value of any bytes is read exactly when strand's is" {
     for (examples) |example| try property.holds(example);
     try shakedown.check(std.testing.allocator, {}, property.body, .{});
 }
+
+test "a codec writes the sequence an iterator gives, held to the count it states" {
+    const Countdown = struct {
+        from: u8,
+        count: usize,
+        const Iterator = struct {
+            left: u8,
+            pub fn next(it: *@This()) ?u8 {
+                if (it.left == 0) return null;
+                it.left -= 1;
+                return it.left;
+            }
+        };
+        pub fn strandSerialize(self: @This(), access: anytype) @TypeOf(access.*).Error!void {
+            var it: Iterator = .{ .left = self.from };
+            try access.writeSequenceOf(u8, self.count, &it);
+        }
+    };
+    var buffer: [64]u8 = undefined;
+    var out = std.Io.Writer.fixed(&buffer);
+    try json.write(&out, Countdown{ .from = 3, .count = 3 }, .{});
+    try std.testing.expectEqualStrings("[2,1,0]", out.buffered());
+    var short = std.Io.Writer.fixed(&buffer);
+    try std.testing.expectError(error.CustomRejected, json.write(&short, Countdown{ .from = 2, .count = 3 }, .{}));
+    var long = std.Io.Writer.fixed(&buffer);
+    try std.testing.expectError(error.CustomRejected, json.write(&long, Countdown{ .from = 4, .count = 3 }, .{}));
+}

@@ -75,6 +75,22 @@ pub const Limits = struct {
     numeric_bytes: Bytes = .literal("1KiB"),
     allocation_bytes: Bytes = .literal("32MiB"),
     work: usize = 128 * 1024 * 1024,
+
+    /// The defaults, raised where a document of `bytes` needs more: for a
+    /// reader that bounds what it reads by its size alone. A value is never
+    /// more than its bytes can spell, and holding a string whole, and the work
+    /// of reading and checking it, are a small multiple of its length.
+    pub fn sized(bytes: usize) Limits {
+        var result: Limits = .{};
+        inline for (.{ "input_bytes", "output_bytes", "string_bytes", "key_bytes" }) |name| {
+            if (limit.exceeds(bytes, @field(result, name))) @field(result, name) = .fromRaw(bytes);
+        }
+        result.items = @max(result.items, bytes);
+        result.container_items = @max(result.container_items, bytes);
+        if (limit.exceeds(bytes *| 2, result.allocation_bytes)) result.allocation_bytes = .fromRaw(bytes *| 2);
+        result.work = @max(result.work, bytes *| 8);
+        return result;
+    }
 };
 
 /// One step of the path to a value: a field or a position.

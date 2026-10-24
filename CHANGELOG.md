@@ -13,7 +13,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - `core.Limits.sized(bytes)`: the defaults raised where a document of that size needs more, for a reader that bounds what it reads by its size alone (chronicle's journal, lookout's checkpoints).
-- A codec writes a sequence it does not hold in a slice: `writeSequenceOf(T, count, iterator)` on the encoder's access writes the `count` values an iterator gives, and an iterator that gives fewer or more is `error.CustomRejected`.
 - `core.Diagnostics.locate`: the line and column of a diagnostic's offset in the text read. TOML, YAML and ZON set them through it, in place of a copy each.
 
 ### Changed

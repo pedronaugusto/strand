@@ -433,7 +433,7 @@ pub fn Cursor(comptime Backend: type) type {
                     if (comptime pointer.size == .slice and pointer.child == u8 and !@hasField(@TypeOf(declared), "codec")) {
                         try self.context.span(value.len, false);
                         try self.context.chargeWork(value.len);
-                        if ((comptime descriptor.field(T, name)).as != .bytes and !std.unicode.utf8ValidateSlice(value)) return error.InvalidUtf8;
+                        if ((comptime descriptor.field(T, name)).as.utf8() and !std.unicode.utf8ValidateSlice(value)) return error.InvalidUtf8;
                     }
                 }
                 return value;
@@ -804,19 +804,21 @@ pub fn Cursor(comptime Backend: type) type {
             const i = if (@typeInfo(T) == .array) @typeInfo(T).array else @typeInfo(T).vector;
             if (i.len > policy.max_len) return error.LengthLimit;
 
-            if (policy.as != .normal) {
+            // Under `text_or_bytes` an array of byte values is read as any tuple is.
+            const as_spelled = policy.as != .normal and !(policy.as == .text_or_bytes and try self.peek() == .begin);
+            if (as_spelled) {
                 if (i.child != u8) @compileError("text/bytes array codec requires u8 elements");
                 const event = try self.take();
                 const span = switch (event) {
-                    .text => |v| if (policy.as == .text) v else return error.UnexpectedType,
-                    .bytes => |v| if (policy.as == .bytes) v else return error.UnexpectedType,
+                    .text => |v| if (policy.as != .bytes) v else return error.UnexpectedType,
+                    .bytes => |v| if (policy.as != .text) v else return error.UnexpectedType,
                     else => return error.UnexpectedType,
                 };
                 if (span.bytes.len != i.len) return error.UnexpectedType;
                 if (span.bytes.len > policy.max_len) return error.LengthLimit;
                 try self.context.span(span.bytes.len, false);
                 try self.context.chargeWork(span.bytes.len);
-                if (policy.as == .text and !validText(Backend, span.bytes)) return error.InvalidUtf8;
+                if (event == .text and !validText(Backend, span.bytes)) return error.InvalidUtf8;
                 var array: if (@typeInfo(T) == .array) T else [i.len]i.child = undefined;
                 @memcpy(&array, span.bytes);
                 if (@typeInfo(T) == .array) if (i.sentinel()) |sentinel| {
@@ -885,17 +887,22 @@ pub fn Cursor(comptime Backend: type) type {
         /// at its position there, and the rest afresh.
         fn slice(self: *Self, comptime T: type, comptime policy: descriptor.Field, prior: anytype) Errors(T, Backend)!T {
             const i = @typeInfo(T).pointer;
-            if (i.child == u8) {
-                const direct_text = if (comptime @hasDecl(Backend, "text")) (if (policy.as != .bytes) try self.direct("text") else null) else null;
+            const direct_text = if (comptime i.child == u8 and @hasDecl(Backend, "text")) (if (policy.as != .bytes) try self.direct("text") else null) else null;
+            // Under `text_or_bytes` a sequence of byte values is read as any sequence is.
+            if (i.child == u8 and !(policy.as == .text_or_bytes and direct_text == null and try self.peek() == .begin)) {
+                var text = direct_text != null;
                 const bytes = direct_text orelse switch (try self.take()) {
-                    .text => |s| if (policy.as == .bytes) return error.UnexpectedType else s,
-                    .bytes => |s| if (policy.as != .bytes) return error.UnexpectedType else s,
+                    .text => |s| if (policy.as == .bytes) return error.UnexpectedType else blk: {
+                        text = true;
+                        break :blk s;
+                    },
+                    .bytes => |s| if (policy.as == .bytes or policy.as == .text_or_bytes) s else return error.UnexpectedType,
                     else => return error.UnexpectedType,
                 };
                 if (bytes.bytes.len > policy.max_len) return error.LengthLimit;
                 try self.context.span(bytes.bytes.len, false);
                 try self.context.chargeWork(bytes.bytes.len);
-                if (policy.as != .bytes and !validText(Backend, bytes.bytes)) return error.InvalidUtf8;
+                if (text and !validText(Backend, bytes.bytes)) return error.InvalidUtf8;
                 if (i.attrs.@"const" and i.sentinel() == null and (i.attrs.@"align" orelse 1) == 1) return self.context.retain(bytes.bytes, bytes.lifetime, policy.borrow);
                 if (policy.borrow == .require) return error.BorrowUnavailable;
                 try self.context.chargeWork(bytes.bytes.len);
@@ -1427,7 +1434,7 @@ fn cloneField(comptime T: type, comptime policy: descriptor.Field, value: T, c: 
                 if (i.child == u8) {
                     try c.span(value.len, false);
                     try c.chargeWork(value.len);
-                    if (policy.as != .bytes and !std.unicode.utf8ValidateSlice(value)) return error.InvalidUtf8;
+                    if (policy.as.utf8() and !std.unicode.utf8ValidateSlice(value)) return error.InvalidUtf8;
                 }
                 const result = try c.allocPointer(T, value.len);
                 for (result, value) |*to, from| to.* = try clone(i.child, from, c);

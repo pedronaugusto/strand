@@ -255,9 +255,11 @@ fn list(comptime names: []const []const u8) []const u8 {
     return out;
 }
 
-/// A text field: JSON's string. Bytes have no JSON spelling.
+/// A text field: JSON's string. Bytes have no JSON spelling; bytes that are
+/// text when they can be (`.text_or_bytes`) are a string or their byte values.
 fn text(comptime policy: descriptor.Field, comptime path: []const u8) []const u8 {
     if (policy.as == .bytes) @compileError(path ++ ": JSON has no bytes; give the field a codec");
+    if (policy.as == .text_or_bytes) return "{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":255}}]}";
     return "{\"type\":\"string\"}";
 }
 

@@ -362,7 +362,8 @@ piece. A constant field name is written with its `.name = ` as one piece.
 What `std.zon` accepts and strand does not: a number whose literal does not fit its
 type is an error, never infinity (`1e999` as `f64`); a `[]const u8` is a string, so a
 tuple of numbers is not one and a string with bytes that are not UTF-8 needs
-`.as = .bytes`; untagged unions, nested optionals and names (`NamedUnit`, `Newtype`,
+`.as = .bytes` (or `.as = .text_or_bytes`: a string when UTF-8, else the tuple of its byte
+values, read in either form); untagged unions, nested optionals and names (`NamedUnit`, `Newtype`,
 `NamedTuple`) have no representation and are refused when the type is compiled. A
 float is rounded to its width once, from its decimal digits, where `std.zon` rounds to
 `f128` first. What strand accepts and `std.zon` does not: integers of any width, and

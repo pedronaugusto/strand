@@ -359,3 +359,22 @@ fn anyBytes(_: void, case: *shakedown.Case) anyerror!void {
 test "any bytes are an item or refused, and an item read is written as itself" {
     try shakedown.check(gpa, {}, anyBytes, .{ .cases = 3000 });
 }
+
+test "text_or_bytes is a text string when the bytes are UTF-8 and a byte string otherwise" {
+    const OsName = struct {
+        name: []const u8,
+        pub const strand = .{ .fields = .{ .name = .{ .as = .text_or_bytes } } };
+    };
+    var state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer state.deinit();
+    const a = state.allocator();
+    for ([_][]const u8{ "caf\u{e9}", "", "a\xffb" }) |name| {
+        var buffer: [64]u8 = undefined;
+        var out = std.Io.Writer.fixed(&buffer);
+        try cbor.write(&out, OsName{ .name = name }, .{});
+        // The map's one entry: the key "name", then the value's major type.
+        const major = out.buffered()[6] >> 5;
+        try std.testing.expectEqual(@as(u8, if (std.unicode.utf8ValidateSlice(name)) 3 else 2), major);
+        try std.testing.expectEqualSlices(u8, name, (try cbor.parseLeaky(OsName, a, out.buffered(), .{})).name);
+    }
+}

@@ -31,7 +31,21 @@ pub const Description = struct {
     reason: []const u8 = "",
 };
 pub const Rename = enum { snake_case, camel_case, PascalCase, kebab_case, SCREAMING_SNAKE_CASE };
-pub const Representation = enum { normal, text, bytes };
+/// How a field of bytes is spelled: as its type has it (`normal`), as text, as
+/// bytes, or `text_or_bytes`: text when the bytes are UTF-8 and otherwise bytes
+/// (in a format with no bytes, JSON's among them, the sequence of their byte
+/// values, as std.json spells them), read in any of these forms. For names an
+/// operating system gives, which are usually text and need not be.
+pub const Representation = enum {
+    normal,
+    text,
+    bytes,
+    text_or_bytes,
+    /// Whether bytes so spelled must be UTF-8.
+    pub fn utf8(r: Representation) bool {
+        return r != .bytes and r != .text_or_bytes;
+    }
+};
 pub const Omit = enum { never, null_value, default_value };
 pub const Duplicates = context.Duplicates;
 pub const Unknown = enum { ignore, reject };

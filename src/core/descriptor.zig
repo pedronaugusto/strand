@@ -61,6 +61,18 @@ pub const Field = struct {
     max_len: usize = std.math.maxInt(usize),
 };
 
+/// The policy each element of a sequence of `E` is read and written under: a
+/// sequence of byte strings spells each as its field says (`as`), anything
+/// else as its type has it.
+pub fn element(comptime policy: Field, comptime E: type) Field {
+    const bytes = switch (@typeInfo(E)) {
+        .pointer => |p| p.size == .slice and p.child == u8,
+        .array => |a| a.child == u8,
+        else => false,
+    };
+    return if (bytes) .{ .as = policy.as } else .{};
+}
+
 pub fn has(comptime T: type, comptime name: []const u8) bool {
     return switch (@typeInfo(T)) {
         .@"struct", .@"union", .@"enum", .@"opaque" => @hasDecl(T, name),

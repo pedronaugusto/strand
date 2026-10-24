@@ -519,7 +519,8 @@ test "fuzz: std's value of any bytes is read exactly when strand's is" {
 const OsName = struct {
     name: []const u8,
     id: [4]u8 = "none".*,
-    pub const strand = .{ .fields = .{ .name = .{ .as = .text_or_bytes }, .id = .{ .as = .text_or_bytes } } };
+    others: []const []const u8 = &.{},
+    pub const strand = .{ .fields = .{ .name = .{ .as = .text_or_bytes }, .id = .{ .as = .text_or_bytes }, .others = .{ .as = .text_or_bytes } } };
 };
 
 test "text_or_bytes writes text when the bytes are UTF-8 and their byte values otherwise, as std.json does, and reads both back" {
@@ -529,7 +530,7 @@ test "text_or_bytes writes text when the bytes are UTF-8 and their byte values o
     const cases = [_]OsName{
         .{ .name = "caf\u{e9}" },
         .{ .name = "" },
-        .{ .name = "a\xffb", .id = "\x00\xc3\x28\x7f".* },
+        .{ .name = "a\xffb", .id = "\x00\xc3\x28\x7f".*, .others = &.{ "ok", "\xc0\x80", "" } },
         .{ .name = "\xed\xa0\x80" },
     };
     for (cases) |case| {
@@ -545,6 +546,8 @@ test "text_or_bytes writes text when the bytes are UTF-8 and their byte values o
         const read = try json.parseLeaky(OsName, a, out.buffered(), .{});
         try std.testing.expectEqualSlices(u8, case.name, read.name);
         try std.testing.expectEqualSlices(u8, &case.id, &read.id);
+        try std.testing.expectEqual(case.others.len, read.others.len);
+        for (case.others, read.others) |want, got| try std.testing.expectEqualSlices(u8, want, got);
     }
     // Either spelling reads; text that is not UTF-8 never does.
     const spelled = try json.parseLeaky(OsName, a, "{\"name\":[104,105],\"id\":\"abcd\"}", .{});

@@ -16,14 +16,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- `.as = .text_or_bytes`, a field policy for bytes an operating system gives (file names, paths): written as text when they are UTF-8 and otherwise as bytes, or in JSON, which has none, as the array of their byte values, as `std.json` writes them; read in any of those forms. The same bytes always take the same form.
+- `.as = .text_or_bytes`, a field policy for bytes an operating system gives (file names, paths): written as text when they are UTF-8 and otherwise as bytes, or in JSON, which has none, as the array of their byte values, as `std.json` writes them; read in any of those forms. The same bytes always take the same form. On a list of byte strings it spells each of them so; so do `.text` and `.bytes`.
 - `core.Limits.sized(bytes)`: the defaults raised where a document of that size needs more, for a reader that bounds what it reads by its size alone (chronicle's journal, lookout's checkpoints).
 - `core.Diagnostics.locate`: the line and column of a diagnostic's offset in the text read. TOML, YAML and ZON set them through it, in place of a copy each.
 
 ### Changed
 
 - `names = .fold_case` folds every letter by Unicode's simple case folding, code point by code point, as Go's `encoding/json` matches names: `É` finds a field named `é`, and `Σ`, `σ` and `ς` find one another. Before, only ASCII letters, `ſ` and the Kelvin sign folded. The folding is xenoglyph's (`case.simpleFold`), a new dependency (xenoglyph 0.4.1).
-
 - A charge an operation takes before allocating (`Context.alloc`, `allocPointer`, the scratch allocator) is given back if the allocation fails and consumed once it succeeds (aegis 0.1.14's `Reservation.consume`), so the reservation is discharged on every path where it was left held.
 
 ## [0.13.1] - 2026-10-18

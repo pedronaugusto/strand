@@ -186,8 +186,9 @@ an explicit data codec. No container capacity or hash internals are serialized.
 Booleans, arbitrary-width integers, floats, exhaustive enums, tagged unions,
 plain structs (including packed/extern), tuples, arrays, vectors, safe single
 pointers and slices have derived meaning. Nonexhaustive enums need a numeric
-codec. aegis scalars are what they hold, recognized by rebuilding each from the
-parameters it publishes (a type that only looks like one is not taken for it):
+codec. aegis scalars are what they hold, recognized by the `aegis_scalar` literal each
+declares, never by its shape, so one made by another copy of aegis (a program
+pinning another aegis version than strand's) is taken alike:
 `units.Duration` and `units.Bytes` read and write their exact text form (`1m30s`,
 `64MiB`), and refuse a bare number, whose unit the text would not state; the
 other units, `int.Checked`, `int.Saturating`, `int.Ranged`, and the ids and

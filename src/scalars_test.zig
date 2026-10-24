@@ -1,14 +1,17 @@
-//! aegis scalars in every format: what they hold, read and written through
-//! the parameters each publishes, durations and sizes as their text.
+//! aegis scalars in every format: what they hold, recognized by the literal
+//! each declares, durations and sizes as their text.
 const std = @import("std");
 const aegis = @import("aegis");
+// Another copy of aegis: what a program pinning another aegis version than
+// strand's builds beside strand's, whose types are never strand's copy's.
+const other_aegis = @import("other_aegis");
 const scalars = @import("core/scalars.zig");
 const json = @import("json.zig");
 const zon = @import("zon.zig");
 
 const Tag = struct {};
 
-test "aegis scalars are recognized by their published parameters" {
+test "aegis scalars are recognized by the literal each declares" {
     try std.testing.expectEqual(scalars.Kind.text, scalars.kind(aegis.units.Duration(.millisecond, u64)).?);
     try std.testing.expectEqual(scalars.Kind.text, scalars.kind(aegis.units.Bytes(u64)).?);
     try std.testing.expectEqual(scalars.Kind.integer, scalars.kind(aegis.units.Count(Tag, u32)).?);
@@ -20,7 +23,7 @@ test "aegis scalars are recognized by their published parameters" {
     try std.testing.expectEqual(scalars.Kind.ranged, scalars.kind(aegis.int.Ranged(u8, 1, 9)).?);
     try std.testing.expectEqual(scalars.Kind.nonzero, scalars.kind(aegis.id.NonZero(Tag, u64)).?);
     try std.testing.expectEqual(scalars.Kind.counter, scalars.kind(aegis.id.Counter(Tag, u64)).?);
-    // A type with the same declarations is not one.
+    // A type with an aegis scalar's declarations but not its literal is not one.
     const Lookalike = enum(u64) {
         pub const Representation = u64;
         pub const Domain = Tag;
@@ -28,6 +31,27 @@ test "aegis scalars are recognized by their published parameters" {
     };
     try std.testing.expectEqual(null, scalars.kind(Lookalike));
     try std.testing.expectEqual(null, scalars.kind(u64));
+}
+
+test "aegis scalars made by another copy of aegis are read and written as aegis scalars" {
+    comptime std.debug.assert(other_aegis.int.Ranged(u16, 1, 4096) != aegis.int.Ranged(u16, 1, 4096));
+    const Job = struct {
+        jobs: other_aegis.int.Ranged(u16, 1, 4096),
+        timeout: other_aegis.units.Duration(.millisecond, u64),
+        owner: other_aegis.id.NonZero(Tag, u64),
+    };
+    const text =
+        \\{"jobs":4096,"timeout":"1m30s","owner":7}
+    ;
+    var parsed = try json.parse(Job, std.testing.allocator, text, .{});
+    defer parsed.deinit();
+    try std.testing.expectEqual(@as(u16, 4096), parsed.value.jobs.raw());
+    try std.testing.expectEqual(@as(u64, 90_000), parsed.value.timeout.raw());
+    var buffer: [128]u8 = undefined;
+    var w: std.Io.Writer = .fixed(&buffer);
+    try json.write(&w, parsed.value, .{});
+    try std.testing.expectEqualStrings(text, w.buffered());
+    try std.testing.expectError(error.NumberOutOfRange, json.parse(Job, std.testing.allocator, "{\"jobs\":0,\"timeout\":\"1s\",\"owner\":7}", .{}));
 }
 
 const Config = struct {

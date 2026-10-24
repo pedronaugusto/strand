@@ -9,12 +9,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Fixed
 
 - An aegis scalar from a program pinning another aegis version than strand's was refused, a `Ranged` as a non-exhaustive enum with no numeric codec: strand recognized aegis's scalars by rebuilding them with its own copy of aegis, and two versions under a plain `zig build` are two copies whose types are never equal. It now reads the `aegis_scalar` declaration each carries (aegis 0.1.18), the same in every copy, at contract 1: its integer and range come from it, a value is made only through the type's own checked functions, and a later contract does not compile, named by its number.
+
 ### Breaking
 
 - Every byte limit and bound strand is given is an aegis `Bytes(usize)`, read and written in aegis's text form and logged with `{f}`: `core.Limits`' `input_bytes`, `output_bytes`, `string_bytes`, `key_bytes`, `numeric_bytes` and `allocation_bytes` (its counts, `depth`, `items`, `container_items` and `work`, stay counts), and the `max_line_bytes`, `recovery_bytes`, `max_row_bytes` and `block_bytes` of the JSON Lines readers, decoder, line reader and tail and the CSV reader. Write `.literal("64KiB")` or `.fromRaw(65536)` where a number was, and read one with `.raw()`.
 
 ### Added
 
+- `core.Limits.sized(bytes)`: the defaults raised where a document of that size needs more, for a reader that bounds what it reads by its size alone (chronicle's journal, lookout's checkpoints).
 - `core.Diagnostics.locate`: the line and column of a diagnostic's offset in the text read. TOML, YAML and ZON set them through it, in place of a copy each.
 
 ### Changed

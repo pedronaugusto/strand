@@ -1108,3 +1108,15 @@ test "a NaN's sign and payload survive an event, signalling ones included" {
     try std.testing.expectEqual(@as(u16, 0x7e00), @as(u16, @bitCast(core.narrowFloat(f16, core.widenFloat(low)))));
     try std.testing.expectEqual(@as(f64, 1.5), core.narrowFloat(f64, core.widenFloat(@as(f32, 1.5))));
 }
+
+test "limits sized for a document raise the defaults to its size and keep them above it" {
+    const small: core.Limits = .sized(10);
+    try std.testing.expectEqual(core.Limits{}, small);
+    const big: core.Limits = .sized(100 << 20);
+    try std.testing.expectEqual(@as(usize, 100 << 20), big.input_bytes.raw());
+    try std.testing.expectEqual(@as(usize, 100 << 20), big.key_bytes.raw());
+    try std.testing.expectEqual(@as(usize, 200 << 20), big.allocation_bytes.raw());
+    try std.testing.expectEqual(@as(usize, 800 << 20), big.work);
+    try std.testing.expectEqual(@as(usize, 1024), big.numeric_bytes.raw());
+    try std.testing.expectEqual(@as(usize, 128), big.depth);
+}

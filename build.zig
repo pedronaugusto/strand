@@ -400,7 +400,7 @@ fn xmlconfDocuments(b: *std.Build, p: *std.Build) *std.Build.Module {
             _ = fields.next();
             _ = fields.next();
             const path = fields.next().?;
-            _ = files.addCopyFile(xmlts.path(b.fmt("xmlconf/{s}", .{path})), b.fmt("xmlconf/{s}", .{path}));
+            _ = files.addCopyFile(xmlts.path(path), b.fmt("xmlconf/{s}", .{path}));
             source.print(b.allocator, "    @embedFile(\"xmlconf/{s}\"),\n", .{path}) catch @panic("OOM");
         }
         source.appendSlice(b.allocator, "};\n") catch @panic("OOM");

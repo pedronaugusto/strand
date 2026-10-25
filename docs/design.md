@@ -719,8 +719,8 @@ declared nowhere that XML calls a validity error is refused, not read without it
 namespace names equal only after an `ATTLIST`'s NMTOKEN normalization. Properties write
 generated elements and typed values and read them back (minified and indented), cut them
 anywhere, read any bytes (damaged examples) in all three ownerships and through the scanner,
-and write back whatever is read; an allocation-failure sweep; limits at their edges. By
-hand (`bench/rivals/xml/infoset.py`): every well-formed document of the suite read by
+and write back whatever is read; an allocation-failure sweep; limits at their edges. In
+private trials (`strand/formats`, its `infoset` driver): every well-formed document of the suite read by
 strand and by expat to the same tree, apart from expat's pre-fifth-edition names (318),
 declared-type normalization (5) and the entity above; 80,000 damaged documents, where
 strand and expat agree on every one but those whose version is no `1.` and digits, which
@@ -757,9 +757,9 @@ entries in any order, with the value the change makes by a model over the format
 `Value` (`src/testing/edit_props.zig`); the text a set replaces holds no comment line;
 an edit refused leaves the text as it was. In YAML a value an alias repeats changes
 where the alias does too, and there an edit is held only to reading back. The same
-property runs over documents mutated from commented examples. The rivals' harnesses
-(`bench/rivals/edit`: toml_edit, ruamel.yaml, jsonc-parser) make the bench's three
-edits to the same bytes, and what they write reads as the value strand's edits make.
+property runs over documents mutated from commented examples. In private trials
+(`strand/formats`), toml_edit, ruamel.yaml and jsonc-parser make the bench's three edits
+to the same bytes, and what they write reads as the value strand's edits make.
 
 ## Format accelerators
 
@@ -784,9 +784,7 @@ Timings are manual observations in private trials, never CI acceptance tests. Th
 repository's own drivers are `bench/bench.zig` (JSON Lines write, read, tail,
 follow, carried values, syncs), `bench/s2.zig` (JSON parse and write against
 `std.json`), `bench/zon.zig`, `bench/schema.zig` (ten 100-field encoders against
-hand-written ones), `bench/core.zig` (the reference backend), `bench/xml.zig`, whose
-`--inputs` writes the documents `bench/rivals/xml` reads (quick-xml with serde, Go's
-encoding/xml) for rows on the same bytes, and `bench/edit.zig`, whose `--inputs` writes
-the documents `bench/rivals/edit` edits (toml_edit, ruamel.yaml, jsonc-parser). Earlier releases'
-rows and the comparison against them are in
+hand-written ones), `bench/core.zig` (the reference backend), `bench/xml.zig` and
+`bench/edit.zig`, each measuring strand alone. Comparisons with other libraries, on the
+same documents, and earlier releases' rows are in
 [private trials](https://github.com/pedronaugusto/trials/tree/main/strand).

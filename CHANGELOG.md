@@ -6,6 +6,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- Development: the W3C XML suite's hash, taken from a copy that had lost the tarball's two empty directories, is the one Zig computes for the tarball itself, and its documents are read where Zig puts them (without the tarball's top `xmlconf/` directory), so a fresh fetch (CI's) builds. A consumer never fetches the suite.
+
+### Changed
+
+- Development: the rival programs and comparison drivers (quick-xml, Go's encoding/xml, expat, toml_edit, ruamel.yaml, jsonc-parser) moved to the private trials repository; `bench/xml.zig` and `bench/edit.zig` measure strand alone. The aegis lint pack (A001, A002, A003, A005) gates with A004.
+
 ## [0.14.0] - 2026-10-25
 
 ### Breaking

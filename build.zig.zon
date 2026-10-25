@@ -42,7 +42,7 @@
         // tests alone: its parts' licences allow no other redistribution.
         .xmlts = .{
             .url = "https://www.w3.org/XML/Test/xmlts20130923.tar.gz",
-            .hash = "N-V-__8AAKKMKQAQZYwJKc3HXn2lz0rK8Zmh5VNdtUCcKLtY",
+            .hash = "N-V-__8AAKKMKQAyL3KQidU3H84LB3ftuZRsxUo4mqNyyHnZ",
             .lazy = true,
         },
 

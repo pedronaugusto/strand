@@ -66,7 +66,7 @@ fn Model(comptime V: type, comptime seq: []const u8, comptime map: []const u8) t
                     if (!addressable(entries, e)) continue;
                     const p = try std.mem.concat(a, u8, &.{ prefix, "/", try escape(a, keyText(e).?) });
                     try members.append(a, p);
-                    try paths(a, e.value, p, leaves, members);
+                    try paths(a, @field(e, "value"), p, leaves, members);
                 }
             } else try leaves.append(a, prefix);
         }
@@ -87,7 +87,7 @@ fn Model(comptime V: type, comptime seq: []const u8, comptime map: []const u8) t
             } else return error.TestUnexpectedResult;
             if (tokens.len == 1 and new == null) return @unionInit(V, map, try std.mem.concat(a, Entry, &.{ entries[0..i], entries[i + 1 ..] }));
             const copy = try a.dupe(Entry, entries);
-            copy[i].value = try changed(a, entries[i].value, tokens[1..], new);
+            @field(copy[i], "value") = try changed(a, @field(entries[i], "value"), tokens[1..], new);
             return @unionInit(V, map, copy);
         }
     };

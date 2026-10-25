@@ -2,13 +2,9 @@
 //! stack and JSONC settings file of about 4 KiB and 256 KiB, each opened,
 //! one value set and the text taken, and a session of three edits (a value
 //! set, a key added, an entry removed) and the text taken. Compilation and
-//! smoke are correctness gates; timing is a manual run. `--inputs DIR`
-//! writes the documents for the rivals' harnesses (bench/rivals/edit:
-//! toml_edit, ruamel.yaml, jsonc-parser), which make the same edits to the
-//! same bytes and write what they make; `--check DIR` reads what they wrote
-//! as the value strand's session makes. The entries the edits change and
-//! remove are named `mid` and `old` in every document, so a harness needs no
-//! more than the file.
+//! smoke are correctness gates; timing is a manual run on a quiet machine.
+//! The comparisons with other editors, on these documents, are in the
+//! private trials repository.
 const std = @import("std");
 const strand = @import("strand");
 const toml = strand.toml;
@@ -123,7 +119,6 @@ fn session(comptime format: Format, e: *EditOf(format)) WorkError!void {
 fn Rows(comptime format: Format, comptime size: usize) type {
     const E = EditOf(format);
     return struct {
-        const suffix = sizes[size].name ++ "." ++ @tagName(format);
         fn source(c: *Context) []const u8 {
             return c.docs[@backingInt(format)][size];
         }
@@ -172,34 +167,6 @@ fn Rows(comptime format: Format, comptime size: usize) type {
 }
 const all = .{ Rows(.toml, 0), Rows(.toml, 1), Rows(.yaml, 0), Rows(.yaml, 1), Rows(.jsonc, 0), Rows(.jsonc, 1) };
 
-/// Whether `other` reads as the value `made` reads as, in `format`.
-fn same(format: Format, a: std.mem.Allocator, made: []const u8, other: []const u8) !bool {
-    return switch (format) {
-        .toml => (try toml.parseLeaky(toml.Value, a, made, .{})).eql(try toml.parseLeaky(toml.Value, a, other, .{})),
-        .yaml => (try yaml.parseLeaky(yaml.Value, a, made, .{})).eql(try yaml.parseLeaky(yaml.Value, a, other, .{})),
-        .jsonc => jsonEql(try jsonc.parseLeaky(strand.json.Value, a, made, .{}), try jsonc.parseLeaky(strand.json.Value, a, other, .{})),
-    };
-}
-/// JSON values equal, an object's members in any order.
-fn jsonEql(x: strand.json.Value, y: strand.json.Value) bool {
-    if (std.meta.activeTag(x) != std.meta.activeTag(y)) return false;
-    return switch (x) {
-        .null_value => true,
-        .boolean => |b| b == y.boolean,
-        .number => |n| std.mem.eql(u8, n, y.number),
-        .string => |t| std.mem.eql(u8, t, y.string),
-        .array => |items| items.len == y.array.len and for (items, y.array) |i, j| {
-            if (!jsonEql(i, j)) break false;
-        } else true,
-        .object => |members| members.len == y.object.len and for (members) |m| {
-            const found = for (y.object) |n| {
-                if (std.mem.eql(u8, m.key, n.key)) break jsonEql(m.value, n.value);
-            } else false;
-            if (!found) break false;
-        } else true,
-    };
-}
-
 pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
     const smoke = args.len > 1 and std.mem.eql(u8, args[1], "--smoke");
@@ -209,44 +176,6 @@ pub fn main(init: std.process.Init) !void {
     };
     defer for (c.docs) |by_size| for (by_size) |doc| c.gpa.free(doc);
 
-    if (args.len > 2 and std.mem.eql(u8, args[1], "--inputs")) {
-        var dir = try std.Io.Dir.cwd().openDir(init.io, args[2], .{});
-        defer dir.close(init.io);
-        inline for (all) |R| {
-            try dir.writeFile(init.io, .{ .sub_path = "input-" ++ R.suffix, .data = R.source(&c) });
-            // What strand's session makes, for comparing by eye.
-            const made = try R.made(&c);
-            defer c.gpa.free(made);
-            try dir.writeFile(init.io, .{ .sub_path = "strand-" ++ R.suffix, .data = made });
-        }
-        return;
-    }
-    if (args.len > 2 and std.mem.eql(u8, args[1], "--check")) {
-        // Each rival's session (`NAME-SIZE.FORMAT`) read as the value
-        // strand's makes.
-        var dir = try std.Io.Dir.cwd().openDir(init.io, args[2], .{ .iterate = true });
-        defer dir.close(init.io);
-        var arena: std.heap.ArenaAllocator = .init(c.gpa);
-        defer arena.deinit();
-        var it = dir.iterate();
-        var checked: usize = 0;
-        while (try it.next(init.io)) |entry| {
-            if (std.mem.startsWith(u8, entry.name, "input-") or std.mem.startsWith(u8, entry.name, "strand-")) continue;
-            inline for (all, 0..) |R, i| if (std.mem.endsWith(u8, entry.name, "-" ++ R.suffix)) {
-                const made = try R.made(&c);
-                defer c.gpa.free(made);
-                const other = try dir.readFileAlloc(init.io, entry.name, arena.allocator(), .limited(16 << 20));
-                if (!try same(@fromBackingInt(@intCast(i / sizes.len)), arena.allocator(), made, other)) {
-                    std.log.err("{s}: not the value strand's session makes", .{entry.name});
-                    return error.PolicyMismatch;
-                }
-                std.log.info("{s}: read as the value strand's session makes", .{entry.name});
-                checked += 1;
-            };
-        }
-        if (checked == 0) return error.PolicyMismatch;
-        return;
-    }
     // Each session changes its document.
     inline for (all) |R| {
         const made = try R.made(&c);

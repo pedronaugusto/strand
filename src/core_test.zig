@@ -111,6 +111,24 @@ test "S1 semantic encoder fixed buffer zero allocations and same typed round tri
     try std.testing.expectError(error.OutputLimit, core.serialize(Record{ .id = 1 }, &out, &c));
 }
 
+test "S1 scratch allocator settles each charge: consumed when an allocation, resize or remap succeeds, given back when it fails" {
+    var buffer: [64]u8 = undefined;
+    var fixed: std.heap.FixedBufferAllocator = .init(&buffer);
+    var c: core.Context = .init(std.testing.failing_allocator, .{}, .borrowed);
+    var scratch = c.scratch(fixed.allocator());
+    const a = scratch.allocator();
+    const memory = try a.alloc(u8, 8);
+    try std.testing.expect(c.allocation_budget.settled());
+    try std.testing.expect(a.resize(memory, 16));
+    try std.testing.expect(c.allocation_budget.settled());
+    _ = a.remap(memory.ptr[0..16], 32) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(c.allocation_budget.settled());
+    try std.testing.expectEqual(@as(usize, 32), c.allocationRequested());
+    try std.testing.expectError(error.OutOfMemory, a.alloc(u8, 128));
+    try std.testing.expect(c.allocation_budget.settled());
+    try std.testing.expectEqual(@as(usize, 32), c.allocationRequested());
+}
+
 test "S1 checked encoding rejects active cycles and invalid UTF8" {
     const Node = struct {
         const Self = @This();

@@ -124,6 +124,7 @@ fn cloneCheck(comptime T: type, comptime seen: []const type) void {
     @setEvalBranchQuota(1_000_000);
     for (seen) |prior| if (T == prior) return;
     const next = seen ++ .{T};
+    // aegis: no-danger: a comptime comparison of types that names Io.Mutex to refuse it as data; no lock is taken
     if (T == std.mem.Allocator or T == std.Io or T == std.Io.File or T == std.Io.Mutex or descriptor.has(T, "deinit")) @compileError("checked clone excludes resources");
     switch (@typeInfo(T)) {
         inline .pointer, .optional, .array, .vector => |i| cloneCheck(i.child, next),

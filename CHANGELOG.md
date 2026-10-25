@@ -23,7 +23,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- Development: the rival programs and comparison drivers (quick-xml, Go's encoding/xml, expat, toml_edit, ruamel.yaml, jsonc-parser) moved to the private trials repository; `bench/xml.zig` and `bench/edit.zig` measure strand alone. The aegis lint pack (A001, A002, A003, A005) gates with A004.
+- Development: the rival programs and comparison drivers (quick-xml, Go's encoding/xml, expat, toml_edit, ruamel.yaml, jsonc-parser) moved to the private trials repository; `bench/xml.zig` and `bench/edit.zig` measure strand alone.
+- The JSON reader and the JSON Lines line reader each mark where bytes enter them with aegis's boundary marker (`input.Untrusted`): every JSON parse goes through it, and a line the line reader hands out has passed it, framed, bounded and checked for control bytes. Nothing changes for a program; past the boundary, the lint reads what a parser reads as the parse's own.
+- Development: preflight 0.18.1 (from 0.17.0), and the aegis lint pack gates every rule but three: A006 (its findings in strand are recursion over types as strand compiles, sent to aegis), and A009 and A010, which are judged on the next preflight. Each danger site the pack finds carries its reason (`// aegis: <reason>: <why>`): the allocator interfaces' pointer casts, the comparisons of types that refuse `Io.Mutex` as data, the follower's `Opener` contract, the parsers' frame states. The benchmark programs are named as built ReleaseFast. strand's own token rule against durability calls is gone: preflight's durability door (P006) holds it.
 
 ## [0.14.0] - 2026-10-25
 

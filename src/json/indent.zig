@@ -33,7 +33,7 @@ pub const Indent = struct {
     }
 
     fn drain(w: *std.Io.Writer, data: []const []const u8, splat: usize) std.Io.Writer.Error!usize {
-        const self: *Indent = @alignCast(@fieldParentPtr("interface", w)); // safe: this vtable is installed only on an Indent's own `interface`
+        const self: *Indent = @alignCast(@fieldParentPtr("interface", w)); // aegis: no-danger: this vtable is installed only on an Indent's own `interface`
         try self.feed(w.buffered());
         w.end = 0;
         var n: usize = 0;

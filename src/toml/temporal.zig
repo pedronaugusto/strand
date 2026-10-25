@@ -9,6 +9,7 @@ pub const Kind = enum(u64) { offset_date_time, local_date_time, local_date, loca
 
 /// Every part a spelling may hold; those its kind has no place for are zero.
 pub const Parts = struct {
+    // aegis: no-danger: which of TOML's four kinds a date or time is, a value's kind set as its spelling is read, not a state
     kind: Kind,
     year: u16 = 0,
     month: u8 = 0,

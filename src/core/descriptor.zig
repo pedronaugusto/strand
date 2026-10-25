@@ -116,7 +116,7 @@ pub fn default(comptime T: type, comptime name: []const u8) ?@FieldType(T, name)
     const info = @typeInfo(T).@"struct";
     inline for (info.field_names, info.field_attrs) |n, attrs| {
         if (std.mem.eql(u8, n, name)) return if (attrs.default_value_ptr) |p| blk: {
-            // safe: Zig provides the correctly typed and aligned default storage.
+            // aegis: no-danger: Zig provides the correctly typed and aligned default storage.
             const value: *const @FieldType(T, name) = @ptrCast(@alignCast(p)); // safe: checked destination bounds or Zig-provided typed storage precede this conversion.
             break :blk value.*;
         } else null;
@@ -174,6 +174,7 @@ fn secret(comptime T: type) bool {
     return false;
 }
 fn inspect(comptime T: type, comptime fmt: Capabilities, comptime seen: []const type, comptime path: []const u8) Description {
+    // aegis: no-danger: a comptime comparison of types that names Io.Mutex to refuse it as data; no lock is taken
     if (T == std.mem.Allocator or T == std.Io or T == std.Io.File or T == std.Io.Mutex or containsSecret(T, &.{})) return rejected(path, "resource or secret is not automatic data");
     for (seen) |v| if (T == v) return .{};
     const next = seen ++ .{T};
@@ -480,6 +481,7 @@ fn scalarKey(comptime T: type) bool {
 }
 
 fn containsResource(comptime T: type, comptime seen: []const type) bool {
+    // aegis: no-danger: a comptime comparison of types that names Io.Mutex to refuse it as data; no lock is taken
     if (T == std.mem.Allocator or T == std.Io or T == std.Io.File or T == std.Io.Mutex) return true;
     for (seen) |v| if (T == v) return false;
     const next = seen ++ .{T};

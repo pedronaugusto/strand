@@ -24,6 +24,7 @@ mode: Decoder.Mode,
 names: []const []const u8,
 /// Whether the header line is written before the first row.
 write_header: bool,
+// aegis: design: the writer's frame, set by what core.serialize begins and ends, which a sequence of calls core makes in nesting order drives
 frame: Frame,
 /// The column the next field of a row is, and the one a key named.
 column: usize,

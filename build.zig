@@ -353,6 +353,7 @@ pub fn dev(b: *std.Build, tools: type) void {
             .target = target,
             .optimize = optimize,
         },
+        .release_fast = comptime benchPrograms(@typeInfo(@FieldType(preflight.Config, "release_fast")).pointer.child),
     });
     // A project that depends on strand by path, with airlock, aegis and xenoglyph
     // and nothing else to fetch: the build a consumer gets.
@@ -382,6 +383,17 @@ fn benchSeam(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang
     const aegis = p.dependency("aegis", .{ .target = target, .optimize = optimize }).module("aegis");
     const xenoglyph = p.dependency("xenoglyph", .{ .target = target, .optimize = optimize }).module("xenoglyph");
     return b.createModule(.{ .root_source_file = p.path("src/seam.zig"), .target = target, .optimize = optimize, .imports = &.{ .{ .name = "aegis", .module = aegis }, .{ .name = "airlock", .module = airlock }, .{ .name = "xenoglyph", .module = xenoglyph } } });
+}
+
+/// The benchmark programs, built ReleaseFast because what they time is
+/// ReleaseFast code: every row on strand's design page and every rival's in
+/// trials is taken so. None ships; each is installed only by its own step.
+fn benchPrograms(comptime Entry: type) []const Entry {
+    const reason = "a benchmark: it times ReleaseFast code, as strand's rows and its rivals' rows in trials are taken";
+    var list: []const Entry = &.{};
+    for ([_][]const u8{ "s2", "zon", "toml", "yaml", "xml", "ini", "json5", "dotenv", "edit", "core" }) |name| list = list ++ .{Entry{ .artifact = "strand-" ++ name ++ "-bench", .reason = reason }};
+    for ([_][]const u8{ "hand", "core" }) |name| list = list ++ .{Entry{ .artifact = "strand-schema-" ++ name, .reason = reason }};
+    return list;
 }
 
 /// Every example, listed rather than globbed: a build graph that scans a

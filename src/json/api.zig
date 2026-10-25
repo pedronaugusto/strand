@@ -2,6 +2,7 @@
 const std = @import("std");
 const limit = @import("../core/limit.zig");
 const core = @import("../core.zig");
+const aegis = @import("aegis");
 const std_value = @import("std_value.zig");
 const decoding = @import("Decoder.zig");
 const encoding = @import("Encoder.zig");
@@ -96,7 +97,20 @@ fn Dialect(comptime T: type, comptime grammar: decoding.Grammar) type {
     const Wire = decoding.Dialect(grammar);
     return struct {
         const Error = @typeInfo(@TypeOf(core.deserialize(T, @as(*Wire, undefined), @as(*core.Context, undefined)))).error_union.error_set;
+        /// The parse's value in a type of its own, as aegis's boundary marker
+        /// asks of what it refines, whatever `T` is.
+        const Refined = struct { value: T };
+        const RefinedPrefix = struct { value: Prefix(T) };
+        /// Where bytes enter the JSON reader: through aegis's boundary marker
+        /// (`input.Untrusted`), its one checked boundary, past which what it
+        /// reads is the parse's.
         fn run(c: *core.Context, input: []const u8) Error!T {
+            return (try aegis.input.Untrusted([]const u8).init(input).parse(c, checked)).value;
+        }
+        fn checked(c: *core.Context, input: []const u8) Error!Refined {
+            return .{ .value = try parsed(c, input) };
+        }
+        fn parsed(c: *core.Context, input: []const u8) Error!T {
             work.parse();
             try c.input(input.len);
             var decoder: Wire = undefined;
@@ -111,6 +125,12 @@ fn Dialect(comptime T: type, comptime grammar: decoding.Grammar) type {
         /// A value at the front of `input`, and where it ended: what comes
         /// after it is the caller's.
         fn front(c: *core.Context, input: []const u8) Error!Prefix(T) {
+            return (try aegis.input.Untrusted([]const u8).init(input).parse(c, checkedFront)).value;
+        }
+        fn checkedFront(c: *core.Context, input: []const u8) Error!RefinedPrefix {
+            return .{ .value = try parsedFront(c, input) };
+        }
+        fn parsedFront(c: *core.Context, input: []const u8) Error!Prefix(T) {
             work.parse();
             try c.input(input.len);
             var decoder: Wire = undefined;

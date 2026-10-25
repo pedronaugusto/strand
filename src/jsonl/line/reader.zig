@@ -369,7 +369,7 @@ pub const LineReader = struct {
     pub fn bufferedFrom(self: *const LineReader, record: RawLine) ?[]const u8 {
         if (!self.borrowed or self.options.record_separator) return null;
         const buffer = self.input.buffer;
-        const start = @intFromPtr(record.line.ptr) -% @intFromPtr(buffer.ptr); // safe: addresses compared as numbers; a line that is not in `buffer` fails the check below
+        const start = @intFromPtr(record.line.ptr) -% @intFromPtr(buffer.ptr); // aegis: no-danger: addresses compared as numbers; a line that is not in `buffer` fails the check below
         const after = start +% record.line.len;
         if (after +% 1 != self.input.seek or after >= self.input.end or buffer[after] != '\n') return null;
         return buffer[start..self.input.end];
@@ -469,8 +469,15 @@ pub const LineReader = struct {
                 self.skipped += 1;
                 continue;
             }
-            return .{ .line = record, .number = number, .offset = offset };
+            // The stream's bytes, framed, held to the line bound and checked
+            // for control bytes: past here a line is this parser's, its one
+            // boundary.
+            return try aegis.input.Untrusted([]const u8).init(record).parse(Place{ .number = number, .offset = offset }, lineAt);
         }
+    }
+    const Place = struct { number: u64, offset: u64 };
+    fn lineAt(place: Place, record: []const u8) error{}!RawLine {
+        return .{ .line = record, .number = place.number, .offset = place.offset };
     }
 
     /// Looks for a control byte in `record[from..]`. Returns true when the

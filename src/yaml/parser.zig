@@ -71,6 +71,7 @@ const Directive = struct { handle: Ref, prefix: Ref };
 
 pub const Parser = struct {
     scanner: scanner.Scanner,
+    // aegis: design: libyaml's parser states, whose transitions are its grammar: the next byte or event decides the edge, and one no edge takes is a syntax error, held to the format's suite and fuzzed
     state: State = .stream_start,
     states: std.ArrayList(State) = .empty,
     directives: std.ArrayList(Directive) = .empty,

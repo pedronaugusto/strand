@@ -174,7 +174,7 @@ pub const Members = struct {
             .value = d.input[found.value_start..found.value_end],
             .separator = if (members.count == 1) members.open_at else found.separator,
             // The name is a view into the input, past its opening quote.
-            .start = @intFromPtr(found.name.ptr) - @intFromPtr(d.input.ptr) - 1, // safe: a checked name is borrowed from the input, never copied
+            .start = @intFromPtr(found.name.ptr) - @intFromPtr(d.input.ptr) - 1, // aegis: no-danger: a checked name is borrowed from the input, never copied
             .value_start = found.value_start,
             .escaped = found.escaped,
         };

@@ -187,7 +187,7 @@ const Builder = struct {
         }
     }
     fn offsetIn(bytes: []const u8, part: []const u8) u32 {
-        return @intCast(@intFromPtr(part.ptr) - @intFromPtr(bytes.ptr)); // safe: `part` is a slice of `bytes`.
+        return @intCast(@intFromPtr(part.ptr) - @intFromPtr(bytes.ptr)); // aegis: no-danger: `part` is a slice of `bytes`.
     }
 
     /// The declared encoding against the bytes: one the byte-order mark or

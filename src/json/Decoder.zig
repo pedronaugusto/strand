@@ -51,6 +51,7 @@ pub fn Dialect(comptime grammar: Grammar) type {
         };
         /// `check_keys`: whether this object's keys are remembered to refuse one given
         /// twice. An object read as a typed record is not: mapping checks its keys.
+        // aegis: design: a parser's frame, whose transitions are its grammar: the next byte or event decides the edge, and one no edge takes is a syntax error, held to the format's suite and fuzzed
         const Frame = struct { object: bool, check_keys: bool, state: State, key_start: usize };
 
         input: []const u8,

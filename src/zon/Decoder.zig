@@ -26,6 +26,7 @@ pub const parseFloat = number.floating;
 const Kind = enum { record, sequence, variant };
 /// Where the container is: what its next token may be.
 const State = enum { start, value, after_value, after_comma };
+// aegis: design: a parser's frame, whose transitions are its grammar: the next byte or event decides the edge, and one no edge takes is a syntax error, held to the format's suite and fuzzed
 const Frame = struct { kind: Kind, state: State, key_start: usize };
 /// A void variant is one token and three events; the last two wait here.
 const Pending = enum { none, unit, end };
@@ -39,6 +40,7 @@ depth: usize,
 keys: [128][]const u8,
 extra_keys: std.ArrayList([]const u8),
 key_count: usize,
+// aegis: no-danger: an event read ahead and owed to the next call (a unit or an end), not a state the decoder moves through
 pending: Pending,
 /// Where the last token ended, before the trivia after it.
 last_end: usize,

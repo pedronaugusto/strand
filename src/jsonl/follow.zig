@@ -65,6 +65,7 @@ pub const Opener = struct {
     /// `error.ReadFailed` leaves diagnostics to the stream.
     pub const OpenError = error{ FileNotFound, OpenFailed } || std.Io.Cancelable;
 
+    // aegis: design: the Opener contract hands each file to the follower, which gives it back through `close` exactly once (`Follower.opened`); the interface is type-erased so a test can stage its files
     pub fn open(self: Opener, io: std.Io) OpenError!std.Io.File {
         return self.openFn(io, self.context);
     }
@@ -90,8 +91,9 @@ pub const PathOpener = struct {
         return .{ .context = self, .openFn = openPath, .closeFn = closePath };
     }
 
+    // aegis: design: an Opener's file, given back through `closePath` exactly once by the follower, as the Opener contract says
     fn openPath(io: std.Io, context: *anyopaque) Opener.OpenError!std.Io.File {
-        const self: *PathOpener = @ptrCast(@alignCast(context)); // safe: `opener` is the only maker of this interface, with a *PathOpener as its context
+        const self: *PathOpener = @ptrCast(@alignCast(context)); // aegis: no-danger: `opener` is the only maker of this interface, with a *PathOpener as its context
         return self.dir.openFile(io, self.sub_path, .{}) catch |err| switch (err) {
             error.Canceled => error.Canceled,
             error.FileNotFound => error.FileNotFound,

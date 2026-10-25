@@ -15,6 +15,8 @@ test {
     _ = @import("msgpack_test.zig");
     _ = @import("toml_test.zig");
     _ = @import("yaml_test.zig");
+    _ = @import("xml_test.zig");
+    _ = @import("testing/xml_suite.zig");
     _ = @import("testing/json_suite.zig");
     _ = @import("testing/toml_suite.zig");
     _ = @import("testing/yaml_suite.zig");
@@ -39,4 +41,5 @@ test {
     _ = @import("msgpack/api.zig");
     _ = @import("toml/api.zig");
     _ = @import("yaml/api.zig");
+    _ = @import("xml/api.zig");
 }

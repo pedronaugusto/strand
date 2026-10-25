@@ -69,6 +69,10 @@ pub fn dev(b: *std.Build, tools: type) void {
     const aegis_sources = b.addWriteFiles().addCopyDirectory(p.dependency("aegis", .{ .target = target, .optimize = optimize }).path("src"), "aegis", .{});
     tests.root_module.addImport("other_aegis", b.createModule(.{ .root_source_file = aegis_sources.path(b, "root.zig"), .target = target, .optimize = optimize }));
 
+    // The W3C XML suite's documents the manifest lists, embedded from where
+    // the build fetched them (`null` when it runs without lazy dependencies).
+    tests.root_module.addImport("xmlconf_documents", xmlconfDocuments(b, p));
+
     const test_step = b.step("test", "Run strand tests");
     // The assembly reaches every test once, in one executable.
     test_step.dependOn(&b.addRunArtifact(tests).step);
@@ -360,3 +364,25 @@ const clone_rejections = [_][]const u8{
     "error: : pointer has no safe data meaning",
     "error: .unsafe: pointer-containing sentinel cannot change ownership",
 };
+
+/// A module of the W3C XML suite's documents, one per line of strand's
+/// manifest and in its order: `documents`, or `null` without the suite.
+fn xmlconfDocuments(b: *std.Build, p: *std.Build) *std.Build.Module {
+    const files = b.addWriteFiles();
+    var source: std.ArrayList(u8) = .empty;
+    if (b.dependencyLazy("xmlts", .{})) |xmlts| {
+        source.appendSlice(b.allocator, "pub const documents: ?[]const []const u8 = &.{\n") catch @panic("OOM");
+        var lines = std.mem.tokenizeScalar(u8, @embedFile("src/corpus/xml/xmlconf.manifest"), '\n');
+        while (lines.next()) |line| {
+            var fields = std.mem.tokenizeScalar(u8, line, ' ');
+            _ = fields.next();
+            _ = fields.next();
+            const path = fields.next().?;
+            _ = files.addCopyFile(xmlts.path(b.fmt("xmlconf/{s}", .{path})), b.fmt("xmlconf/{s}", .{path}));
+            source.print(b.allocator, "    @embedFile(\"xmlconf/{s}\"),\n", .{path}) catch @panic("OOM");
+        }
+        source.appendSlice(b.allocator, "};\n") catch @panic("OOM");
+    } else |_| source.appendSlice(b.allocator, "pub const documents: ?[]const []const u8 = null;\n") catch @panic("OOM");
+    _ = p;
+    return b.createModule(.{ .root_source_file = files.add("documents.zig", source.items) });
+}

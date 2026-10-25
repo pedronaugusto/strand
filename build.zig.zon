@@ -38,6 +38,14 @@
 
     },
     .dev_dependencies = .{
+        // The W3C XML Conformance Test Suite, fetched from the W3C for the
+        // tests alone: its parts' licences allow no other redistribution.
+        .xmlts = .{
+            .url = "https://www.w3.org/XML/Test/xmlts20130923.tar.gz",
+            .hash = "N-V-__8AAKKMKQAQZYwJKc3HXn2lz0rK8Zmh5VNdtUCcKLtY",
+            .lazy = true,
+        },
+
         .preflight = .{
             .url = "git+https://github.com/pedronaugusto/preflight?ref=v0.6.2#d7ccc1bdcfe7cf6f480a434201f8690b325f6504",
             .hash = "preflight-0.6.2-LX1ZwgPWEAAh_GQ61_8uRRfqxC-d6ru3oz3cKfSQ0W40",

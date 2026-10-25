@@ -11,7 +11,8 @@
   "test_dependencies": [
     "shakedown",
     "airlock.testing",
-    "other_aegis"
+    "other_aegis",
+    "xmlconf_documents"
   ],
   "function_exceptions": {
     "src/jsonl/follow.zig:Follower": {

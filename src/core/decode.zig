@@ -271,7 +271,10 @@ pub fn Cursor(comptime Backend: type) type {
                 if (!std.unicode.utf8ValidateSlice(header.name)) return error.InvalidUtf8;
             }
             if (header.len == null and !Backend.capabilities.indefinite_containers) return error.UnsupportedValue;
-            if (header.kind != expected and !(expected == .tuple and header.kind == .sequence) and !(expected == .record and header.kind == .map) and !(expected == .map and header.kind == .record)) return error.UnexpectedType;
+            // A format that spells a union as a record of one member is asked
+            // for a union and answers with that record.
+            const union_record = expected == .variant and Backend.capabilities.variant_record and (header.kind == .record or header.kind == .map);
+            if (header.kind != expected and !union_record and !(expected == .tuple and header.kind == .sequence) and !(expected == .record and header.kind == .map) and !(expected == .map and header.kind == .record)) return error.UnexpectedType;
             try self.context.enter();
             errdefer self.context.leave();
             if (header.len) |n| try self.context.count(n);
@@ -696,7 +699,7 @@ pub fn Cursor(comptime Backend: type) type {
             const i = @typeInfo(T).@"union";
             const opt = comptime descriptor.options(T);
             if (@hasField(@TypeOf(opt), "tag")) return self.tagged(T);
-            const header = try self.start(if (Backend.capabilities.variant_record) .record else .variant);
+            const header = try self.start(.variant);
             defer self.context.leave();
             if (header.len) |n| if (n != 1) return error.SyntaxError;
             const variant_name = if (Backend.capabilities.variant_record) try self.key() else header.name;
@@ -1644,6 +1647,9 @@ fn PolicyCompoundAccess(comptime Backend: type, comptime policy: descriptor.Fiel
 
 fn expectedKind(comptime T: type, comptime policy: descriptor.Field) ctx.Diagnostics.Expected {
     if (comptime scalars.kind(T)) |k| return if (k == .text) .text else .integer;
+    // A type with a codec of its own has no shape the core can name: what
+    // its codec reads says what it asks for.
+    if (comptime descriptor.has(T, "strandDeserialize")) return .unknown;
     return switch (@typeInfo(T)) {
         .bool => .boolean,
         .int => .integer,

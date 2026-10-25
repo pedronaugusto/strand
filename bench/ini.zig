@@ -29,6 +29,8 @@ const Context = struct {
     document: []u8,
     value: Config,
     buffer: []u8,
+    /// For the writer to remember the sections, to refuse one given twice.
+    scratch: []u8,
 };
 
 fn document(gpa: std.mem.Allocator, services: usize) ![]u8 {
@@ -53,9 +55,11 @@ fn document(gpa: std.mem.Allocator, services: usize) ![]u8 {
             },
         };
     }
+    const scratch = try gpa.alloc(u8, 64 * 1024);
+    defer gpa.free(scratch);
     var out: std.Io.Writer.Allocating = .init(gpa);
     errdefer out.deinit();
-    try ini.write(&out.writer, Config{ .items = list }, .{});
+    try ini.write(&out.writer, Config{ .items = list }, .{ .scratch = scratch });
     return out.toOwnedSlice();
 }
 
@@ -81,7 +85,7 @@ fn write(c: *Context, units: u64) WorkError!void {
     var sum: usize = 0;
     for (0..units) |_| {
         var writer = std.Io.Writer.fixed(c.buffer);
-        try ini.write(&writer, c.value, .{});
+        try ini.write(&writer, c.value, .{ .scratch = c.scratch });
         sum +%= writer.buffered().len;
         std.mem.doNotOptimizeAway(writer.buffered());
     }
@@ -91,17 +95,19 @@ fn write(c: *Context, units: u64) WorkError!void {
 pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
     const smoke = args.len > 1 and std.mem.eql(u8, args[1], "--smoke");
-    var c: Context = .{ .gpa = init.gpa, .arena = .init(init.gpa), .fixture = .init(init.gpa), .document = undefined, .value = undefined, .buffer = undefined };
+    var c: Context = .{ .gpa = init.gpa, .arena = .init(init.gpa), .fixture = .init(init.gpa), .document = undefined, .value = undefined, .buffer = undefined, .scratch = undefined };
     defer c.arena.deinit();
     defer c.fixture.deinit();
     c.document = try document(c.gpa, if (smoke) 4 else 560);
     defer c.gpa.free(c.document);
     c.buffer = try c.gpa.alloc(u8, c.document.len * 2);
     defer c.gpa.free(c.buffer);
+    c.scratch = try c.gpa.alloc(u8, 64 * 1024);
+    defer c.gpa.free(c.scratch);
     c.value = try ini.parseLeaky(Config, c.fixture.allocator(), c.document, .{});
     // What is read is written back as the same document.
     var again = std.Io.Writer.fixed(c.buffer);
-    try ini.write(&again, c.value, .{});
+    try ini.write(&again, c.value, .{ .scratch = c.scratch });
     if (!std.mem.eql(u8, again.buffered(), c.document)) return error.PolicyMismatch;
     const rows = [_]shakedown.bench.Row(Context, WorkError){
         .{ .name = "ini.typed.64k", .unit = "document", .initial = 1, .run = typed },

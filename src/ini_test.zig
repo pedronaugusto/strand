@@ -163,6 +163,45 @@ test "what is not written, since it would not read back as itself" {
     try std.testing.expectEqualStrings("Key = 1\n", out.written());
 }
 
+test "a map's key or section given twice is not written, as it would not read back" {
+    var out: std.Io.Writer.Allocating = .init(gpa);
+    defer out.deinit();
+    const twice = [_]ini.Member{ .{ .key = "a", .value = .{ .text = "1" } }, .{ .key = "a", .value = .none } };
+    try std.testing.expectError(error.DuplicateField, ini.write(&out.writer, ini.Value{ .members = &twice }, .{ .dialect = .{ .keys_without_values = true } }));
+    const in_section = [_]ini.Member{.{ .key = "s", .value = .{ .section = &twice } }};
+    try std.testing.expectError(error.DuplicateField, ini.write(&out.writer, ini.Value{ .members = &in_section }, .{ .dialect = .{ .keys_without_values = true } }));
+    const sections = [_]ini.Member{ .{ .key = "s", .value = .{ .section = &.{} } }, .{ .key = "s", .value = .{ .section = &.{} } } };
+    try std.testing.expectError(error.DuplicateField, ini.write(&out.writer, ini.Value{ .members = &sections }, .{}));
+    // A key and a section of one name are two names, as the reader reads them;
+    // a key in two sections is one in each; a key left out is not written.
+    out.clearRetainingCapacity();
+    const apart = [_]ini.Member{
+        .{ .key = "a", .value = .none },
+        .{ .key = "a", .value = .{ .text = "1" } },
+        .{ .key = "s", .value = .{ .section = &.{.{ .key = "a", .value = .{ .text = "2" } }} } },
+        .{ .key = "a", .value = .{ .section = &.{.{ .key = "a", .value = .{ .text = "3" } }} } },
+    };
+    try ini.write(&out.writer, ini.Value{ .members = &apart }, .{});
+    try std.testing.expectEqualStrings("a = 1\n\n[s]\na = 2\n\n[a]\na = 3\n", out.written());
+    var back = try ini.parse(ini.Value, gpa, out.written(), .{});
+    defer back.deinit();
+    try std.testing.expectEqual(3, back.value.members.len);
+    // Past the 128th, a map's names are remembered in the scratch it is given.
+    var many: [200]ini.Member = undefined;
+    var names: [200][4]u8 = undefined;
+    for (&many, &names, 0..) |*m, *name, i| {
+        name.* = .{ 'k', '0' + @as(u8, @intCast(i / 100)), '0' + @as(u8, @intCast(i / 10 % 10)), '0' + @as(u8, @intCast(i % 10)) }; // safe: i under 200.
+        m.* = .{ .key = name, .value = .{ .text = "v" } };
+    }
+    out.clearRetainingCapacity();
+    try std.testing.expectError(error.OutOfMemory, ini.write(&out.writer, ini.Value{ .members = &many }, .{}));
+    var scratch: [4096]u8 = undefined;
+    out.clearRetainingCapacity();
+    try ini.write(&out.writer, ini.Value{ .members = &many }, .{ .scratch = &scratch });
+    many[199].key = "k000";
+    try std.testing.expectError(error.DuplicateField, ini.write(&out.writer, ini.Value{ .members = &many }, .{ .scratch = &scratch }));
+}
+
 test "ini.Value written and read back, keys with no value where the dialect takes them" {
     const d: ini.Dialect = .{ .keys_without_values = true };
     var value = try ini.parse(ini.Value, gpa, "top = 1\nflag\n\n[s]\nk = a\n  b\nempty =\n", .{ .dialect = d });

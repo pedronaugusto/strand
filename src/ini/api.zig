@@ -90,6 +90,10 @@ pub fn parseLeaky(comptime T: type, arena: std.mem.Allocator, input: []const u8,
 pub const WriteOptions = struct {
     limits: core.Limits = .{},
     dialect: Dialect = .{},
+    /// Scratch for a map's keys or sections past its 128th, remembered to
+    /// refuse one given twice (`OutOfMemory` where it runs out); a struct
+    /// needs none.
+    scratch: []u8 = &.{},
 };
 /// Streams `value`, a struct or a map, as an INI document: its members that
 /// hold a value first, then each struct or map member as a section. A sink
@@ -97,13 +101,12 @@ pub const WriteOptions = struct {
 /// first where nothing must reach the sink unless all of it does.
 pub fn write(output: *std.Io.Writer, value: anytype, options: WriteOptions) @typeInfo(@TypeOf(core.serialize(value, @as(*WireEncoder, undefined), @as(*core.Context, undefined)))).error_union.error_set!void {
     aegis.assert.pre(options.dialect.valid(), valid_dialect);
-    var no_scratch: [0]u8 = .{};
-    var fixed: std.heap.FixedBufferAllocator = .init(&no_scratch);
+    var fixed: std.heap.FixedBufferAllocator = .init(options.scratch);
     var c = core.Context.init(fixed.allocator(), options.limits, .borrowed);
     c.acceptance.duplicates = .reject;
     var encoder: WireEncoder = undefined;
     encoder.init(output, options.dialect);
-    defer encoder.deinit();
+    defer encoder.deinit(&c);
     try core.serialize(value, &encoder, &c);
 }
 

@@ -93,6 +93,13 @@
       "imports": [
         "strand"
       ]
+    },
+    "zig build docs -- ini": {
+      "source": "examples/settings.zig",
+      "region": "ini",
+      "imports": [
+        "strand"
+      ]
     }
   },
   "extra_checks": [

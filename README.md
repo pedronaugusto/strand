@@ -1,7 +1,7 @@
 # strand
 
 strand reads and writes Zig values as JSON, JSON Lines, ZON, URL-encoded forms,
-CSV, CBOR, MessagePack, TOML, YAML and XML, through one mapping core that every format shares. Zig 0.17.0 is required.
+CSV, CBOR, MessagePack, TOML, YAML, XML and INI, through one mapping core that every format shares. Zig 0.17.0 is required.
 
 A value of any plain Zig type is parsed straight into that type, borrowed from
 the input, copied into an owner of its own, or put on an arena the caller holds,
@@ -545,6 +545,71 @@ std.debug.assert(strand.xml.parse(strand.xml.Element, gpa, external, .{}) == err
 ```
 <!-- END GENERATED -->
 
+## INI
+
+`strand.ini` reads and writes INI in a dialect, Python configparser's unless another is
+given: `#` and `;` comment lines, `=` and `:` between a key and its value, a value
+continued on the lines indented under its key (blank lines within kept), keys lowercased
+by Unicode's full mapping as configparser's `optionxform` does, section names as
+written. `parse`, `parseOwned` and `parseLeaky` read a document into a struct or a map,
+with the other formats' limits, ownership and field policy: the keys before the first
+section are its members, and each `[section]` a member that is a struct or a map of its
+keys. Lines are read as configparser reads them, and a key or a section given twice is
+refused, as its strict mode does. A value is text until the type asks for something
+else: a number in JSON's spelling, a boolean as configparser's `getboolean` reads one
+(`1`, `yes`, `true`, `on`, their opposites, any case), or a null, which an empty value
+is where the type takes one. `Dialect` changes the comment prefixes, adds comments after
+a value (`inline_comment_prefixes`), the delimiters, turns continuation off (rust-ini's
+and Go's reading), keeps keys as written, or takes keys with no value
+(`keys_without_values`, a null). There is no interpolation: `%(name)s` and `${name}` are
+text, and `[DEFAULT]` is a section like any other, since strand resolves nothing.
+`ini.Value` holds any document in order. The writer puts a struct's keys first and each
+struct or map member as a section after them, a continued value on tab-indented lines,
+and refuses what would not read back as itself: a key written after a section, a section
+in a section, a sequence, a value with white space at a line's end or a comment's start
+where one would be read. [examples/settings.zig](examples/settings.zig) reads and writes
+a service's settings.
+
+<!-- BEGIN GENERATED zig build docs -- ini -->
+```zig
+const strand = @import("strand");
+
+const text =
+    \\# relay's settings
+    \\name = relay
+    \\Debug = yes
+    \\
+    \\[server]
+    \\host = 0.0.0.0
+    \\port: 8443
+    \\
+    \\[banner]
+    \\text = Welcome
+    \\    to relay
+;
+var settings = try strand.ini.parse(Settings, gpa, text, .{});
+defer settings.deinit();
+std.debug.assert(settings.value.debug);
+std.debug.assert(settings.value.server.port == 8443);
+std.debug.assert(std.mem.eql(u8, settings.value.banner.text, "Welcome\nto relay"));
+
+// Written back: keys first, then each section; a continued value on
+// tab-indented lines.
+var out: std.Io.Writer.Allocating = .init(gpa);
+try strand.ini.write(&out.writer, settings.value, .{});
+std.debug.assert(std.mem.eql(u8, out.written(), "name = relay\ndebug = true\n\n[server]\nhost = 0.0.0.0\nport = 8443\n\n[banner]\ntext = Welcome\n\tto relay\n"));
+
+// Any document, in another dialect: comments after values, keys with
+// no value. No interpolation: `%(name)s` is text.
+const dialect: strand.ini.Dialect = .{ .inline_comment_prefixes = &.{";"}, .keys_without_values = true };
+var value = try strand.ini.parse(strand.ini.Value, gpa, "[mysqld]\nskip-networking\nuser = %(name)s ; who runs it\n", .{ .dialect = dialect });
+defer value.deinit();
+const mysqld = value.value.section("mysqld").?;
+std.debug.assert(mysqld[0].value == .none);
+std.debug.assert(std.mem.eql(u8, strand.ini.Value.text(mysqld, "user").?, "%(name)s"));
+```
+<!-- END GENERATED -->
+
 ## Editing
 
 `strand.toml.Edit`, `strand.yaml.Edit` and `strand.json.jsonc.Edit` hold a document as
@@ -642,6 +707,7 @@ and nonzero checks included.
 - It does not watch the filesystem or flush on a timer.
 - It reads no application type from a YAML tag, and does not merge YAML 1.1's `<<` keys.
 - It fetches no external XML entity or DTD, applies no `ATTLIST` default, and does not validate against a DTD or a schema.
+- It interpolates no INI value (`%(name)s`, `${name}`) and gives no section `[DEFAULT]`'s keys.
 
 ## Built with
 

@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `strand.ini`: INI read and written through the one core, in a `Dialect`, Python configparser's by default: `#` and `;` comment lines, `=` and `:` delimiters, values continued on indented lines, keys lowercased by Unicode's full mapping (`optionxform`), section names as written; `inline_comment_prefixes`, `continuation`, `lowercase_keys` and `keys_without_values` change it. A document is a struct or a map: the keys before its first section, then each section, a struct or map of its keys; lines are read as configparser reads them, and a key or a section given twice is refused, as its strict mode does. A value is text until the type asks: a number in JSON's spelling, a boolean as `getboolean` reads one, a null where it is empty and the type takes one. No interpolation, and `[DEFAULT]` is a section like any other. `ini.Value` holds any document in order. The writer puts keys before sections and refuses what would not read back as itself. Held to configparser's reading by its own cases, to round trips over generated documents in three dialects, and fuzzed.
+
 ### Fixed
 
 - Development: the W3C XML suite's hash, taken from a copy that had lost the tarball's two empty directories, is the one Zig computes for the tarball itself, and its documents are read where Zig puts them (without the tarball's top `xmlconf/` directory), so a fresh fetch (CI's) builds. A consumer never fetches the suite.

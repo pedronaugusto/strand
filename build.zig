@@ -251,6 +251,16 @@ pub fn dev(b: *std.Build, tools: type) void {
         const xml_smoke = b.addRunArtifact(xml_bench);
         xml_smoke.addArg("--smoke");
         test_step.dependOn(&xml_smoke.step);
+        const ini_bench = b.addExecutable(.{
+            .name = "strand-ini-bench",
+            .root_module = b.createModule(.{ .root_source_file = p.path("bench/ini.zig"), .target = target, .optimize = bench_mode, .imports = benchImports(b, target, bench_mode) }),
+        });
+        ini_bench.root_module.addImport("shakedown", dependency.module("shakedown"));
+        b.step("ini-bench-build", "Compile INI observations").dependOn(&b.addInstallArtifact(ini_bench, .{}).step);
+        check_step.dependOn(&ini_bench.step);
+        const ini_smoke = b.addRunArtifact(ini_bench);
+        ini_smoke.addArg("--smoke");
+        test_step.dependOn(&ini_smoke.step);
         const edit_bench = b.addExecutable(.{
             .name = "strand-edit-bench",
             .root_module = b.createModule(.{ .root_source_file = p.path("bench/edit.zig"), .target = target, .optimize = bench_mode, .imports = benchImports(b, target, bench_mode) }),
@@ -366,6 +376,7 @@ const example_sources = [_][]const u8{
     "examples/deploy.zig",
     "examples/listing.zig",
     "examples/edit.zig",
+    "examples/settings.zig",
 };
 
 // Build-only tooling belongs to a root invocation, never a consumer's dependency graph.

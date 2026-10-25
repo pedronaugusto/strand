@@ -727,6 +727,55 @@ strand and expat agree on every one but those whose version is no `1.` and digit
 expat takes. quick-xml's and Go's writing of a 1,000-object listing reads back as the
 value strand wrote it from, and strand's is what their harnesses read.
 
+## INI
+
+INI has no standard, so `strand.ini` reads a dialect (`src/ini/text.zig`), and the
+default is the most specified one, Python's configparser: what its `_read` does to a
+line, strand's reader (`src/ini/Decoder.zig`) does. A line's comment comes off (a full
+line after its leading white space, or, where the dialect names inline prefixes, from a
+prefix at the line's start or after white space), and what is left is trimmed; a blank
+line inside a value is an empty line of it, and a comment line is nothing. A line
+indented deeper than the key's line continues its value; otherwise a line is a section
+header (`[` first, the name up to the last `]`, as configparser's `\[(?P<header>.+)\]`
+matches) or a key, which ends at the first delimiter. A continued value's lines are
+joined by line feeds and its blank last lines dropped, as `_join_multiline_values` does.
+strand departs from configparser where configparser resolves rather than reads: keys
+before the first section are the document's own members (configparser's
+`allow_unnamed_section`) rather than an error, `[DEFAULT]` is a section like any other
+(configparser copies its keys into every section), and nothing is interpolated. White
+space is ASCII's; a byte-order mark first is skipped.
+
+The document is read whole into its sections, keys and value lines, then given out as
+a record: the keys before any section, then each section a record of its keys, so a
+type reads the keys and sections it names and the core refuses a key or a section given
+twice (configparser's `strict`). A value on one line is borrowed; a continued one is
+joined in the arena when it is read. Keys are lowercased by Unicode's full mapping
+(xenoglyph's `case`), as Python's `str.lower` that `optionxform` is. A value is text until
+the type asks: numbers in JSON's grammar by its exact kernels, booleans as `getboolean`,
+a null for an empty value or a key with no value where the type takes one, as CSV's empty
+field. `ini.Value` holds any document as members in order: a key's text, a key with no
+value, or a section of such keys, read by peeking each member's event.
+
+The writer (`src/ini/Encoder.zig`) writes a record's members that hold a value as
+`key = value` lines and each record or map member as a `[section]` after them, a blank line
+before it; a value of more lines continues on lines indented by a tab, as configparser
+writes one, and follows its delimiter with no space where it begins with an inline
+comment's prefix. A null is a key with no value where the dialect takes one, and is left
+out otherwise. It refuses what would not read back as itself: a key after the first
+section (it would be the section's), a section in a section, a sequence, a key with a
+delimiter, a line feed or white space at an end, a key the dialect would lowercase, a key
+that would read as a header, a value with white space at a line's end, a blank last line,
+a later line that is a comment, or a comment's start where a reader would find one.
+
+The evidence is configparser's own reading, cases from its tests (comments, continuation
+and blank lines in values, delimiters, duplicate keys and sections, keys with no value,
+inline comments, section names with `]`), properties that write generated documents in
+three dialects and read them back, and a fuzz target that reads damaged documents and
+writes back whatever it reads. In private trials (`strand/formats`, its `differential`
+driver), damaged documents read by configparser and by strand agree on every one, in
+configparser's dialect and with inline comments and keys with no value; rust-ini reads a
+grammar of its own (a key twice, a section header across lines).
+
 ## Editing
 
 `toml.Edit`, `yaml.Edit` and `json.jsonc.Edit` (`src/toml/edit.zig`, `src/yaml/edit.zig`,
@@ -784,7 +833,7 @@ Timings are manual observations in private trials, never CI acceptance tests. Th
 repository's own drivers are `bench/bench.zig` (JSON Lines write, read, tail,
 follow, carried values, syncs), `bench/s2.zig` (JSON parse and write against
 `std.json`), `bench/zon.zig`, `bench/schema.zig` (ten 100-field encoders against
-hand-written ones), `bench/core.zig` (the reference backend), `bench/xml.zig` and
-`bench/edit.zig`, each measuring strand alone. Comparisons with other libraries, on the
+hand-written ones), `bench/core.zig` (the reference backend), `bench/xml.zig`,
+`bench/ini.zig` and `bench/edit.zig`, each measuring strand alone. Comparisons with other libraries, on the
 same documents, and earlier releases' rows are in
 [private trials](https://github.com/pedronaugusto/trials/tree/main/strand).

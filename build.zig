@@ -261,6 +261,16 @@ pub fn dev(b: *std.Build, tools: type) void {
         const ini_smoke = b.addRunArtifact(ini_bench);
         ini_smoke.addArg("--smoke");
         test_step.dependOn(&ini_smoke.step);
+        const json5_bench = b.addExecutable(.{
+            .name = "strand-json5-bench",
+            .root_module = b.createModule(.{ .root_source_file = p.path("bench/json5.zig"), .target = target, .optimize = bench_mode, .imports = benchImports(b, target, bench_mode) }),
+        });
+        json5_bench.root_module.addImport("shakedown", dependency.module("shakedown"));
+        b.step("json5-bench-build", "Compile JSON5 observations").dependOn(&b.addInstallArtifact(json5_bench, .{}).step);
+        check_step.dependOn(&json5_bench.step);
+        const json5_smoke = b.addRunArtifact(json5_bench);
+        json5_smoke.addArg("--smoke");
+        test_step.dependOn(&json5_smoke.step);
         const edit_bench = b.addExecutable(.{
             .name = "strand-edit-bench",
             .root_module = b.createModule(.{ .root_source_file = p.path("bench/edit.zig"), .target = target, .optimize = bench_mode, .imports = benchImports(b, target, bench_mode) }),
@@ -377,6 +387,7 @@ const example_sources = [_][]const u8{
     "examples/listing.zig",
     "examples/edit.zig",
     "examples/settings.zig",
+    "examples/json5.zig",
 };
 
 // Build-only tooling belongs to a root invocation, never a consumer's dependency graph.

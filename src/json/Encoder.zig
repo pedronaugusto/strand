@@ -4,298 +4,312 @@ const limit = @import("../core/limit.zig");
 const core = @import("../core.zig");
 const strings = @import("text.zig");
 const decoding = @import("Decoder.zig");
-const Decoder = decoding.Dialect(false);
-pub const Format = Decoder.Format;
-pub const capabilities = Decoder.capabilities;
-pub const canonical = false;
-pub const Error = core.EncodeError || std.Io.Writer.Error;
-/// Mapping does not check text for UTF-8: the run scan below sees every high
-/// byte, and only a run that has one is checked.
-pub const validates_text = true;
-writer: *std.Io.Writer,
-/// The containers open, the value at the root first: `top` is the one being
-/// written into, and a key written in it waits for its value in `key_written`.
-frames: [128]Frame,
-extra: std.ArrayList(Frame),
-depth: usize,
-top: *Frame,
-key_written: bool,
-keys: [128][]const u8,
-extra_keys: std.ArrayList([]const u8),
-key_count: usize,
-/// Where output waits to be counted and published: the writer's own unused
-/// buffer when it has room, `local` when it has not.
-stage: []u8,
-staged: usize,
-local: [512]u8,
-/// Whether an object at the top is left open, its closing brace unwritten,
-/// for members the caller adds; and, once it is, whether it has any.
-open_root: bool,
-root_members: bool,
-const Frame = struct { object: bool, check_duplicates: bool, key_start: usize, first: bool = true };
-const Self = @This();
-/// Starts `self` over `writer`, built where it lies, field by field: its frames,
-/// keys and stage are kilobytes a struct literal would build elsewhere and copy.
-pub fn init(self: *Self, writer: *std.Io.Writer) void {
-    self.writer = writer;
-    self.extra = .empty;
-    self.depth = 0;
-    self.frames[0] = .{ .object = false, .check_duplicates = false, .key_start = 0 };
-    self.top = &self.frames[0];
-    self.key_written = false;
-    self.extra_keys = .empty;
-    self.key_count = 0;
-    self.open_root = false;
-    self.root_members = false;
-    self.restage();
-}
-pub fn deinit(self: *Self, c: *core.Context) void {
-    self.extra.deinit(c.allocator());
-    self.extra_keys.deinit(c.allocator());
-    self.* = undefined;
-}
-fn frame(self: *Self, depth: usize) *Frame {
-    return if (depth < self.frames.len) &self.frames[depth] else &self.extra.items[depth - self.frames.len];
-}
-fn restage(self: *Self) void {
-    const free = self.writer.unusedCapacitySlice();
-    self.stage = if (free.len >= 256) free else &self.local;
-    self.staged = 0;
-}
-/// Output is staged, then counted against the limit and published a stage at
-/// a time: a member is a handful of small pieces, and each one separately
-/// costs more than the piece. Staged in the writer's own buffer, a stage is
-/// published by moving the writer's end over it, with no copy; nothing past
-/// that end is the writer's until then, so a refused stage leaves nothing.
-inline fn put(self: *Self, data: []const u8, c: *core.Context) Error!void {
-    if (data.len <= self.stage.len - self.staged) {
-        strings.copy(self.stage[self.staged..].ptr, data);
-        self.staged += data.len;
-        return;
-    }
-    return self.putAside(data, c);
-}
-fn putAside(self: *Self, data: []const u8, c: *core.Context) Error!void {
-    try self.flush(c);
-    if (data.len <= self.stage.len / 4) {
-        @memcpy(self.stage[0..data.len], data);
-        self.staged = data.len;
-        return;
-    }
-    try c.output(data.len);
-    try self.writer.writeAll(data);
-    self.restage();
-}
-/// Everything staged goes out. A caller of `begin` ends with this.
-pub fn flush(self: *Self, c: *core.Context) Error!void {
-    const n = self.staged;
-    if (n == 0) return;
-    try c.output(n);
-    if (self.stage.ptr != @as([*]u8, &self.local)) {
-        self.writer.end += n;
-    } else try self.writer.writeAll(self.local[0..n]);
-    self.restage();
-}
-/// What comes before a value or a key: nothing after a key, a comma after
-/// another member.
-inline fn before(self: *Self, c: *core.Context) Error!void {
-    if (self.key_written) {
-        self.key_written = false;
-        return;
-    }
-    const f = self.top;
-    if (!f.first) try self.put(",", c);
-    f.first = false;
-}
-fn quoted(self: *Self, spelling: []const u8, c: *core.Context) Error!void {
-    // A string with nothing to escape is one piece when the stage has room.
-    if (spelling.len + 2 <= self.stage.len - self.staged) {
-        const found = strings.special(spelling);
-        if (found.at == spelling.len) {
-            if (found.non_ascii and !std.unicode.utf8ValidateSlice(spelling)) return error.InvalidUtf8;
-            self.stage[self.staged] = '"';
-            strings.copy(self.stage[self.staged + 1 ..].ptr, spelling);
-            self.stage[self.staged + 1 + spelling.len] = '"';
-            self.staged += spelling.len + 2;
-            return;
+
+/// The encoder of a dialect: JSON, or with `json5` JSON5, which is JSON as
+/// it is written but for the floats JSON has no spelling for, `Infinity`,
+/// `-Infinity` and `NaN`, and a `Raw`, which is checked as JSON5. The
+/// dialect is fixed when the type is made, so JSON pays nothing for it.
+pub fn Dialect(comptime json5: bool) type {
+    return struct {
+        const Decoder = decoding.Dialect(if (json5) .json5 else .json);
+        pub const Format = Decoder.Format;
+        pub const capabilities = Decoder.capabilities;
+        pub const canonical = false;
+        pub const Error = core.EncodeError || std.Io.Writer.Error;
+        /// Mapping does not check text for UTF-8: the run scan below sees every high
+        /// byte, and only a run that has one is checked.
+        pub const validates_text = true;
+        writer: *std.Io.Writer,
+        /// The containers open, the value at the root first: `top` is the one being
+        /// written into, and a key written in it waits for its value in `key_written`.
+        frames: [128]Frame,
+        extra: std.ArrayList(Frame),
+        depth: usize,
+        top: *Frame,
+        key_written: bool,
+        keys: [128][]const u8,
+        extra_keys: std.ArrayList([]const u8),
+        key_count: usize,
+        /// Where output waits to be counted and published: the writer's own unused
+        /// buffer when it has room, `local` when it has not.
+        stage: []u8,
+        staged: usize,
+        local: [512]u8,
+        /// Whether an object at the top is left open, its closing brace unwritten,
+        /// for members the caller adds; and, once it is, whether it has any.
+        open_root: bool,
+        root_members: bool,
+        const Frame = struct { object: bool, check_duplicates: bool, key_start: usize, first: bool = true };
+        const Self = @This();
+        /// Starts `self` over `writer`, built where it lies, field by field: its frames,
+        /// keys and stage are kilobytes a struct literal would build elsewhere and copy.
+        pub fn init(self: *Self, writer: *std.Io.Writer) void {
+            self.writer = writer;
+            self.extra = .empty;
+            self.depth = 0;
+            self.frames[0] = .{ .object = false, .check_duplicates = false, .key_start = 0 };
+            self.top = &self.frames[0];
+            self.key_written = false;
+            self.extra_keys = .empty;
+            self.key_count = 0;
+            self.open_root = false;
+            self.root_members = false;
+            self.restage();
         }
-    }
-    try self.put("\"", c);
-    var from: usize = 0;
-    while (from < spelling.len) {
-        // A run ends before a byte no UTF-8 sequence holds, so each run is
-        // checked whole.
-        const found = strings.special(spelling[from..]);
-        const i = from + found.at;
-        if (found.non_ascii and !std.unicode.utf8ValidateSlice(spelling[from..i])) return error.InvalidUtf8;
-        try self.put(spelling[from..i], c);
-        if (i == spelling.len) break;
-        const byte = spelling[i];
-        const escape: ?[]const u8 = switch (byte) {
-            '"' => "\\\"",
-            '\\' => "\\\\",
-            '\n' => "\\n",
-            '\r' => "\\r",
-            '\t' => "\\t",
-            8 => "\\b",
-            12 => "\\f",
-            else => null,
-        };
-        if (escape) |escaped| {
-            try self.put(escaped, c);
-        } else {
-            var buffer: [6]u8 = undefined;
-            const escaped = std.mem.print(&buffer, "\\u00{x:0>2}", .{byte}) catch unreachable; // unreachable: a six-byte escape fits exactly.
-            try self.put(escaped, c);
+        pub fn deinit(self: *Self, c: *core.Context) void {
+            self.extra.deinit(c.allocator());
+            self.extra_keys.deinit(c.allocator());
+            self.* = undefined;
         }
-        from = i + 1;
-    }
-    try self.put("\"", c);
-}
-pub fn boolean(self: *Self, value: bool, c: *core.Context) Error!void {
-    try self.before(c);
-    try self.put(if (value) "true" else "false", c);
-}
-pub fn integer(self: *Self, value: anytype, c: *core.Context) Error!void {
-    const bits = @typeInfo(@TypeOf(value)).int.bits;
-    var buffer: [bits / 3 + 3]u8 = undefined;
-    const spelling = if (bits <= 128) strings.decimal(&buffer, value) else buffer[0..std.fmt.printInt(&buffer, value, 10, .lower, .{})];
-    if (limit.exceeds(spelling.len, c.limits.numeric_bytes)) return error.LengthLimit;
-    try self.before(c);
-    try self.put(spelling, c);
-}
-/// The shortest spelling that reads back as the same number: in decimals
-/// where they are few, as JavaScript writes a number, and with an exponent
-/// below 1e-7 and from 1e21, where decimals run to hundreds of digits.
-pub fn floating(self: *Self, value: anytype, c: *core.Context) Error!void {
-    var buffer: [128]u8 = undefined;
-    const magnitude = @abs(value);
-    const decimals = magnitude == 0 or (magnitude >= 1e-7 and magnitude < 1e21);
-    const spelling = (if (decimals) std.mem.print(&buffer, "{}", .{value}) else std.mem.print(&buffer, "{e}", .{value})) catch return error.NumberOutOfRange;
-    if (limit.exceeds(spelling.len, c.limits.numeric_bytes)) return error.LengthLimit;
-    try self.before(c);
-    try self.put(spelling, c);
-}
-pub fn text(self: *Self, value: []const u8, c: *core.Context) Error!void {
-    const is_key = self.top.object and !self.key_written;
-    if (is_key and self.top.check_duplicates) {
-        for (self.top.key_start..self.key_count) |i| {
-            const prior = if (i < self.keys.len) self.keys[i] else self.extra_keys.items[i - self.keys.len];
-            try c.chargeWork(@min(value.len, prior.len));
-            if (std.mem.eql(u8, value, prior)) return error.DuplicateField;
+        fn frame(self: *Self, depth: usize) *Frame {
+            return if (depth < self.frames.len) &self.frames[depth] else &self.extra.items[depth - self.frames.len];
         }
-        if (self.key_count < self.keys.len) self.keys[self.key_count] = value else try self.extra_keys.append(c.allocator(), value);
-        self.key_count += 1;
-    }
-    try self.before(c);
-    try self.quoted(value, c);
-    if (is_key) {
-        try self.put(":", c);
-        self.key_written = true;
-    }
-}
-pub const key = text;
-/// A name the type spells when it is compiled, such as an enum's: quoted then,
-/// written now as one piece.
-pub fn symbol(self: *Self, comptime name: []const u8, c: *core.Context) Error!void {
-    try self.before(c);
-    try self.put(comptime "\"" ++ escapedName(name) ++ "\"", c);
-}
-/// A field of a struct, whose name is a constant: `"name":` in one piece, with
-/// the comma that separates it from the member before.
-pub fn field(self: *Self, comptime name: []const u8, c: *core.Context) Error!void {
-    const f = self.top;
-    if (!f.object or f.check_duplicates or self.key_written) return self.key(name, c);
-    const piece = comptime "\"" ++ escapedName(name) ++ "\":";
-    if (f.first) {
-        f.first = false;
-        try self.put(piece, c);
-    } else try self.put("," ++ piece, c);
-    self.key_written = true;
-}
-/// A constant name as a JSON string body: what a key spelled from it holds.
-pub fn escapedName(comptime name: []const u8) []const u8 {
-    comptime var result: []const u8 = "";
-    inline for (name) |byte| result = result ++ switch (byte) {
-        '"' => "\\\"",
-        '\\' => "\\\\",
-        '\n' => "\\n",
-        '\r' => "\\r",
-        '\t' => "\\t",
-        8 => "\\b",
-        12 => "\\f",
-        0...7, 11, 14...31 => std.fmt.comptimePrint("\\u00{x:0>2}", .{byte}),
-        else => &[_]u8{byte},
+        fn restage(self: *Self) void {
+            const free = self.writer.unusedCapacitySlice();
+            self.stage = if (free.len >= 256) free else &self.local;
+            self.staged = 0;
+        }
+        /// Output is staged, then counted against the limit and published a stage at
+        /// a time: a member is a handful of small pieces, and each one separately
+        /// costs more than the piece. Staged in the writer's own buffer, a stage is
+        /// published by moving the writer's end over it, with no copy; nothing past
+        /// that end is the writer's until then, so a refused stage leaves nothing.
+        inline fn put(self: *Self, data: []const u8, c: *core.Context) Error!void {
+            if (data.len <= self.stage.len - self.staged) {
+                strings.copy(self.stage[self.staged..].ptr, data);
+                self.staged += data.len;
+                return;
+            }
+            return self.putAside(data, c);
+        }
+        fn putAside(self: *Self, data: []const u8, c: *core.Context) Error!void {
+            try self.flush(c);
+            if (data.len <= self.stage.len / 4) {
+                @memcpy(self.stage[0..data.len], data);
+                self.staged = data.len;
+                return;
+            }
+            try c.output(data.len);
+            try self.writer.writeAll(data);
+            self.restage();
+        }
+        /// Everything staged goes out. A caller of `begin` ends with this.
+        pub fn flush(self: *Self, c: *core.Context) Error!void {
+            const n = self.staged;
+            if (n == 0) return;
+            try c.output(n);
+            if (self.stage.ptr != @as([*]u8, &self.local)) {
+                self.writer.end += n;
+            } else try self.writer.writeAll(self.local[0..n]);
+            self.restage();
+        }
+        /// What comes before a value or a key: nothing after a key, a comma after
+        /// another member.
+        inline fn before(self: *Self, c: *core.Context) Error!void {
+            if (self.key_written) {
+                self.key_written = false;
+                return;
+            }
+            const f = self.top;
+            if (!f.first) try self.put(",", c);
+            f.first = false;
+        }
+        fn quoted(self: *Self, spelling: []const u8, c: *core.Context) Error!void {
+            // A string with nothing to escape is one piece when the stage has room.
+            if (spelling.len + 2 <= self.stage.len - self.staged) {
+                const found = strings.special(spelling);
+                if (found.at == spelling.len) {
+                    if (found.non_ascii and !std.unicode.utf8ValidateSlice(spelling)) return error.InvalidUtf8;
+                    self.stage[self.staged] = '"';
+                    strings.copy(self.stage[self.staged + 1 ..].ptr, spelling);
+                    self.stage[self.staged + 1 + spelling.len] = '"';
+                    self.staged += spelling.len + 2;
+                    return;
+                }
+            }
+            try self.put("\"", c);
+            var from: usize = 0;
+            while (from < spelling.len) {
+                // A run ends before a byte no UTF-8 sequence holds, so each run is
+                // checked whole.
+                const found = strings.special(spelling[from..]);
+                const i = from + found.at;
+                if (found.non_ascii and !std.unicode.utf8ValidateSlice(spelling[from..i])) return error.InvalidUtf8;
+                try self.put(spelling[from..i], c);
+                if (i == spelling.len) break;
+                const byte = spelling[i];
+                const escape: ?[]const u8 = switch (byte) {
+                    '"' => "\\\"",
+                    '\\' => "\\\\",
+                    '\n' => "\\n",
+                    '\r' => "\\r",
+                    '\t' => "\\t",
+                    8 => "\\b",
+                    12 => "\\f",
+                    else => null,
+                };
+                if (escape) |escaped| {
+                    try self.put(escaped, c);
+                } else {
+                    var buffer: [6]u8 = undefined;
+                    const escaped = std.mem.print(&buffer, "\\u00{x:0>2}", .{byte}) catch unreachable; // unreachable: a six-byte escape fits exactly.
+                    try self.put(escaped, c);
+                }
+                from = i + 1;
+            }
+            try self.put("\"", c);
+        }
+        pub fn boolean(self: *Self, value: bool, c: *core.Context) Error!void {
+            try self.before(c);
+            try self.put(if (value) "true" else "false", c);
+        }
+        pub fn integer(self: *Self, value: anytype, c: *core.Context) Error!void {
+            const bits = @typeInfo(@TypeOf(value)).int.bits;
+            var buffer: [bits / 3 + 3]u8 = undefined;
+            const spelling = if (bits <= 128) strings.decimal(&buffer, value) else buffer[0..std.fmt.printInt(&buffer, value, 10, .lower, .{})];
+            if (limit.exceeds(spelling.len, c.limits.numeric_bytes)) return error.LengthLimit;
+            try self.before(c);
+            try self.put(spelling, c);
+        }
+        /// The shortest spelling that reads back as the same number: in decimals
+        /// where they are few, as JavaScript writes a number, and with an exponent
+        /// below 1e-7 and from 1e21, where decimals run to hundreds of digits. In
+        /// JSON5 a float that is not finite is `Infinity`, `-Infinity` or `NaN`.
+        pub fn floating(self: *Self, value: anytype, c: *core.Context) Error!void {
+            if (json5 and !std.math.isFinite(value)) {
+                try self.before(c);
+                return self.put(if (std.math.isNan(value)) "NaN" else if (value > 0) "Infinity" else "-Infinity", c);
+            }
+            var buffer: [128]u8 = undefined;
+            const magnitude = @abs(value);
+            const decimals = magnitude == 0 or (magnitude >= 1e-7 and magnitude < 1e21);
+            const spelling = (if (decimals) std.mem.print(&buffer, "{}", .{value}) else std.mem.print(&buffer, "{e}", .{value})) catch return error.NumberOutOfRange;
+            if (limit.exceeds(spelling.len, c.limits.numeric_bytes)) return error.LengthLimit;
+            try self.before(c);
+            try self.put(spelling, c);
+        }
+        pub fn text(self: *Self, value: []const u8, c: *core.Context) Error!void {
+            const is_key = self.top.object and !self.key_written;
+            if (is_key and self.top.check_duplicates) {
+                for (self.top.key_start..self.key_count) |i| {
+                    const prior = if (i < self.keys.len) self.keys[i] else self.extra_keys.items[i - self.keys.len];
+                    try c.chargeWork(@min(value.len, prior.len));
+                    if (std.mem.eql(u8, value, prior)) return error.DuplicateField;
+                }
+                if (self.key_count < self.keys.len) self.keys[self.key_count] = value else try self.extra_keys.append(c.allocator(), value);
+                self.key_count += 1;
+            }
+            try self.before(c);
+            try self.quoted(value, c);
+            if (is_key) {
+                try self.put(":", c);
+                self.key_written = true;
+            }
+        }
+        pub const key = text;
+        /// A name the type spells when it is compiled, such as an enum's: quoted then,
+        /// written now as one piece.
+        pub fn symbol(self: *Self, comptime name: []const u8, c: *core.Context) Error!void {
+            try self.before(c);
+            try self.put(comptime "\"" ++ escapedName(name) ++ "\"", c);
+        }
+        /// A field of a struct, whose name is a constant: `"name":` in one piece, with
+        /// the comma that separates it from the member before.
+        pub fn field(self: *Self, comptime name: []const u8, c: *core.Context) Error!void {
+            const f = self.top;
+            if (!f.object or f.check_duplicates or self.key_written) return self.key(name, c);
+            const piece = comptime "\"" ++ escapedName(name) ++ "\":";
+            if (f.first) {
+                f.first = false;
+                try self.put(piece, c);
+            } else try self.put("," ++ piece, c);
+            self.key_written = true;
+        }
+        /// A constant name as a JSON string body: what a key spelled from it holds.
+        pub fn escapedName(comptime name: []const u8) []const u8 {
+            comptime var result: []const u8 = "";
+            inline for (name) |byte| result = result ++ switch (byte) {
+                '"' => "\\\"",
+                '\\' => "\\\\",
+                '\n' => "\\n",
+                '\r' => "\\r",
+                '\t' => "\\t",
+                8 => "\\b",
+                12 => "\\f",
+                0...7, 11, 14...31 => std.fmt.comptimePrint("\\u00{x:0>2}", .{byte}),
+                else => &[_]u8{byte},
+            };
+            return result;
+        }
+        pub fn bytes(_: *Self, _: []const u8, _: *core.Context) Error!void {
+            return error.UnsupportedValue;
+        }
+        pub fn scalar(self: *Self, value: u21, c: *core.Context) Error!void {
+            var buffer: [4]u8 = undefined;
+            const n = std.unicode.utf8Encode(value, &buffer) catch return error.InvalidUtf8;
+            try self.text(buffer[0..n], c);
+        }
+        pub fn nullValue(self: *Self, c: *core.Context) Error!void {
+            try self.before(c);
+            try self.put("null", c);
+        }
+        /// Nothing, such as an arm of a union that holds nothing: an empty object,
+        /// as JSON spells it.
+        pub fn unit(self: *Self, c: *core.Context) Error!void {
+            try self.before(c);
+            try self.put("{}", c);
+        }
+        pub fn begin(self: *Self, kind: core.Kind, name: []const u8, _: usize, c: *core.Context) Error!void {
+            try self.before(c);
+            const object = kind == .record or kind == .map or kind == .variant;
+            try self.put(if (object) "{" else "[", c);
+            const entry: Frame = .{ .object = object, .check_duplicates = kind == .map, .key_start = self.key_count };
+            const depth = self.depth + 1;
+            if (depth < self.frames.len) self.frames[depth] = entry else try self.extra.append(c.allocator(), entry);
+            self.depth = depth;
+            self.top = self.frame(depth);
+            if (kind == .variant) try self.key(name, c);
+        }
+        pub fn end(self: *Self, c: *core.Context) Error!void {
+            const f = self.top.*;
+            if (f.object and self.key_written) return error.CustomRejected;
+            if (self.depth == 1 and f.object and self.open_root) {
+                self.root_members = !f.first;
+            } else try self.put(if (f.object) "}" else "]", c);
+            if (self.depth >= self.frames.len) _ = self.extra.pop();
+            self.depth -= 1;
+            self.top = self.frame(self.depth);
+            self.key_count = f.key_start;
+            self.extra_keys.shrinkRetainingCapacity(self.key_count - @min(self.key_count, self.keys.len));
+        }
+        pub fn validateRaw(_: *Self, payload: []const u8, c: *core.Context) Error!void {
+            c.input(payload.len) catch |err| return encodeError(err);
+            var decoder: Decoder = undefined;
+            decoder.init(c, payload);
+            decoder.checking = true;
+            defer decoder.deinit();
+            var cursor: core.Cursor(Decoder) = .{ .backend = &decoder, .context = c };
+            cursor.skip() catch |err| return encodeError(err);
+            decoder.endInput(c) catch |err| return encodeError(err);
+        }
+        fn encodeError(err: core.DecodeError) core.EncodeError {
+            return switch (err) {
+                error.InputLimit, error.DepthLimit, error.ItemLimit, error.LengthLimit, error.AllocationLimit, error.WorkLimit, error.OutOfMemory => |e| e,
+                else => error.InvalidRaw,
+            };
+        }
+        /// A checked value's bytes. A line break in one is only ever between two
+        /// tokens, where a space is the same JSON, so it is written as one: a value
+        /// written on one line stays on one line, which a JSON Lines record needs.
+        pub fn raw(self: *Self, payload: []const u8, c: *core.Context) Error!void {
+            try self.before(c);
+            var rest = payload;
+            while (std.mem.findAny(u8, rest, "\r\n")) |at| {
+                try self.put(rest[0..at], c);
+                try self.put(" ", c);
+                rest = rest[at + 1 ..];
+            }
+            try self.put(rest, c);
+        }
     };
-    return result;
-}
-pub fn bytes(_: *Self, _: []const u8, _: *core.Context) Error!void {
-    return error.UnsupportedValue;
-}
-pub fn scalar(self: *Self, value: u21, c: *core.Context) Error!void {
-    var buffer: [4]u8 = undefined;
-    const n = std.unicode.utf8Encode(value, &buffer) catch return error.InvalidUtf8;
-    try self.text(buffer[0..n], c);
-}
-pub fn nullValue(self: *Self, c: *core.Context) Error!void {
-    try self.before(c);
-    try self.put("null", c);
-}
-/// Nothing, such as an arm of a union that holds nothing: an empty object,
-/// as JSON spells it.
-pub fn unit(self: *Self, c: *core.Context) Error!void {
-    try self.before(c);
-    try self.put("{}", c);
-}
-pub fn begin(self: *Self, kind: core.Kind, name: []const u8, _: usize, c: *core.Context) Error!void {
-    try self.before(c);
-    const object = kind == .record or kind == .map or kind == .variant;
-    try self.put(if (object) "{" else "[", c);
-    const entry: Frame = .{ .object = object, .check_duplicates = kind == .map, .key_start = self.key_count };
-    const depth = self.depth + 1;
-    if (depth < self.frames.len) self.frames[depth] = entry else try self.extra.append(c.allocator(), entry);
-    self.depth = depth;
-    self.top = self.frame(depth);
-    if (kind == .variant) try self.key(name, c);
-}
-pub fn end(self: *Self, c: *core.Context) Error!void {
-    const f = self.top.*;
-    if (f.object and self.key_written) return error.CustomRejected;
-    if (self.depth == 1 and f.object and self.open_root) {
-        self.root_members = !f.first;
-    } else try self.put(if (f.object) "}" else "]", c);
-    if (self.depth >= self.frames.len) _ = self.extra.pop();
-    self.depth -= 1;
-    self.top = self.frame(self.depth);
-    self.key_count = f.key_start;
-    self.extra_keys.shrinkRetainingCapacity(self.key_count - @min(self.key_count, self.keys.len));
-}
-pub fn validateRaw(_: *Self, payload: []const u8, c: *core.Context) Error!void {
-    c.input(payload.len) catch |err| return encodeError(err);
-    var decoder: Decoder = undefined;
-    decoder.init(c, payload);
-    decoder.checking = true;
-    defer decoder.deinit();
-    var cursor: core.Cursor(Decoder) = .{ .backend = &decoder, .context = c };
-    cursor.skip() catch |err| return encodeError(err);
-    decoder.endInput(c) catch |err| return encodeError(err);
-}
-fn encodeError(err: core.DecodeError) core.EncodeError {
-    return switch (err) {
-        error.InputLimit, error.DepthLimit, error.ItemLimit, error.LengthLimit, error.AllocationLimit, error.WorkLimit, error.OutOfMemory => |e| e,
-        else => error.InvalidRaw,
-    };
-}
-/// A checked value's bytes. A line break in one is only ever between two
-/// tokens, where a space is the same JSON, so it is written as one: a value
-/// written on one line stays on one line, which a JSON Lines record needs.
-pub fn raw(self: *Self, payload: []const u8, c: *core.Context) Error!void {
-    try self.before(c);
-    var rest = payload;
-    while (std.mem.findAny(u8, rest, "\r\n")) |at| {
-        try self.put(rest[0..at], c);
-        try self.put(" ", c);
-        rest = rest[at + 1 ..];
-    }
-    try self.put(rest, c);
 }

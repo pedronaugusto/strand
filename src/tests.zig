@@ -9,6 +9,7 @@ test {
     _ = @import("zon_test.zig");
     _ = @import("urlencoded_test.zig");
     _ = @import("jsonc_test.zig");
+    _ = @import("json5_test.zig");
     _ = @import("csv_test.zig");
     _ = @import("ini_test.zig");
     _ = @import("jcs_test.zig");
@@ -21,6 +22,7 @@ test {
     _ = @import("testing/edit_props.zig");
     _ = @import("testing/xml_suite.zig");
     _ = @import("testing/json_suite.zig");
+    _ = @import("testing/json5_suite.zig");
     _ = @import("testing/toml_suite.zig");
     _ = @import("testing/yaml_suite.zig");
     _ = @import("testing/fuzz_test.zig");

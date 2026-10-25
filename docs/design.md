@@ -113,6 +113,42 @@ that never ends stops at its `/`, which the next token then refuses. A `Raw` tak
 source, comments included, and so is JSONC; writing is always plain JSON, and a `Raw`
 with a comment in it is refused there as any invalid one is.
 
+JSON5 is the decoder's third dialect (`Grammar.json5`), JSONC and more: its tokens
+beyond JSON's are read by `src/json/json5.zig` and nowhere else, behind compile-time
+branches, so JSON's and JSONC's code is unchanged by it. A key is a string in either
+quote or an ECMAScript 5.1 identifier name, its letters, marks, digits and connectors by
+xenoglyph's general categories, its `\u` escapes each a character the name may hold. A
+string in single quotes is scanned for its own quote, a backslash and a line end; in
+double quotes by JSON's vector scan, its stops at control bytes passed over, since JSON5
+lets a control character stand in a string. An escape is ECMAScript's: a line
+terminator after the backslash continues the string and stands for nothing. A number's
+grammar adds a sign of either kind, hexadecimal digits, a bare point, `Infinity` and
+`NaN`; it stays a lexeme, and the dialect's own `parseInteger` and `parseFloat` read the
+new spellings exactly (hexadecimal into an integer by checked arithmetic, into a float to
+the nearest, held to `exact` by its significant bits) and hand the rest to JSON's kernels.
+White space adds the vertical tab, the form feed, U+00A0, U+FEFF, U+2028, U+2029 and the
+space separators, spelled out as their UTF-8 and held to xenoglyph's `Zs` by a test over
+every code point; a line comment ends at any ECMAScript line terminator. What JSON5's
+reference implementation (json5 2.2.3) resolves rather than reads, strand reads as it
+reads JSON: a key given twice is refused (the reference keeps the last), a lone surrogate
+escape refused (the reference keeps it in its JavaScript string), a decimal past a
+float's range out of it (the reference makes it `Infinity`); `duplicates` and
+`invalid_unicode` read as the reference does. A comment is passed over unread, as JSONC's
+is, so bytes in it that are not UTF-8 are not refused. The format is JSON's, so a `Raw` read from
+JSON5 is its JSON5 text and a `Value` keeps a JSON5 lexeme. The encoder is a dialect too:
+JSON5's writes JSON but for the floats that are not finite, and checks a `Raw` and a
+`Value`'s number as JSON5 reads them, where JSON's refuses both. A value passed over
+compares its keys as written, escapes and all, by the text they spell, in every dialect.
+The evidence is json5-tests, every case read as the reference reads it (the expected
+values in `src/testing/json5_suite.zig` are the reference's), properties that any JSON
+reads as the same value as JSON5 and that any JSON5 value written reads back as itself,
+and a fuzz target that holds a value passed over to the value read. In private trials
+(`strand/formats`, its `json5-differential` driver), 40,000 damaged documents read by the
+reference and by strand agree on every one but two kinds, each a choice above: a lone
+surrogate escape, which strand refuses and reads as the reference's value with
+`.replace`, and bytes that are not UTF-8 in a comment, which strand passes over. The json5
+crate and serde_json5 read and write the bench's configuration as strand reads it.
+
 `json.jcs` is RFC 8785. Canonical form needs every object's members sorted, which a
 stream cannot do, so it reads the value as a `json.Value` (numbers as their lexemes,
 members in order) and writes that: members sorted by UTF-16 code units, which put a

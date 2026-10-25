@@ -23,6 +23,7 @@ pub const layers: []const gantry.rules.Layer = &.{
         "src/json/member_scan.zig",
         "src/json/indent.zig",
         "src/json/number.zig",
+        "src/json/json5.zig",
     } },
     .{ .name = "JSON wire", .patterns = &.{
         "src/json/Decoder.zig",

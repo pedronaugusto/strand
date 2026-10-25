@@ -1,6 +1,6 @@
 //! JSON-native dynamic values retain validated numeric lexemes and object order.
-const number = @import("number.zig");
-const WireDecoder = @import("Decoder.zig").Dialect(false);
+const json5_tokens = @import("json5.zig");
+const WireDecoder = @import("Decoder.zig").Dialect(.json);
 const core = @import("../core.zig");
 pub const Member = struct { key: []const u8, value: Value };
 pub const Value = union(enum) {
@@ -43,8 +43,11 @@ pub const Value = union(enum) {
             .array => |v| try access.writeSequence(v),
             .object => |v| try access.writePairs(v),
             .number => |v| {
+                // One number, as JSON5 spells one, which takes in JSON's: the
+                // writer checks it as its dialect reads it, so a JSON5 spelling
+                // is refused as JSON.
                 try access.chargeWork(v.len);
-                if (!number.valid(v)) return error.InvalidRaw;
+                if (!json5_tokens.validNumber(v)) return error.InvalidRaw;
                 try access.raw(WireDecoder.Format, v);
             },
         }

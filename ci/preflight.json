@@ -100,6 +100,13 @@
       "imports": [
         "strand"
       ]
+    },
+    "zig build docs -- json5": {
+      "source": "examples/json5.zig",
+      "region": "json5",
+      "imports": [
+        "strand"
+      ]
     }
   },
   "extra_checks": [

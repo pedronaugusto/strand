@@ -14,7 +14,7 @@ const decoding = @import("Decoder.zig");
 const strings = @import("text.zig");
 const api = @import("api.zig");
 
-const Wire = decoding.Dialect(true);
+const Wire = decoding.Dialect(.jsonc);
 pub const Error = edit.Error;
 
 pub const EditOptions = struct {

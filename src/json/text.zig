@@ -1,6 +1,6 @@
 //! JSON strings at the byte level: where a run of plain text ends, whether it
-//! is UTF-8, and what an escape means. The decoder and the encoder share these
-//! and nothing else does.
+//! is UTF-8, and what an escape means. The decoder and the encoder share these,
+//! and JSON5's tokens build on them.
 const std = @import("std");
 const core = @import("../core.zig");
 const work = @import("work.zig");
@@ -204,7 +204,7 @@ fn lone(unicode: Unicode) error{SyntaxError}!Escape {
     return if (unicode == .replace) .{ .len = 5, .scalar = 0xfffd } else error.SyntaxError;
 }
 
-fn hexQuad(bytes: []const u8) error{SyntaxError}!u16 {
+pub fn hexQuad(bytes: []const u8) error{SyntaxError}!u16 {
     if (bytes.len < 4) return error.SyntaxError;
     var out: u16 = 0;
     for (bytes[0..4]) |c| {
@@ -265,7 +265,7 @@ pub fn unescape(body: []const u8, out: []u8, unicode: Unicode) usize {
 
 /// A run with no escape copied into `out`, under `.replace` with each byte
 /// that does not begin a UTF-8 sequence as U+FFFD. Returns the length written.
-fn copyRun(run: []const u8, out: []u8, unicode: Unicode) usize {
+pub fn copyRun(run: []const u8, out: []u8, unicode: Unicode) usize {
     if (unicode == .refuse) {
         @memcpy(out[0..run.len], run);
         return run.len;
@@ -290,7 +290,7 @@ fn copyRun(run: []const u8, out: []u8, unicode: Unicode) usize {
 /// How long the UTF-8 sequence `bytes` begins with is, or 0 where the first
 /// byte begins none: a byte UTF-8 has no place for, a sequence cut short, an
 /// overlong form or a surrogate, each of which reads as U+FFFD a byte at a time.
-fn sequence(bytes: []const u8) usize {
+pub fn sequence(bytes: []const u8) usize {
     if (bytes[0] < 0x80) return 1;
     const n = std.unicode.utf8ByteSequenceLength(bytes[0]) catch return 0;
     if (n > bytes.len) return 0;
@@ -387,7 +387,7 @@ pub fn unescapedLength(body: []const u8, unicode: Unicode) usize {
 }
 
 /// How long a run with no escape is once copied by `copyRun`.
-fn runLength(run: []const u8, unicode: Unicode) usize {
+pub fn runLength(run: []const u8, unicode: Unicode) usize {
     if (unicode == .refuse) return run.len;
     var n: usize = 0;
     var from: usize = 0;

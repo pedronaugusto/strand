@@ -4,14 +4,15 @@ const limit = @import("../core/limit.zig");
 const core = @import("../core.zig");
 const std_value = @import("std_value.zig");
 const decoding = @import("Decoder.zig");
-const WireEncoder = @import("Encoder.zig");
+const encoding = @import("Encoder.zig");
+const WireEncoder = encoding.Dialect(false);
 const indent = @import("indent.zig");
 const route = @import("route.zig");
 const object_members = @import("members.zig");
 const control = @import("control.zig");
 const work = @import("work.zig");
-pub const Format = decoding.Dialect(false).Format;
-pub const capabilities = decoding.Dialect(false).capabilities;
+pub const Format = decoding.Format;
+pub const capabilities = decoding.capabilities;
 /// One JSON value kept as its bytes: checked when it is read, written back as
 /// it came, and parsed when it is wanted. A carried payload, a request handed
 /// on, the part of a record a reader only routes.
@@ -36,7 +37,7 @@ pub const Raw = struct {
     pub fn encode(gpa: std.mem.Allocator, value: anytype, options: WriteOptions) (WriteError(@TypeOf(value)) || std.mem.Allocator.Error)!Raw {
         var out: std.Io.Writer.Allocating = .init(gpa);
         defer out.deinit();
-        _ = emitOn(gpa, &out.writer, value, options, false) catch |err| return if (err == error.WriteFailed) error.OutOfMemory else err;
+        _ = emitOn(false, gpa, &out.writer, value, options, false) catch |err| return if (err == error.WriteFailed) error.OutOfMemory else err;
         return .{ .bytes = try out.toOwnedSlice() };
     }
 
@@ -89,10 +90,10 @@ fn acceptance(options: ParseOptions) core.Acceptance {
     };
 }
 fn Decode(comptime T: type) type {
-    return Dialect(T, false);
+    return Dialect(T, .json);
 }
-fn Dialect(comptime T: type, comptime comments: bool) type {
-    const Wire = decoding.Dialect(comments);
+fn Dialect(comptime T: type, comptime grammar: decoding.Grammar) type {
+    const Wire = decoding.Dialect(grammar);
     return struct {
         const Error = @typeInfo(@TypeOf(core.deserialize(T, @as(*Wire, undefined), @as(*core.Context, undefined)))).error_union.error_set;
         fn run(c: *core.Context, input: []const u8) Error!T {
@@ -128,10 +129,10 @@ fn Dialect(comptime T: type, comptime comments: bool) type {
 pub fn ParseError(comptime T: type) type {
     return @typeInfo(@TypeOf(parseLeaky(T, @as(std.mem.Allocator, undefined), "", .{}))).error_union.error_set;
 }
-fn context(arena: std.mem.Allocator, options: ParseOptions) core.Context {
+fn context(arena: std.mem.Allocator, options: ParseOptions, grammar: decoding.Grammar) core.Context {
     if (options.diagnostics) |d| {
         d.* = .{};
-        d.format = "json";
+        d.format = formatName(grammar);
     }
     var c = core.Context.init(arena, options.limits, .borrowed);
     c.acceptance = acceptance(options);
@@ -139,19 +140,23 @@ fn context(arena: std.mem.Allocator, options: ParseOptions) core.Context {
     return c;
 }
 fn parseWith(comptime T: type, comptime ownership: core.Ownership, gpa: std.mem.Allocator, input: []const u8, options: ParseOptions) @typeInfo(@TypeOf(core.acquireWith(T, ownership, gpa, input, .{}, Decode(T).run))).error_union.error_set!Parsed(T) {
-    return parseDialect(T, false, ownership, gpa, input, options);
+    return parseDialect(T, .json, ownership, gpa, input, options);
 }
-fn parseDialect(comptime T: type, comptime comments: bool, comptime ownership: core.Ownership, gpa: std.mem.Allocator, input: []const u8, options: ParseOptions) @typeInfo(@TypeOf(core.acquireWith(T, ownership, gpa, input, .{}, Dialect(T, comments).run))).error_union.error_set!Parsed(T) {
+/// What diagnostics call the format read: JSONC is JSON with comments.
+fn formatName(grammar: decoding.Grammar) []const u8 {
+    return if (grammar == .json5) "json5" else "json";
+}
+fn parseDialect(comptime T: type, comptime grammar: decoding.Grammar, comptime ownership: core.Ownership, gpa: std.mem.Allocator, input: []const u8, options: ParseOptions) @typeInfo(@TypeOf(core.acquireWith(T, ownership, gpa, input, .{}, Dialect(T, grammar).run))).error_union.error_set!Parsed(T) {
     if (options.diagnostics) |d| {
         d.* = .{};
-        d.format = "json";
+        d.format = formatName(grammar);
     }
     const acquisition: core.AcquisitionOptions = .{
         .limits = options.limits,
         .acceptance = acceptance(options),
         .diagnostics = options.diagnostics,
     };
-    return core.acquireWith(T, ownership, gpa, input, acquisition, Dialect(T, comments).run);
+    return core.acquireWith(T, ownership, gpa, input, acquisition, Dialect(T, grammar).run);
 }
 /// `input` as a `T`, owned by the returned `Parsed`. Strings with nothing to
 /// unescape point into `input`, which must outlive the result.
@@ -164,9 +169,12 @@ pub fn parseOwned(comptime T: type, gpa: std.mem.Allocator, input: []const u8, o
 }
 /// Bounds requests per operation; caller-owned arena backing and reset are external.
 pub fn parseLeaky(comptime T: type, arena: std.mem.Allocator, input: []const u8, options: ParseOptions) @typeInfo(@TypeOf(Decode(T).run(@as(*core.Context, undefined), input))).error_union.error_set!T {
-    var c = context(arena, options);
+    return parseLeakyDialect(T, .json, arena, input, options);
+}
+fn parseLeakyDialect(comptime T: type, comptime grammar: decoding.Grammar, arena: std.mem.Allocator, input: []const u8, options: ParseOptions) @typeInfo(@TypeOf(Dialect(T, grammar).run(@as(*core.Context, undefined), input))).error_union.error_set!T {
+    var c = context(arena, options, grammar);
     if (limit.exceeds(input.len, options.limits.input_bytes)) return error.InputLimit;
-    return Dialect(T, false).run(&c, input);
+    return Dialect(T, grammar).run(&c, input);
 }
 /// JSONC, the JSON of editors' settings and `tsconfig.json`: `//` and
 /// `/* */` comments wherever whitespace may be, and a comma after a
@@ -175,18 +183,50 @@ pub fn parseLeaky(comptime T: type, arena: std.mem.Allocator, input: []const u8,
 /// JSONC writer: what is written is JSON.
 pub const jsonc = struct {
     /// `json.parse` of JSONC.
-    pub fn parse(comptime T: type, gpa: std.mem.Allocator, input: []const u8, options: ParseOptions) @typeInfo(@TypeOf(parseDialect(T, true, .borrowed, gpa, input, options))).error_union.error_set!Parsed(T) {
-        return parseDialect(T, true, .borrowed, gpa, input, options);
+    pub fn parse(comptime T: type, gpa: std.mem.Allocator, input: []const u8, options: ParseOptions) @typeInfo(@TypeOf(parseDialect(T, .jsonc, .borrowed, gpa, input, options))).error_union.error_set!Parsed(T) {
+        return parseDialect(T, .jsonc, .borrowed, gpa, input, options);
     }
     /// `json.parseOwned` of JSONC.
-    pub fn parseOwned(comptime T: type, gpa: std.mem.Allocator, input: []const u8, options: ParseOptions) @typeInfo(@TypeOf(parseDialect(T, true, .owned, gpa, input, options))).error_union.error_set!Parsed(T) {
-        return parseDialect(T, true, .owned, gpa, input, options);
+    pub fn parseOwned(comptime T: type, gpa: std.mem.Allocator, input: []const u8, options: ParseOptions) @typeInfo(@TypeOf(parseDialect(T, .jsonc, .owned, gpa, input, options))).error_union.error_set!Parsed(T) {
+        return parseDialect(T, .jsonc, .owned, gpa, input, options);
     }
     /// `json.parseLeaky` of JSONC.
-    pub fn parseLeaky(comptime T: type, arena: std.mem.Allocator, input: []const u8, options: ParseOptions) @typeInfo(@TypeOf(Dialect(T, true).run(@as(*core.Context, undefined), input))).error_union.error_set!T {
-        var c = context(arena, options);
-        if (limit.exceeds(input.len, options.limits.input_bytes)) return error.InputLimit;
-        return Dialect(T, true).run(&c, input);
+    pub fn parseLeaky(comptime T: type, arena: std.mem.Allocator, input: []const u8, options: ParseOptions) @typeInfo(@TypeOf(parseLeakyDialect(T, .jsonc, arena, input, options))).error_union.error_set!T {
+        return parseLeakyDialect(T, .jsonc, arena, input, options);
+    }
+};
+/// JSON5 (json5.org), JSON for people to write: JSONC's comments and final
+/// commas, and keys as ECMAScript identifier names, strings in single quotes
+/// and continued across lines, ECMAScript's escapes (`\v`, `\0`, `\xHH`, any
+/// other character as itself), numbers in hexadecimal, with a plus, with a
+/// point and no digits on one side of it, `Infinity` and `NaN`, and Unicode's
+/// space separators as white space. Read with JSON's options and promises:
+/// a key given twice is refused unless `duplicates` says otherwise, and a
+/// string that is not Unicode refused unless `invalid_unicode` does. A number
+/// stays its lexeme in a `Value`, so a JSON5 spelling of one writes as JSON5
+/// and not as JSON. A `Raw` read from JSON5 keeps its text, so it is JSON5.
+pub const json5 = struct {
+    /// `json.parse` of JSON5.
+    pub fn parse(comptime T: type, gpa: std.mem.Allocator, input: []const u8, options: ParseOptions) @typeInfo(@TypeOf(parseDialect(T, .json5, .borrowed, gpa, input, options))).error_union.error_set!Parsed(T) {
+        return parseDialect(T, .json5, .borrowed, gpa, input, options);
+    }
+    /// `json.parseOwned` of JSON5.
+    pub fn parseOwned(comptime T: type, gpa: std.mem.Allocator, input: []const u8, options: ParseOptions) @typeInfo(@TypeOf(parseDialect(T, .json5, .owned, gpa, input, options))).error_union.error_set!Parsed(T) {
+        return parseDialect(T, .json5, .owned, gpa, input, options);
+    }
+    /// `json.parseLeaky` of JSON5.
+    pub fn parseLeaky(comptime T: type, arena: std.mem.Allocator, input: []const u8, options: ParseOptions) @typeInfo(@TypeOf(parseLeakyDialect(T, .json5, arena, input, options))).error_union.error_set!T {
+        return parseLeakyDialect(T, .json5, arena, input, options);
+    }
+    /// Everything writing a `T` as JSON5 can fail with.
+    pub fn WriteError(comptime T: type) type {
+        return WriteErrorOf(T, true);
+    }
+    /// `json.write` as JSON5: the same text, but that a float JSON has no
+    /// spelling for is written `Infinity`, `-Infinity` or `NaN` and not
+    /// refused, and a `Value`'s number or a `Raw` is checked as JSON5.
+    pub fn write(output: *std.Io.Writer, value: anytype, options: WriteOptions) WriteErrorOf(@TypeOf(value), true)!void {
+        return writeDialect(true, output, value, options);
     }
 };
 /// A value read from the front of some bytes, and where it ended.
@@ -198,9 +238,9 @@ pub fn Prefix(comptime T: type) type {
 /// pretty JSON Lines record is read this way out of the bytes buffered behind
 /// it, across the line breaks inside it.
 pub fn parsePrefixLeaky(comptime T: type, arena: std.mem.Allocator, input: []const u8, options: ParseOptions) ParseError(T)!Prefix(T) {
-    var c = context(arena, options);
+    var c = context(arena, options, .json);
     if (limit.exceeds(input.len, options.limits.input_bytes)) return error.InputLimit;
-    return Dialect(T, false).front(&c, input);
+    return Dialect(T, .json).front(&c, input);
 }
 /// Bounded bridge with standard dynamic numeric alternatives and standard owner.
 /// Transfers one arena; the stable standard owner permits managed Array mutation.
@@ -227,19 +267,25 @@ pub const WriteOptions = struct {
 };
 /// Everything writing a `T` can fail with.
 pub fn WriteError(comptime T: type) type {
-    return @typeInfo(@TypeOf(core.serialize(if (T == std.json.Value) @as(Value, undefined) else @as(T, undefined), @as(*WireEncoder, undefined), @as(*core.Context, undefined)))).error_union.error_set || std.Io.Writer.Error;
+    return WriteErrorOf(T, false);
+}
+fn WriteErrorOf(comptime T: type, comptime json5_text: bool) type {
+    return @typeInfo(@TypeOf(core.serialize(if (T == std.json.Value) @as(Value, undefined) else @as(T, undefined), @as(*encoding.Dialect(json5_text), undefined), @as(*core.Context, undefined)))).error_union.error_set || std.Io.Writer.Error;
 }
 /// Writes `value` as checked JSON. Output is published a stage at a time, so a
 /// failure can leave a prefix in `output`; encode into a fixed or allocating
 /// writer first where nothing must reach the sink unless all of it does.
 pub fn write(output: *std.Io.Writer, value: anytype, options: WriteOptions) WriteError(@TypeOf(value))!void {
+    return writeDialect(false, output, value, options);
+}
+fn writeDialect(comptime json5_text: bool, output: *std.Io.Writer, value: anytype, options: WriteOptions) WriteErrorOf(@TypeOf(value), json5_text)!void {
     if (options.whitespace != .minified) {
         var buffer: [256]u8 = undefined;
         var laid: indent.Indent = .init(output, unit(options.whitespace), &buffer);
-        _ = try emit(&laid.interface, value, options, false);
+        _ = try emit(json5_text, &laid.interface, value, options, false);
         return laid.interface.flush();
     }
-    _ = try emit(output, value, options, false);
+    _ = try emit(json5_text, output, value, options, false);
 }
 fn unit(whitespace: Whitespace) []const u8 {
     return switch (whitespace) {
@@ -252,18 +298,19 @@ fn unit(whitespace: Whitespace) []const u8 {
         .indent_tab => "\t",
     };
 }
-/// Writes `value`; with `open`, an object at the top is left without its
-/// closing brace, and whether it has members is returned.
-fn emit(output: *std.Io.Writer, value: anytype, options: WriteOptions, open: bool) WriteError(@TypeOf(value))!bool {
+/// Writes `value`, as JSON5 where `json5_text`; with `open`, an object at the
+/// top is left without its closing brace, and whether it has members is
+/// returned.
+fn emit(comptime json5_text: bool, output: *std.Io.Writer, value: anytype, options: WriteOptions, open: bool) WriteErrorOf(@TypeOf(value), json5_text)!bool {
     var fixed: std.heap.FixedBufferAllocator = .init(options.scratch);
-    return emitOn(fixed.allocator(), output, value, options, open);
+    return emitOn(json5_text, fixed.allocator(), output, value, options, open);
 }
 /// `emit` with `storage` for what writing needs beyond the stack.
-fn emitOn(storage: std.mem.Allocator, output: *std.Io.Writer, value: anytype, options: WriteOptions, open: bool) WriteError(@TypeOf(value))!bool {
+fn emitOn(comptime json5_text: bool, storage: std.mem.Allocator, output: *std.Io.Writer, value: anytype, options: WriteOptions, open: bool) WriteErrorOf(@TypeOf(value), json5_text)!bool {
     var c = core.Context.init(storage, options.limits, .borrowed);
     c.acceptance.duplicates = .reject;
     c.omit_nulls = options.nulls == .omit;
-    var encoder: WireEncoder = undefined;
+    var encoder: encoding.Dialect(json5_text) = undefined;
     encoder.init(output);
     encoder.open_root = open;
     defer encoder.deinit(&c);
@@ -312,7 +359,7 @@ pub fn writeObjectOpen(output: *std.Io.Writer, value: anytype, options: WriteOpt
     }
     var minified = options;
     minified.whitespace = .minified;
-    const members = try emit(output, value, minified, true);
+    const members = try emit(false, output, value, minified, true);
     return .{ .output = output, .options = minified, .empty = !members };
 }
 
@@ -336,4 +383,5 @@ test {
     _ = route;
     _ = @import("member_scan.zig");
     _ = @import("text.zig");
+    _ = @import("json5.zig");
 }

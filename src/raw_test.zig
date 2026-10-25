@@ -37,6 +37,21 @@ test Raw {
     try testing.expectEqualStrings("null", bare.data.bytes);
 }
 
+test "a Raw refuses a key given twice however it is spelled, as reading the value does" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{ "{\"a\":1,\"\\u0061\":2}", "{\"\\n\":1,\"\\u000a\":2}", "{\"\\/\":1,\"/\":2}" }) |input| {
+        try testing.expectError(error.DuplicateField, json.parseLeaky(json.Value, a, input, .{}));
+        try testing.expectError(error.DuplicateField, json.parseLeaky(Raw, a, input, .{}));
+        // An ignored member is passed over, and checked as it is.
+        const wrapped = try std.mem.concat(a, u8, &.{ "{\"skip\":", input, ",\"keep\":1}" });
+        try testing.expectError(error.DuplicateField, json.parseLeaky(struct { keep: u8 }, a, wrapped, .{ .ignore_unknown_fields = true }));
+    }
+    // Keys that differ in what they spell are two keys.
+    _ = try json.parseLeaky(Raw, a, "{\"\\u0061\":1,\"\\u0062\":2,\"a\\\\\":3,\"a\\\\\\\\\":4}", .{});
+}
+
 test "parsing a Raw is the constructor that checks" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();

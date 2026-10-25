@@ -7,19 +7,37 @@ const limit = @import("../core/limit.zig");
 const core = @import("../core.zig");
 const numbers = @import("number.zig");
 const strings = @import("text.zig");
-const format = enum { json };
-const capabilities_of: core.Capabilities = .{ .map_keys = .text_only, .bytes = false, .named_shapes = false, .nonfinite_floats = false, .variant_record = true, .max_integer_bits = std.math.maxInt(usize), .utf8_text = true };
+const json5_tokens = @import("json5.zig");
+/// JSON's three dialects are one format: a `Raw` read from JSONC or JSON5
+/// holds the text as it was written.
+pub const Format = enum { json };
+/// What JSON can hold. JSON5 holds the floats that are not finite as well.
+pub const capabilities: core.Capabilities = .{ .map_keys = .text_only, .bytes = false, .named_shapes = false, .nonfinite_floats = false, .variant_record = true, .max_integer_bits = std.math.maxInt(usize), .utf8_text = true };
+const json_format = Format;
+const json_capabilities = capabilities;
+const json5_capabilities: core.Capabilities = blk: {
+    var with_nonfinite = capabilities;
+    with_nonfinite.nonfinite_floats = true;
+    break :blk with_nonfinite;
+};
 
-/// The decoder of a dialect: JSON, or with `jsonc` JSONC, whose comments
-/// (`//`, `/* */`) are whitespace and whose containers may end in a comma.
-/// The dialect is fixed when the type is made, so JSON pays nothing for it.
-pub fn Dialect(comptime jsonc: bool) type {
+/// The JSON a decoder reads: JSON; JSONC, whose comments (`//`, `/* */`) are
+/// whitespace and whose containers may end in a comma; or JSON5, which is
+/// JSONC with keys as identifiers, strings in single quotes and across lines,
+/// more escapes, more numbers and more white space (`json5.zig`).
+pub const Grammar = enum { json, jsonc, json5 };
+
+/// The decoder of a dialect. The dialect is fixed when the type is made, so
+/// JSON pays nothing for the others.
+pub fn Dialect(comptime grammar: Grammar) type {
+    const jsonc = grammar != .json;
+    const json5 = grammar == .json5;
     return struct {
-        pub const Format = format;
+        pub const Format = json_format;
         pub const Error = core.DecodeError;
-        pub const capabilities = capabilities_of;
-        pub const parseInteger = numbers.integer;
-        pub const parseFloat = numbers.floating;
+        pub const capabilities = if (json5) json5_capabilities else json_capabilities;
+        pub const parseInteger = if (json5) json5_tokens.integer else numbers.integer;
+        pub const parseFloat = if (json5) json5_tokens.floating else numbers.floating;
         /// Where a container is: what its next byte may be.
         const State = enum(u8) {
             /// Just opened: a member, or the close.
@@ -120,10 +138,11 @@ pub fn Dialect(comptime jsonc: bool) type {
             };
             return at;
         }
-        /// Past the whitespace from `from`, and in JSONC the comments in it. A
-        /// comment that does not end stops it at its `/`, where the next token is
-        /// then a syntax error.
+        /// Past the whitespace from `from`, and in JSONC and JSON5 the comments in
+        /// it. A comment that does not end stops it at its `/`, where the next
+        /// token is then a syntax error.
         inline fn space(self: *const Self, from: usize) usize {
+            if (json5) return json5_tokens.space(self.input, from);
             const at = blank(self.input, from);
             return if (jsonc) self.comments(at) else at;
         }
@@ -145,7 +164,8 @@ pub fn Dialect(comptime jsonc: bool) type {
             if (at < self.input.len and (self.input[at] == ',' or self.input[at] == ':')) at = self.space(at + 1);
             return at;
         }
-        /// After a comma, whether a JSONC container ends there instead of going on.
+        /// After a comma, whether a JSONC or JSON5 container ends there instead of
+        /// going on.
         inline fn trailing(self: *const Self, object: bool) bool {
             return jsonc and self.at < self.input.len and self.input[self.at] == closer(object);
         }
@@ -180,16 +200,28 @@ pub fn Dialect(comptime jsonc: bool) type {
             self.finish(self.at + 1);
             return .end;
         }
-        fn remember(self: *Self, c: *core.Context, name: []const u8) Error!void {
+        /// Refuses `name` where the object on top has it already, and else keeps
+        /// it. `written`: whether its names are as written, escapes and all, as
+        /// a value passed over or checked has them, and not unescaped.
+        fn remember(self: *Self, c: *core.Context, name: []const u8, written: bool) Error!void {
             const from = self.frame().key_start;
             for (from..self.key_count) |i| {
                 const prior = if (i < self.keys.len) self.keys[i] else self.extra_keys.items[i - self.keys.len];
                 try c.chargeWork(@max(name.len, prior.len));
-                const same = if (self.checking) strings.sameText(name, prior, self.accepting.unicode) else std.mem.eql(u8, name, prior);
+                const same = if (written) self.sameName(name, prior) else std.mem.eql(u8, name, prior);
                 if (same) return error.DuplicateField;
             }
             if (self.key_count < self.keys.len) self.keys[self.key_count] = name else self.extra_keys.append(self.allocator, name) catch |err| return failure(c, err);
             self.key_count += 1;
+        }
+        /// Whether two names as written spell the same text: different bytes
+        /// spell different text unless an escape is in one, or under `.replace`
+        /// a byte that is not UTF-8.
+        fn sameName(self: *const Self, a: []const u8, b: []const u8) bool {
+            if (std.mem.eql(u8, a, b)) return true;
+            const unicode = self.accepting.unicode;
+            if (unicode == .refuse and std.mem.findScalar(u8, a, '\\') == null and std.mem.findScalar(u8, b, '\\') == null) return false;
+            return if (json5) json5_tokens.sameText(a, b, unicode) else strings.sameText(a, b, unicode);
         }
         inline fn byte(self: *const Self) Error!u8 {
             return if (self.at < self.input.len) self.input[self.at] else error.SyntaxError;
@@ -327,6 +359,7 @@ pub fn Dialect(comptime jsonc: bool) type {
                 .value => return error.SyntaxError,
             }
             // The key.
+            if (json5) return self.passMember5(c, count, at, separator);
             if (at >= bytes.len or bytes[at] != '"') return error.SyntaxError;
             const body = bytes[at + 1 ..];
             const found = strings.specialNear(body) orelse strings.special(body);
@@ -344,7 +377,7 @@ pub fn Dialect(comptime jsonc: bool) type {
                 try c.span(strings.unescapedLength(body[0..name_len], self.accepting.unicode), true);
             }
             const name = body[0..name_len];
-            if (f.check_keys) try self.remember(c, name);
+            if (f.check_keys) try self.remember(c, name, true);
             if (count.* >= c.limits.container_items) return error.ItemLimit;
             count.* += 1;
             try c.node();
@@ -353,6 +386,40 @@ pub fn Dialect(comptime jsonc: bool) type {
             if (at >= bytes.len or bytes[at] != ':') return error.SyntaxError;
             at = self.space(at + 1);
             // The value.
+            f.state = .after;
+            try self.passAt(c, at);
+            return .{ .name = name, .escaped = escaped, .separator = separator, .value_start = at, .value_end = self.last_end };
+        }
+        /// `passMember` in JSON5 from its key at `at` on: a key in either quote,
+        /// or an identifier name, whose escapes are only ever `\u`.
+        fn passMember5(self: *Self, c: *core.Context, count: *usize, key_at: usize, separator: usize) Error!?MemberSpan {
+            const f = self.frame();
+            const bytes = self.input;
+            const unicode = self.accepting.unicode;
+            if (key_at >= bytes.len) return error.SyntaxError;
+            const quoted = bytes[key_at] == '"' or bytes[key_at] == '\'';
+            const from = key_at + @intFromBool(quoted);
+            var name_end: usize = undefined;
+            var escaped: bool = undefined;
+            if (quoted) {
+                const found = try json5_tokens.end(bytes[from..], bytes[key_at], unicode);
+                name_end = from + found.at;
+                escaped = found.escaped;
+            } else {
+                const found = try json5_tokens.identifier(bytes, from);
+                name_end = found.end;
+                escaped = found.escaped;
+            }
+            const name = bytes[from..name_end];
+            try c.span(if (escaped) json5_tokens.unescapedLength(name, unicode) else name.len, true);
+            if (f.check_keys) try self.remember(c, name, true);
+            if (count.* >= c.limits.container_items) return error.ItemLimit;
+            count.* += 1;
+            try c.node();
+            try c.chargeWork(name.len);
+            var at = self.space(name_end + @intFromBool(quoted));
+            if (at >= bytes.len or bytes[at] != ':') return error.SyntaxError;
+            at = self.space(at + 1);
             f.state = .after;
             try self.passAt(c, at);
             return .{ .name = name, .escaped = escaped, .separator = separator, .value_start = at, .value_end = self.last_end };
@@ -389,7 +456,7 @@ pub fn Dialect(comptime jsonc: bool) type {
                 .value => return error.SyntaxError,
             }
             f.state = .value;
-            if (!f.check_keys and names.len != 0) switch (hint) {
+            if (!json5 and !f.check_keys and names.len != 0) switch (hint) {
                 inline 0...names.len - 1 => |h| if (comptime literal(names[h])) |quoted| {
                     const rest = self.input[self.at..];
                     if (rest.len > quoted.len and startsWith(rest, quoted)) {
@@ -443,11 +510,13 @@ pub fn Dialect(comptime jsonc: bool) type {
 
         /// A key and the colon after it.
         inline fn key(self: *Self, c: *core.Context, check: bool) Error!core.Event {
-            if (try self.byte() != '"') return error.SyntaxError;
-            const name = try self.string(c, true);
+            const name = if (json5) try self.name5(c) else name: {
+                if (try self.byte() != '"') return error.SyntaxError;
+                break :name try self.string(c, true);
+            };
             if (self.at >= self.input.len or self.input[self.at] != ':') return error.SyntaxError;
             self.at = self.space(self.at + 1);
-            if (check) try self.remember(c, name.bytes);
+            if (check) try self.remember(c, name.bytes, self.checking);
             return .{ .text = name };
         }
 
@@ -511,8 +580,7 @@ pub fn Dialect(comptime jsonc: bool) type {
         /// if it is anything else.
         pub inline fn number(self: *Self, c: *core.Context) Error!?[]const u8 {
             if (!try self.toValue()) return null;
-            const b = try self.byte();
-            if (b != '-' and (b < '0' or b > '9')) return null;
+            if (!startsNumber(try self.byte())) return null;
             self.reading();
             const from = self.at;
             const end = try numberEnd(self.input, from);
@@ -544,6 +612,8 @@ pub fn Dialect(comptime jsonc: bool) type {
             if (digits == 0 or (bytes[first] == '0' and digits > 1)) return null;
             if (at < bytes.len) switch (bytes[at]) {
                 '0'...'9', '.', 'e', 'E' => return null,
+                // JSON5's hexadecimal digits, after their `0`.
+                'x', 'X' => if (json5) return null,
                 else => {},
             };
             if (limit.exceeds(digits, c.limits.numeric_bytes)) return null;
@@ -569,7 +639,7 @@ pub fn Dialect(comptime jsonc: bool) type {
         /// anything else.
         pub inline fn text(self: *Self, c: *core.Context) Error!?core.Span {
             if (!try self.toValue()) return null;
-            if (try self.byte() != '"') return null;
+            if (!startsString(try self.byte())) return null;
             self.reading();
             return try self.string(c, false);
         }
@@ -599,7 +669,8 @@ pub fn Dialect(comptime jsonc: bool) type {
             try c.chargeWork(1);
             if (at >= bytes.len) return error.SyntaxError;
             switch (bytes[at]) {
-                '-', '0'...'9' => {
+                '-', '0'...'9', '+', '.', 'I', 'N' => {
+                    if (!startsNumber(bytes[at])) return error.SyntaxError;
                     const end = try numberEnd(bytes, at);
                     if (limit.exceeds(end - at, c.limits.numeric_bytes)) return error.LengthLimit;
                     try c.chargeWork(end - at);
@@ -616,7 +687,8 @@ pub fn Dialect(comptime jsonc: bool) type {
                     self.last_end = at + spelling.len;
                     self.at = self.space(at + spelling.len);
                 },
-                '"' => {
+                '"', '\'' => {
+                    if (!startsString(bytes[at])) return error.SyntaxError;
                     self.at = at;
                     try self.passString(c);
                 },
@@ -636,6 +708,13 @@ pub fn Dialect(comptime jsonc: bool) type {
         noinline fn passString(self: *Self, c: *core.Context) Error!void {
             const start = self.at + 1;
             const body = self.input[start..];
+            if (json5) {
+                const found = try json5_tokens.end(body, self.input[self.at], self.accepting.unicode);
+                const len = if (found.escaped) json5_tokens.unescapedLength(body[0..found.at], self.accepting.unicode) else found.at;
+                try c.span(len, false);
+                try c.chargeWork(len);
+                return self.finish(start + found.at + 1);
+            }
             const found = strings.specialNear(body) orelse strings.special(body);
             var len = found.at;
             var end = found.at;
@@ -736,7 +815,8 @@ pub fn Dialect(comptime jsonc: bool) type {
                     self.finish(self.at + 1);
                     return .{ .begin = .{ .kind = .sequence } };
                 },
-                '"' => {
+                '"', '\'' => {
+                    if (!startsString(self.input[self.at])) return error.SyntaxError;
                     const span = try self.string(c, false);
                     self.ended();
                     return .{ .text = span };
@@ -744,7 +824,8 @@ pub fn Dialect(comptime jsonc: bool) type {
                 't' => return self.word("true", .{ .boolean = true }),
                 'f' => return self.word("false", .{ .boolean = false }),
                 'n' => return self.word("null", .none),
-                '-', '0'...'9' => {
+                '-', '0'...'9', '+', '.', 'I', 'N' => {
+                    if (!startsNumber(self.input[self.at])) return error.SyntaxError;
                     const start = self.at;
                     const end = try numberEnd(self.input, start);
                     if (limit.exceeds(end - start, c.limits.numeric_bytes)) return error.LengthLimit;
@@ -768,6 +849,7 @@ pub fn Dialect(comptime jsonc: bool) type {
         /// The string at the cursor: borrowed from the input when it has no escape,
         /// unescaped into the operation's storage when it has one.
         inline fn string(self: *Self, c: *core.Context, is_key: bool) Error!core.Span {
+            if (json5) return self.string5(c, is_key);
             const start = self.at + 1;
             const body = self.input[start..];
             // The common case, a string with no escape, takes one look.
@@ -799,8 +881,62 @@ pub fn Dialect(comptime jsonc: bool) type {
             return .{ .bytes = storage[0..n], .lifetime = .owned };
         }
 
+        /// The string in either quote at the cursor, in JSON5: borrowed or unescaped
+        /// as JSON's is.
+        fn string5(self: *Self, c: *core.Context, is_key: bool) Error!core.Span {
+            const start = self.at + 1;
+            const body = self.input[start..];
+            const unicode = self.accepting.unicode;
+            const found = try json5_tokens.end(body, self.input[self.at], unicode);
+            self.finish(start + found.at + 1);
+            return self.text5(c, body[0..found.at], found.escaped, is_key);
+        }
+        /// A JSON5 key at the cursor: in either quote, or an identifier name.
+        fn name5(self: *Self, c: *core.Context) Error!core.Span {
+            if (startsString(try self.byte())) return self.string5(c, true);
+            const found = try json5_tokens.identifier(self.input, self.at);
+            const body = self.input[self.at..found.end];
+            self.finish(found.end);
+            return self.text5(c, body, found.escaped, true);
+        }
+        /// A JSON5 string's or name's body, borrowed where nothing in it is to be
+        /// rewritten, and else unescaped into the operation's storage, or under
+        /// `checking` counted and borrowed as it is.
+        fn text5(self: *Self, c: *core.Context, body: []const u8, escaped: bool, is_key: bool) Error!core.Span {
+            const unicode = self.accepting.unicode;
+            if (!escaped) {
+                try c.span(body.len, is_key);
+                return .{ .bytes = body, .lifetime = .borrowed };
+            }
+            if (self.checking) {
+                try c.span(json5_tokens.unescapedLength(body, unicode), is_key);
+                return .{ .bytes = body, .lifetime = .borrowed };
+            }
+            // As in JSON, the escaped length bounds the copy but under `.replace`.
+            const storage = try c.alloc(u8, if (unicode == .refuse) body.len else json5_tokens.unescapedLength(body, unicode));
+            const n = json5_tokens.unescape(body, storage, unicode);
+            try c.span(n, is_key);
+            return .{ .bytes = storage[0..n], .lifetime = .owned };
+        }
+
+        /// Whether a value that begins with `b` is a number: in JSON5, also one
+        /// with a plus, a bare point, `Infinity` or `NaN`.
+        inline fn startsNumber(b: u8) bool {
+            return switch (b) {
+                '-', '0'...'9' => true,
+                '+', '.', 'I', 'N' => json5,
+                else => false,
+            };
+        }
+        /// Whether a value that begins with `b` is a string: in JSON5, also one
+        /// in single quotes.
+        inline fn startsString(b: u8) bool {
+            return b == '"' or (json5 and b == '\'');
+        }
+
         /// Where the number that starts at `start` ends; its grammar is checked.
         inline fn numberEnd(bytes: []const u8, start: usize) Error!usize {
+            if (json5) return json5_tokens.numberEnd(bytes, start);
             var at = start;
             if (bytes[at] == '-') at += 1;
             if (at == bytes.len) return error.SyntaxError;

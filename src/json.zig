@@ -23,6 +23,16 @@ pub const jsonc = struct {
     pub const Edit = @import("json/edit.zig").Edit;
     pub const EditOptions = @import("json/edit.zig").EditOptions;
 };
+/// JSON5: read with JSON's options and promises (`parse`, `parseOwned`,
+/// `parseLeaky`), and written as JSON is but for the floats JSON has no
+/// spelling for (`write`).
+pub const json5 = struct {
+    pub const parse = api.json5.parse;
+    pub const parseOwned = api.json5.parseOwned;
+    pub const parseLeaky = api.json5.parseLeaky;
+    pub const write = api.json5.write;
+    pub const WriteError = api.json5.WriteError;
+};
 /// The JSON Canonicalization Scheme (RFC 8785).
 pub const jcs = @import("json/canonical.zig");
 /// JSON Schema (2020-12) for the JSON a type is read and written as.

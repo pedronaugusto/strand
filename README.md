@@ -93,8 +93,8 @@ memory and 128 Mi units of work; `ParseOptions.limits` raises or lowers them.
 reads into `std.json.Value` under the same limits. `json.jsonc.parse`, `parseOwned`
 and `parseLeaky` read JSONC, the JSON of editors' settings and `tsconfig.json`: `//`
 and `/* */` comments wherever whitespace may be, and a comma after a container's last
-member or element, with JSON's options and promises. Writing is plain JSON whatever
-was read. `json.jcs.write` and `json.jcs.canonicalize` write the JSON Canonicalization
+member or element, with JSON's options and promises; it is written as JSON. JSON5 is
+the next section. `json.jcs.write` and `json.jcs.canonicalize` write the JSON Canonicalization
 Scheme (RFC 8785), one spelling for every value, for hashing and signing: members sorted
 by their names' UTF-16 code units, numbers as ECMAScript writes doubles, no whitespace; a
 name given twice, and a typed integer past ±(2^53−1), are refused.
@@ -165,6 +165,66 @@ while (try members.next()) |member| {
 A line can also be routed without checking it: `kindOf` reads its first key,
 `tagOf` the arm of a union it holds, and `memberOf` and `memberStringOf` one
 member wherever it is, each as a view into the line.
+
+## JSON5
+
+`strand.json.json5` reads JSON5 (json5.org), JSON for people to write, through the
+JSON reader in its third dialect, with JSON's options and promises: `parse`,
+`parseOwned` and `parseLeaky`. JSON5 is JSONC's comments and trailing commas, and keys
+as ECMAScript identifier names (Unicode letters and digits by the Unicode xenoglyph
+carries, `\u` escapes in them), strings in single quotes and continued on the next line
+after a backslash, ECMAScript's escapes (`\v`, `\0`, `\xHH`, any other character as
+itself), a control character standing in a string as itself, numbers in hexadecimal,
+with a plus, or with a point and no digits on one side of it, `Infinity` and `NaN`, and
+Unicode's space separators, U+2028 and U+2029 as white space. A key given twice is
+refused unless `duplicates` says otherwise, however each is spelled (`a`, `'a'`,
+`\u0061`), and a lone surrogate escape is refused unless `invalid_unicode` replaces it;
+JSON5's reference implementation keeps the last key and the lone surrogate. A number
+past a float's range is out of it, as in JSON, where the reference reads `Infinity`. A
+comment is passed over unread, as in JSONC, so a byte in one that is not UTF-8 is not
+looked at.
+`json.Value` keeps each number as it was written, so `0x1F` stays `0x1F`.
+`json.json5.write` writes JSON, but that a float JSON cannot spell is written
+`Infinity`, `-Infinity` or `NaN`, and a `Value`'s number and a `Raw` are checked as
+JSON5; `json.write` refuses them. The json5 project's json5-tests run in the tests,
+each case read as the reference reads it. [examples/json5.zig](examples/json5.zig)
+reads and writes a build's settings.
+
+<!-- BEGIN GENERATED zig build docs -- json5 -->
+```zig
+const strand = @import("strand");
+
+const text =
+    \\// The build's settings.
+    \\{
+    \\  name: 'relay',
+    \\  jobs: +8,
+    \\  umask: 0x1ED,           // 0755
+    \\  timeout: Infinity,      /* no limit */
+    \\  targets: ['linux', "macos",],
+    \\  banner: 'Built by \
+    \\the relay',
+    \\}
+;
+var settings = try strand.json.json5.parse(Settings, gpa, text, .{});
+defer settings.deinit();
+std.debug.assert(settings.value.umask == 0o755);
+std.debug.assert(std.math.isPositiveInf(settings.value.timeout));
+std.debug.assert(std.mem.eql(u8, settings.value.banner, "Built by the relay"));
+
+// Any document: a number stays as it was written.
+var value = try strand.json.json5.parse(strand.json.Value, gpa, text, .{});
+defer value.deinit();
+std.debug.assert(std.mem.eql(u8, value.value.object[2].value.number, "0x1ED"));
+
+// Written as JSON, but for the floats JSON cannot spell.
+var out: std.Io.Writer.Allocating = .init(gpa);
+try strand.json.json5.write(&out.writer, settings.value, .{});
+std.debug.assert(std.mem.eql(u8, out.written(),
+    \\{"name":"relay","jobs":8,"umask":493,"timeout":Infinity,"targets":["linux","macos"],"banner":"Built by the relay"}
+));
+```
+<!-- END GENERATED -->
 
 ## JSON Lines
 
@@ -729,7 +789,7 @@ and nonzero checks included.
 Development runs through bay.
 
 `bay test` runs the unit suite, scratch tests and examples in Debug by default.
-The suite covers each format's own standard suite (JSONTestSuite, RFC 8785's and the
+The suite covers each format's own standard suite (JSONTestSuite, json5-tests, RFC 8785's and the
 cyberphone vectors, RFC 8949's Appendix A, msgpack-test-suite, toml-test, yaml-test-suite, the W3C XML
 Conformance Test Suite, which the build fetches from the W3C), round trips
 through every reader and writer, framing, checked copies, rotation, cancellation and

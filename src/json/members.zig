@@ -8,7 +8,7 @@ const core = @import("../core.zig");
 const decoding = @import("Decoder.zig");
 const strings = @import("text.zig");
 
-const Wire = decoding.Dialect(false);
+const Wire = decoding.Dialect(.json);
 
 /// What reading a member can fail with: the bytes are not JSON
 /// (`SyntaxError`), the value is JSON but not an object (`UnexpectedType`),

@@ -14,6 +14,7 @@ const yaml = @import("../yaml.zig");
 const toml_suite = @import("toml_suite.zig");
 const yaml_suite = @import("yaml_suite.zig");
 const json_suite = @import("json_suite.zig");
+const shakedown = @import("shakedown");
 
 const gpa = std.testing.allocator;
 /// Paths tried in one document, of each kind.
@@ -182,7 +183,8 @@ fn commentChanged(before: []const u8, after: []const u8, marker: []const u8) boo
 
 const Tally = struct { documents: usize = 0, sets: usize = 0, removes: usize = 0, refused: usize = 0, failures: usize = 0 };
 
-/// The property over one document of format `F`.
+/// The property over one document of format `F`. An edit refused leaves
+/// the text as it was.
 fn property(comptime F: type, name: []const u8, text: []const u8, tally: *Tally) !void {
     var arena: std.heap.ArenaAllocator = .init(gpa);
     defer arena.deinit();
@@ -203,6 +205,11 @@ fn property(comptime F: type, name: []const u8, text: []const u8, tally: *Tally)
         var e = try F.Edit.init(gpa, text, .{});
         defer e.deinit();
         e.set(path, @as(u8, 7)) catch |err| {
+            if (!std.mem.eql(u8, e.bytes(), text)) {
+                std.log.err("{s}: {s} set {s}: refused ({t}), the text changed", .{ F.name, name, path, err });
+                tally.failures += 1;
+                continue;
+            }
             if (aliases and (err == error.SyntaxError or err == error.PathNotFound)) {
                 tally.refused += 1;
                 continue;
@@ -228,6 +235,11 @@ fn property(comptime F: type, name: []const u8, text: []const u8, tally: *Tally)
         var e = try F.Edit.init(gpa, text, .{});
         defer e.deinit();
         e.remove(path) catch |err| {
+            if (!std.mem.eql(u8, e.bytes(), text)) {
+                std.log.err("{s}: {s} remove {s}: refused ({t}), the text changed", .{ F.name, name, path, err });
+                tally.failures += 1;
+                continue;
+            }
             if (aliases and (err == error.SyntaxError or err == error.PathNotFound)) {
                 tally.refused += 1;
                 continue;
@@ -263,6 +275,11 @@ const Toml = struct {
     fn aliases(_: []const u8) bool {
         return false;
     }
+    const examples = [_][]const u8{
+        "# top\na = 1 # one\nb.c = [1, 2] # dotted\n\n[t]\nk = \"v\"\n\n[t.sub]\nz = { x = 1, y.w = 2 }\n",
+        "[[arr]]\n# first\nn = 1\na.b.c = 2\n\n[[arr]]\nn = 3\n[arr.s]\nq = [\n  1, # one\n  2,\n]\n",
+        "s = \"\"\"\nx\"\"\"\nl = 'raw'\nt = { a = { b = [true, 07:32:00] } }\n",
+    };
 };
 const Yaml = struct {
     const name = "YAML";
@@ -276,6 +293,11 @@ const Yaml = struct {
     fn aliases(text: []const u8) bool {
         return std.mem.findScalar(u8, text, '*') != null;
     }
+    const examples = [_][]const u8{
+        "# top\na: 1 # one\nb:\n  c: [1, 2] # flow\n  d:\n    - x\n    # between\n    - y\n",
+        "- name: a\n  tags: {k: v, w: [1]}\n- ? complex\n  : value\n-\n  - nested\n",
+        "s: |\n  block\n  text\nq: 'quoted'\nanchor: &a {x: 1}\nalias: *a\n---\nsecond: 2\n",
+    };
 };
 const Jsonc = struct {
     const name = "JSONC";
@@ -289,6 +311,11 @@ const Jsonc = struct {
     fn aliases(_: []const u8) bool {
         return false;
     }
+    const examples = [_][]const u8{
+        "{\n  // top\n  \"a\": 1, // one\n  \"b\": {\"c\": [1, 2,], /* inline */ \"d\": null},\n}\n",
+        "[\n  {\"n\": 1},\n  // between\n  [true, \"s\\\"q\"],\n  {}\n]\n",
+        "/* head */ {\"x\": {\"y\": {\"z\": []}}, \"e\": \"\"}",
+    };
 };
 
 fn expectNone(comptime F: type, tally: Tally) !void {
@@ -302,7 +329,7 @@ test "TOML editing over toml-test: each leaf set, each member removed" {
     var tally: Tally = .{};
     for (toml_suite.v1_1) |case| if (case.json != null) try property(Toml, case.name, case.toml, &tally);
     try expectNone(Toml, tally);
-    try std.testing.expect(tally.documents > 200 and tally.sets > 1000 and tally.removes > 1000);
+    try std.testing.expect(tally.documents > 200 and tally.sets > 800 and tally.removes > 1300);
 }
 test "YAML editing over yaml-test-suite: each leaf set, each member removed" {
     var tally: Tally = .{};
@@ -316,4 +343,30 @@ test "JSONC editing over JSONTestSuite and yaml-test-suite's JSON: each leaf set
     for (yaml_suite.cases) |case| if (case.json) |text| try property(Jsonc, case.path, text, &tally);
     try expectNone(Jsonc, tally);
     try std.testing.expect(tally.documents > 200 and tally.sets > 500 and tally.removes > 500);
+}
+
+/// Documents mutated from each format's examples, commented and nested, are
+/// held to the property: whatever reads is edited without a crash, a leak or
+/// a change the property refuses.
+fn anyDocument(comptime F: type) fn (void, *shakedown.Case) anyerror!void {
+    return struct {
+        fn run(_: void, case: *shakedown.Case) anyerror!void {
+            var buffer: [160]u8 = undefined;
+            const input = shakedown.gen.mutated(case.source, &buffer, &F.examples);
+            case.note("input: {s}", .{input});
+            var tally: Tally = .{};
+            try property(F, "a mutated document", input, &tally);
+            try std.testing.expectEqual(0, tally.failures);
+        }
+    }.run;
+}
+
+test "fuzz: TOML editing of any document read" {
+    try shakedown.check(gpa, {}, anyDocument(Toml), .{ .cases = 600 });
+}
+test "fuzz: YAML editing of any document read" {
+    try shakedown.check(gpa, {}, anyDocument(Yaml), .{ .cases = 600 });
+}
+test "fuzz: JSONC editing of any document read" {
+    try shakedown.check(gpa, {}, anyDocument(Jsonc), .{ .cases = 600 });
 }

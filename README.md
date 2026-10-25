@@ -545,6 +545,79 @@ std.debug.assert(strand.xml.parse(strand.xml.Element, gpa, external, .{}) == err
 ```
 <!-- END GENERATED -->
 
+## Editing
+
+`strand.toml.Edit`, `strand.yaml.Edit` and `strand.json.jsonc.Edit` hold a document as
+its text and change it in place, as toml_edit and ruamel.yaml do: `set`, `insert` and
+`remove` take a JSON Pointer (RFC 6901), and every byte a change does not replace stays
+as it was: comments, blank lines, key order, quoting, the spelling of numbers. Where to
+change is found by the format's own reader, recording where each part is written, and
+what to write is spelled by the format's own writer, so an editor reads and writes
+nothing `parse` and `write` would not. A value is replaced where it is written. A key
+added goes after its table's or mapping's last member at its members' indentation; in
+TOML after the last `key = value` line of its section, inside its braces, or under its
+dotted prefix, and a table or an array of tables is a section of its own. A member
+removed takes its line and the comment on it; a TOML table removed takes every section
+and dotted key it is made of. Each edit is read back whole before it is kept, and that
+read finds the next edit's place: a change that would leave text the reader refuses is
+an error, and the text is as it was. In YAML a node replaced takes its anchor with it,
+an alias left naming none is refused, and a stream holds at most one document, as
+`yaml.parse` reads one. Every valid document of toml-test, yaml-test-suite and
+JSONTestSuite has each leaf set and each member removed, and each must read back as
+exactly that change; documents mutated from commented examples are fuzzed the same way.
+[examples/edit.zig](examples/edit.zig) edits a manifest, a service and a settings file.
+
+<!-- BEGIN GENERATED zig build docs -- edit -->
+```zig
+const strand = @import("strand");
+
+const manifest =
+    \\# The service's manifest.
+    \\[package]
+    \\name = "relay"
+    \\version = "0.1.0" # bumped by the release
+    \\
+    \\[dependencies]
+    \\wire = "1.4"     # pinned for the wire format
+    \\legacy = "0.9"
+    \\
+;
+var toml = try strand.toml.Edit.init(gpa, manifest, .{});
+defer toml.deinit();
+try toml.set("/package/version", "0.2.0");
+try toml.set("/dependencies/trace", "0.3");
+try toml.remove("/dependencies/legacy");
+std.debug.assert(std.mem.eql(u8, toml.bytes(),
+    \\# The service's manifest.
+    \\[package]
+    \\name = "relay"
+    \\version = "0.2.0" # bumped by the release
+    \\
+    \\[dependencies]
+    \\wire = "1.4"     # pinned for the wire format
+    \\trace = "0.3"
+    \\
+));
+
+// YAML: a value set where it is written, a key added at its column.
+var yaml = try strand.yaml.Edit.init(gpa, "api:\n  replicas: 2 # scaled by hand\n  ports: [8080]\n", .{});
+defer yaml.deinit();
+try yaml.set("/api/replicas", @as(u8, 5));
+try yaml.insert("/api/ports/-", @as(u16, 9090));
+try yaml.set("/api/debug", true);
+std.debug.assert(std.mem.eql(u8, yaml.bytes(), "api:\n  replicas: 5 # scaled by hand\n  ports: [8080, 9090]\n  debug: true\n"));
+
+// JSONC: comments and a trailing comma kept; an edit read back before it
+// is kept, so a key that cannot be reached is refused, the text as it was.
+var jsonc = try strand.json.jsonc.Edit.init(gpa, "{\n  // points\n  \"editor.fontSize\": 14,\n}\n", .{});
+defer jsonc.deinit();
+try jsonc.set("/editor.fontSize", @as(u8, 16));
+std.debug.assert(std.mem.eql(u8, jsonc.bytes(), "{\n  // points\n  \"editor.fontSize\": 16,\n}\n"));
+std.debug.assert(jsonc.set("/editor.fontSize/size", @as(u8, 1)) == error.PathNotFound);
+std.debug.assert(std.mem.eql(u8, jsonc.bytes(), "{\n  // points\n  \"editor.fontSize\": 16,\n}\n"));
+```
+<!-- END GENERATED -->
+
 ## Design
 
 [docs/design.md](docs/design.md) says how the parts are layered, what the core

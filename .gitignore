@@ -11,3 +11,5 @@ zig-pkg/
 /bench/rivals/xml/rust/target/
 /bench/rivals/xml/go/xml-rivals
 __pycache__/
+/bench/rivals/edit/rust/target/
+/bench/rivals/edit/node/node_modules/

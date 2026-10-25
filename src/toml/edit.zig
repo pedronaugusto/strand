@@ -72,24 +72,36 @@ fn readDocument(a: std.mem.Allocator, text: []const u8, options: EditOptions) Er
     }
     return .{ .doc = doc, .spans = spans, .parents = parents, .text = text };
 }
+/// `text` copied and read on an arena of its own.
+fn hold(gpa: std.mem.Allocator, text: []const u8, options: EditOptions) Error!edit.Held(Read) {
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    errdefer arena.deinit();
+    const a = arena.allocator();
+    // Read before the arena is moved into the result: the read allocates on it.
+    const r = try readDocument(a, try a.dupe(u8, text), options);
+    return .{ .arena = arena, .read = r };
+}
 
 /// A TOML document held as its text, edited in place.
 pub const Edit = struct {
     gpa: std.mem.Allocator,
-    text: edit.Text,
+    /// The text as it is now, and where each part is written in it.
+    held: edit.Held(Read),
     options: EditOptions,
+    /// The next commit leaves the text it replaces to the caller: a removal
+    /// that remakes a table keeps the text it started from until it is done.
+    keep_held: bool = false,
 
     /// `text` checked as TOML and copied: the edit's own.
     pub fn init(gpa: std.mem.Allocator, text: []const u8, options: EditOptions) Error!Edit {
-        try check(gpa, text, options);
-        return .{ .gpa = gpa, .text = try edit.Text.init(gpa, text), .options = options };
+        return .{ .gpa = gpa, .held = try hold(gpa, text, options), .options = options };
     }
     pub fn deinit(self: *Edit) void {
-        self.text.deinit(self.gpa);
+        self.held.deinit();
     }
     /// The document as it is now.
     pub fn bytes(self: *const Edit) []const u8 {
-        return self.text.bytes.items;
+        return self.held.read.text;
     }
 
     /// The value at `pointer` made `value`: replaced where it is written as a
@@ -99,10 +111,10 @@ pub const Edit = struct {
         var arena: std.heap.ArenaAllocator = .init(self.gpa);
         defer arena.deinit();
         const a = arena.allocator();
-        const r = try readDocument(a, self.bytes(), self.options);
+        const r = &self.held.read;
         const path = try edit.Pointer.parse(pointer);
-        if (try find(a, &r, path)) |n| {
-            if (inlineValue(&r, n)) {
+        if (try find(a, r, path)) |n| {
+            if (inlineValue(r, n)) {
                 const s = r.span(n);
                 return self.commit(a, &.{.{ .start = s.start, .end = s.end, .replacement = try self.spellInline(a, value) }});
             }
@@ -110,8 +122,8 @@ pub const Edit = struct {
             return self.set(pointer, value);
         }
         const split = path.split() orelse return error.PathNotFound;
-        const parent = (try find(a, &r, split.parent)) orelse return error.PathNotFound;
-        return self.add(a, &r, split.parent, parent, split.last, null, value);
+        const parent = (try find(a, r, split.parent)) orelse return error.PathNotFound;
+        return self.add(a, r, split.parent, parent, split.last, null, value);
     }
     /// `value` put into the array before the element `pointer` names, or at
     /// its end for `-`; into a table, as `set` adds a key.
@@ -119,25 +131,34 @@ pub const Edit = struct {
         var arena: std.heap.ArenaAllocator = .init(self.gpa);
         defer arena.deinit();
         const a = arena.allocator();
-        const r = try readDocument(a, self.bytes(), self.options);
+        const r = &self.held.read;
         const split = (try edit.Pointer.parse(pointer)).split() orelse return error.PathNotFound;
-        const parent = (try find(a, &r, split.parent)) orelse return error.PathNotFound;
+        const parent = (try find(a, r, split.parent)) orelse return error.PathNotFound;
         if (r.node(parent).kind == .table) return self.set(pointer, value);
         const at = if (split.last.isEnd()) r.node(parent).count() else split.last.index() orelse return error.PathNotFound;
         if (at > r.node(parent).count()) return error.PathNotFound;
-        return self.add(a, &r, split.parent, parent, split.last, at, value);
+        return self.add(a, r, split.parent, parent, split.last, at, value);
     }
     /// The key, element or table at `pointer` taken out, with its line, or
     /// every section and dotted key a table is made of. A table that only
     /// what was taken out made (`[a.b.c]` for `a.b`, `a.b = 1` for `a`)
     /// stays, empty, as a removal leaves the rest.
     pub fn remove(self: *Edit, pointer: []const u8) Error!void {
-        // On a copy: a table remade is part of the one edit.
-        var work: Edit = .{ .gpa = self.gpa, .text = try edit.Text.init(self.gpa, self.bytes()), .options = self.options };
-        defer work.deinit();
-        const kind = try work.cut(pointer);
-        try work.keep((try edit.Pointer.parse(pointer)).split().?.parent, kind);
-        std.mem.swap(edit.Text, &self.text, &work.text);
+        // A table remade is part of the one edit: the text before it is
+        // held until the edit is done, and is the text again if it fails.
+        const parent = ((try edit.Pointer.parse(pointer)).split() orelse return error.PathNotFound).parent;
+        var before = self.held;
+        self.keep_held = true;
+        const kind = self.cut(pointer) catch |err| {
+            self.keep_held = false;
+            return err;
+        };
+        self.keep(parent, kind) catch |err| {
+            self.held.deinit();
+            self.held = before;
+            return err;
+        };
+        before.deinit();
     }
     /// The container `path` reached before a removal, of `kind`, made again
     /// empty where nothing defines it now, and its own the same way.
@@ -145,8 +166,8 @@ pub const Edit = struct {
         var arena: std.heap.ArenaAllocator = .init(self.gpa);
         defer arena.deinit();
         const a = arena.allocator();
-        const r = try readDocument(a, self.bytes(), self.options);
-        if (try find(a, &r, path) != null) return;
+        const r = &self.held.read;
+        if (try find(a, r, path) != null) return;
         const split = path.split() orelse return;
         try self.keep(split.parent, .table);
         if (kind == .array) return self.set(path.rest, [0]u8{});
@@ -157,31 +178,34 @@ pub const Edit = struct {
         var arena: std.heap.ArenaAllocator = .init(self.gpa);
         defer arena.deinit();
         const a = arena.allocator();
-        const r = try readDocument(a, self.bytes(), self.options);
-        const n = (try find(a, &r, try edit.Pointer.parse(pointer))) orelse return error.PathNotFound;
+        const r = &self.held.read;
+        const n = (try find(a, r, try edit.Pointer.parse(pointer))) orelse return error.PathNotFound;
         const parent = r.parents[n];
         if (parent == none) return error.PathNotFound;
         const kind = r.node(parent).kind;
         const text = self.bytes();
         var splices: std.ArrayList(edit.Splice) = .empty;
-        if (inlineValue(&r, n)) {
+        if (inlineValue(r, n)) {
             const s = r.span(n);
             const start = if (s.entry != none) s.entry else s.start;
-            if (inlineContainer(&r, parent)) {
-                try splices.append(a, memberCut(&r, parent, n, start, s.end));
+            if (inlineContainer(r, parent)) {
+                try splices.append(a, memberCut(r, parent, n, start, s.end));
+            } else if (inlineAround(r, n)) |container| {
+                // A dotted key's value inside braces: a member of them.
+                try splices.append(a, memberCut(r, container, n, start, s.end));
             } else {
                 try splices.append(a, lineCut(text, start, s.end));
             }
             try self.commit(a, splices.items);
             return kind;
         }
-        if (inlineAround(&r, n)) |container| {
+        if (inlineAround(r, n)) |container| {
             // A table dotted keys make inside braces: the braces' members
             // but those under it, written again between them.
             var kept: std.ArrayList([]const u8) = .empty;
             for (r.spans.nodes.items, 0..) |s, i| {
                 const at: u32 = @intCast(i);
-                if (s.entry == none or (inlineAround(&r, at) orelse none) != container or r.isUnder(at, n)) continue;
+                if (s.entry == none or (inlineAround(r, at) orelse none) != container or r.isUnder(at, n)) continue;
                 try kept.append(a, text[s.entry..s.end]);
             }
             const inner = try std.mem.join(a, ", ", kept.items);
@@ -218,7 +242,7 @@ pub const Edit = struct {
             return self.addElement(a, r, parent, index, try self.spellInline(a, value));
         }
         const name = token.unescape(try a.alloc(u8, token.written.len));
-        const keys = try pathKeys(a, parent_path);
+        const keys = try tableKeys(a, r, parent_path);
         if (inlineContainer(r, parent)) {
             const member = try std.mem.concat(a, u8, &.{ try spellKey(a, name), " = ", try self.spellInline(a, value) });
             return self.addMember(a, r, parent, member);
@@ -247,16 +271,19 @@ pub const Edit = struct {
             const insert_at = if (h.body_end != 0) h.body_end else h.end;
             return self.commit(a, &.{.{ .start = insert_at, .end = insert_at, .replacement = try newlineBefore(a, text, insert_at, written) }});
         }
-        // A table made only on the way to others: a section of its own at the end.
+        // A table made only on the way to others: a section of its own at the
+        // end of the nearest table with one (an element of an array of
+        // tables, whose sections name it only in its own part), or of the text.
         const section = if (sections) written else try std.mem.concat(a, u8, &.{ "[", try spellPath(a, keys), "]\n", written });
-        return self.commit(a, &.{.{ .start = text.len, .end = text.len, .replacement = try separated(a, text, text.len, section) }});
+        const end = sectionEnd(r, parent);
+        return self.commit(a, &.{.{ .start = end, .end = end, .replacement = try separated(a, text, end, section) }});
     }
     /// A table added to an array of tables: its `[[...]]` section after the
     /// last element's, or before element `at`'s.
     fn addTable(self: *Edit, a: std.mem.Allocator, r: *const Read, parent_path: edit.Pointer, parent: u32, at: ?usize, value: anytype) Error!void {
         const text = self.bytes();
         const split = parent_path.split() orelse return error.PathNotFound;
-        const keys = try pathKeys(a, split.parent);
+        const keys = try tableKeys(a, r, split.parent);
         const name = split.last.unescape(try a.alloc(u8, split.last.written.len));
         const one = [1]@TypeOf(value){value};
         const written = try self.spellUnder(a, keys, name, @as([]const @TypeOf(value), &one));
@@ -319,52 +346,40 @@ pub const Edit = struct {
         // A section starts after the line break the writer puts between sections.
         return std.mem.trimStart(u8, written, "\n");
     }
-    /// The text the splices make, if it reads as TOML.
+    /// The text the splices make, if it reads as TOML: that read is held for
+    /// the next edit. What the edit read of the text before is gone, unless
+    /// the caller holds it.
     fn commit(self: *Edit, a: std.mem.Allocator, splices: []const edit.Splice) Error!void {
-        const sorted = try a.dupe(edit.Splice, splices);
-        std.mem.sort(edit.Splice, sorted, {}, struct {
-            fn lessThan(_: void, x: edit.Splice, y: edit.Splice) bool {
-                return x.start > y.start;
-            }
-        }.lessThan);
-        var next: []const u8 = self.bytes();
-        for (sorted) |s| next = try std.mem.concat(a, u8, &.{ next[0..s.start], s.replacement, next[s.end..] });
-        try check(a, next, self.options);
-        try self.text.replace(self.gpa, next);
+        const next = try hold(self.gpa, try edit.applied(a, self.bytes(), splices), self.options);
+        if (self.keep_held) self.keep_held = false else self.held.deinit();
+        self.held = next;
     }
 };
-
-fn check(gpa: std.mem.Allocator, text: []const u8, options: EditOptions) Error!void {
-    var arena: std.heap.ArenaAllocator = .init(gpa);
-    defer arena.deinit();
-    _ = try api.parseLeaky(api.Value, arena.allocator(), text, .{ .limits = options.limits, .version = options.version });
-}
 
 /// The node `path` reaches, or null.
 fn find(a: std.mem.Allocator, r: *const Read, path: edit.Pointer) Error!?u32 {
     var n: u32 = 0;
     var rest = path;
-    while (rest.next()) |token| {
-        const node = r.node(n);
-        if (node.kind == .table) {
-            const name = token.unescape(try a.alloc(u8, token.written.len));
-            var child = node.first();
-            n = while (child != none) : (child = r.node(child).next) {
-                if (std.mem.eql(u8, r.keyOf(child), name)) break child;
-            } else return null;
-        } else if (node.kind == .array) {
-            const index = token.index() orelse return null;
-            var child = node.first();
-            var k: usize = 0;
-            n = while (child != none) : ({
-                child = r.node(child).next;
-                k += 1;
-            }) {
-                if (k == index) break child;
-            } else return null;
-        } else return null;
-    }
+    while (rest.next()) |token| n = (try step(a, r, n, token)) orelse return null;
     return n;
+}
+/// The member of container `n` that `token` names, or null.
+fn step(a: std.mem.Allocator, r: *const Read, n: u32, token: edit.Token) Error!?u32 {
+    const node = r.node(n);
+    var child = node.first();
+    if (node.kind == .table) {
+        const name = token.unescape(try a.alloc(u8, token.written.len));
+        while (child != none) : (child = r.node(child).next) if (std.mem.eql(u8, r.keyOf(child), name)) return child;
+        return null;
+    }
+    if (node.kind != .array) return null;
+    const index = token.index() orelse return null;
+    var k: usize = 0;
+    while (child != none) : ({
+        child = r.node(child).next;
+        k += 1;
+    }) if (k == index) return child;
+    return null;
 }
 
 /// Whether node `n` is written as one value: after a key's `=`, or in an array.
@@ -428,8 +443,17 @@ fn memberCut(r: *const Read, parent: u32, n: u32, start: u32, end: u32) edit.Spl
     }
     // The last: the comma before it goes, unless it is the only one.
     var previous: u32 = none;
-    var child = r.node(parent).first();
-    while (child != n) : (child = r.node(child).next) previous = child;
+    if (r.node(parent).kind == .array) {
+        var child = r.node(parent).first();
+        while (child != n) : (child = r.node(child).next) previous = child;
+    } else {
+        // The member written before it, dotted keys among them.
+        for (r.spans.nodes.items, 0..) |s, i| {
+            const at: u32 = @intCast(i);
+            if (s.entry == none or s.end > start or (inlineAround(r, at) orelse none) != parent) continue;
+            if (previous == none or s.end > r.span(previous).end) previous = at;
+        }
+    }
     if (previous == none) return .{ .start = start, .end = end, .replacement = "" };
     return .{ .start = r.span(previous).end, .end = end, .replacement = "" };
 }
@@ -457,12 +481,31 @@ fn separated(a: std.mem.Allocator, text: []const u8, at: usize, section: []const
     return std.mem.concat(a, u8, &.{ before, section, after });
 }
 
-/// A pointer's tokens, unescaped: a table's keys.
-fn pathKeys(a: std.mem.Allocator, path: edit.Pointer) Error![]const []const u8 {
+/// The keys of the tables `path` reaches, unescaped, as a section header
+/// names them: an index into an array of tables is not one, a header under
+/// an element naming the element its part of the text is in.
+fn tableKeys(a: std.mem.Allocator, r: *const Read, path: edit.Pointer) Error![]const []const u8 {
     var keys: std.ArrayList([]const u8) = .empty;
+    var n: u32 = 0;
     var rest = path;
-    while (rest.next()) |token| try keys.append(a, token.unescape(try a.alloc(u8, token.written.len)));
+    while (rest.next()) |token| {
+        if (r.node(n).kind == .table) try keys.append(a, token.unescape(try a.alloc(u8, token.written.len)));
+        n = (try step(a, r, n, token)) orelse return error.PathNotFound;
+    }
     return keys.items;
+}
+/// Where the part of the text the nearest table at or above `n` with a
+/// section of its own ends: after its last section and those under it.
+fn sectionEnd(r: *const Read, n: u32) usize {
+    var at = n;
+    while (at != 0 and at != none) : (at = r.parents[at]) if (r.header(at)) |own| {
+        var end = own.end;
+        for (r.spans.headers.items) |h| if (r.isUnder(h.node, at)) {
+            end = @max(end, h.end);
+        };
+        return end;
+    };
+    return r.text.len;
 }
 fn spellKey(a: std.mem.Allocator, name: []const u8) Error![]const u8 {
     if (strings.bare(name)) return name;

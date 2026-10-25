@@ -91,25 +91,35 @@ fn readStream(a: std.mem.Allocator, text: []const u8, options: EditOptions) Erro
     }
     return .{ .doc = doc, .spans = spans, .parents = parents, .text = text };
 }
+/// `text` copied and read on an arena of its own: refused unless it is a
+/// stream of at most one document, as `yaml.parse` reads one.
+fn hold(gpa: std.mem.Allocator, text: []const u8, options: EditOptions) Error!edit.Held(Read) {
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    errdefer arena.deinit();
+    const a = arena.allocator();
+    const r = try readStream(a, try a.dupe(u8, text), options);
+    if (r.node(0).count() > 1) return error.SyntaxError;
+    return .{ .arena = arena, .read = r };
+}
 
 /// A YAML document held as its text, edited in place.
 pub const Edit = struct {
     gpa: std.mem.Allocator,
-    text: edit.Text,
+    /// The text as it is now, and where each node is written in it.
+    held: edit.Held(Read),
     options: EditOptions,
 
     /// `text` checked as a YAML stream of at most one document and copied:
     /// the edit's own.
     pub fn init(gpa: std.mem.Allocator, text: []const u8, options: EditOptions) Error!Edit {
-        try check(gpa, text, options);
-        return .{ .gpa = gpa, .text = try edit.Text.init(gpa, text), .options = options };
+        return .{ .gpa = gpa, .held = try hold(gpa, text, options), .options = options };
     }
     pub fn deinit(self: *Edit) void {
-        self.text.deinit(self.gpa);
+        self.held.deinit();
     }
     /// The document as it is now.
     pub fn bytes(self: *const Edit) []const u8 {
-        return self.text.bytes.items;
+        return self.held.read.text;
     }
 
     /// The value at `pointer` made `value`: replaced where it is written, or
@@ -119,7 +129,7 @@ pub const Edit = struct {
         var arena: std.heap.ArenaAllocator = .init(self.gpa);
         defer arena.deinit();
         const a = arena.allocator();
-        const r = try readStream(a, self.bytes(), self.options);
+        const r = &self.held.read;
         const path = try edit.Pointer.parse(pointer);
         const text = self.bytes();
         if (r.node(0).count() == 0) {
@@ -128,22 +138,22 @@ pub const Edit = struct {
             const spelled = try self.spell(a, value, false);
             return self.commit(a, &.{.{ .start = text.len, .end = text.len, .replacement = try newlineBefore(a, text, text.len, spelled) }});
         }
-        if (try find(a, &r, path)) |n| {
+        if (try find(a, r, path)) |n| {
             const parent = r.parents[n];
             const in_flow = parent != 0 and r.span(parent).flow;
             const spelled = try self.spell(a, value, r.span(n).flow or in_flow);
-            if (try emptyValue(a, &r, n, spelled)) |splice| return self.commit(a, &.{splice});
+            if (try emptyValue(a, r, n, spelled)) |splice| return self.commit(a, &.{splice});
             if (in_flow) {
                 // An empty value right after its `:` is given a space.
                 const s = r.span(n);
                 const gap: []const u8 = if (s.start > 0 and text[s.start - 1] == ':') " " else "";
                 return self.commit(a, &.{.{ .start = s.start, .end = s.end, .replacement = try std.mem.concat(a, u8, &.{ gap, trimLine(spelled) }) }});
             }
-            return self.commit(a, &.{try placed(a, &r, n, spelled)});
+            return self.commit(a, &.{try placed(a, r, n, spelled)});
         }
         const split = path.split() orelse return error.PathNotFound;
-        const parent = (try find(a, &r, split.parent)) orelse return error.PathNotFound;
-        return self.add(a, &r, parent, split.last, null, value);
+        const parent = (try find(a, r, split.parent)) orelse return error.PathNotFound;
+        return self.add(a, r, parent, split.last, null, value);
     }
     /// `value` put into the sequence before the entry `pointer` names, or at
     /// its end for `-`; into a mapping, as `set` adds a key.
@@ -151,24 +161,24 @@ pub const Edit = struct {
         var arena: std.heap.ArenaAllocator = .init(self.gpa);
         defer arena.deinit();
         const a = arena.allocator();
-        const r = try readStream(a, self.bytes(), self.options);
+        const r = &self.held.read;
         if (r.node(0).count() == 0) return error.PathNotFound;
         const split = (try edit.Pointer.parse(pointer)).split() orelse return error.PathNotFound;
-        const parent = (try find(a, &r, split.parent)) orelse return error.PathNotFound;
+        const parent = (try find(a, r, split.parent)) orelse return error.PathNotFound;
         if (r.node(parent).kind != .sequence) return self.set(pointer, value);
         const count = r.node(parent).count();
         const at = if (split.last.isEnd()) count else split.last.index() orelse return error.PathNotFound;
         if (at > count) return error.PathNotFound;
-        return self.add(a, &r, parent, split.last, at, value);
+        return self.add(a, r, parent, split.last, at, value);
     }
     /// The key or entry at `pointer` taken out, with its lines.
     pub fn remove(self: *Edit, pointer: []const u8) Error!void {
         var arena: std.heap.ArenaAllocator = .init(self.gpa);
         defer arena.deinit();
         const a = arena.allocator();
-        const r = try readStream(a, self.bytes(), self.options);
+        const r = &self.held.read;
         if (r.node(0).count() == 0) return error.PathNotFound;
-        const n = (try find(a, &r, try edit.Pointer.parse(pointer))) orelse return error.PathNotFound;
+        const n = (try find(a, r, try edit.Pointer.parse(pointer))) orelse return error.PathNotFound;
         const parent = r.parents[n];
         if (parent == 0) return error.PathNotFound;
         const members = try r.members(a, parent);
@@ -177,20 +187,20 @@ pub const Edit = struct {
         } else return error.PathNotFound;
         if (r.span(parent).flow) {
             // A pair in a flow sequence (`[a: b]`) is a mapping left empty.
-            if (members.len == 1 and r.node(parent).kind == .mapping and !braced(&r, parent)) {
+            if (members.len == 1 and r.node(parent).kind == .mapping and !braced(r, parent)) {
                 const s = r.span(parent);
                 return self.commit(a, &.{.{ .start = s.start, .end = s.end, .replacement = "{}" }});
             }
             var splices: std.ArrayList(edit.Splice) = .empty;
-            try flowCut(a, &r, members, i, &splices);
+            try flowCut(a, r, members, i, &splices);
             return self.commit(a, splices.items);
         }
         if (members.len == 1) {
             // A block collection's only member: the collection made empty.
             const empty = if (r.node(parent).kind == .mapping) "{}\n" else "[]\n";
-            return self.commit(a, &.{try placed(a, &r, parent, empty)});
+            return self.commit(a, &.{try placed(a, r, parent, empty)});
         }
-        return self.commit(a, &.{blockCut(&r, members, i)});
+        return self.commit(a, &.{blockCut(r, members, i)});
     }
 
     /// A key `token` (or an entry at `at`) added to collection `parent`.
@@ -232,26 +242,14 @@ pub const Edit = struct {
         const line = trimLine(written);
         return line[1 .. line.len - 1];
     }
-    /// The text the splices make, if it reads as YAML.
+    /// The text the splices make, if it reads as YAML: that read is held for
+    /// the next edit. What the edit read of the text before is gone.
     fn commit(self: *Edit, a: std.mem.Allocator, splices: []const edit.Splice) Error!void {
-        const sorted = try a.dupe(edit.Splice, splices);
-        std.mem.sort(edit.Splice, sorted, {}, struct {
-            fn lessThan(_: void, x: edit.Splice, y: edit.Splice) bool {
-                return x.start > y.start;
-            }
-        }.lessThan);
-        var next: []const u8 = self.bytes();
-        for (sorted) |s| next = try std.mem.concat(a, u8, &.{ next[0..s.start], s.replacement, next[s.end..] });
-        try check(a, next, self.options);
-        try self.text.replace(self.gpa, next);
+        const next = try hold(self.gpa, try edit.applied(a, self.bytes(), splices), self.options);
+        self.held.deinit();
+        self.held = next;
     }
 };
-
-fn check(gpa: std.mem.Allocator, text: []const u8, options: EditOptions) Error!void {
-    var arena: std.heap.ArenaAllocator = .init(gpa);
-    defer arena.deinit();
-    _ = try api.parseLeaky(api.Value, arena.allocator(), text, .{ .limits = options.limits });
-}
 
 /// The node `path` reaches in the document, or null. An alias is a value
 /// that may be replaced or removed, never gone through.

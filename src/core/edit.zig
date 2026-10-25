@@ -109,6 +109,46 @@ pub const Splice = struct {
     replacement: []const u8,
 };
 
+/// The text `splices` make of `text`, on `a`: each names bytes of `text`,
+/// none overlapping another, and is made in one pass in the order they lie.
+pub fn applied(a: std.mem.Allocator, text: []const u8, splices: []const Splice) error{OutOfMemory}![]u8 {
+    const sorted = try a.dupe(Splice, splices);
+    defer a.free(sorted);
+    std.mem.sort(Splice, sorted, {}, struct {
+        fn lessThan(_: void, x: Splice, y: Splice) bool {
+            return x.start < y.start;
+        }
+    }.lessThan);
+    var length = text.len;
+    for (sorted) |s| length = length - (s.end - s.start) + s.replacement.len;
+    const out = try a.alloc(u8, length);
+    var from: usize = 0;
+    var to: usize = 0;
+    for (sorted) |s| {
+        std.debug.assert(from <= s.start and s.start <= s.end and s.end <= text.len);
+        @memcpy(out[to..][0 .. s.start - from], text[from..s.start]);
+        to += s.start - from;
+        @memcpy(out[to..][0..s.replacement.len], s.replacement);
+        to += s.replacement.len;
+        from = s.end;
+    }
+    @memcpy(out[to..], text[from..]);
+    return out;
+}
+
+/// A document's text and what reading it found (`Read`, which holds the
+/// text), on an arena of their own: the read that checked an edit, kept to
+/// find the next edit's place.
+pub fn Held(comptime Read: type) type {
+    return struct {
+        arena: std.heap.ArenaAllocator,
+        read: Read,
+        pub fn deinit(self: *@This()) void {
+            self.arena.deinit();
+        }
+    };
+}
+
 /// A document's text, which every edit changes and nothing else holds.
 pub const Text = struct {
     bytes: std.ArrayList(u8) = .empty,

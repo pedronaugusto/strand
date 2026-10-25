@@ -243,7 +243,8 @@ pub const Edit = struct {
 fn check(gpa: std.mem.Allocator, text: []const u8, options: EditOptions) Error!void {
     var arena: std.heap.ArenaAllocator = .init(gpa);
     defer arena.deinit();
-    _ = try api.jsonc.parseLeaky(api.Value, arena.allocator(), text, .{ .limits = options.limits, .duplicates = .last });
+    // Checked as every value is, kept as its bytes: no tree built to be dropped.
+    _ = try api.jsonc.parseLeaky(api.Raw, arena.allocator(), text, .{ .limits = options.limits, .duplicates = .last });
 }
 
 /// Where the white space and comments after `at` end.

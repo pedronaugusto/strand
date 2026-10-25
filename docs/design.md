@@ -727,6 +727,40 @@ strand and expat agree on every one but those whose version is no `1.` and digit
 expat takes. quick-xml's and Go's writing of a 1,000-object listing reads back as the
 value strand wrote it from, and strand's is what their harnesses read.
 
+## Editing
+
+`toml.Edit`, `yaml.Edit` and `json.jsonc.Edit` (`src/toml/edit.zig`, `src/yaml/edit.zig`,
+`src/json/edit.zig`, sharing `src/core/edit.zig`) change a document's text in place. There
+is no second, lossless tree beside the one `parse` reads: toml_edit and ruamel.yaml keep
+one because their parsers drop what they do not need, and strand's readers already know
+where each part is written. An edit is a list of splices of the text. Where they go is
+found by the format's own reader in a comptime instance that records spans (TOML's nodes
+and headers, YAML's nodes with their entry indicators and the end of their last token,
+JSONC's member and element spans read container by container along the path), and what
+they hold is spelled by the format's own writer: inline or as sections in TOML, block or
+flow in YAML (`WriteOptions.flow`), at the indentation of where it goes. A path is a JSON
+Pointer (RFC 6901), the one syntax the three data models share.
+
+An edit is kept only if the text it makes reads whole. The editor holds the text and
+that read on an arena of its own (`edit.Held`), so the read that checked one edit finds
+the next one's place: a session of n edits reads the text n + 1 times. TOML and YAML
+check with the reader every parse uses, YAML refusing a second document as `parse`
+does; JSONC checks with its decoder reading the document as a `Raw`, checked as every
+value is and building nothing. A removal that remakes a TOML table (the last key of
+`[a.b.c]`'s `a.b`) holds the text it started from until the table is made again, and is
+that text again if it cannot be.
+
+The evidence is each format's suite: in every valid document of toml-test 1.1.0,
+yaml-test-suite and JSONTestSuite (and the yaml-test-suite's JSON, as JSONC), up to 64
+leaves set to 7 and 64 members removed, each result read back and compared, keyed
+entries in any order, with the value the change makes by a model over the format's
+`Value` (`src/testing/edit_props.zig`); the text a set replaces holds no comment line;
+an edit refused leaves the text as it was. In YAML a value an alias repeats changes
+where the alias does too, and there an edit is held only to reading back. The same
+property runs over documents mutated from commented examples. The rivals' harnesses
+(`bench/rivals/edit`: toml_edit, ruamel.yaml, jsonc-parser) make the bench's three
+edits to the same bytes, and what they write reads as the value strand's edits make.
+
 ## Format accelerators
 
 A format may answer the core's most common requests without building an event:
@@ -750,8 +784,9 @@ Timings are manual observations in private trials, never CI acceptance tests. Th
 repository's own drivers are `bench/bench.zig` (JSON Lines write, read, tail,
 follow, carried values, syncs), `bench/s2.zig` (JSON parse and write against
 `std.json`), `bench/zon.zig`, `bench/schema.zig` (ten 100-field encoders against
-hand-written ones), `bench/core.zig` (the reference backend) and `bench/xml.zig`, whose
+hand-written ones), `bench/core.zig` (the reference backend), `bench/xml.zig`, whose
 `--inputs` writes the documents `bench/rivals/xml` reads (quick-xml with serde, Go's
-encoding/xml) for rows on the same bytes. Earlier releases'
+encoding/xml) for rows on the same bytes, and `bench/edit.zig`, whose `--inputs` writes
+the documents `bench/rivals/edit` edits (toml_edit, ruamel.yaml, jsonc-parser). Earlier releases'
 rows and the comparison against them are in
 [private trials](https://github.com/pedronaugusto/trials/tree/main/strand).

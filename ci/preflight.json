@@ -86,6 +86,13 @@
       "imports": [
         "strand"
       ]
+    },
+    "zig build docs -- edit": {
+      "source": "examples/edit.zig",
+      "region": "edit",
+      "imports": [
+        "strand"
+      ]
     }
   },
   "extra_checks": [

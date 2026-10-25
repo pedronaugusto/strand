@@ -175,6 +175,31 @@ test "TOML: arrays of tables appended and removed" {
     try std.testing.expectEqualStrings("[[server]]\nname = \"b\"\n\n[[server]]\nname = \"c\"\n", e.bytes());
 }
 
+test "TOML: dotted keys inside braces and under an element of an array of tables" {
+    var braces = try toml.Edit.init(gpa, "t = {a.b.c = 1, a.b.d = 2}\n", .{});
+    defer braces.deinit();
+    try braces.remove("/t/a/b/c");
+    try std.testing.expectEqualStrings("t = {a.b.d = 2}\n", braces.bytes());
+    try braces.remove("/t/a/b");
+    try std.testing.expectEqualStrings("t = { a = {} }\n", braces.bytes());
+
+    const text =
+        \\[[arr]]
+        \\a.b.c = 1
+        \\
+        \\[[arr]]
+        \\a.b.c = 3
+        \\
+    ;
+    var e = try toml.Edit.init(gpa, text, .{});
+    defer e.deinit();
+    // The table `a` stays, its section named in the first element's part.
+    try e.remove("/arr/0/a/b");
+    try std.testing.expectEqualStrings("[[arr]]\n\n[arr.a]\n\n[[arr]]\na.b.c = 3\n", e.bytes());
+    try e.set("/arr/0/a/k", @as(u8, 1));
+    try std.testing.expectEqualStrings("[[arr]]\n\n[arr.a]\nk = 1\n\n[[arr]]\na.b.c = 3\n", e.bytes());
+}
+
 test "YAML: values set, keys added at their column, comments kept" {
     const text =
         \\# The service.

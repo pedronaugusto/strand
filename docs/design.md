@@ -2,8 +2,8 @@
 
 Strand is one build module, `strand`, whose namespaces are `strand.core`,
 `strand.json`, `strand.jsonl`, `strand.zon`, `strand.urlencoded`, `strand.csv`,
-`strand.cbor`, `strand.msgpack`, `strand.toml` and `strand.yaml`; the root names only
-those ten.
+`strand.cbor`, `strand.msgpack`, `strand.toml`, `strand.yaml` and `strand.xml`; the
+root names only those eleven.
 There is one API per thing: JSON is parsed and written by `strand.json` alone,
 and JSON Lines is framing around it, not a codec of its own. A separate build
 module buys something only where it keeps dependencies from users who do not need
@@ -33,7 +33,9 @@ them, the map sorting of their deterministic profiles (`src/binary/sorted.zig`);
 grammar is shared. TOML is text → syntax → wire → values → API/facade, and imports
 JSON's exact number kernels alone. YAML is text (characters and the core schema) →
 events → nodes → wire → values → API/facade, and imports JSON's exact number kernels
-alone.
+alone. XML is text (characters, names, XML Schema's lexical forms) → tokens (the scanner
+and the doctype's internal subset) → nodes → wire → values → API/facade, and imports
+JSON's exact number kernels alone.
 Mapping consumes immediate events, including JSON number lexemes; it requires no
 DOM or token tape. JSONL framing shares its line/drain boundary decision between
 the pull reader and the push decoder, and both parse a record with `json`.
@@ -627,6 +629,104 @@ Properties write generated values (keys of any kind) and read them back, cut the
 anywhere, and read any bytes (examples with a few edits) in all three ownerships and
 write back whatever is read.
 
+## XML
+
+XML 1.0 (fifth edition) is read in three steps. The scanner (`src/xml/Scanner.zig`) makes
+tokens of the text and checks them as it goes: the declaration (a `1.x` version read as
+1.0), the doctype with its internal subset handed over whole, start tags (each attribute
+named once) and end tags (each matching its start), character data (every character XML
+allows, no `]]>`, references well-formed), CDATA sections, comments and processing
+instructions; outside the root, only white space and those last two. A run of character
+data is classified a vector at a time, and what it holds (a reference, a carriage return,
+only white space) is handed on with it, so the nodes never look at it again. The scanner
+is public (`xml.Scanner`), for a reader of a document too large to read whole.
+
+The internal subset (`src/xml/dtd.zig`) is read for well-formedness: element, attribute
+list, entity and notation declarations, comments, processing instructions, and
+parameter-entity references between declarations, an internal one read in place as
+declarations and an external one never read (the declarations after it are checked and
+not taken, as §5.1 asks). An entity's literal becomes its replacement text with line ends
+made line feeds and character references expanded; general references stay for its use.
+An attribute's default is held to the rules its values are (no `<`, every entity declared,
+internal and not inside itself).
+
+The tokens are read into nodes (`src/xml/document.zig`): each element followed by its
+attributes and then its content, each knowing where it ends; a text node is a maximal run
+of character data between two elements, CDATA, references and entities' text joined into
+it, comments and processing instructions passed over. A run that is one piece of the
+input needing nothing done is borrowed; any other is decoded into the document's working
+storage (references replaced, line ends made line feeds) and handed on as a transient
+span. An internal entity referred to in content is scanned in place as content (its
+elements balanced within it), one in an attribute value normalized in place; each
+expansion is charged as work and its nodes and bytes to the item and allocation limits as
+they are made, so an entity that would grow a document without end is refused once it has
+grown past them, and one inside itself is refused. An external entity is never fetched: a
+reference to one is `UnsupportedValue` (in an attribute value, where XML forbids it, a
+syntax error). An entity declared nowhere is a syntax error where every declaration was
+read, and `UnsupportedValue` where some might be in what strand does not read. Attribute
+values are normalized as CDATA (white space characters spaces); `ATTLIST` defaults and
+declared-type normalization are not applied, as libxml2 and Go do not by default.
+Namespace declarations are scope: their nodes are marked so, each element's and
+attribute's name is a qualified name whose prefix is bound, and no two attributes are one
+name in one namespace (`ParseOptions.namespaces` turns that off). UTF-8 is read, and
+UTF-16 by its byte-order mark, transcoded into working storage; a declared encoding that
+the mark or the declaration's own bytes contradict is not well-formed, and one that agrees
+with UTF-8 on ASCII is read only for a document of ASCII alone.
+
+The decoder (`src/xml/Decoder.zig`) walks the nodes as quick-xml's serde reads them, since
+a field's name is all a type has to say where it is: an element read as a record is its
+attributes keyed `@name`, then its children in order, each child element keyed by its
+name and a text run by `$text`. White space between child elements is formatting and is
+no member, unless the element's content is mixed; an element with no child element keeps
+its white space. Children of one name group into a sequence where the type asks for one at
+the first of them, wherever the rest stand (Go merges non-adjacent ones too; quick-xml
+needs a feature for it), and a frame remembers the names grouped, so each is one key; asked
+for one value, a second child of the name is a second key, which the core's duplicate
+policy refuses. An element read as anything else is its text, read as the type asks (XML
+Schema's `integer`, `double`, `INF` and `NaN`, `boolean`), its attributes unknown fields.
+A union is a record of one member, the child element named for its arm; the root read as
+a union, or as a map, is one entry, its name to its content, so a document's root name is
+an arm and `xml.Element` reads its own name. A record does not take namespace
+declarations; a map, which takes everything an element has (`xml.Element`, `core.Pairs`),
+does. A place in the walk is a node, so a union tagged inside its element is read by
+walking from its place again. An XML value is no one span of its text (its entities are
+read in place), so there is no `xml.Raw`.
+
+`xml.Element` is a name and the entries of its content in order, keyed as a record's
+members are: an attribute `@name`, a text run `$text`, a child element its name, its
+value the child's text where it holds text alone and its own entries otherwise. So an
+element is read and written by the core as every type is, mixed content and namespace
+declarations kept, and two elements compare by their entries.
+
+The writer (`src/xml/Encoder.zig`) streams: the root an element of the name the write is
+given (a union's root its arm's element), a record's or map's members its attributes
+(before any child: a start tag is written before its content), text and children, a
+sequence repeated elements of its key's name (a sequence in a sequence has no name to
+repeat and is refused), a union an element holding its arm's. A null optional field is
+left out and a null anywhere else refused: XML has no null. Text is escaped and checked as
+UTF-8 in one pass that writes plain ASCII straight through; in attributes `"`, tab, line
+feed and carriage return are character references, so a reader's normalization gives them
+back, and a character XML cannot hold is refused. A field's name is checked when its type
+is compiled, a map's key when it is written. Floats are the shortest spelling that reads
+back, or `INF`, `-INF`, `NaN`.
+
+The evidence is the W3C XML Conformance Test Suite (xmlts20130923), fetched by the build
+from the W3C as a lazy dev dependency (its parts' licences allow no other copy) with the
+documents strand's manifest lists embedded into the tests: every XML 1.0 test of the fifth
+edition that needs no external entity, 1,727, each valid and invalid document read and
+each not-well-formed one refused. Two are skipped, named with their reasons: an entity
+declared nowhere that XML calls a validity error is refused, not read without it, and two
+namespace names equal only after an `ATTLIST`'s NMTOKEN normalization. Properties write
+generated elements and typed values and read them back (minified and indented), cut them
+anywhere, read any bytes (damaged examples) in all three ownerships and through the scanner,
+and write back whatever is read; an allocation-failure sweep; limits at their edges. By
+hand (`bench/rivals/xml/infoset.py`): every well-formed document of the suite read by
+strand and by expat to the same tree, apart from expat's pre-fifth-edition names (318),
+declared-type normalization (5) and the entity above; 80,000 damaged documents, where
+strand and expat agree on every one but those whose version is no `1.` and digits, which
+expat takes. quick-xml's and Go's writing of a 1,000-object listing reads back as the
+value strand wrote it from, and strand's is what their harnesses read.
+
 ## Format accelerators
 
 A format may answer the core's most common requests without building an event:
@@ -650,6 +750,8 @@ Timings are manual observations in private trials, never CI acceptance tests. Th
 repository's own drivers are `bench/bench.zig` (JSON Lines write, read, tail,
 follow, carried values, syncs), `bench/s2.zig` (JSON parse and write against
 `std.json`), `bench/zon.zig`, `bench/schema.zig` (ten 100-field encoders against
-hand-written ones) and `bench/core.zig` (the reference backend). Earlier releases'
+hand-written ones), `bench/core.zig` (the reference backend) and `bench/xml.zig`, whose
+`--inputs` writes the documents `bench/rivals/xml` reads (quick-xml with serde, Go's
+encoding/xml) for rows on the same bytes. Earlier releases'
 rows and the comparison against them are in
 [private trials](https://github.com/pedronaugusto/trials/tree/main/strand).

@@ -79,6 +79,13 @@
       "imports": [
         "strand"
       ]
+    },
+    "zig build docs -- xml": {
+      "source": "examples/listing.zig",
+      "region": "xml",
+      "imports": [
+        "strand"
+      ]
     }
   },
   "extra_checks": [

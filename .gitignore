@@ -8,3 +8,6 @@ zig-pkg/
 
 # macOS.
 .DS_Store
+/bench/rivals/xml/rust/target/
+/bench/rivals/xml/go/xml-rivals
+__pycache__/

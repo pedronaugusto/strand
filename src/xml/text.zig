@@ -51,16 +51,27 @@ pub inline fn decode(bytes: []const u8, at: usize) ?struct { c: u21, len: u3 } {
     return .{ .c = c, .len = len };
 }
 
+/// What each ASCII byte may be in a name: bit 0 its start, bit 1 after it.
+const ascii_names: [128]u2 = blk: {
+    var table: [128]u2 = @splat(0);
+    for (0..128) |b| {
+        const start: u2 = @intFromBool(isNameStart(@intCast(b)));
+        const rest: u2 = @intFromBool(isName(@intCast(b)));
+        table[b] = start | rest << 1;
+    }
+    break :blk table;
+};
+
 /// The length of the `Name` at the start of `bytes` (0 where none starts),
 /// or null where the bytes there are no UTF-8.
 pub fn nameLength(bytes: []const u8) ?usize {
     var at: usize = 0;
     while (at < bytes.len) {
         const b = bytes[at];
-        // ASCII names are the common case: a byte at a time, no decode.
+        // ASCII names are the common case: a table, no decode.
         if (b < 0x80) {
-            const ok = if (at == 0) isNameStart(b) else isName(b);
-            if (!ok) return at;
+            const bit: u2 = if (at == 0) 1 else 2;
+            if (ascii_names[b] & bit == 0) return at;
             at += 1;
             continue;
         }

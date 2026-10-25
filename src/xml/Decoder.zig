@@ -45,12 +45,15 @@ const Frame = union(enum) {
         end: u32,
         /// The node whose value is next, its key given.
         value: ?u32 = null,
-        /// White space between children is content.
+        /// White space is content: the element's content is mixed, or it
+        /// holds no child element for white space to stand between.
         mixed: bool,
         /// Where this element's grouped names start in `grouped`.
         grouped: u32,
         /// A map takes namespace declarations too; a record does not.
         declarations: bool,
+        /// The next key, where `atEnd` has found it.
+        peeked: ?u32 = null,
     },
     /// The children of one name, from the first.
     group: struct { name: []const u8, at: u32, end: u32, left: u32 },
@@ -154,7 +157,12 @@ pub fn atEnd(self: *Self) Error!bool {
     const d = &(self.doc orelse return false);
     const frame = self.top() orelse return false;
     return switch (frame.*) {
-        .element => |*e| e.value == null and self.nextKey(d, e) == null,
+        .element => |*e| blk: {
+            if (e.value != null) break :blk false;
+            const k = self.nextKey(d, e);
+            e.peeked = k;
+            break :blk k == null;
+        },
         .group => |g| g.left == 0,
         .children => |*ch| nextChild(d, ch.at, ch.end, ch.mixed) == null,
         .arm => |a| a.step == 2,
@@ -170,7 +178,9 @@ pub fn next(self: *Self, c: *core.Context, request: core.Request) Error!core.Eve
                 e.value = null;
                 return self.memberValue(d, c, e, j, request);
             }
-            const j = self.nextKey(d, e) orelse {
+            const found = if (e.peeked) |k| k else self.nextKey(d, e);
+            e.peeked = null;
+            const j = found orelse {
                 self.grouped.shrinkRetainingCapacity(e.grouped);
                 _ = self.frames.pop();
                 return .end;
@@ -301,11 +311,7 @@ fn element(self: *Self, d: *const document.Document, c: *core.Context, j: u32, r
     const node = d.nodes.items[j];
     const attributes = node.attributes();
     const first_child = j + 1 + attributes;
-    const has_elements = blk: {
-        var k = first_child;
-        while (k < node.end) : (k = d.nodes.items[k].end) if (d.nodes.items[k].kind == .element) break :blk true;
-        break :blk false;
-    };
+    const has_elements = node.elements;
     switch (request.expected) {
         .sequence, .tuple => return self.open(d, c, j, request),
         .record, .variant => return self.members(d, c, j, false),
@@ -320,11 +326,8 @@ fn element(self: *Self, d: *const document.Document, c: *core.Context, j: u32, r
     if (has_elements) return error.UnexpectedType;
     if (ownAttributes(d, j) and c.acceptance.reject_unknown_fields) return error.UnknownField;
     // Its text: at most one run, as comments and processing instructions
-    // join the text around them.
-    var k = first_child;
-    while (k < node.end) : (k = d.nodes.items[k].end) {
-        if (d.nodes.items[k].kind == .text) return scalar(d.value(d.nodes.items[k]), c, request);
-    }
+    // join the text around them, and nothing else.
+    if (first_child < node.end) return scalar(d.value(d.nodes.items[first_child]), c, request);
     return scalar(.{ .bytes = "", .lifetime = .borrowed }, c, request);
 }
 fn members(self: *Self, d: *const document.Document, c: *core.Context, j: u32, declarations: bool) Error!core.Event {
@@ -333,13 +336,13 @@ fn members(self: *Self, d: *const document.Document, c: *core.Context, j: u32, d
     var k = j + 1 + node.attributes();
     while (k < node.end) : (k = d.nodes.items[k].end) {
         const child = d.nodes.items[k];
-        if (child.kind == .element or node.mixed or !child.blank) count += 1;
+        if (child.kind == .element or node.mixed or !node.elements or !child.blank) count += 1;
     }
     // Grouped children make fewer keys than this: the record's length is
     // left open, and this bounds it.
     try c.chargeWork(count + 1);
     try c.count(count);
-    try self.push(c, .{ .element = .{ .node = j, .at = j + 1, .end = node.end, .mixed = node.mixed, .grouped = @intCast(self.grouped.items.len), .declarations = declarations } });
+    try self.push(c, .{ .element = .{ .node = j, .at = j + 1, .end = node.end, .mixed = node.mixed or !node.elements, .grouped = @intCast(self.grouped.items.len), .declarations = declarations } });
     return .{ .begin = .{ .kind = .record, .len = null } };
 }
 fn open(self: *Self, d: *const document.Document, c: *core.Context, j: u32, request: core.Request) Error!core.Event {
@@ -347,10 +350,11 @@ fn open(self: *Self, d: *const document.Document, c: *core.Context, j: u32, requ
     const node = d.nodes.items[j];
     if (ownAttributes(d, j) and c.acceptance.reject_unknown_fields) return error.UnknownField;
     var count: usize = 0;
-    var k = nextChild(d, j + 1 + node.attributes(), node.end, node.mixed);
-    while (k) |at| : (k = nextChild(d, d.nodes.items[at].end, node.end, node.mixed)) count += 1;
+    const mixed = node.mixed or !node.elements;
+    var k = nextChild(d, j + 1 + node.attributes(), node.end, mixed);
+    while (k) |at| : (k = nextChild(d, d.nodes.items[at].end, node.end, mixed)) count += 1;
     try c.chargeWork(count + 1);
-    try self.push(c, .{ .children = .{ .at = j + 1 + node.attributes(), .end = node.end, .mixed = node.mixed } });
+    try self.push(c, .{ .children = .{ .at = j + 1 + node.attributes(), .end = node.end, .mixed = mixed } });
     return .{ .begin = .{ .kind = .sequence, .len = count } };
 }
 

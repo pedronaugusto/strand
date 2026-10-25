@@ -15,6 +15,8 @@ const xml_text = @import("text.zig");
 pub const Format = Decoder.Format;
 pub const capabilities = Decoder.capabilities;
 pub const canonical = false;
+/// Text is checked as UTF-8 where it is escaped, in the same pass.
+pub const validates_text = true;
 pub const Error = core.EncodeError || std.Io.Writer.Error;
 
 /// How written XML is laid out: on one line, or a child element to a line,
@@ -61,6 +63,10 @@ slot: Slot,
 /// Namespace declarations for the root's start tag.
 namespaces: []const Namespace,
 done: bool,
+/// How many elements are open.
+elements: usize,
+/// The name the next element takes was checked when its type was compiled.
+name_checked: bool,
 const Self = @This();
 
 pub const Namespace = struct {
@@ -70,7 +76,7 @@ pub const Namespace = struct {
 };
 
 pub fn init(self: *Self, writer: *std.Io.Writer, root: []const u8, whitespace: Whitespace, namespaces: []const Namespace, allocator: ?std.mem.Allocator) void {
-    self.* = .{ .writer = writer, .allocator = allocator, .indent = indentUnit(whitespace), .stack = .empty, .frames = undefined, .attributes = .empty, .attribute_buffer = undefined, .slot = .{ .root = root }, .namespaces = namespaces, .done = false };
+    self.* = .{ .writer = writer, .allocator = allocator, .indent = indentUnit(whitespace), .stack = .empty, .frames = undefined, .attributes = .empty, .attribute_buffer = undefined, .slot = .{ .root = root }, .namespaces = namespaces, .done = false, .elements = 0, .name_checked = false };
     self.stack = .initBuffer(&self.frames);
     self.attributes = .initBuffer(&self.attribute_buffer);
 }
@@ -94,10 +100,29 @@ fn put(self: *Self, out: []const u8, c: *core.Context) Error!void {
     try c.output(out.len);
     try self.writer.writeAll(out);
 }
+const lanes = 16;
+const Lane = @Vector(lanes, u8);
+/// `value` escaped as character data or an attribute's value, in one pass
+/// where it needs no escape and is ASCII: the common case. A character XML
+/// cannot hold, or bytes that are not UTF-8, are refused.
 fn escaped(self: *Self, value: []const u8, attribute: bool, c: *core.Context) Error!void {
-    if (xml_text.forbidden(value) != null) return error.UnsupportedValue;
-    try c.output(xml_text.escapedLength(value, attribute));
-    try xml_text.escape(self.writer, value, attribute);
+    var i: usize = 0;
+    while (i + lanes <= value.len) : (i += lanes) {
+        const v: Lane = value[i..][0..lanes].*;
+        var special = (v < @as(Lane, @splat(0x20))) | (v >= @as(Lane, @splat(0x80))) | (v == @as(Lane, @splat('&'))) | (v == @as(Lane, @splat('<'))) | (v == @as(Lane, @splat('>')));
+        if (attribute) special |= v == @as(Lane, @splat('"'));
+        if (@reduce(.Or, special)) break;
+    }
+    while (i < value.len) : (i += 1) {
+        const b = value[i];
+        if (b < 0x20 or b >= 0x80 or b == '&' or b == '<' or b == '>' or (attribute and b == '"')) break;
+    }
+    if (i == value.len) return self.put(value, c);
+    if (!std.unicode.utf8ValidateSlice(value[i..])) return error.InvalidUtf8;
+    if (xml_text.forbidden(value[i..]) != null) return error.UnsupportedValue;
+    try c.output(i + xml_text.escapedLength(value[i..], attribute));
+    try self.writer.writeAll(value[0..i]);
+    try xml_text.escape(self.writer, value[i..], attribute);
 }
 fn top(self: *Self) ?*Frame {
     if (self.stack.items.len == 0) return null;
@@ -127,16 +152,14 @@ fn pushFrame(self: *Self, frame: Frame) Error!void {
 }
 /// How many element frames are open: the depth of an indented line.
 fn level(self: *Self) usize {
-    var n: usize = 0;
-    for (self.stack.items) |f| if (f.kind == .element or f.kind == .wrapper) {
-        n += 1;
-    };
-    return n;
+    return self.elements;
 }
 fn newline(self: *Self, depth: usize, c: *core.Context) Error!void {
     if (self.indent.len == 0) return;
-    try self.put("\n", c);
-    for (0..depth) |_| try self.put(self.indent, c);
+    try c.output(1 + depth * self.indent.len);
+    try self.writer.writeByte('\n');
+    if (self.indent.len == 1) return self.writer.splatByteAll(self.indent[0], depth);
+    for (0..depth) |_| try self.writer.writeAll(self.indent);
 }
 /// Closes the innermost element's start tag, if it is open.
 fn closeTag(self: *Self, c: *core.Context) Error!void {
@@ -163,9 +186,11 @@ fn take(self: *Self) Error!Slot {
 fn checkName(name: []const u8) Error!void {
     if (!xml_text.isWholeName(name)) return error.UnsupportedValue;
 }
-/// The start of an element named `name`, as a child of what is open.
+/// The start of an element named `name`, as a child of what is open: a
+/// name checked already (a field's, at compile time) or here.
 fn startTag(self: *Self, name: []const u8, c: *core.Context) Error!void {
-    try checkName(name);
+    if (!self.name_checked) try checkName(name);
+    self.name_checked = false;
     try self.closeTag(c);
     const depth = self.level();
     if (self.element()) |parent| {
@@ -288,6 +313,14 @@ pub fn unit(self: *Self, c: *core.Context) Error!void {
     self.finishRoot();
 }
 /// A member's key: where its value goes.
+/// A record's field: a name the type spells, so checked when it compiles.
+pub fn field(self: *Self, comptime name: []const u8, c: *core.Context) Error!void {
+    const plain = comptime name.len > 0 and name[0] != '@' and !std.mem.eql(u8, name, "$text") and xml_text.isWholeName(name);
+    if (!plain) return self.key(name, c);
+    if (self.slot != .none) return error.UnsupportedValue;
+    self.slot = .{ .child = name };
+    self.name_checked = true;
+}
 pub fn key(self: *Self, name: []const u8, c: *core.Context) Error!void {
     if (self.slot != .none) return error.UnsupportedValue;
     if (name.len > 0 and name[0] == '@') {
@@ -330,6 +363,7 @@ pub fn begin(self: *Self, kind: core.Kind, name: []const u8, len: usize, c: *cor
             .root, .child => |element_name| {
                 try self.startTag(element_name, c);
                 try self.pushFrame(.{ .kind = .element, .name = element_name, .open_tag = true, .map = kind == .map, .attributes_start = self.attributes.items.len });
+                self.elements += 1;
             },
             else => return error.UnsupportedValue,
         },
@@ -353,6 +387,7 @@ pub fn begin(self: *Self, kind: core.Kind, name: []const u8, len: usize, c: *cor
                 try self.startTag(element_name, c);
                 try self.put(">", c);
                 try self.pushFrame(.{ .kind = .wrapper, .name = element_name, .attributes_start = self.attributes.items.len });
+                self.elements += 1;
                 self.slot = .{ .child = name };
             },
             else => return error.UnsupportedValue,
@@ -364,7 +399,10 @@ pub fn end(self: *Self, c: *core.Context) Error!void {
     const f = self.stack.pop() orelse return error.UnsupportedValue;
     self.slot = .none;
     switch (f.kind) {
-        .element, .wrapper => try self.endTag(f, c),
+        .element, .wrapper => {
+            self.elements -= 1;
+            try self.endTag(f, c);
+        },
         .sequence, .transparent => {},
     }
     self.finishRoot();

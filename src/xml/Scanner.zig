@@ -98,6 +98,8 @@ allocator: std.mem.Allocator,
 pending_end: ?[]const u8,
 /// Where the input was found not well-formed.
 failed_at: usize,
+/// What the last `text` token holds.
+text_flags: TextFlags = .{},
 own_context: core.Context,
 const Self = @This();
 
@@ -123,6 +125,7 @@ pub fn start(self: *Self, c: *core.Context, allocator: std.mem.Allocator, input:
     self.allocator = allocator;
     self.pending_end = null;
     self.failed_at = 0;
+    self.text_flags = .{};
 }
 pub fn deinit(self: *Self) void {
     self.open.deinit(self.allocator);
@@ -183,13 +186,11 @@ pub fn next(self: *Self) Error!?Token {
 fn chars(self: *Self, bytes: []const u8, at: usize) Error!void {
     var i: usize = 0;
     while (i < bytes.len) {
+        i = plainRun(bytes, i);
+        if (i == bytes.len) return;
         const b = bytes[i];
-        if (b >= 0x20 and b < 0x80) {
-            i += 1;
-            continue;
-        }
-        if (b < 0x20) {
-            if (b != '\t' and b != '\n' and b != '\r') return self.fail(at + i);
+        if (b < 0x80) {
+            if (b < 0x20 and b != '\t' and b != '\n' and b != '\r') return self.fail(at + i);
             i += 1;
             continue;
         }
@@ -198,6 +199,75 @@ fn chars(self: *Self, bytes: []const u8, at: usize) Error!void {
         i += d.len;
     }
 }
+const lanes = 16;
+const Lane = @Vector(lanes, u8);
+/// Where the run of printable ASCII from `from` ends: a vector at a time.
+inline fn plainRun(bytes: []const u8, from: usize) usize {
+    var i = from;
+    while (i + lanes <= bytes.len) : (i += lanes) {
+        const v: Lane = bytes[i..][0..lanes].*;
+        const odd = (v < @as(Lane, @splat(0x20))) | (v >= @as(Lane, @splat(0x80)));
+        if (std.simd.firstTrue(odd)) |f| return i + f;
+    }
+    while (i < bytes.len and bytes[i] >= 0x20 and bytes[i] < 0x80) i += 1;
+    return i;
+}
+
+/// What the last character data read holds, for a reader that would
+/// otherwise look again: a reference, a carriage return, only white space.
+pub const TextFlags = struct { references: bool = false, carriage_return: bool = false, blank: bool = true };
+/// Character data from `at` up to its `<` (or the end), checked in one pass:
+/// characters XML allows, references well-formed, no `]]>`; and what it
+/// holds noted in `flags`.
+fn scanText(self: *Self, at: usize, flags: *TextFlags) Error!usize {
+    const input = self.input;
+    var i = at;
+    flags.* = .{};
+    while (i < input.len) {
+        // A run of bytes that need nothing: printable ASCII but `<&]`.
+        while (i + lanes <= input.len) {
+            const v: Lane = input[i..][0..lanes].*;
+            const special = (v < @as(Lane, @splat(0x20))) | (v >= @as(Lane, @splat(0x80))) | (v == @as(Lane, @splat('<'))) | (v == @as(Lane, @splat('&'))) | (v == @as(Lane, @splat(']')));
+            const first: usize = if (std.simd.firstTrue(special)) |f| f else lanes;
+            if (flags.blank and !text.allSpace(input[i..][0..first])) flags.blank = false;
+            i += first;
+            if (first != lanes) break;
+        }
+        if (i >= input.len) break;
+        const b = input[i];
+        switch (b) {
+            '<' => return i,
+            ' ', '\t', '\n' => i += 1,
+            '\r' => {
+                flags.carriage_return = true;
+                i += 1;
+            },
+            '&' => {
+                flags.blank = false;
+                flags.references = true;
+                i = try self.reference(i);
+            },
+            ']' => {
+                flags.blank = false;
+                if (self.startsWith(i, "]]>")) return self.fail(i);
+                i += 1;
+            },
+            0...0x08, 0x0B, 0x0C, 0x0E...0x1F => return self.fail(i),
+            0x21...0x25, 0x27...0x3B, 0x3D...0x5C, 0x5E...0x7F => {
+                flags.blank = false;
+                i += 1;
+            },
+            0x80...0xFF => {
+                flags.blank = false;
+                const d = text.decode(input, i) orelse return self.failUtf8(i);
+                if (!text.isChar(d.c)) return self.fail(i);
+                i += d.len;
+            },
+        }
+    }
+    return i;
+}
+
 /// The name at `at`, checked; its end is the caller's to check.
 fn nameAt(self: *Self, at: usize) Error![]const u8 {
     const n = text.nameLength(self.input[at..]) orelse return self.failUtf8(at);
@@ -238,27 +308,19 @@ fn reference(self: *Self, at: usize) Error!usize {
 fn charData(self: *Self) Error!Token {
     const input = self.input;
     const start_at = self.at;
-    const end = std.mem.findScalarPos(u8, input, start_at, '<') orelse input.len;
-    const bytes = input[start_at..end];
+    var end: usize = undefined;
     if (self.place != .inside) {
         // Outside the root: white space only.
+        end = std.mem.findScalarPos(u8, input, start_at, '<') orelse input.len;
+        const bytes = input[start_at..end];
         if (!text.allSpace(bytes)) return self.fail(start_at + (std.mem.findNone(u8, bytes, " \t\r\n") orelse 0));
+        self.text_flags = .{};
     } else {
-        try self.chars(bytes, start_at);
-        var i: usize = 0;
-        while (std.mem.findAnyPos(u8, bytes, i, "&]")) |k| {
-            if (bytes[k] == '&') {
-                i = try self.reference(start_at + k) - start_at;
-                if (i > bytes.len) return self.fail(start_at + k);
-            } else {
-                if (std.mem.startsWith(u8, bytes[k..], "]]>")) return self.fail(start_at + k);
-                i = k + 1;
-            }
-        }
+        end = try self.scanText(start_at, &self.text_flags);
     }
-    try self.context.chargeWork(bytes.len);
+    try self.context.chargeWork(end - start_at);
     self.at = end;
-    return .{ .text = bytes };
+    return .{ .text = input[start_at..end] };
 }
 
 fn startTag(self: *Self) Error!Token {

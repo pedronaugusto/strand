@@ -239,19 +239,27 @@ const Reader = struct {
         }
         return i;
     }
-    /// An entity's literal as its replacement text: character references
-    /// expanded, other references checked and kept; no parameter-entity
+    /// An entity's literal as its replacement text: line ends made line
+    /// feeds, character references expanded, other references checked and kept; no parameter-entity
     /// reference, which the internal subset refuses inside a declaration.
     fn entityValue(r: *Reader, bytes: []const u8, value: []const u8, at: usize) Error!Entity {
         const out = &r.dtd.replacement;
         const start = out.items.len;
         if (start + value.len > std.math.maxInt(u32)) return error.LengthLimit;
         try r.c.chargeWork(value.len);
+        // Line ends of the input are line feeds; a carriage return in a
+        // parameter entity's text came from a character reference and stays.
+        const input = r.base != null;
         var i: usize = 0;
         while (i < value.len) {
-            const k = std.mem.findAnyPos(u8, value, i, "&%") orelse value.len;
+            const k = std.mem.findAnyPos(u8, value, i, if (input) "&%\r" else "&%") orelse value.len;
             try out.appendSlice(r.allocator, value[i..k]);
             if (k == value.len) break;
+            if (value[k] == '\r') {
+                try out.append(r.allocator, '\n');
+                i = if (k + 1 < value.len and value[k + 1] == '\n') k + 2 else k + 1;
+                continue;
+            }
             if (value[k] == '%') return r.fail(bytes, at + k);
             const ref = try reference(value, k) orelse return r.fail(bytes, at + k);
             switch (ref) {

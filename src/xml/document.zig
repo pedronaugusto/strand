@@ -39,6 +39,8 @@ pub const Node = struct {
     /// An attribute that declares a namespace: scope, which a map of an
     /// element's content keeps and a record does not.
     declaration: bool = false,
+    /// An element that holds a child element.
+    elements: bool = false,
     /// An element's name; an attribute's key, `@` and its name.
     name: Span32 = .{},
     /// An attribute's value; a text run's bytes; an element's attribute count
@@ -99,7 +101,15 @@ const xml_namespace = "http://www.w3.org/XML/1998/namespace";
 const xmlns_namespace = "http://www.w3.org/2000/xmlns/";
 
 /// A piece of the text run being made.
-const Piece = struct { source: Source, start: u32, len: u32, cdata: bool = false };
+const Piece = struct {
+    source: Source,
+    start: u32,
+    len: u32,
+    cdata: bool = false,
+    /// Its bytes are its text as they are: no reference, no carriage return.
+    plain: bool = false,
+    blank: bool = false,
+};
 /// Bytes in one of the document's sources.
 const Decoded = struct { source: Source, span: Span32 };
 /// A prefix bound in the elements open.
@@ -169,7 +179,7 @@ const Builder = struct {
                 .doctype => |d| try self.doctype(d),
                 .start => |s| try self.startElement(s, source, base, offsetIn(bytes, s.name)),
                 .end => try self.endElement(),
-                .text => |raw| if (self.open.items.len != 0) try self.textPiece(raw, source, base, offsetIn(bytes, raw)),
+                .text => |raw| if (self.open.items.len != 0) try self.textPiece(raw, source, scanner.text_flags, offsetIn(bytes, raw)),
                 .cdata => |raw| try self.addPiece(.{ .source = source, .start = offsetIn(bytes, raw), .len = @intCast(raw.len), .cdata = true }, offsetIn(bytes, raw)),
                 .comment => {},
                 .pi => |p| if (self.options.namespaces and std.mem.findScalar(u8, p.target, ':') != null) return self.fail(offsetIn(bytes, p.target)),
@@ -230,6 +240,7 @@ const Builder = struct {
         try self.closeRun();
         if (self.open.items.len >= self.c.limits.depth) return error.DepthLimit;
         const at = self.place(source, name_offset);
+        if (self.open.items.len != 0) self.doc.nodes.items[self.open.items[self.open.items.len - 1]].elements = true;
         const index = try self.append(.{ .kind = .element, .name_source = source, .name = .{ .start = name_offset, .len = @intCast(s.name.len) }, .at = at });
         _ = base;
         self.open.append(self.allocator, index) catch return self.oom();
@@ -340,8 +351,8 @@ const Builder = struct {
     }
     /// Character data: its pieces between references to entities, each
     /// entity's text read in place.
-    fn textPiece(self: *Builder, raw: []const u8, source: Source, base: u32, offset: u32) Error!void {
-        _ = base;
+    fn textPiece(self: *Builder, raw: []const u8, source: Source, flags: Scanner.TextFlags, offset: u32) Error!void {
+        if (!flags.references) return self.addPiece(.{ .source = source, .start = offset, .len = @intCast(raw.len), .plain = !flags.carriage_return, .blank = flags.blank }, offset);
         var i: usize = 0;
         var piece_start: usize = 0;
         while (std.mem.findScalarPos(u8, raw, i, '&')) |k| {
@@ -405,11 +416,10 @@ const Builder = struct {
         const pieces = self.run.items;
         var node: Node = .{ .kind = .text, .at = self.run_at };
         const only = pieces[0];
-        const only_bytes = self.doc.bytesOf(only.source)[only.start..][0..only.len];
-        if (pieces.len == 1 and only.source == .input and std.mem.findAny(u8, only_bytes, "&\r") == null) {
+        if (pieces.len == 1 and only.source == .input and only.plain) {
             node.value_source = .input;
             node.value = .{ .start = only.start, .len = only.len };
-            node.blank = text.allSpace(only_bytes);
+            node.blank = only.blank;
         } else {
             const start = try self.decodedLen();
             for (pieces) |p| try self.decodePiece(p);

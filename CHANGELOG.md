@@ -26,8 +26,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - A union is read by asking its format for a union; a format that spells a union as a record of one member answers with that record, as before. A type with a codec of its own asks its format for nothing in particular (it asked for its Zig shape: a union-shaped `Value` asked for a union), so a format whose reading depends on what is asked for reads such a type by what its codec then reads.
-- `names = .fold_case` folds every letter by Unicode's simple case folding, code point by code point, as Go's `encoding/json` matches names: `É` finds a field named `é`, and `Σ`, `σ` and `ς` find one another. Before, only ASCII letters, `ſ` and the Kelvin sign folded. The folding is xenoglyph's (`case.simpleFold`), a new dependency (xenoglyph 0.4.1).
+- `names = .fold_case` folds every letter by Unicode's simple case folding, code point by code point, as Go's `encoding/json` matches names: `É` finds a field named `é`, and `Σ`, `σ` and `ς` find one another. Before, only ASCII letters, `ſ` and the Kelvin sign folded. The folding is xenoglyph's (`case.simpleFold`), a new dependency (xenoglyph 0.4.2).
 - A charge an operation takes before allocating (`Context.alloc`, `allocPointer`, the scratch allocator) is given back if the allocation fails and consumed once it succeeds (aegis 0.1.14's `Reservation.consume`), so the reservation is discharged on every path where it was left held.
+- aegis 0.1.18 (from 0.1.14). Development: preflight 0.17.0 (from 0.6.2) and shakedown 0.4.17 (from 0.4.6).
 
 ## [0.13.1] - 2026-10-18
 

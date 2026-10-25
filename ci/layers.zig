@@ -8,6 +8,7 @@ pub const layers: []const gantry.rules.Layer = &.{
         "src/core/scalars.zig",
         "src/core/descriptor.zig",
         "src/core/codecs.zig",
+        "src/core/edit.zig",
     } },
     .{ .name = "core mapping", .patterns = &.{
         "src/core/decode.zig",
@@ -34,6 +35,7 @@ pub const layers: []const gantry.rules.Layer = &.{
     .{ .name = "JSON module", .patterns = &.{"src/json/api.zig"} },
     .{ .name = "JSON canonical form", .patterns = &.{"src/json/canonical.zig"} },
     .{ .name = "JSON schema", .patterns = &.{"src/json/schema.zig"} },
+    .{ .name = "JSON editing", .patterns = &.{"src/json/edit.zig"} },
     .{ .name = "JSON facade", .patterns = &.{"src/json.zig"} },
     .{ .name = "JSONL schema", .patterns = &.{"src/jsonl/versioned.zig"} },
     .{ .name = "records", .patterns = &.{
@@ -83,6 +85,7 @@ pub const layers: []const gantry.rules.Layer = &.{
     .{ .name = "TOML wire", .patterns = &.{ "src/toml/Decoder.zig", "src/toml/Encoder.zig" } },
     .{ .name = "TOML values", .patterns = &.{ "src/toml/codecs.zig", "src/toml/Value.zig" } },
     .{ .name = "TOML module", .patterns = &.{"src/toml/api.zig"} },
+    .{ .name = "TOML editing", .patterns = &.{"src/toml/edit.zig"} },
     .{ .name = "TOML facade", .patterns = &.{"src/toml.zig"} },
     .{ .name = "YAML text", .patterns = &.{ "src/yaml/scanner.zig", "src/yaml/schema.zig" } },
     .{ .name = "YAML events", .patterns = &.{"src/yaml/parser.zig"} },

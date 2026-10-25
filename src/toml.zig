@@ -18,3 +18,7 @@ pub const parseOwned = api.parseOwned;
 pub const parseLeaky = api.parseLeaky;
 pub const WriteOptions = api.WriteOptions;
 pub const write = api.write;
+pub const writeValue = api.writeValue;
+/// A document edited in place, its comments and layout kept.
+pub const Edit = @import("toml/edit.zig").Edit;
+pub const EditOptions = @import("toml/edit.zig").EditOptions;

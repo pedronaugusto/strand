@@ -86,6 +86,11 @@ pub const WriteOptions = struct {
     limits: core.Limits = .{},
     /// What the document is held on until its root closes.
     allocator: std.mem.Allocator,
+    /// The table the document is written as, a part of a larger one: its
+    /// sections' headers start with this path (`server`, `port` writes a
+    /// table under it as `[server.port.x]`). Its own values come first, as a
+    /// table's do, for the caller to place after that table's header.
+    path: []const []const u8 = &.{},
     /// TOML has no null: one is refused, unless optional fields that are
     /// null are left out of their tables.
     nulls: Nulls = .refuse,
@@ -101,7 +106,22 @@ pub fn write(output: *std.Io.Writer, value: anytype, options: WriteOptions) @typ
     c.acceptance.duplicates = .reject;
     c.omit_nulls = options.nulls == .omit;
     var encoder: WireEncoder = undefined;
-    encoder.init(output, options.allocator);
+    encoder.init(output, options.allocator, .document, options.path);
+    defer encoder.deinit();
+    try core.serialize(value, &encoder, &c);
+    try encoder.finish();
+}
+/// Writes `value`, of any kind, as TOML spells a value inline: a scalar, an
+/// array, or a table as `{ key = value, ... }`, on one line. What follows a
+/// key's `=`, or stands in an array.
+pub fn writeValue(output: *std.Io.Writer, value: anytype, options: WriteOptions) @typeInfo(@TypeOf(core.serialize(value, @as(*WireEncoder, undefined), @as(*core.Context, undefined)))).error_union.error_set!void {
+    var no_scratch: [0]u8 = .{};
+    var fixed: std.heap.FixedBufferAllocator = .init(&no_scratch);
+    var c = core.Context.init(fixed.allocator(), options.limits, .borrowed);
+    c.acceptance.duplicates = .reject;
+    c.omit_nulls = options.nulls == .omit;
+    var encoder: WireEncoder = undefined;
+    encoder.init(output, options.allocator, .inline_value, &.{});
     defer encoder.deinit();
     try core.serialize(value, &encoder, &c);
     try encoder.finish();

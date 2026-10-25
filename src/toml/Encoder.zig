@@ -42,13 +42,19 @@ writer: *std.Io.Writer,
 arena: std.heap.ArenaAllocator,
 /// The containers open, innermost last.
 stack: std.ArrayList(Node),
-root: ?*Table,
+root: ?Node,
+/// How the root is written: as a document, its sections under `path`, or
+/// inline, as one value.
+layout: Layout,
+path: []const []const u8,
 /// A date's or a time's kind, given by a tag: the text written next is its spelling.
 kind: ?temporal.Kind,
 const Self = @This();
 
-pub fn init(self: *Self, writer: *std.Io.Writer, allocator: std.mem.Allocator) void {
-    self.* = .{ .writer = writer, .arena = .init(allocator), .stack = .empty, .root = null, .kind = null };
+pub const Layout = enum { document, inline_value };
+
+pub fn init(self: *Self, writer: *std.Io.Writer, allocator: std.mem.Allocator, layout: Layout, path: []const []const u8) void {
+    self.* = .{ .writer = writer, .arena = .init(allocator), .stack = .empty, .root = null, .layout = layout, .path = path, .kind = null };
 }
 pub fn deinit(self: *Self) void {
     self.arena.deinit();
@@ -63,12 +69,14 @@ fn fail(err: anyerror) Error {
 
 /// Places `node` where the next value goes: under the open table's key, at
 /// the end of the open array, or as the root.
-fn place(self: *Self, node: Node) Error!void {
+fn place(self: *Self, node: Node, c: *core.Context) Error!void {
     const a = self.arena.allocator();
     if (self.kind != null) return error.UnsupportedValue;
     if (self.stack.items.len == 0) {
-        if (self.root != null or node != .table) return error.UnsupportedValue;
-        self.root = node.table;
+        if (self.root != null or (self.layout == .document and node != .table)) return error.UnsupportedValue;
+        self.root = node;
+        // A scalar root, written inline, is whole as it is placed.
+        if (node == .scalar) return self.inlineValue(node, c);
         return;
     }
     switch (self.stack.items[self.stack.items.len - 1]) {
@@ -82,33 +90,33 @@ fn place(self: *Self, node: Node) Error!void {
     }
 }
 /// A value spelled by `print`, placed.
-fn spell(self: *Self, comptime spelling: []const u8, args: anytype) Error!void {
+fn spell(self: *Self, comptime spelling: []const u8, args: anytype, c: *core.Context) Error!void {
     const spelled = self.arena.allocator().print(spelling, args) catch |err| return fail(err);
-    try self.place(.{ .scalar = spelled });
+    try self.place(.{ .scalar = spelled }, c);
 }
 
-pub fn boolean(self: *Self, value: bool, _: *core.Context) Error!void {
-    try self.place(.{ .scalar = if (value) "true" else "false" });
+pub fn boolean(self: *Self, value: bool, c: *core.Context) Error!void {
+    try self.place(.{ .scalar = if (value) "true" else "false" }, c);
 }
 /// TOML's integers are signed 64-bit.
-pub fn integer(self: *Self, value: anytype, _: *core.Context) Error!void {
+pub fn integer(self: *Self, value: anytype, c: *core.Context) Error!void {
     const n = std.math.cast(i64, value) orelse return error.NumberOutOfRange;
-    try self.spell("{d}", .{n});
+    try self.spell("{d}", .{n}, c);
 }
 /// The shortest spelling that reads back as the same binary64, with a
 /// fraction or an exponent so that it reads as a float.
 pub fn floating(self: *Self, value: anytype, c: *core.Context) Error!void {
     const v: f64 = @floatCast(value);
     if (std.math.isFinite(value) and @as(@TypeOf(value), @floatCast(v)) != value) return error.NumberOutOfRange;
-    if (std.math.isNan(v)) return self.place(.{ .scalar = if (std.math.signbit(v)) "-nan" else "nan" });
-    if (std.math.isInf(v)) return self.place(.{ .scalar = if (v < 0) "-inf" else "inf" });
+    if (std.math.isNan(v)) return self.place(.{ .scalar = if (std.math.signbit(v)) "-nan" else "nan" }, c);
+    if (std.math.isInf(v)) return self.place(.{ .scalar = if (v < 0) "-inf" else "inf" }, c);
     var buffer: [64]u8 = undefined;
     const magnitude = @abs(v);
     const decimals = magnitude == 0 or (magnitude >= 1e-5 and magnitude < 1e16);
     const spelled = (if (decimals) std.mem.print(&buffer, "{d}", .{v}) else std.mem.print(&buffer, "{e}", .{v})) catch return error.NumberOutOfRange;
     if (limit.exceeds(spelled.len, c.limits.numeric_bytes)) return error.LengthLimit;
     const float = std.mem.findAny(u8, spelled, ".e") != null;
-    try self.spell("{s}{s}", .{ spelled, if (float) "" else ".0" });
+    try self.spell("{s}{s}", .{ spelled, if (float) "" else ".0" }, c);
 }
 pub fn text(self: *Self, value: []const u8, c: *core.Context) Error!void {
     // A map's key comes as text where a table waits for one.
@@ -124,9 +132,9 @@ pub fn text(self: *Self, value: []const u8, c: *core.Context) Error!void {
         var buffer: [temporal.max_len]u8 = undefined;
         const spelled = temporal.format(parts, &buffer);
         const copy = self.arena.allocator().dupe(u8, spelled) catch |err| return fail(err);
-        return self.place(.{ .scalar = copy });
+        return self.place(.{ .scalar = copy }, c);
     }
-    try self.place(.{ .scalar = try self.quote(value) });
+    try self.place(.{ .scalar = try self.quote(value) }, c);
 }
 /// `value` as a basic string, in the tree's storage.
 fn quote(self: *Self, value: []const u8) Error![]const u8 {
@@ -162,7 +170,7 @@ pub fn tag(self: *Self, number: u64, _: *core.Context) Error!void {
     if (self.kind != null) return error.UnsupportedValue;
     self.kind = std.enums.fromInt(temporal.Kind, number) orelse return error.UnsupportedValue;
 }
-pub fn begin(self: *Self, kind: core.Kind, name: []const u8, _: usize, _: *core.Context) Error!void {
+pub fn begin(self: *Self, kind: core.Kind, name: []const u8, _: usize, c: *core.Context) Error!void {
     const a = self.arena.allocator();
     const node: Node = switch (kind) {
         .record, .map, .variant => blk: {
@@ -179,7 +187,7 @@ pub fn begin(self: *Self, kind: core.Kind, name: []const u8, _: usize, _: *core.
         },
         else => return error.UnsupportedValue,
     };
-    try self.place(node);
+    try self.place(node, c);
     self.stack.append(a, node) catch |err| return fail(err);
 }
 pub fn end(self: *Self, c: *core.Context) Error!void {
@@ -284,8 +292,10 @@ fn header(self: *Self, path: []const []const u8, open: []const u8, close: []cons
     try self.put("\n", c);
 }
 fn document(self: *Self, c: *core.Context) Error!void {
+    if (self.layout == .inline_value) return self.inlineValue(self.root.?, c);
     var path: std.ArrayList([]const u8) = .empty;
-    try self.table(self.root.?, &path, c);
+    path.appendSlice(self.arena.allocator(), self.path) catch |err| return fail(err);
+    try self.table(self.root.?.table, &path, c);
 }
 
 /// After the value: the document is written once its root closes.

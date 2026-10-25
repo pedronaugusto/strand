@@ -14,7 +14,15 @@ pub const parseLeaky = api.parseLeaky;
 pub const Prefix = api.Prefix;
 pub const parsePrefixLeaky = api.parsePrefixLeaky;
 pub const parseStdValue = api.parseStdValue;
-pub const jsonc = api.jsonc;
+/// JSONC: read with JSON's options and promises (`parse`, `parseOwned`,
+/// `parseLeaky`), and edited in place, its comments kept (`Edit`).
+pub const jsonc = struct {
+    pub const parse = api.jsonc.parse;
+    pub const parseOwned = api.jsonc.parseOwned;
+    pub const parseLeaky = api.jsonc.parseLeaky;
+    pub const Edit = @import("json/edit.zig").Edit;
+    pub const EditOptions = @import("json/edit.zig").EditOptions;
+};
 /// The JSON Canonicalization Scheme (RFC 8785).
 pub const jcs = @import("json/canonical.zig");
 /// JSON Schema (2020-12) for the JSON a type is read and written as.

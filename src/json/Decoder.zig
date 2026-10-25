@@ -666,27 +666,43 @@ pub fn Dialect(comptime jsonc: bool) type {
         /// The next element of the array on top passed over, or false where the
         /// array closes, the close taken.
         inline fn passElement(self: *Self, c: *core.Context, count: *usize) Error!bool {
+            return try self.passElementSpan(c, count) != null;
+        }
+        /// Where one element of the array on top lies.
+        pub const ElementSpan = struct {
+            /// The `,` before the element, or where the array's first element
+            /// begins.
+            separator: usize,
+            value_start: usize,
+            value_end: usize,
+        };
+        /// The next element of the array on top, passed over as `pass`
+        /// passes over one, and where it lies; null where the array closes,
+        /// the close taken.
+        pub inline fn passElementSpan(self: *Self, c: *core.Context, count: *usize) Error!?ElementSpan {
             const f = self.frame();
             const bytes = self.input;
             var at = self.at;
+            var separator = at;
             switch (f.state) {
                 .first => if (at < bytes.len and bytes[at] == ']') {
                     _ = self.close();
-                    return false;
+                    return null;
                 },
                 .member => {},
                 .after => {
                     if (at >= bytes.len) return error.SyntaxError;
                     if (bytes[at] == ']') {
                         _ = self.close();
-                        return false;
+                        return null;
                     }
                     if (bytes[at] != ',') return error.SyntaxError;
+                    separator = at;
                     at = self.space(at + 1);
                     if (jsonc and at < bytes.len and bytes[at] == ']') {
                         self.at = at;
                         _ = self.close();
-                        return false;
+                        return null;
                     }
                 },
                 .value => return error.SyntaxError,
@@ -695,7 +711,7 @@ pub fn Dialect(comptime jsonc: bool) type {
             count.* += 1;
             f.state = .after;
             try self.passAt(c, at);
-            return true;
+            return .{ .separator = separator, .value_start = at, .value_end = self.last_end };
         }
 
         fn value(self: *Self, c: *core.Context, request: core.Request) Error!core.Event {

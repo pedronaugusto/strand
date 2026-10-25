@@ -46,3 +46,5 @@ pub const Bytes = @import("core/model.zig").Bytes;
 pub const Cursor = @import("core/decode.zig").Cursor;
 pub const Pair = @import("core/model.zig").Pair;
 pub const Backing = @import("core/context.zig").Backing;
+/// What every format's editor shares: JSON Pointer paths, splices and the text they change.
+pub const edit = @import("core/edit.zig");

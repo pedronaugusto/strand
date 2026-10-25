@@ -6,9 +6,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Fixed
-
-- An aegis scalar from a program pinning another aegis version than strand's was refused, a `Ranged` as a non-exhaustive enum with no numeric codec: strand recognized aegis's scalars by rebuilding them with its own copy of aegis, and two versions under a plain `zig build` are two copies whose types are never equal. It now reads the `aegis_scalar` declaration each carries (aegis 0.1.18), the same in every copy, at contract 1: its integer and range come from it, a value is made only through the type's own checked functions, and a later contract does not compile, named by its number.
+## [0.14.0] - 2026-10-25
 
 ### Breaking
 
@@ -29,6 +27,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `names = .fold_case` folds every letter by Unicode's simple case folding, code point by code point, as Go's `encoding/json` matches names: `É` finds a field named `é`, and `Σ`, `σ` and `ς` find one another. Before, only ASCII letters, `ſ` and the Kelvin sign folded. The folding is xenoglyph's (`case.simpleFold`), a new dependency (xenoglyph 0.4.2).
 - A charge an operation takes before allocating (`Context.alloc`, `allocPointer`, the scratch allocator) is given back if the allocation fails and consumed once it succeeds (aegis 0.1.14's `Reservation.consume`), so the reservation is discharged on every path where it was left held.
 - aegis 0.1.18 (from 0.1.14). Development: preflight 0.17.0 (from 0.6.2) and shakedown 0.4.17 (from 0.4.6).
+
+### Fixed
+
+- An aegis scalar from a program pinning another aegis version than strand's was refused, a `Ranged` as a non-exhaustive enum with no numeric codec: strand recognized aegis's scalars by rebuilding them with its own copy of aegis, and two versions under a plain `zig build` are two copies whose types are never equal. It now reads the `aegis_scalar` declaration each carries (aegis 0.1.18), the same in every copy, at contract 1: its integer and range come from it, a value is made only through the type's own checked functions, and a later contract does not compile, named by its number.
 
 ## [0.13.1] - 2026-10-18
 
@@ -976,7 +978,8 @@ First release: the line layer over `std.json`, and nothing else.
   awkward inputs, with the line numbering checked against an index scan that
   shares no code with the package.
 
-[Unreleased]: https://github.com/pedronaugusto/strand/compare/v0.13.1...HEAD
+[Unreleased]: https://github.com/pedronaugusto/strand/compare/v0.14.0...HEAD
+[0.14.0]: https://github.com/pedronaugusto/strand/compare/v0.13.1...v0.14.0
 [0.13.1]: https://github.com/pedronaugusto/strand/compare/v0.10.0...v0.13.1
 [0.10.0]: https://github.com/pedronaugusto/strand/compare/v0.9.1...v0.10.0
 [0.9.1]: https://github.com/pedronaugusto/strand/compare/v0.9.0...v0.9.1

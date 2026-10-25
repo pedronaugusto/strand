@@ -128,8 +128,32 @@ pub const Edit = struct {
         return self.add(a, &r, split.parent, parent, split.last, at, value);
     }
     /// The key, element or table at `pointer` taken out, with its line, or
-    /// every section and dotted key a table is made of.
+    /// every section and dotted key a table is made of. A table that only
+    /// what was taken out made (`[a.b.c]` for `a.b`, `a.b = 1` for `a`)
+    /// stays, empty, as a removal leaves the rest.
     pub fn remove(self: *Edit, pointer: []const u8) Error!void {
+        // On a copy: a table remade is part of the one edit.
+        var work: Edit = .{ .gpa = self.gpa, .text = try edit.Text.init(self.gpa, self.bytes()), .options = self.options };
+        defer work.deinit();
+        const kind = try work.cut(pointer);
+        try work.keep((try edit.Pointer.parse(pointer)).split().?.parent, kind);
+        std.mem.swap(edit.Text, &self.text, &work.text);
+    }
+    /// The container `path` reached before a removal, of `kind`, made again
+    /// empty where nothing defines it now, and its own the same way.
+    fn keep(self: *Edit, path: edit.Pointer, kind: syntax.Kind) Error!void {
+        var arena: std.heap.ArenaAllocator = .init(self.gpa);
+        defer arena.deinit();
+        const a = arena.allocator();
+        const r = try readDocument(a, self.bytes(), self.options);
+        if (try find(a, &r, path) != null) return;
+        const split = path.split() orelse return;
+        try self.keep(split.parent, .table);
+        if (kind == .array) return self.set(path.rest, [0]u8{});
+        return self.set(path.rest, struct {}{});
+    }
+    /// The removal itself, giving the kind of container it was in.
+    fn cut(self: *Edit, pointer: []const u8) Error!syntax.Kind {
         var arena: std.heap.ArenaAllocator = .init(self.gpa);
         defer arena.deinit();
         const a = arena.allocator();
@@ -137,6 +161,7 @@ pub const Edit = struct {
         const n = (try find(a, &r, try edit.Pointer.parse(pointer))) orelse return error.PathNotFound;
         const parent = r.parents[n];
         if (parent == none) return error.PathNotFound;
+        const kind = r.node(parent).kind;
         const text = self.bytes();
         var splices: std.ArrayList(edit.Splice) = .empty;
         if (inlineValue(&r, n)) {
@@ -147,7 +172,23 @@ pub const Edit = struct {
             } else {
                 try splices.append(a, lineCut(text, start, s.end));
             }
-            return self.commit(a, splices.items);
+            try self.commit(a, splices.items);
+            return kind;
+        }
+        if (inlineAround(&r, n)) |container| {
+            // A table dotted keys make inside braces: the braces' members
+            // but those under it, written again between them.
+            var kept: std.ArrayList([]const u8) = .empty;
+            for (r.spans.nodes.items, 0..) |s, i| {
+                const at: u32 = @intCast(i);
+                if (s.entry == none or (inlineAround(&r, at) orelse none) != container or r.isUnder(at, n)) continue;
+                try kept.append(a, text[s.entry..s.end]);
+            }
+            const inner = try std.mem.join(a, ", ", kept.items);
+            const c = r.span(container);
+            const replacement = if (kept.items.len == 0) "{}" else try std.mem.concat(a, u8, &.{ "{ ", inner, " }" });
+            try self.commit(a, &.{.{ .start = c.start, .end = c.end, .replacement = replacement }});
+            return kind;
         }
         // A table: every section it or a table under it is, and every dotted
         // key under it outside them.
@@ -156,13 +197,14 @@ pub const Edit = struct {
         }
         for (r.spans.nodes.items, 0..) |s, i| {
             if (s.entry == none or !r.isUnder(@intCast(i), n)) continue;
-            const inside = for (splices.items) |cut| {
-                if (s.entry >= cut.start and s.entry < cut.end) break true;
+            const inside = for (splices.items) |splice| {
+                if (s.entry >= splice.start and s.entry < splice.end) break true;
             } else false;
             if (!inside) try splices.append(a, lineCut(text, s.entry, s.end));
         }
         if (splices.items.len == 0) return error.PathNotFound;
-        return self.commit(a, splices.items);
+        try self.commit(a, splices.items);
+        return kind;
     }
 
     /// A key `token` (or an element at `at`) added to container `parent`,
@@ -348,11 +390,24 @@ fn lastChild(r: *const Read, parent: u32) u32 {
 fn lastEntry(r: *const Read, table: u32) ?u32 {
     var best: ?u32 = null;
     for (r.spans.nodes.items, 0..) |s, i| {
-        if (s.entry != none and r.isUnder(@intCast(i), table) and i != table) {
+        if (s.entry != none and r.isUnder(@intCast(i), table) and i != table and !sectionBetween(r, @intCast(i), table)) {
             if (best == null or s.entry > r.span(best.?).entry) best = @intCast(i);
         }
     }
     return best;
+}
+/// Whether a table between node `n` and `ancestor` has a section of its
+/// own, which `n` is written in.
+fn sectionBetween(r: *const Read, n: u32, ancestor: u32) bool {
+    var at = r.parents[n];
+    while (at != ancestor) : (at = r.parents[at]) if (r.header(at) != null) return true;
+    return false;
+}
+/// The inline table node `n` is written inside, if any.
+fn inlineAround(r: *const Read, n: u32) ?u32 {
+    var at = r.parents[n];
+    while (at != none) : (at = r.parents[at]) if (r.node(at).kind == .table and inlineContainer(r, at)) return at;
+    return null;
 }
 fn depthBetween(r: *const Read, n: u32, ancestor: u32) usize {
     var d: usize = 0;

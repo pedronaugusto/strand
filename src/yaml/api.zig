@@ -100,6 +100,8 @@ pub const WriteOptions = struct {
     /// What a null optional field is: written as `null`, or left out of its
     /// mapping.
     nulls: Nulls = .write,
+    /// Every collection in flow style (`{a: 1, b: [2]}`), the document on one line.
+    flow: bool = false,
     pub const Nulls = enum { write, omit };
 };
 /// The error set of a write of `T`.
@@ -134,7 +136,7 @@ pub fn writeStream(output: *std.Io.Writer, values: anytype, options: WriteOption
 }
 fn document(output: *std.Io.Writer, value: anytype, options: WriteOptions, c: *core.Context) WriteError(@TypeOf(value))!void {
     var encoder: WireEncoder = undefined;
-    encoder.init(output, options.allocator);
+    encoder.init(output, options.allocator, options.flow);
     defer encoder.deinit();
     try core.serialize(value, &encoder, c);
     try encoder.finish();

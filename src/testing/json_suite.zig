@@ -4,7 +4,7 @@
 //! invalid UTF-8, UTF-16 input and lone surrogates reject.
 const std = @import("std");
 const json = @import("../json.zig");
-const cases = [_]struct { name: []const u8, input: []const u8, accept: bool }{
+pub const cases = [_]struct { name: []const u8, input: []const u8, accept: bool }{
     .{ .name = "i_number_double_huge_neg_exp.json", .input = @embedFile("../corpus/json-test-suite/i_number_double_huge_neg_exp.json"), .accept = true },
     .{ .name = "i_number_huge_exp.json", .input = @embedFile("../corpus/json-test-suite/i_number_huge_exp.json"), .accept = true },
     .{ .name = "i_number_neg_int_huge_exp.json", .input = @embedFile("../corpus/json-test-suite/i_number_neg_int_huge_exp.json"), .accept = true },

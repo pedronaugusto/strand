@@ -93,6 +93,7 @@ pub const layers: []const gantry.rules.Layer = &.{
     .{ .name = "YAML wire", .patterns = &.{ "src/yaml/Decoder.zig", "src/yaml/Encoder.zig" } },
     .{ .name = "YAML values", .patterns = &.{"src/yaml/Value.zig"} },
     .{ .name = "YAML module", .patterns = &.{"src/yaml/api.zig"} },
+    .{ .name = "YAML editing", .patterns = &.{"src/yaml/edit.zig"} },
     .{ .name = "YAML facade", .patterns = &.{"src/yaml.zig"} },
     .{ .name = "XML text", .patterns = &.{"src/xml/text.zig"} },
     .{ .name = "XML tokens", .patterns = &.{ "src/xml/Scanner.zig", "src/xml/dtd.zig" } },

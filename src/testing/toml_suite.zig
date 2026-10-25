@@ -27,8 +27,8 @@ fn listed(comptime list: []const u8) []const Case {
     }
     return found;
 }
-const v1_0 = listed(@embedFile("../corpus/toml/files-toml-1.0.0"));
-const v1_1 = listed(@embedFile("../corpus/toml/files-toml-1.1.0"));
+pub const v1_0 = listed(@embedFile("../corpus/toml/files-toml-1.0.0"));
+pub const v1_1 = listed(@embedFile("../corpus/toml/files-toml-1.1.0"));
 
 test "toml-test decoder, TOML 1.0.0 and 1.1.0" {
     // Every file each list names, as the pinned lists count them.

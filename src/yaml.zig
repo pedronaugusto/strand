@@ -17,3 +17,6 @@ pub const parseStreamLeaky = api.parseStreamLeaky;
 pub const WriteOptions = api.WriteOptions;
 pub const write = api.write;
 pub const writeStream = api.writeStream;
+/// A document edited in place, its comments and layout kept.
+pub const Edit = @import("yaml/edit.zig").Edit;
+pub const EditOptions = @import("yaml/edit.zig").EditOptions;

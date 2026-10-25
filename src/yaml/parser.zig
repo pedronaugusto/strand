@@ -77,6 +77,11 @@ pub const Parser = struct {
     /// The last document ended without `...`: no directive may follow.
     open_ended: bool = false,
     failed_at: u32 = 0,
+    /// Where the last token taken that is written ends: the end of the
+    /// event just given, for an editor's spans.
+    last_end: u32 = 0,
+    /// Where the last `-` or `?` taken starts, until a reader of spans takes it.
+    indicator: ?u32 = null,
 
     pub fn init(input: []const u8, allocator: std.mem.Allocator, decoded: *std.ArrayList(u8)) Parser {
         return .{ .scanner = .init(input, allocator, decoded) };
@@ -99,6 +104,11 @@ pub const Parser = struct {
         return self.scanner.peek();
     }
     fn skip(self: *Parser) void {
+        const token = &self.scanner.tokens.items[self.scanner.head];
+        if (token.end.index > token.start.index) {
+            self.last_end = token.end.index;
+            if (token.kind == .block_entry or token.kind == .key) self.indicator = token.start.index;
+        }
         self.scanner.skip();
     }
     fn push(self: *Parser, state: State) Error!void {

@@ -55,10 +55,12 @@ key_buffer: [128]Key,
 quoting: []const u8,
 /// The root value is written.
 done: bool,
+/// Every collection is in flow style, the root's too.
+flow: bool,
 const Self = @This();
 
-pub fn init(self: *Self, writer: *std.Io.Writer, allocator: ?std.mem.Allocator) void {
-    self.* = .{ .writer = writer, .stack = .empty, .allocator = allocator, .frames = undefined, .keys = .empty, .key_buffer = undefined, .quoting = "", .done = false };
+pub fn init(self: *Self, writer: *std.Io.Writer, allocator: ?std.mem.Allocator, flow: bool) void {
+    self.* = .{ .writer = writer, .stack = .empty, .allocator = allocator, .frames = undefined, .keys = .empty, .key_buffer = undefined, .quoting = "", .done = false, .flow = flow };
     self.stack = .initBuffer(&self.frames);
     self.keys = .initBuffer(&self.key_buffer);
 }
@@ -208,7 +210,7 @@ fn placed(self: *Self, len: usize, spelled: ?[]const u8, c: *core.Context) Error
 }
 /// A string, plain where that reads back as itself, double-quoted otherwise.
 fn string(self: *Self, value: []const u8, c: *core.Context) Error!void {
-    const flow = if (self.top()) |f| f.flow else false;
+    const flow = if (self.top()) |f| f.flow else self.flow;
     if (plain(value, flow)) return self.scalarValue(value, c);
     var counting: std.Io.Writer.Discarding = .init(&.{});
     quote(&counting.writer, value) catch unreachable; // unreachable: counting fails at nothing.
@@ -359,7 +361,7 @@ pub fn begin(self: *Self, kind: core.Kind, name: []const u8, _: usize, c: *core.
     try self.before(null, c);
     const parent = self.top();
     // A collection inside a flow collection, or as a key, is in flow style.
-    const flow = if (parent) |p| p.flow or (p.mapping and p.key_next) else false;
+    const flow = if (parent) |p| p.flow or (p.mapping and p.key_next) else self.flow;
     const map = kind == .map;
     const key_start = self.keys.items.len;
     if (flow) {

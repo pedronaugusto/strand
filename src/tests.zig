@@ -17,6 +17,7 @@ test {
     _ = @import("yaml_test.zig");
     _ = @import("xml_test.zig");
     _ = @import("edit_test.zig");
+    _ = @import("testing/edit_props.zig");
     _ = @import("testing/xml_suite.zig");
     _ = @import("testing/json_suite.zig");
     _ = @import("testing/toml_suite.zig");

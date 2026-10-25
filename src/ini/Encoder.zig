@@ -42,15 +42,15 @@ const Self = @This();
 
 /// Names written so far, the first 128 kept here and the rest in the
 /// operation's storage, as JSON's writer keeps a map's keys.
-const Names = struct {
+pub const Names = struct {
     near: [128][]const u8,
     far: std.ArrayList([]const u8),
     len: usize,
 
-    const empty: Names = .{ .near = undefined, .far = .empty, .len = 0 };
+    pub const empty: Names = .{ .near = undefined, .far = .empty, .len = 0 };
 
     /// Keeps `name`, refused where it is one kept already.
-    fn add(self: *Names, name: []const u8, c: *core.Context) Error!void {
+    pub fn add(self: *Names, name: []const u8, c: *core.Context) Error!void {
         for (0..self.len) |i| {
             const prior = if (i < self.near.len) self.near[i] else self.far.items[i - self.near.len];
             try c.chargeWork(@min(name.len, prior.len) + 1);
@@ -59,7 +59,7 @@ const Names = struct {
         if (self.len < self.near.len) self.near[self.len] = name else try self.far.append(c.allocator(), name);
         self.len += 1;
     }
-    fn clear(self: *Names) void {
+    pub fn clear(self: *Names) void {
         self.len = 0;
         self.far.clearRetainingCapacity();
     }

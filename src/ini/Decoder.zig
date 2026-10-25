@@ -307,7 +307,14 @@ fn value(self: *Self, c: *core.Context, e: Entry, request: core.Request) Error!c
         if (request.nullable or request.expected == .unknown) return .none;
         return error.UnexpectedType;
     }
-    const s = try self.joined(c, e);
+    return typed(c, try self.joined(c, e), request);
+}
+
+/// A value written as text, as the type asks for it: a null where it is
+/// empty and the type takes one, a number in JSON's spelling, a boolean as
+/// configparser's `getboolean` reads one, the raw bytes, or the text. The
+/// .env reader types its values so too.
+pub fn typed(c: *core.Context, s: core.Span, request: core.Request) Error!core.Event {
     if (s.bytes.len == 0) {
         if (request.nullable) return .none;
         if (request.expected == .unit) return .unit;

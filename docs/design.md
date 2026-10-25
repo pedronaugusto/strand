@@ -812,6 +812,44 @@ driver), damaged documents read by configparser and by strand agree on every one
 configparser's dialect and with inline comments and keys with no value; rust-ini reads a
 grammar of its own (a key twice, a section header across lines).
 
+## .env
+
+.env has no standard, and its readers disagree past `KEY=value`: dotenvy reads values as a
+shell does (quotes concatenated, a space unquoted refused, `$` always expanded), python-dotenv
+by a grammar of regular expressions, Node's dotenv and godotenv by others. An intersection of
+them reads too little of the files people write, so `strand.dotenv` reads python-dotenv's
+grammar exactly (`src/dotenv/text.zig` is its `parse_binding`, step for step), as INI reads
+configparser's: white space is Python's `str.isspace`, INI's; a binding is white space and line
+ends, `export` and white space, a key (in single quotes, or up to `=`, `#` or white space), white
+space, `=`, white space and a value, or none, a comment after white space, the line's end. A
+quoted value runs across lines to its closing quote, a backslash taking the character after it
+with it, and its escapes are python-dotenv's for that quote; an unquoted value is the rest of
+the line, cut at a `#` after white space and trimmed at its end. python-dotenv reads a file
+through Python's text layer, so a line end inside quotes reads as a line feed; strand does
+that itself. strand departs where python-dotenv resolves rather than reads, as INI does from
+configparser: a line python-dotenv warns about and skips is a syntax error, a key given twice
+is refused (python-dotenv keeps the last), and nothing is interpolated (strand reads no
+environment).
+
+The file is read whole into its bindings, then given out as a record of its keys
+(`src/dotenv/Decoder.zig`). A value with no escape and no carriage return is borrowed; one with
+either is rewritten in the arena, never longer than it was written. A value is typed by INI's
+`typed` (a number in JSON's spelling, a boolean as `getboolean`), but an empty value stays empty
+text, as python-dotenv's `""`, and only a key with no `=` is a null, its `None`. The writer
+(`src/dotenv/Encoder.zig`) quotes a key or a value only where python-dotenv would read it
+otherwise: a value in single quotes where it is one line with no `'` or `\`, else in double
+quotes with `\\`, `\"`, `\n` and `\r` escaped; a key in single quotes where it has `=`, `#`,
+white space, or begins with `'` or U+FEFF (which first in a file is a byte-order mark). A map's
+key given twice is refused, through INI's `Names`.
+
+The evidence is python-dotenv's own parser tests, every input read as python-dotenv reads a file
+of it (`src/testing/dotenv_suite.zig`, the expected readings written by trials'
+`dotenv/python_dotenv.py suite`), properties that write generated files and read them back, and
+a fuzz target that writes back whatever it reads. In private trials (`strand/formats`, its
+`dotenv-differential` driver), 40,000 damaged files read by python-dotenv and by strand agree on
+every one but the files with a key given twice; dotenvy reads a grammar of its own (quoted keys,
+`\t` and `\'`, a space in an unquoted value and a key alone refused; `\n` read in an unquoted value).
+
 ## Editing
 
 `toml.Edit`, `yaml.Edit` and `json.jsonc.Edit` (`src/toml/edit.zig`, `src/yaml/edit.zig`,

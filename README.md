@@ -670,6 +670,64 @@ std.debug.assert(std.mem.eql(u8, strand.ini.Value.text(mysqld, "user").?, "%(nam
 ```
 <!-- END GENERATED -->
 
+## .env
+
+`strand.dotenv` reads a .env file as python-dotenv reads one (its parser, 1.2), through
+the one core: `KEY=value` and `export KEY=value` lines, white space around `=`, `#`
+comment lines; a value unquoted, trimmed and cut at a `#` after white space, or in
+single or double quotes, across lines, with python-dotenv's escapes (`\\` and `\'` in
+single quotes; those, `\"` and `\a \b \f \n \r \t \v` in double quotes; any other
+backslash stays); a key unquoted (anything but `=`, `#` and white space) or in single
+quotes; a key with no `=`, which is a null. A file is read as Python reads a text file,
+so a line end inside quotes is a line feed. Nothing is interpolated: `$NAME` and
+`${NAME}` are text, where python-dotenv, dotenvy and others expand them. A file is a
+struct or a map of its keys; a value is text until the type asks, typed as INI's values
+are (a number in JSON's spelling, a boolean as `getboolean` reads one), an empty value
+empty text. Where python-dotenv warns and skips a line it cannot read, strand refuses
+the file, and a key given twice is refused, where python-dotenv keeps the last. The
+writer writes a struct's or a map's members as `KEY=value` lines, quoting a key or a
+value only where it must to read back as itself. python-dotenv's own parser cases run in
+the tests, each read as it reads a file of it. [examples/environment.zig](examples/environment.zig)
+reads and writes a service's environment.
+
+<!-- BEGIN GENERATED zig build docs -- dotenv -->
+```zig
+const strand = @import("strand");
+
+const text =
+    \\# The service.
+    \\export DATABASE_URL=postgres://db:5432/app  # where the data is
+    \\PORT = 8443
+    \\DEBUG=yes
+    \\GREETING="Hello,\n\tworld"
+    \\TOKEN='s3cr3t-$keep'
+    \\CERT='-----BEGIN-----
+    \\abc
+    \\-----END-----'
+    \\PROXY
+;
+var service = try strand.dotenv.parse(Service, gpa, text, .{});
+defer service.deinit();
+std.debug.assert(service.value.PORT == 8443);
+std.debug.assert(service.value.DEBUG);
+std.debug.assert(std.mem.eql(u8, service.value.GREETING, "Hello,\n\tworld"));
+// Nothing is expanded: `$keep` is text.
+std.debug.assert(std.mem.eql(u8, service.value.TOKEN, "s3cr3t-$keep"));
+std.debug.assert(service.value.PROXY == null);
+
+// Any file, as its keys in order, a key with no `=` null.
+var env = try strand.dotenv.parse(strand.core.Pairs([]const u8, ?[]const u8), gpa, text, .{});
+defer env.deinit();
+std.debug.assert(env.value.items.len == 7);
+
+// Written back, a value quoted only where it must be.
+var out: std.Io.Writer.Allocating = .init(gpa);
+const Banner = struct { NAME: []const u8, MOTD: []const u8, NOTE: []const u8 };
+try strand.dotenv.write(&out.writer, Banner{ .NAME = "relay", .MOTD = "Hello, world #1", .NOTE = "two\nlines" }, .{});
+std.debug.assert(std.mem.eql(u8, out.written(), "NAME=relay\nMOTD='Hello, world #1'\nNOTE=\"two\\nlines\"\n"));
+```
+<!-- END GENERATED -->
+
 ## Editing
 
 `strand.toml.Edit`, `strand.yaml.Edit` and `strand.json.jsonc.Edit` hold a document as
@@ -768,6 +826,7 @@ and nonzero checks included.
 - It reads no application type from a YAML tag, and does not merge YAML 1.1's `<<` keys.
 - It fetches no external XML entity or DTD, applies no `ATTLIST` default, and does not validate against a DTD or a schema.
 - It interpolates no INI value (`%(name)s`, `${name}`) and gives no section `[DEFAULT]`'s keys.
+- It expands no .env variable (`$NAME`, `${NAME}`) and reads no process environment.
 
 ## Built with
 
@@ -789,7 +848,7 @@ and nonzero checks included.
 Development runs through bay.
 
 `bay test` runs the unit suite, scratch tests and examples in Debug by default.
-The suite covers each format's own standard suite (JSONTestSuite, json5-tests, RFC 8785's and the
+The suite covers each format's own standard suite (JSONTestSuite, json5-tests, python-dotenv's parser cases, RFC 8785's and the
 cyberphone vectors, RFC 8949's Appendix A, msgpack-test-suite, toml-test, yaml-test-suite, the W3C XML
 Conformance Test Suite, which the build fetches from the W3C), round trips
 through every reader and writer, framing, checked copies, rotation, cancellation and

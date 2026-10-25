@@ -12,6 +12,7 @@ test {
     _ = @import("json5_test.zig");
     _ = @import("csv_test.zig");
     _ = @import("ini_test.zig");
+    _ = @import("dotenv_test.zig");
     _ = @import("jcs_test.zig");
     _ = @import("cbor_test.zig");
     _ = @import("msgpack_test.zig");
@@ -23,6 +24,7 @@ test {
     _ = @import("testing/xml_suite.zig");
     _ = @import("testing/json_suite.zig");
     _ = @import("testing/json5_suite.zig");
+    _ = @import("testing/dotenv_suite.zig");
     _ = @import("testing/toml_suite.zig");
     _ = @import("testing/yaml_suite.zig");
     _ = @import("testing/fuzz_test.zig");
@@ -43,6 +45,7 @@ test {
     _ = @import("urlencoded/api.zig");
     _ = @import("csv/text.zig");
     _ = @import("ini/api.zig");
+    _ = @import("dotenv/api.zig");
     _ = @import("cbor/api.zig");
     _ = @import("msgpack/api.zig");
     _ = @import("toml/api.zig");

@@ -12,3 +12,4 @@ pub const toml = @import("toml.zig");
 pub const yaml = @import("yaml.zig");
 pub const xml = @import("xml.zig");
 pub const ini = @import("ini.zig");
+pub const dotenv = @import("dotenv.zig");

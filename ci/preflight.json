@@ -107,6 +107,13 @@
       "imports": [
         "strand"
       ]
+    },
+    "zig build docs -- dotenv": {
+      "source": "examples/environment.zig",
+      "region": "dotenv",
+      "imports": [
+        "strand"
+      ]
     }
   },
   "extra_checks": [

@@ -2,7 +2,7 @@
 //! not part of `core`.
 const aegis = @import("aegis");
 
-const Bytes = aegis.units.Bytes(usize);
+pub const Bytes = aegis.units.Bytes(usize);
 
 /// Whether `n` bytes are more than `limit` allows; `n` equal to it is within.
 pub fn exceeds(n: usize, limit: Bytes) bool {

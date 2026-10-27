@@ -79,6 +79,7 @@ pub const Member = struct {
     /// fit. A buffer as long as `name` always holds it.
     pub fn nameInto(member: Member, buffer: []u8) error{NoSpaceLeft}![]u8 {
         if (buffer.len < member.name.len and buffer.len < strings.unescapedLength(member.name, .refuse)) return error.NoSpaceLeft;
+        // aegis: no-danger: `unescape` returns the length it wrote into `buffer`, which is at least as long as the name
         if (buffer.len >= member.name.len) return buffer[0..strings.unescape(member.name, buffer, .refuse)];
         // Shorter than the name as written, and long enough for its text.
         var decoded: strings.Unescaped = .{ .rest = member.name };
@@ -171,6 +172,7 @@ pub const Members = struct {
         };
         return .{
             .name = found.name,
+            // aegis: no-danger: the decoder found the value's start and end in its own input
             .value = d.input[found.value_start..found.value_end],
             .separator = if (members.count == 1) members.open_at else found.separator,
             // The name is a view into the input, past its opening quote.

@@ -250,16 +250,19 @@ pub fn unescape(body: []const u8, out: []u8, unicode: Unicode) usize {
     var from: usize = 0;
     var to: usize = 0;
     while (std.mem.findScalarPos(u8, body, from, '\\')) |slash| {
+        // aegis: no-danger: `slash` is a search's answer at or past `from` in `body`; `out` is as long as `unescapedLength` counts, the caller's contract, and `to` is what has been written
         to += copyRun(body[from..slash], out[to..], unicode);
         // aegis: no-danger: `end` checked every escape in this body.
         const e = escape(body[slash + 1 ..], unicode) catch unreachable;
         var encoded: [4]u8 = undefined;
         // aegis: no-danger: a scalar `escape` decoded is at most U+10FFFF and no surrogate.
         const n = std.unicode.utf8Encode(e.scalar, &encoded) catch unreachable;
+        // aegis: no-danger: `n` is the length of the scalar encoded, at most 4; `out` is as long as `unescapedLength` counts
         @memcpy(out[to..][0..n], encoded[0..n]);
         to += n;
         from = slash + 1 + e.len;
     }
+    // aegis: no-danger: `from` is past the last escape, inside `body`; `out` is as long as `unescapedLength` counts
     return to + copyRun(body[from..], out[to..], unicode);
 }
 
@@ -275,10 +278,12 @@ pub fn copyRun(run: []const u8, out: []u8, unicode: Unicode) usize {
     while (from < run.len) {
         const n = sequence(run[from..]);
         if (n == 0) {
+            // aegis: no-danger: `out` is as long as `runLength` counts for this run, the caller's contract, U+FFFD's bytes counted for each byte that begins no sequence
             @memcpy(out[to..][0..replacement.len], replacement);
             to += replacement.len;
             from += 1;
         } else {
+            // aegis: no-danger: `n` is a whole sequence at `from`, inside `run`; `out` is as long as `runLength` counts
             @memcpy(out[to..][0..n], run[from..][0..n]);
             to += n;
             from += n;
@@ -323,10 +328,12 @@ pub const Unescaped = struct {
                 // A sequence goes by whole, so that its bytes after the first
                 // are not taken for ones that begin none.
                 const n = sequence(self.rest);
+                // aegis: no-danger: `sequence` gives the length of a whole sequence at the start of `rest`, at most its length
                 const bytes = if (n == 0) replacement else self.rest[0..n];
                 @memcpy(self.pending[0..bytes.len], bytes);
                 self.len = bytes.len;
                 self.at = 1;
+                // aegis: no-danger: `sequence` gives the length of a whole sequence at the start of `rest`, at most its length
                 self.rest = self.rest[@max(n, 1)..];
                 return self.pending[0];
             }
@@ -383,6 +390,7 @@ pub fn unescapedLength(body: []const u8, unicode: Unicode) usize {
         n += runLength(body[from..slash], unicode) + (std.unicode.utf8CodepointSequenceLength(e.scalar) catch unreachable);
         from = slash + 1 + e.len;
     }
+    // aegis: no-danger: `from` is past the last escape, inside `body`
     return n + runLength(body[from..], unicode);
 }
 

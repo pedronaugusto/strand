@@ -23,6 +23,7 @@ pub fn space(bytes: []const u8, from: usize) usize {
         ' ', '\t', '\n', '\r', 0x0b, 0x0c => at += 1,
         '/' => {
             if (at + 1 == bytes.len) return at;
+            // aegis: no-danger: `at + 1 == bytes.len` returned on the line before, and the loop holds `at` inside the input
             switch (bytes[at + 1]) {
                 '/' => at = lineEnd(bytes, at + 2),
                 '*' => at = (std.mem.findPos(u8, bytes, at + 2, "*/") orelse return at) + 2,
@@ -30,6 +31,7 @@ pub fn space(bytes: []const u8, from: usize) usize {
             }
         },
         0xc2, 0xe1, 0xe2, 0xe3, 0xef => {
+            // aegis: no-danger: the loop holds `at` inside the input
             const n = wideSpace(bytes[at..]);
             if (n == 0) return at;
             at += n;
@@ -93,8 +95,10 @@ pub fn identifier(bytes: []const u8, from: usize) error{SyntaxError}!Name {
             if (!identifierChar(b, first)) break;
             at += 1;
         } else {
+            // aegis: no-danger: the loop holds `at` inside the input
             const n = strings.sequence(bytes[at..]);
             if (n == 0) return error.SyntaxError;
+            // aegis: no-danger: the loop holds `at` inside the input, and `sequence` found a whole sequence there
             if (!identifierChar(xenoglyph.utf8.decode(bytes[at..]).code_point, first)) break;
             at += n;
         }
@@ -207,6 +211,7 @@ pub fn unescape(body: []const u8, out: []u8, unicode: Unicode) usize {
     var from: usize = 0;
     var to: usize = 0;
     while (std.mem.findScalarPos(u8, body, from, '\\')) |slash| {
+        // aegis: no-danger: `slash` is a search's answer at or past `from` in `body`; `out` is as long as `unescapedLength` counts, the caller's contract, and `to` is what has been written
         to += strings.copyRun(body[from..slash], out[to..], unicode);
         // aegis: no-danger: `end` checked every escape in this body.
         const e = escape(body[slash + 1 ..], unicode) catch unreachable;
@@ -214,11 +219,13 @@ pub fn unescape(body: []const u8, out: []u8, unicode: Unicode) usize {
             var encoded: [4]u8 = undefined;
             // aegis: no-danger: a scalar `escape` decoded is at most U+10FFFF and no surrogate.
             const n = std.unicode.utf8Encode(scalar, &encoded) catch unreachable;
+            // aegis: no-danger: `n` is the length of the scalar encoded, at most 4; `out` is as long as `unescapedLength` counts
             @memcpy(out[to..][0..n], encoded[0..n]);
             to += n;
         }
         from = slash + 1 + e.len;
     }
+    // aegis: no-danger: `from` is past the last escape, inside `body`; `out` is as long as `unescapedLength` counts
     return to + strings.copyRun(body[from..], out[to..], unicode);
 }
 
@@ -229,11 +236,13 @@ pub fn unescapedLength(body: []const u8, unicode: Unicode) usize {
     while (std.mem.findScalarPos(u8, body, from, '\\')) |slash| {
         // aegis: no-danger: `end` checked every escape in this body.
         const e = escape(body[slash + 1 ..], unicode) catch unreachable;
+        // aegis: no-danger: `slash` is a search's answer at or past `from` in `body`
         n += strings.runLength(body[from..slash], unicode);
         // aegis: no-danger: an escape decodes to a Unicode scalar, never a surrogate half.
         if (e.scalar) |scalar| n += std.unicode.utf8CodepointSequenceLength(scalar) catch unreachable;
         from = slash + 1 + e.len;
     }
+    // aegis: no-danger: `from` is past the last escape, inside `body`
     return n + strings.runLength(body[from..], unicode);
 }
 
@@ -260,9 +269,11 @@ const Unescaped = struct {
             }
             // A sequence goes by whole under `.replace`, as `copyRun` copies it.
             const n = if (self.unicode == .replace and self.rest[0] >= 0x80) strings.sequence(self.rest) else 1;
+            // aegis: no-danger: `sequence` gives the length of a whole sequence at the start of `rest`, at most its length
             const bytes = if (n == 0) "\u{fffd}" else self.rest[0..n];
             @memcpy(self.pending[0..bytes.len], bytes);
             self.len = bytes.len;
+            // aegis: no-danger: `sequence` gives the length of a whole sequence at the start of `rest`, at most its length
             self.rest = self.rest[@max(n, 1)..];
         }
         self.at += 1;
@@ -287,7 +298,7 @@ pub fn sameText(a: []const u8, b: []const u8, unicode: Unicode) bool {
 pub fn numberEnd(bytes: []const u8, start: usize) error{SyntaxError}!usize {
     var at = start;
     if (at < bytes.len and (bytes[at] == '-' or bytes[at] == '+')) at += 1;
-    if (at == bytes.len) return error.SyntaxError;
+    if (at >= bytes.len) return error.SyntaxError;
     var integral = true;
     switch (bytes[at]) {
         'I' => return word(bytes, at, "Infinity"),
@@ -322,6 +333,7 @@ pub fn numberEnd(bytes: []const u8, start: usize) error{SyntaxError}!usize {
 }
 
 fn word(bytes: []const u8, at: usize, comptime spelling: []const u8) error{SyntaxError}!usize {
+    // aegis: no-danger: `at` is inside the input, checked by `numberEnd` before it calls this
     if (!std.mem.startsWith(u8, bytes[at..], spelling)) return error.SyntaxError;
     return at + spelling.len;
 }

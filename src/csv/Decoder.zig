@@ -38,7 +38,6 @@ const Frame = enum { none, rows, record, tuple, done };
 input: []const u8,
 at: usize,
 dialect: text.Dialect,
-// aegis: no-danger: a reading's choice between a document and a row, set when the decoder is made, not a state it moves through
 mode: Mode,
 /// The header's names; a `Reader` hands them over for each row.
 names: []const core.Span,

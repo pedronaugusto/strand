@@ -51,7 +51,6 @@ const Frame = struct {
     elide: bool,
     empty: bool = true,
     value_pending: bool = false,
-    // aegis: no-danger: whether a union arm's payload is known yet, a value's shape recorded as it is written, not a state machine
     arm: Arm = .unknown,
     name: []const u8 = "",
     key_start: usize,

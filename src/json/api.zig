@@ -105,6 +105,7 @@ fn Dialect(comptime T: type, comptime grammar: decoding.Grammar) type {
         /// (`input.Untrusted`), its one checked boundary, past which what it
         /// reads is the parse's.
         fn run(c: *core.Context, input: []const u8) Error!T {
+            // aegis: design: `descriptor.same` and the decoder's `zero` recurse over T's own fields and children, as deep as T nests when strand compiles, never as deep as the input
             return (try aegis.input.Untrusted([]const u8).init(input).parse(c, checked)).value;
         }
         fn checked(c: *core.Context, input: []const u8) Error!Refined {

@@ -120,20 +120,28 @@ pub fn applied(a: std.mem.Allocator, text: []const u8, splices: []const Splice) 
             return x.start < y.start;
         }
     }.lessThan);
+    // The contract is checked before anything is counted: each splice lies in
+    // the text, after the one before it.
     var length = text.len;
-    for (sorted) |s| length = length - (s.end - s.start) + s.replacement.len;
+    var last: usize = 0;
+    for (sorted) |s| {
+        aegis.assert.invariant(last <= s.start and s.start <= s.end and s.end <= text.len, "each splice lies in the text, none overlapping another");
+        length = length - (s.end - s.start) + s.replacement.len; // aegis: no-danger: the splice, checked on the line before, lies in the text
+        last = s.end;
+    }
     const out = try a.alloc(u8, length);
     var from: usize = 0;
     var to: usize = 0;
+    // `out` is as long as the checked splices make the text, and `to` counts
+    // what has been written of it.
     for (sorted) |s| {
-        aegis.assert.invariant(from <= s.start and s.start <= s.end and s.end <= text.len, "from <= s.start and s.start <= s.end and s.end <= text.len");
-        @memcpy(out[to..][0 .. s.start - from], text[from..s.start]);
-        to += s.start - from;
-        @memcpy(out[to..][0..s.replacement.len], s.replacement);
+        @memcpy(out[to..][0 .. s.start - from], text[from..s.start]); // aegis: no-danger: from <= s.start <= text.len, checked above; out holds what the splices make
+        to += s.start - from; // aegis: no-danger: from <= s.start, checked above
+        @memcpy(out[to..][0..s.replacement.len], s.replacement); // aegis: no-danger: out holds each replacement, counted in its length above
         to += s.replacement.len;
         from = s.end;
     }
-    @memcpy(out[to..], text[from..]);
+    @memcpy(out[to..], text[from..]); // aegis: no-danger: from is the last splice's end, at most text.len, checked above
     return out;
 }
 
@@ -178,7 +186,7 @@ pub const Text = struct {
 
 /// Where the line holding `at` starts.
 pub fn lineStart(text: []const u8, at: usize) usize {
-    return if (std.mem.findScalarLast(u8, text[0..at], '\n')) |k| k + 1 else 0;
+    return if (std.mem.findScalarLast(u8, text[0..at], '\n')) |k| k + 1 else 0; // aegis: no-danger: `at` is a position in `text` the caller's read found
 }
 /// Where the line holding `at` ends: past its line feed, or the text's end.
 pub fn lineEnd(text: []const u8, at: usize) usize {
@@ -186,7 +194,7 @@ pub fn lineEnd(text: []const u8, at: usize) usize {
 }
 /// Whether only spaces and tabs stand between `from` and `to`.
 pub fn blankBetween(text: []const u8, from: usize, to: usize) bool {
-    for (text[from..to]) |b| if (b != ' ' and b != '\t') return false;
+    for (text[from..to]) |b| if (b != ' ' and b != '\t') return false; // aegis: no-danger: positions in `text` the caller's read found, `from` the start of the line `to` is on
     return true;
 }
 /// The spaces and tabs that start the line holding `at`.

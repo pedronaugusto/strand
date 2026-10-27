@@ -158,6 +158,14 @@
         "level": "gate"
       },
       {
+        "id": "A009",
+        "level": "gate"
+      },
+      {
+        "id": "A010",
+        "level": "gate"
+      },
+      {
         "id": "A011",
         "level": "gate"
       },

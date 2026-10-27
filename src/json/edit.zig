@@ -143,6 +143,7 @@ pub const Edit = struct {
         if (comma_before) |k| {
             // The comma before goes too, and what stands between it and the
             // member stays.
+            // aegis: no-danger: the comma at `k` stands before the member, so `k + 1 <= own_start`, both positions the edit's read found in `text`
             return self.commit(a, .{ .start = k, .end = own_end, .replacement = text[k + 1 .. own_start] });
         }
         try self.commit(a, .{ .start = own_start, .end = own_end, .replacement = "" });
@@ -186,6 +187,7 @@ pub const Edit = struct {
         if (kids.len == 0) {
             // Inside the brackets, after any comment there.
             const open = container.open + 1;
+            // aegis: no-danger: `open` is one past the container's bracket and `end - 1` its closing bracket, positions the edit's read found in `text`
             const replacement = if (container.lines or std.mem.findScalar(u8, text[open .. container.end - 1], '\n') != null)
                 try std.mem.concat(a, u8, &.{ "\n", indent, member.items, "\n", edit.indentation(text, container.open) })
             else
@@ -217,6 +219,7 @@ pub const Edit = struct {
         if (container.lines) {
             const line_end = lineRest(text, last.value_end) orelse last.value_end;
             const end = if (line_end > 0 and text[line_end - 1] == '\n') line_end - 1 else line_end;
+            // aegis: no-danger: `end` is at or past the last value's end, on its line, positions the edit's read found in `text`
             const replacement = try std.mem.concat(a, u8, &.{ ",", text[last.value_end..end], "\n", indent, member.items });
             return self.commit(a, .{ .start = last.value_end, .end = end, .replacement = replacement });
         }
@@ -313,6 +316,7 @@ fn readContainer(a: std.mem.Allocator, text: []const u8, start: usize, options: 
         while (try d.passElementSpan(&c, &count)) |e| try children.append(a, .{ .start = e.value_start, .value_start = e.value_start, .value_end = e.value_end });
     }
     const end = d.last_end;
+    // aegis: no-danger: `start` is the container's bracket and its first child starts after it, positions the read found in `text`
     const lines = children.items.len != 0 and std.mem.findScalar(u8, text[start..children.items[0].start], '\n') != null;
     return .{ .object = object, .open = start, .end = end, .children = children.items, .lines = lines };
 }

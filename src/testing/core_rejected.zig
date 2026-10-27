@@ -16,7 +16,7 @@ fn required(_: *core.Context, _: []const u8) core.DecodeError!Required {
 pub const EncodeOnly = struct {
     pub fn strandSerialize(_: EncodeOnly, _: anytype) core.EncodeError!void {}
 };
-const Secret = struct {
+pub const Secret = struct {
     material: [16]u8,
     pub fn format(_: *const Secret, _: *std.Io.Writer) error{SecretNotFormattable}!void {
         return error.SecretNotFormattable;

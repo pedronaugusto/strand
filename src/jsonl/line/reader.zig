@@ -491,6 +491,7 @@ pub const LineReader = struct {
     /// there is one, is a line nobody takes twice and is left where it is.
     inline fn checkControl(self: *LineReader, record: []const u8, from: usize, number: u64) NextError!bool {
         if (!self.options.reject_control_bytes) return false;
+        // aegis: no-danger: `from` is a position in `record` the caller has already read up to
         const offset = indexOfControl(record[from..]) orelse return false;
         return self.controlByte(from + offset, number);
     }
@@ -844,6 +845,7 @@ pub const LineReader = struct {
                 self.number += 1;
                 self.fault.framing(self.number);
                 self.offset = self.record_offset;
+                // aegis: no-danger: `before` was the writer's end before this read, which only appended to it
                 self.consumed += self.line_buf.writer.end - before;
                 self.consumed += try self.refuseOversized(.discard, self.line_buf.written());
                 self.unfinished = self.discarding;
@@ -877,6 +879,7 @@ pub const LineReader = struct {
         }
 
         const record_len = if (self.options.crlf and self.line_buf.writer.end > 0 and
+            // aegis: no-danger: `end > 0` is checked first, and std's Writer keeps its end at most its buffer's length
             self.line_buf.writer.buffer[self.line_buf.writer.end - 1] == '\r')
             self.line_buf.writer.end - 1
         else
@@ -885,6 +888,7 @@ pub const LineReader = struct {
             self.number += 1;
             self.fault.framing(self.number);
             self.offset = self.record_offset;
+            // aegis: no-danger: `record_len` is the writer's end, or one less, so at most what it has written
             _ = try self.refuseOversized(.whole, self.line_buf.written()[0..record_len]);
             return error.LineTooLong;
         }
@@ -892,6 +896,7 @@ pub const LineReader = struct {
         self.number += 1;
         // Tolerate CRLF: the `\r` belongs to the terminator, not the JSON.
         if (self.options.crlf and self.line_buf.writer.end > before and
+            // aegis: no-danger: `end > before >= 0` is checked first, and std's Writer keeps its end at most its buffer's length
             self.line_buf.writer.buffer[self.line_buf.writer.end - 1] == '\r')
         {
             self.line_buf.writer.end -= 1;

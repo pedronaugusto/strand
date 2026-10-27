@@ -309,6 +309,28 @@ test "YAML: removals take their lines; flow collections; empty values" {
     try std.testing.expectEqualStrings("whole: true\n", e.bytes());
 }
 
+test "YAML: a carriage return alone ends a line, as the reader reads it" {
+    // Found by the fuzzer: the comment after `a` ends at the carriage return,
+    // and `b` is the next key, not part of `a`'s line.
+    var e = try yaml.Edit.init(gpa, "# top\na: 1 # one\rb:\n  c: 2\n", .{});
+    defer e.deinit();
+    try e.remove("/a");
+    try std.testing.expectEqualStrings("# top\nb:\n  c: 2\n", e.bytes());
+
+    var lone = try yaml.Edit.init(gpa, "a: 1\rb: 2\r", .{});
+    defer lone.deinit();
+    try lone.remove("/b");
+    try std.testing.expectEqualStrings("a: 1\r", lone.bytes());
+    try lone.set("/c", @as(u8, 3));
+    try std.testing.expectEqualStrings("a: 1\rc: 3\n", lone.bytes());
+
+    var crlf = try yaml.Edit.init(gpa, "a: 1 # one\r\nb: [1,\r\n  2]\r\n", .{});
+    defer crlf.deinit();
+    try crlf.remove("/a");
+    try crlf.remove("/b/0");
+    try std.testing.expectEqualStrings("b: [\r\n  2]\r\n", crlf.bytes());
+}
+
 test "YAML: a node replaced takes its anchor; an alias left without one is refused" {
     var e = try yaml.Edit.init(gpa, "base: &b {x: 1}\nuse: *b\n", .{});
     defer e.deinit();

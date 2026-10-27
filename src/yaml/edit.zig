@@ -223,7 +223,7 @@ pub const Edit = struct {
             const before = r.entry(members[index]);
             return self.commit(a, &.{.{ .start = before, .end = before, .replacement = try std.mem.concat(a, u8, &.{ lines, indent }) }});
         }
-        const after = edit.lineEnd(text, r.end(members[members.len - 1]));
+        const after = lineEnd(text, r.end(members[members.len - 1]));
         return self.commit(a, &.{.{ .start = after, .end = after, .replacement = try newlineBefore(a, text, after, try std.mem.concat(a, u8, &.{ indent, lines })) }});
     }
 
@@ -289,16 +289,16 @@ fn placed(a: std.mem.Allocator, r: *const Read, n: u32, spelled: []const u8) Err
     const one_line = std.mem.findScalar(u8, body, '\n') == null;
     const parent = r.parents[n];
     if (parent == 0) {
-        if (one_line or edit.blankBetween(text, edit.lineStart(text, s.start), s.start)) return .{ .start = s.start, .end = s.end, .replacement = body };
+        if (one_line or edit.blankBetween(text, lineStart(text, s.start), s.start)) return .{ .start = s.start, .end = s.end, .replacement = body };
         // After `---` on its line: a block starts on the next.
         return .{ .start = s.start, .end = s.end, .replacement = try std.mem.concat(a, u8, &.{ "\n", body }) };
     }
     // An empty node right after its `-` or `:` is given a space.
-    const gap: []const u8 = if (s.start > 0 and text[s.start - 1] != ' ' and text[s.start - 1] != '\n') " " else "";
+    const gap: []const u8 = if (s.start > 0 and text[s.start - 1] != ' ' and lineStart(text, s.start) != s.start) " " else "";
     if (r.node(parent).kind == .mapping) {
         const k = keyBefore(r, parent, n);
         if (colonAfter(text, r.span(k).end)) |colon| {
-            const same_line = std.mem.findScalar(u8, text[colon..s.start], '\n') == null;
+            const same_line = std.mem.findAny(u8, text[colon..s.start], "\r\n") == null;
             const key_column = column(text, r.span(k).entry);
             // On a line after its key's, deeper: replaced there where
             // comments stand before it, to keep them.
@@ -336,7 +336,7 @@ fn emptyValue(a: std.mem.Allocator, r: *const Read, n: u32, spelled: []const u8)
     const body = trimLine(spelled);
     if (r.span(parent).flow) return .{ .start = key_end, .end = key_end, .replacement = try std.mem.concat(a, u8, &.{ ": ", body }) };
     const key_column = column(text, r.span(k).entry);
-    const after = edit.lineEnd(text, key_end);
+    const after = lineEnd(text, key_end);
     const line = try std.mem.concat(a, u8, &.{ try spaces(a, key_column), ": ", try edit.indented(a, body, try spaces(a, key_column + 2)), "\n" });
     return .{ .start = after, .end = after, .replacement = try newlineBefore(a, text, after, line) };
 }
@@ -350,7 +350,7 @@ fn skipGap(text: []const u8, at: usize) usize {
     var i = at;
     while (i < text.len) switch (text[i]) {
         ' ', '\t', '\r', '\n' => i += 1,
-        '#' => i = edit.lineEnd(text, i),
+        '#' => i = lineEnd(text, i),
         else => break,
     };
     return i;
@@ -383,8 +383,8 @@ fn flowAdd(a: std.mem.Allocator, r: *const Read, parent: u32, members: []const M
         while (open > s.start and text[open - 1] != '[' and text[open - 1] != '{') open -= 1;
         return .{ .start = open, .end = s.end - 1, .replacement = spelled };
     }
-    const lines = std.mem.findScalar(u8, text[s.start..r.start(members[0])], '\n') != null;
-    const indent = edit.indentation(text, r.start(members[0]));
+    const lines = std.mem.findAny(u8, text[s.start..r.start(members[0])], "\r\n") != null;
+    const indent = indentation(text, r.start(members[0]));
     if (index < members.len) {
         const before = r.start(members[index]);
         const replacement = if (lines) try std.mem.concat(a, u8, &.{ spelled, ",\n", indent }) else try std.mem.concat(a, u8, &.{ spelled, ", " });
@@ -408,8 +408,8 @@ fn flowCut(a: std.mem.Allocator, r: *const Read, members: []const Member, i: usi
             try splices.append(a, .{ .start = start, .end = end, .replacement = "" });
             return splices.append(a, .{ .start = comma, .end = stop, .replacement = "" });
         }
-        const line = edit.lineStart(text, start);
-        if (stop < text.len and text[stop] == '\n' and edit.blankBetween(text, line, start)) return splices.append(a, .{ .start = line, .end = stop + 1, .replacement = "" });
+        const line = lineStart(text, start);
+        if (pastBreak(text, stop)) |past| if (edit.blankBetween(text, line, start)) return splices.append(a, .{ .start = line, .end = past, .replacement = "" });
         return splices.append(a, .{ .start = start, .end = stop, .replacement = "" });
     }
     // The last: the comma before it goes, unless it is the only one.
@@ -422,13 +422,13 @@ fn blockCut(r: *const Read, members: []const Member, i: usize) edit.Splice {
     const text = r.text;
     const start = r.entry(members[i]);
     const end = r.end(members[i]);
-    const line = edit.lineStart(text, start);
+    const line = lineStart(text, start);
     if (edit.blankBetween(text, line, start)) {
         var stop: usize = end;
         while (stop < text.len and (text[stop] == ' ' or text[stop] == '\t')) stop += 1;
-        if (stop < text.len and text[stop] == '#') stop = std.mem.findScalarPos(u8, text, stop, '\n') orelse text.len;
-        if (stop < text.len and text[stop] == '\r') stop += 1;
-        if (stop == text.len or text[stop] == '\n') return .{ .start = line, .end = @min(stop + 1, text.len), .replacement = "" };
+        if (stop < text.len and text[stop] == '#') stop = std.mem.findAnyPos(u8, text, stop, "\r\n") orelse text.len;
+        if (stop == text.len) return .{ .start = line, .end = stop, .replacement = "" };
+        if (pastBreak(text, stop)) |past| return .{ .start = line, .end = past, .replacement = "" };
     }
     // After `- ` on its line (`- a: 1`): the next member takes its place.
     if (i + 1 < members.len) return .{ .start = start, .end = r.entry(members[i + 1]), .replacement = "" };
@@ -440,7 +440,41 @@ fn trimLine(spelled: []const u8) []const u8 {
     return std.mem.trimEnd(u8, spelled, "\n");
 }
 fn column(text: []const u8, at: usize) usize {
-    return at - edit.lineStart(text, at);
+    return at - lineStart(text, at);
+}
+// YAML ends a line at a line feed, a carriage return, or the two together
+// (as its scanner reads them), where `edit`'s lines end at a line feed alone:
+// a lone carriage return after a comment is the comment's end.
+
+/// Past the line break at `at`, if one is there.
+fn pastBreak(text: []const u8, at: usize) ?usize {
+    if (at == text.len) return null;
+    return switch (text[at]) {
+        '\n' => at + 1,
+        '\r' => if (at + 1 < text.len and text[at + 1] == '\n') at + 2 else at + 1,
+        else => null,
+    };
+}
+/// Where the line holding `at` starts.
+fn lineStart(text: []const u8, at: usize) usize {
+    var i = at;
+    while (i > 0) : (i -= 1) {
+        // The carriage return of a CRLF ends no line on its own.
+        if (text[i - 1] == '\n' or (text[i - 1] == '\r' and (i == text.len or text[i] != '\n'))) return i;
+    }
+    return 0;
+}
+/// Past the line break that ends the line holding `at`, or the text's end.
+fn lineEnd(text: []const u8, at: usize) usize {
+    const k = std.mem.findAnyPos(u8, text, at, "\r\n") orelse return text.len;
+    return pastBreak(text, k).?;
+}
+/// The spaces and tabs that start the line holding `at`.
+fn indentation(text: []const u8, at: usize) []const u8 {
+    const start = lineStart(text, at);
+    var i = start;
+    while (i < text.len and (text[i] == ' ' or text[i] == '\t')) i += 1;
+    return text[start..i];
 }
 fn spaces(a: std.mem.Allocator, n: usize) Error![]const u8 {
     const s = try a.alloc(u8, n);
@@ -448,6 +482,6 @@ fn spaces(a: std.mem.Allocator, n: usize) Error![]const u8 {
     return s;
 }
 fn newlineBefore(a: std.mem.Allocator, text: []const u8, at: usize, line: []const u8) Error![]const u8 {
-    if (at == 0 or text[at - 1] == '\n') return line;
+    if (lineStart(text, at) == at) return line;
     return std.mem.concat(a, u8, &.{ "\n", line });
 }

@@ -18,6 +18,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `yaml.Edit` ends a line where YAML does, at a carriage return alone too: a comment before one ran on to the next line feed, so removing `a` from `a: 1 # one\rb: 2` took `b` with it. Found by the fuzzer.
 - A value passed over rather than read (a `Raw`, an ignored field) refuses an object with a key given twice when one of the two is spelled with an escape (`{"a":1,"\u0061":2}`), as reading the value does; it compared the keys as written, and took them for two.
 - Development: the W3C XML suite's hash, taken from a copy that had lost the tarball's two empty directories, is the one Zig computes for the tarball itself, and its documents are read where Zig puts them (without the tarball's top `xmlconf/` directory), so a fresh fetch (CI's) builds. A consumer never fetches the suite.
 

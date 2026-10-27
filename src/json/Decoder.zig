@@ -967,7 +967,7 @@ pub fn Dialect(comptime grammar: Grammar) type {
             if (at >= bytes.len) return error.SyntaxError;
             if (bytes[at] == '0') {
                 at += 1;
-            } else if (bytes[at] >= '1' and bytes[at] <= '9') { // aegis: no-danger: `at >= bytes.len` was refused before the `if`
+            } else if (bytes[at] >= '1' and bytes[at] <= '9') {
                 at = digitsEnd(bytes, at + 1);
             } else return error.SyntaxError;
             if (at < bytes.len and bytes[at] == '.') {

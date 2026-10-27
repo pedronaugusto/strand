@@ -23,7 +23,6 @@ pub fn space(bytes: []const u8, from: usize) usize {
         ' ', '\t', '\n', '\r', 0x0b, 0x0c => at += 1,
         '/' => {
             if (at + 1 == bytes.len) return at;
-            // aegis: no-danger: `at + 1 == bytes.len` returned on the line before, and the loop holds `at` inside the input
             switch (bytes[at + 1]) {
                 '/' => at = lineEnd(bytes, at + 2),
                 '*' => at = (std.mem.findPos(u8, bytes, at + 2, "*/") orelse return at) + 2,
@@ -31,7 +30,6 @@ pub fn space(bytes: []const u8, from: usize) usize {
             }
         },
         0xc2, 0xe1, 0xe2, 0xe3, 0xef => {
-            // aegis: no-danger: the loop holds `at` inside the input
             const n = wideSpace(bytes[at..]);
             if (n == 0) return at;
             at += n;
@@ -95,10 +93,8 @@ pub fn identifier(bytes: []const u8, from: usize) error{SyntaxError}!Name {
             if (!identifierChar(b, first)) break;
             at += 1;
         } else {
-            // aegis: no-danger: the loop holds `at` inside the input
             const n = strings.sequence(bytes[at..]);
             if (n == 0) return error.SyntaxError;
-            // aegis: no-danger: the loop holds `at` inside the input, and `sequence` found a whole sequence there
             if (!identifierChar(xenoglyph.utf8.decode(bytes[at..]).code_point, first)) break;
             at += n;
         }

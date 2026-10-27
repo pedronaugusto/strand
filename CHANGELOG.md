@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-10-27
+
 ### Breaking
 
 - None for a program: `json.Format`, `json.capabilities` and `json.Raw.StrandRawFormat` are the type and the value they were, now declared once for JSON's three dialects (a `Raw` read from JSON, JSONC or JSON5 is branded `json.Format`). They are named here because the release check compares declarations by how they are spelled.
@@ -16,18 +18,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `strand.json.json5`: JSON5 read through the JSON reader in a third dialect, with JSON's options and promises (`parse`, `parseOwned`, `parseLeaky`): JSONC's comments and trailing commas, keys as ECMAScript identifier names (Unicode's letters and digits, `\u` escapes) or strings in either quote, single-quoted strings, strings continued across lines, ECMAScript's escapes, control characters in strings, hexadecimal numbers, a plus, a bare point, `Infinity` and `NaN`, and Unicode's space separators as white space. A key given twice is refused however it is spelled, unless `duplicates` says otherwise. `json.Value` keeps each number as written. `json.json5.write` writes JSON but for the floats JSON cannot spell, `Infinity`, `-Infinity` and `NaN`, and checks a `Value`'s number and a `Raw` as JSON5. Held to json5-tests, each case read as JSON5's reference implementation reads it, to properties over generated JSON and JSON5, and fuzzed. `bench/json5.zig` measures it.
 - `strand.ini`: INI read and written through the one core, in a `Dialect`, Python configparser's by default: `#` and `;` comment lines, `=` and `:` delimiters, values continued on indented lines, keys lowercased by Unicode's full mapping (`optionxform`), section names as written; `inline_comment_prefixes`, `continuation`, `lowercase_keys` and `keys_without_values` change it. A document is a struct or a map: the keys before its first section, then each section, a struct or map of its keys; lines are read as configparser reads them, and a key or a section given twice is refused, as its strict mode does. A value is text until the type asks: a number in JSON's spelling, a boolean as `getboolean` reads one, a null where it is empty and the type takes one. No interpolation, and `[DEFAULT]` is a section like any other. `ini.Value` holds any document in order. The writer puts keys before sections and refuses what would not read back as itself, a map's key or section given twice among it (past the 128th, a map's names are remembered in `WriteOptions.scratch`). Held to configparser's reading by its own cases, to round trips over generated documents in three dialects, and fuzzed.
 
-### Fixed
-
-- `yaml.Edit` ends a line where YAML does, at a carriage return alone too: a comment before one ran on to the next line feed, so removing `a` from `a: 1 # one\rb: 2` took `b` with it. Found by the fuzzer.
-- A value passed over rather than read (a `Raw`, an ignored field) refuses an object with a key given twice when one of the two is spelled with an escape (`{"a":1,"\u0061":2}`), as reading the value does; it compared the keys as written, and took them for two.
-- Development: the W3C XML suite's hash, taken from a copy that had lost the tarball's two empty directories, is the one Zig computes for the tarball itself, and its documents are read where Zig puts them (without the tarball's top `xmlconf/` directory), so a fresh fetch (CI's) builds. A consumer never fetches the suite.
-
 ### Changed
 
 - Development: the rival programs and comparison drivers (quick-xml, Go's encoding/xml, expat, toml_edit, ruamel.yaml, jsonc-parser) moved to the private trials repository; `bench/xml.zig` and `bench/edit.zig` measure strand alone.
 - The JSON reader and the JSON Lines line reader each mark where bytes enter them with aegis's boundary marker (`input.Untrusted`): every JSON parse goes through it, and a line the line reader hands out has passed it, framed, bounded and checked for control bytes. Nothing changes for a program; past the boundary, the lint reads what a parser reads as the parse's own.
 - aegis 0.2.2 (from 0.1.18), airlock 0.6.0 (from 0.5.0) and xenoglyph 0.5.1 (from 0.4.2): the aegis 0.2 line, which the family moves to together. strand used nothing that changed. Development: preflight 0.18.3 (from 0.17.0) and shakedown 0.5.0 (from 0.4.17).
 - Development: the aegis lint pack gates every rule but A006, whose calls through strand's generic backends and hooks glint cannot resolve (sent to aegis); it reports nothing. Each danger site the pack finds carries its reason (`// aegis: <reason>: <why>`): the allocator interfaces' pointer casts, the parsers' frame states, an escape decoded again after its body was checked, and each position a parser reads, with the check that holds it inside the input. A contract the splicer and the line reader hold on positions is checked in every build (`aegis.assert.invariant`), the splicer's before it counts anything, and a number's end refuses a start past the input. strand's own token rule against durability calls is gone: preflight's durability door (P006) holds it.
+
+### Fixed
+
+- `yaml.Edit` ends a line where YAML does, at a carriage return alone too: a comment before one ran on to the next line feed, so removing `a` from `a: 1 # one\rb: 2` took `b` with it. Found by the fuzzer.
+- A value passed over rather than read (a `Raw`, an ignored field) refuses an object with a key given twice when one of the two is spelled with an escape (`{"a":1,"\u0061":2}`), as reading the value does; it compared the keys as written, and took them for two.
+- Development: the W3C XML suite's hash, taken from a copy that had lost the tarball's two empty directories, is the one Zig computes for the tarball itself, and its documents are read where Zig puts them (without the tarball's top `xmlconf/` directory), so a fresh fetch (CI's) builds. A consumer never fetches the suite.
 
 ## [0.14.0] - 2026-10-25
 
@@ -1001,7 +1003,8 @@ First release: the line layer over `std.json`, and nothing else.
   awkward inputs, with the line numbering checked against an index scan that
   shares no code with the package.
 
-[Unreleased]: https://github.com/pedronaugusto/strand/compare/v0.14.0...HEAD
+[Unreleased]: https://github.com/pedronaugusto/strand/compare/v0.15.0...HEAD
+[0.15.0]: https://github.com/pedronaugusto/strand/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/pedronaugusto/strand/compare/v0.13.1...v0.14.0
 [0.13.1]: https://github.com/pedronaugusto/strand/compare/v0.10.0...v0.13.1
 [0.10.0]: https://github.com/pedronaugusto/strand/compare/v0.9.1...v0.10.0

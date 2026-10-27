@@ -626,7 +626,7 @@ pub fn Dialect(comptime grammar: Grammar) type {
             } else result: {
                 if (negative) {
                     if (magnitude > @as(u64, 1) << (bits - 1)) return null;
-                    break :result @intCast(-@as(i65, magnitude)); // safe: at most the magnitude of the signed minimum.
+                    break :result @intCast(-@as(i65, magnitude)); // aegis: no-danger: at most the magnitude of the signed minimum.
                 }
                 break :result std.math.cast(T, magnitude) orelse return null;
             };

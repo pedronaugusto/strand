@@ -305,7 +305,7 @@ fn readContainer(a: std.mem.Allocator, text: []const u8, start: usize, options: 
         while (try d.passMember(&c, &count)) |m| try children.append(a, .{
             .name = m.name,
             .escaped = m.escaped,
-            .start = @intFromPtr(m.name.ptr) - @intFromPtr(text.ptr) - 1, // aegis: no-danger: a checked name is borrowed from the text
+            .start = @intFromPtr(m.name.ptr) - @intFromPtr(text.ptr) - 1,
             .value_start = m.value_start,
             .value_end = m.value_end,
         });

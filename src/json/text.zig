@@ -251,10 +251,10 @@ pub fn unescape(body: []const u8, out: []u8, unicode: Unicode) usize {
     var to: usize = 0;
     while (std.mem.findScalarPos(u8, body, from, '\\')) |slash| {
         to += copyRun(body[from..slash], out[to..], unicode);
-        // unreachable: `end` checked every escape in this body.
+        // aegis: no-danger: `end` checked every escape in this body.
         const e = escape(body[slash + 1 ..], unicode) catch unreachable;
         var encoded: [4]u8 = undefined;
-        // unreachable: a scalar `escape` decoded is at most U+10FFFF and no surrogate.
+        // aegis: no-danger: a scalar `escape` decoded is at most U+10FFFF and no surrogate.
         const n = std.unicode.utf8Encode(e.scalar, &encoded) catch unreachable;
         @memcpy(out[to..][0..n], encoded[0..n]);
         to += n;
@@ -333,9 +333,9 @@ pub const Unescaped = struct {
             defer self.rest = self.rest[1..];
             return self.rest[0];
         }
-        // unreachable: `end` checked every escape in this body.
+        // aegis: no-danger: `end` checked every escape in this body.
         const e = escape(self.rest[1..], self.unicode) catch unreachable;
-        // unreachable: an escape decodes to a Unicode scalar, never a surrogate half.
+        // aegis: no-danger: an escape decodes to a Unicode scalar, never a surrogate half.
         self.len = std.unicode.utf8Encode(e.scalar, &self.pending) catch unreachable;
         self.at = 1;
         self.rest = self.rest[1 + e.len ..];
@@ -377,9 +377,9 @@ pub fn unescapedLength(body: []const u8, unicode: Unicode) usize {
     var n: usize = 0;
     var from: usize = 0;
     while (std.mem.findScalarPos(u8, body, from, '\\')) |slash| {
-        // unreachable: `end` checked every escape in this body.
+        // aegis: no-danger: `end` checked every escape in this body.
         const e = escape(body[slash + 1 ..], unicode) catch unreachable;
-        // unreachable: an escape decodes to a Unicode scalar, never a surrogate half.
+        // aegis: no-danger: an escape decodes to a Unicode scalar, never a surrogate half.
         n += runLength(body[from..slash], unicode) + (std.unicode.utf8CodepointSequenceLength(e.scalar) catch unreachable);
         from = slash + 1 + e.len;
     }

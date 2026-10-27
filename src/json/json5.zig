@@ -208,11 +208,11 @@ pub fn unescape(body: []const u8, out: []u8, unicode: Unicode) usize {
     var to: usize = 0;
     while (std.mem.findScalarPos(u8, body, from, '\\')) |slash| {
         to += strings.copyRun(body[from..slash], out[to..], unicode);
-        // unreachable: `end` checked every escape in this body.
+        // aegis: no-danger: `end` checked every escape in this body.
         const e = escape(body[slash + 1 ..], unicode) catch unreachable;
         if (e.scalar) |scalar| {
             var encoded: [4]u8 = undefined;
-            // unreachable: a scalar `escape` decoded is at most U+10FFFF and no surrogate.
+            // aegis: no-danger: a scalar `escape` decoded is at most U+10FFFF and no surrogate.
             const n = std.unicode.utf8Encode(scalar, &encoded) catch unreachable;
             @memcpy(out[to..][0..n], encoded[0..n]);
             to += n;
@@ -227,10 +227,10 @@ pub fn unescapedLength(body: []const u8, unicode: Unicode) usize {
     var n: usize = 0;
     var from: usize = 0;
     while (std.mem.findScalarPos(u8, body, from, '\\')) |slash| {
-        // unreachable: `end` checked every escape in this body.
+        // aegis: no-danger: `end` checked every escape in this body.
         const e = escape(body[slash + 1 ..], unicode) catch unreachable;
         n += strings.runLength(body[from..slash], unicode);
-        // unreachable: an escape decodes to a Unicode scalar, never a surrogate half.
+        // aegis: no-danger: an escape decodes to a Unicode scalar, never a surrogate half.
         if (e.scalar) |scalar| n += std.unicode.utf8CodepointSequenceLength(scalar) catch unreachable;
         from = slash + 1 + e.len;
     }
@@ -251,10 +251,10 @@ const Unescaped = struct {
             if (self.rest.len == 0) return null;
             self.at = 0;
             if (self.rest[0] == '\\') {
-                // unreachable: `end` checked every escape in this body.
+                // aegis: no-danger: `end` checked every escape in this body.
                 const e = escape(self.rest[1..], self.unicode) catch unreachable;
                 self.rest = self.rest[1 + e.len ..];
-                // unreachable: an escape decodes to a Unicode scalar, never a surrogate half.
+                // aegis: no-danger: an escape decodes to a Unicode scalar, never a surrogate half.
                 self.len = if (e.scalar) |scalar| std.unicode.utf8Encode(scalar, &self.pending) catch unreachable else 0;
                 continue;
             }

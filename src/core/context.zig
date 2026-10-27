@@ -271,7 +271,7 @@ pub const Context = struct {
         // refused allocation costs the operation nothing.
         var charge = self.allocation_budget.reserve(bytes.raw()) catch return error.AllocationLimit;
         errdefer charge.release();
-        const memory = try self.storage.alloc(T, n);
+        const memory = try self.storage.alloc(T, n); // aegis: no-danger: its size, checked, was reserved against the allocation budget above
         charge.consume();
         return memory;
     }

@@ -1488,14 +1488,14 @@ fn HookErrors(comptime T: type, comptime Backend: type, comptime seen: []const t
     return switch (@typeInfo(T)) {
         inline .pointer, .optional, .array, .vector => |i| HookErrors(i.child, Backend, next),
         inline .@"struct", .@"union" => |i| blk: {
-            var errors: type = error{};
+            var Set: type = error{};
             for (i.field_types, i.field_names) |F, name| {
                 const opt = descriptor.fieldOptions(T, name);
-                if (@hasField(@TypeOf(opt), "codec") and @hasDecl(opt.codec, "decode")) errors = errors || @typeInfo(@TypeOf(opt.codec.decode(@as(*Access(Backend), undefined)))).error_union.error_set else errors = errors || HookErrors(F, Backend, next);
-                if (@hasField(@TypeOf(opt), "default") and @typeInfo(@TypeOf(opt.default)) == .@"fn") errors = errors || @typeInfo(@TypeOf(opt.default(@as(*ctx.Context, undefined)))).error_union.error_set;
+                if (@hasField(@TypeOf(opt), "codec") and @hasDecl(opt.codec, "decode")) Set = Set || @typeInfo(@TypeOf(opt.codec.decode(@as(*Access(Backend), undefined)))).error_union.error_set else Set = Set || HookErrors(F, Backend, next);
+                if (@hasField(@TypeOf(opt), "default") and @typeInfo(@TypeOf(opt.default)) == .@"fn") Set = Set || @typeInfo(@TypeOf(opt.default(@as(*ctx.Context, undefined)))).error_union.error_set;
             }
-            if (@typeInfo(errors).error_set.error_names == null) @compileError("field codecs and defaults require named errors");
-            break :blk errors;
+            if (@typeInfo(Set).error_set.error_names == null) @compileError("field codecs and defaults require named errors");
+            break :blk Set;
         },
         else => error{},
     };

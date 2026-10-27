@@ -5,6 +5,7 @@
 //! format: an editor finds the bytes a change replaces, and the text keeps
 //! every other byte as it was.
 const std = @import("std");
+const aegis = @import("aegis");
 const ctx = @import("context.zig");
 
 /// What an edit can fail with, beside its format's reading and writing.
@@ -125,7 +126,7 @@ pub fn applied(a: std.mem.Allocator, text: []const u8, splices: []const Splice) 
     var from: usize = 0;
     var to: usize = 0;
     for (sorted) |s| {
-        std.debug.assert(from <= s.start and s.start <= s.end and s.end <= text.len);
+        aegis.assert.invariant(from <= s.start and s.start <= s.end and s.end <= text.len, "from <= s.start and s.start <= s.end and s.end <= text.len");
         @memcpy(out[to..][0 .. s.start - from], text[from..s.start]);
         to += s.start - from;
         @memcpy(out[to..][0..s.replacement.len], s.replacement);
@@ -165,7 +166,7 @@ pub const Text = struct {
     /// replaced (its replacement may be a part of the text itself).
     pub fn spliced(self: *const Text, gpa: std.mem.Allocator, splice: Splice) error{OutOfMemory}![]u8 {
         const text = self.bytes.items;
-        std.debug.assert(splice.start <= splice.end and splice.end <= text.len);
+        aegis.assert.invariant(splice.start <= splice.end and splice.end <= text.len, "splice.start <= splice.end and splice.end <= text.len");
         return std.mem.concat(gpa, u8, &.{ text[0..splice.start], splice.replacement, text[splice.end..] });
     }
     /// The text made `next`, which an edit checked.

@@ -369,7 +369,7 @@ pub const LineReader = struct {
     pub fn bufferedFrom(self: *const LineReader, record: RawLine) ?[]const u8 {
         if (!self.borrowed or self.options.record_separator) return null;
         const buffer = self.input.buffer;
-        const start = @intFromPtr(record.line.ptr) -% @intFromPtr(buffer.ptr); // aegis: no-danger: addresses compared as numbers; a line that is not in `buffer` fails the check below
+        const start = @intFromPtr(record.line.ptr) -% @intFromPtr(buffer.ptr);
         const after = start +% record.line.len;
         if (after +% 1 != self.input.seek or after >= self.input.end or buffer[after] != '\n') return null;
         return buffer[start..self.input.end];
@@ -387,8 +387,8 @@ pub const LineReader = struct {
     /// `max_line_bytes`. The caller joins those itself.
     pub fn takeThrough(self: *LineReader, record: RawLine, rest: []const u8, end: usize) ?[]const u8 {
         const first = record.line.len;
-        std.debug.assert(first <= end);
-        std.debug.assert(end < rest.len);
+        aegis.assert.invariant(first <= end, "first <= end");
+        aegis.assert.invariant(end < rest.len, "end < rest.len");
         std.debug.assert(rest[end] == '\n');
         if (limit.exceeds(end, self.options.max_line_bytes)) return null;
         const lines = newlinesAfter(rest[first .. end + 1]) orelse return null;

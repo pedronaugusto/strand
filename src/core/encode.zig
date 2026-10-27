@@ -90,9 +90,9 @@ fn emit(comptime policy: descriptor.Field, value: anytype, out: anytype, c: *ctx
                 var ancestor = active;
                 while (ancestor) |a| : (ancestor = a.previous) {
                     try c.chargeWork(1);
-                    if (a.address == @intFromPtr(value)) return error.CycleDetected; // aegis: no-danger: only live data pointers are compared for active-path identity; no integer dereference.
+                    if (a.address == @intFromPtr(value)) return error.CycleDetected;
                 }
-                const frame: Active = .{ .address = @intFromPtr(value), .previous = active }; // aegis: no-danger: only live data pointers are compared for active-path identity; no integer dereference.
+                const frame: Active = .{ .address = @intFromPtr(value), .previous = active };
                 try c.enter();
                 defer c.leave();
                 c.items -= 1;

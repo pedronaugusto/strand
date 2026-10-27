@@ -15,22 +15,22 @@
         // Syncing a file and telling files apart. Pinned to a commit; the
         // hash is what the build checks.
         .airlock = .{
-            .url = "git+https://github.com/pedronaugusto/airlock?ref=v0.5.0#7f762143644bc2464e7a7e1544af7c5572f5f5a7",
-            .hash = "airlock-0.5.0-rfvu6Bq4BgClxCu1P8SDSU9WW0WOMd6jYDjtfasSIGEi",
+            .url = "git+https://github.com/pedronaugusto/airlock?ref=v0.6.0#0931b6512b1d7c2e03e822bc82870ec8f98fa91e",
+            .hash = "airlock-0.6.0-rfvu6JUEBwD8DeigCmlj5NDNiglUZzUy2HSsKAeYRs3E",
         },
 
         // Types that make the checked work in the core safe by construction:
         // finite budgets, checked arithmetic, closed public diagnostics and
         // always-on contracts. std only, pinned to a commit.
         .aegis = .{
-            .url = "git+https://github.com/pedronaugusto/aegis?ref=v0.1.18#c6fd0e2501b553af60256669df0ee15176ed21ce",
-            .hash = "aegis-0.1.18-rsxounuqCAA3bG0JhLkfilLi4zBvhm9QTeUkT1U4UBr5",
+            .url = "git+https://github.com/pedronaugusto/aegis?ref=v0.2.2#17b0bde5486f61b3786272219231cfa1f8b67c10",
+            .hash = "aegis-0.2.2-rsxoumb0CAA6g5peyPparEP4gU0iQNa4N3eUGPruujSn",
         },
 
         // Unicode's simple case folding, for member names read by folding.
         .xenoglyph = .{
-            .url = "git+https://github.com/pedronaugusto/xenoglyph?ref=v0.4.2#8aed75bd7544bae9858799f0f29e2eab1e3b2801",
-            .hash = "xenoglyph-0.4.2-YKXZla8pGwCdQVFVWrrij3Eu8CZreypuVrHD_jsDTwAo",
+            .url = "git+https://github.com/pedronaugusto/xenoglyph?ref=v0.5.1#47cce65a205158f3a9d64a78be763ee5cee744cc",
+            .hash = "xenoglyph-0.5.1-YKXZlRfgRgA-8yyLTWXsJNDfnimXJi_WG7n959GPPr4U",
         },
 
         // Test doubles, for the tests alone: no module a consumer builds
@@ -47,13 +47,13 @@
         },
 
         .preflight = .{
-            .url = "git+https://github.com/pedronaugusto/preflight?ref=v0.18.1#30011caf79609517f0f08073ca01b470e91e126d",
-            .hash = "preflight-0.18.1-LX1ZwmB0EwBVRRr1TC7B3glo_AEXhxCj31SBjQe4ozja",
+            .url = "git+https://github.com/pedronaugusto/preflight?ref=v0.18.2#ec1324e593a0d09a9e6ec66cdf037e9a3b63a014",
+            .hash = "preflight-0.18.2-LX1ZwvamEwC6vQI0Y6KJcTB3CWZY1bws92ObpDBiZPAq",
         },
 
         .shakedown = .{
-            .url = "git+https://github.com/pedronaugusto/shakedown?ref=v0.4.17#b96c548a2fed2a4cc8b9d790fdbf29332b056f9d",
-            .hash = "shakedown-0.4.17-BR8U41SzFgBFNel0aa2pn9ELQvUHoVDmnXOWslP0wHV7",
+            .url = "git+https://github.com/pedronaugusto/shakedown?ref=aegis-0.2#9a4140e4a783690da260f556e6c5decf5944fa34",
+            .hash = "shakedown-0.4.18-BR8U498oFwAT5BMzQZvD_95ntC0m-mvZdZF75e19qT57",
         },
     },
 }

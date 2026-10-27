@@ -165,7 +165,7 @@ pub fn ecmascript(buffer: *[64]u8, v: f64) []const u8 {
     }
     // The shortest digits that read back as `v`, and the exponent of the first.
     var scientific: [64]u8 = undefined;
-    const spelled = std.fmt.float.render(&scientific, @abs(v), .{}) catch unreachable; // unreachable: 64 bytes hold any double's shortest form
+    const spelled = std.fmt.float.render(&scientific, @abs(v), .{}) catch unreachable; // aegis: no-danger: 64 bytes hold any double's shortest form
     const e_at = std.mem.findScalar(u8, spelled, 'e').?;
     var digits: [20]u8 = undefined;
     var k: usize = 0;
@@ -174,7 +174,7 @@ pub fn ecmascript(buffer: *[64]u8, v: f64) []const u8 {
         k += 1;
     };
     const s = digits[0..k];
-    const n = (std.fmt.parseInt(i32, spelled[e_at + 1 ..], 10) catch unreachable) + 1; // unreachable: render writes a decimal exponent
+    const n = (std.fmt.parseInt(i32, spelled[e_at + 1 ..], 10) catch unreachable) + 1; // aegis: no-danger: render writes a decimal exponent
     const put = struct {
         fn bytes(b: *[64]u8, i: *usize, data: []const u8) void {
             @memcpy(b[i.*..][0..data.len], data);
@@ -205,7 +205,7 @@ pub fn ecmascript(buffer: *[64]u8, v: f64) []const u8 {
         }
         put.bytes(buffer, &at, if (n - 1 < 0) "e-" else "e+");
         var exponent: [8]u8 = undefined;
-        put.bytes(buffer, &at, std.mem.print(&exponent, "{d}", .{@abs(n - 1)}) catch unreachable); // unreachable: an exponent has at most three digits
+        put.bytes(buffer, &at, std.mem.print(&exponent, "{d}", .{@abs(n - 1)}) catch unreachable); // aegis: no-danger: an exponent has at most three digits
     }
     return buffer[0..at];
 }

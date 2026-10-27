@@ -153,10 +153,3 @@ pub const required = blk: {
     };
     break :blk paths;
 };
-
-/// Tokens nothing here may spell: how a file is identified belongs to
-/// airlock, and strand calls it. How one is made durable is preflight's
-/// durability door (P006), in every repository of the family.
-pub const owned: []const gantry.rules.TokenRule = &.{
-    .{ .name = "file identity belongs to airlock", .tokens = &.{ "statx", "fstat", "fstatat", "FILE_ID_INFO" } },
-};

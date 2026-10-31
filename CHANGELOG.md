@@ -10,6 +10,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Development: file identity belongs to airlock as a resolved rule, the way durability does: `ci/preflight.json` keeps std's `c.fstat`, `c.fstatat`, `c.statx`, `os.linux.statx` and `os.linux.IoUring.statx`, and every extern `fstat`, `fstatat` and `statx`, out of production code (P006, owned by airlock). The token rule in `ci/layers.zig` that matched their spellings is gone.
 
+### Fixed
+
+- A writer's scratch (`ini`, `dotenv`, `zon` and `urlencoded`'s keys and frames past what they keep inline) holds a list where it lies as the list grows, its growth charged to the allocation budget as an allocation is: each growth took a new block and left the last behind, so a fixed scratch ran out at a size that depended on the target's growth steps (riscv64 needed 4256 bytes for 200 INI keys where x86_64 needed 2416, and a 4096-byte scratch failed with `OutOfMemory` there).
+
 ## [0.15.0] - 2026-10-27
 
 ### Breaking

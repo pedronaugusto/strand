@@ -292,9 +292,12 @@ pub const Context = struct {
         return if (info.size == .one) &memory[0] else memory;
     }
     /// Temporary adapter for format scratch. It cannot outlive the operation.
-    /// No resize avoids uncharged growth; arena release remains the owner's.
+    /// Growth is charged as an allocation is, so a list kept in a fixed
+    /// scratch grows where it lies instead of leaving each smaller copy
+    /// behind, which made what a caller's scratch must hold depend on the
+    /// target's growth steps; arena release remains the owner's.
     pub fn allocator(self: *Context) std.mem.Allocator {
-        return .{ .ptr = self, .vtable = &.{ .alloc = scratchAllocate, .resize = std.mem.Allocator.noResize, .remap = std.mem.Allocator.noRemap, .free = scratchFree } };
+        return .{ .ptr = self, .vtable = &.{ .alloc = scratchAllocate, .resize = scratchResize, .remap = scratchRemap, .free = scratchFree } };
     }
     fn scratchAllocate(raw: *anyopaque, n: usize, alignment: std.mem.Alignment, address: usize) ?[*]u8 {
         const self: *Context = @ptrCast(@alignCast(raw)); // aegis: no-danger: allocator's pointer is its live Context.
@@ -308,6 +311,36 @@ pub const Context = struct {
         };
         charge.consume();
         return memory;
+    }
+    /// `n` bytes more charged to the allocation budget, or null, the context
+    /// marked, past it.
+    fn scratchGrowth(self: *Context, n: usize) ?bounded.Budget(usize).Reservation {
+        return self.allocation_budget.reserve(n) catch {
+            self.allocation_limited = true;
+            return null;
+        };
+    }
+    fn scratchResize(raw: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, address: usize) bool {
+        const self: *Context = @ptrCast(@alignCast(raw)); // aegis: no-danger: allocator's pointer is its live Context.
+        if (new_len <= memory.len) return self.storage.rawResize(memory, alignment, new_len, address);
+        var charge = self.scratchGrowth(new_len - memory.len) orelse return false;
+        if (self.storage.rawResize(memory, alignment, new_len, address)) {
+            charge.consume();
+            return true;
+        }
+        charge.release();
+        return false;
+    }
+    fn scratchRemap(raw: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, address: usize) ?[*]u8 {
+        const self: *Context = @ptrCast(@alignCast(raw)); // aegis: no-danger: allocator's pointer is its live Context.
+        if (new_len <= memory.len) return self.storage.rawRemap(memory, alignment, new_len, address);
+        var charge = self.scratchGrowth(new_len - memory.len) orelse return null;
+        const moved = self.storage.rawRemap(memory, alignment, new_len, address) orelse {
+            charge.release();
+            return null;
+        };
+        charge.consume();
+        return moved;
     }
     fn scratchFree(raw: *anyopaque, memory: []u8, alignment: std.mem.Alignment, address: usize) void {
         const self: *Context = @ptrCast(@alignCast(raw)); // aegis: no-danger: allocator's pointer is its live Context.
@@ -348,10 +381,7 @@ pub const Scratch = struct {
         return .{ .ptr = self, .vtable = &.{ .alloc = allocate, .resize = resize, .remap = remap, .free = release } };
     }
     fn charge(self: *Scratch, n: usize) ?bounded.Budget(usize).Reservation {
-        return self.context.allocation_budget.reserve(n) catch {
-            self.context.allocation_limited = true;
-            return null;
-        };
+        return self.context.scratchGrowth(n);
     }
     fn allocate(raw: *anyopaque, n: usize, alignment: std.mem.Alignment, address: usize) ?[*]u8 {
         const self: *Scratch = @ptrCast(@alignCast(raw)); // aegis: no-danger: allocator's pointer is its live Scratch.

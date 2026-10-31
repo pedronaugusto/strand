@@ -136,6 +136,7 @@ const shared = struct {
     /// | `SeekFailed` | The file refused a seek; ask `source.seek_err`. |
     /// | `Truncated` | The file is shorter than when `init` measured it. |
     /// | `OutOfMemory` | The allocator failed. |
+    /// | `Canceled` | The `std.Io` canceled the task while a block was being read. |
     pub const NextError = error{
         MalformedLine,
         ControlByte,
@@ -145,7 +146,7 @@ const shared = struct {
         SeekFailed,
         Truncated,
         OutOfMemory,
-    };
+    } || std.Io.Cancelable;
 };
 
 /// A stream of `T` read from the end of a seekable file towards its start.
@@ -547,7 +548,7 @@ pub fn Tail(comptime T: type) type {
 
             self.source.seekTo(self.lo - take) catch return error.SeekFailed;
             self.source.interface.readSliceAll(self.buf.items[0..take]) catch |err| switch (err) {
-                error.ReadFailed => return error.ReadFailed,
+                error.ReadFailed => return self.readFault(),
                 // The file was this long when `init` measured it.
                 error.EndOfStream => return error.Truncated,
             };
@@ -566,6 +567,17 @@ pub fn Tail(comptime T: type) type {
                     self.buf.items.len -= 1;
                 }
             }
+        }
+
+        /// What a failed block read really was. A cancellation inside a read
+        /// reaches the `Io.Reader` interface as `error.ReadFailed`; the real
+        /// error is on the file reader, as `Follower.readFault` reads it.
+        fn readFault(self: *Self) NextError {
+            const err = self.source.err orelse return error.ReadFailed;
+            return switch (err) {
+                error.Canceled => error.Canceled,
+                else => error.ReadFailed,
+            };
         }
     };
 }

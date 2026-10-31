@@ -522,3 +522,18 @@ test "a pipe has no end to start a backward read from" {
     var source = read_end.reader(testing.io, &.{});
     try testing.expectError(error.Streaming, Tail(Event).init(testing.allocator, &source, .{}));
 }
+
+test "a cancellation inside a block read is reported as itself" {
+    var fixture = try Fixture.init("{\"kind\":\"a\"}\n{\"kind\":\"b\"}\n", 64);
+    defer fixture.deinit();
+
+    const fio = try shakedown.FaultIo.init(testing.allocator, testing.io, .{ .plan = &.{.{
+        .at = .{ .nth = .{ .call = .fileReadPositional, .n = 1 } },
+        .fault = .cancel,
+    }} });
+    defer fio.deinit();
+    var source = fixture.file.reader(fio.io(), fixture.buffer);
+    var tail: Tail(Event) = try .init(testing.allocator, &source, .{});
+    defer tail.deinit();
+    try testing.expectError(error.Canceled, tail.prev());
+}

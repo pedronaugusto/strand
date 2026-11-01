@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Breaking
+
+- `Tail`'s `prev`, `prevRaw` and `last` report `error.Canceled` when the task is canceled during a block read, as `Follower.next` does, instead of `error.ReadFailed`: `Tail.NextError` gains `Canceled`.
+
 ### Changed
 
 - Development: file identity belongs to airlock as a resolved rule, the way durability does: `ci/preflight.json` keeps std's `c.fstat`, `c.fstatat`, `c.statx`, `os.linux.statx` and `os.linux.IoUring.statx`, and every extern `fstat`, `fstatat` and `statx`, out of production code (P006, owned by airlock). The token rule in `ci/layers.zig` that matched their spellings is gone.

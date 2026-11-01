@@ -129,6 +129,18 @@ test "S1 scratch allocator settles each charge: consumed when an allocation, res
     try std.testing.expectEqual(@as(usize, 32), c.allocationRequested());
 }
 
+test "S1 a list kept in a fixed scratch grows where it lies, so what it needs is its own size and no target's growth steps" {
+    var buffer: [2048]u8 = @splat(0);
+    var fixed: std.heap.FixedBufferAllocator = .init(&buffer);
+    var c: core.Context = .init(fixed.allocator(), .{}, .borrowed);
+    var list: std.ArrayList(u8) = .empty;
+    defer list.deinit(c.allocator());
+    // Each copy left behind, 1100 bytes took 3820 on x86_64 and 3283 on riscv64.
+    for (0..1100) |i| try list.append(c.allocator(), @truncate(i));
+    try std.testing.expectEqual(@as(usize, 1100), list.items.len);
+    try std.testing.expect(c.allocation_budget.settled());
+}
+
 test "S1 checked encoding rejects active cycles and invalid UTF8" {
     const Node = struct {
         const Self = @This();

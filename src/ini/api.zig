@@ -26,7 +26,7 @@ fn Decode(comptime T: type) type {
     return struct {
         const Error = @typeInfo(@TypeOf(core.deserialize(T, @as(*WireDecoder, undefined), @as(*core.Context, undefined)))).error_union.error_set;
         fn run(c: *core.Context, input: []const u8, dialect: Dialect) Error!T {
-            aegis.assert.pre(dialect.valid(), valid_dialect);
+            aegis.assert.invariant(dialect.valid(), valid_dialect);
             try c.input(input.len);
             var decoder: WireDecoder = undefined;
             decoder.init(c, input, dialect);
@@ -100,7 +100,7 @@ pub const WriteOptions = struct {
 /// failure may publish a prefix; write into a fixed or allocating writer
 /// first where nothing must reach the sink unless all of it does.
 pub fn write(output: *std.Io.Writer, value: anytype, options: WriteOptions) @typeInfo(@TypeOf(core.serialize(value, @as(*WireEncoder, undefined), @as(*core.Context, undefined)))).error_union.error_set!void {
-    aegis.assert.pre(options.dialect.valid(), valid_dialect);
+    aegis.assert.invariant(options.dialect.valid(), valid_dialect);
     var fixed: std.heap.FixedBufferAllocator = .init(options.scratch);
     var c = core.Context.init(fixed.allocator(), options.limits, .borrowed);
     c.acceptance.duplicates = .reject;

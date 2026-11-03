@@ -235,7 +235,7 @@ pub const Context = struct {
         self.hook_depth += 1;
     }
     pub fn leaveHook(self: *Context) void {
-        aegis.assert.pre(self.hook_depth != 0, "a callback was left that was never entered");
+        aegis.assert.invariant(self.hook_depth != 0, "a callback was left that was never entered");
         self.hook_depth -= 1;
     }
     pub inline fn node(self: *Context) error{ItemLimit}!void {

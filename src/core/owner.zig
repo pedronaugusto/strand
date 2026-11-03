@@ -21,7 +21,7 @@ pub fn Parsed(comptime T: type) type {
         }
         /// Consumes the owner. A value copy alone never transfers storage.
         pub fn take(self: *Self) Self {
-            aegis.assert.pre(self.isLive(), "a parsed owner was used after it was taken or released");
+            aegis.assert.invariant(self.isLive(), "a parsed owner was used after it was taken or released");
             const destination = self.*;
             self.state = null;
             self.value = undefined;
@@ -29,7 +29,7 @@ pub fn Parsed(comptime T: type) type {
         }
         /// Exactly once, infallible; the transferred-from owner is invalid.
         pub fn deinit(self: *Self) void {
-            aegis.assert.pre(self.isLive(), "a parsed owner was used after it was taken or released");
+            aegis.assert.invariant(self.isLive(), "a parsed owner was used after it was taken or released");
             var arena = self.state.?.promote(self.gpa);
             arena.deinit();
             self.state = null;
@@ -89,7 +89,7 @@ pub fn acquireLeaky(comptime T: type, arena: std.mem.Allocator, bytes: []const u
 /// arena is left empty. Nothing about the value is checked: this is for a
 /// caller that built it through the bounded operations here, one at a time.
 pub fn adopt(comptime T: type, gpa: std.mem.Allocator, arena: *std.heap.ArenaAllocator, value: T) Parsed(T) {
-    aegis.assert.pre(arena.child_allocator.ptr == gpa.ptr and arena.child_allocator.vtable == gpa.vtable, "an arena is adopted only with the allocator under it");
+    aegis.assert.invariant(arena.child_allocator.ptr == gpa.ptr and arena.child_allocator.vtable == gpa.vtable, "an arena is adopted only with the allocator under it");
     const resident = arena.queryCapacity();
     const state = arena.state;
     arena.state = .init;

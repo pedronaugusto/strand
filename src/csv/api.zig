@@ -23,7 +23,7 @@ fn Decode(comptime T: type) type {
     return struct {
         const Error = @typeInfo(@TypeOf(core.deserialize(T, @as(*WireDecoder, undefined), @as(*core.Context, undefined)))).error_union.error_set;
         fn run(c: *core.Context, input: []const u8, dialect: Dialect) Error!T {
-            aegis.assert.pre(dialect.valid(), "the delimiter and the quote are two bytes, neither a line break");
+            aegis.assert.invariant(dialect.valid(), "the delimiter and the quote are two bytes, neither a line break");
             try c.input(input.len);
             var decoder: WireDecoder = undefined;
             decoder.init(c, input);
@@ -97,7 +97,7 @@ fn names(comptime Row: type) []const []const u8 {
 /// A sink failure may publish a prefix; write into a fixed or allocating
 /// writer first where nothing must reach the sink unless all of it does.
 pub fn write(output: *std.Io.Writer, rows: anytype, options: WriteOptions) @typeInfo(@TypeOf(core.serialize(rows, @as(*WireEncoder, undefined), @as(*core.Context, undefined)))).error_union.error_set!void {
-    aegis.assert.pre(options.dialect.valid(), "the delimiter and the quote are two bytes, neither a line break");
+    aegis.assert.invariant(options.dialect.valid(), "the delimiter and the quote are two bytes, neither a line break");
     const Row = std.meta.Elem(@TypeOf(rows));
     const header = names(Row);
     var no_scratch: [0]u8 = .{};
@@ -119,7 +119,7 @@ pub fn Writer(comptime T: type) type {
         header_pending: bool,
 
         pub fn init(output: *std.Io.Writer, options: WriteOptions) Self {
-            aegis.assert.pre(options.dialect.valid(), "the delimiter and the quote are two bytes, neither a line break");
+            aegis.assert.invariant(options.dialect.valid(), "the delimiter and the quote are two bytes, neither a line break");
             return .{ .output = output, .options = options, .header_pending = options.dialect.header and names(T).len != 0 };
         }
         /// One row, and the header first if it has not been written.
@@ -174,7 +174,7 @@ pub fn Reader(comptime T: type) type {
         fault: struct { line: u64 = 0, err: ?core.DecodeError = null } = .{},
 
         pub fn init(gpa: std.mem.Allocator, input: *std.Io.Reader, options: Options) Self {
-            aegis.assert.pre(options.parse.dialect.valid(), "the delimiter and the quote are two bytes, neither a line break");
+            aegis.assert.invariant(options.parse.dialect.valid(), "the delimiter and the quote are two bytes, neither a line break");
             return .{
                 .lines = .init(gpa, input, .{
                     .max_line_bytes = options.max_row_bytes,

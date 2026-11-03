@@ -707,10 +707,11 @@ const Gap = struct {
     path: PathOpener,
     /// How many times the opener found nothing at the path.
     absent_looks: usize = 0,
-
     /// The writer's create, run by the `FaultIo` at the wait it is planned for.
-    fn create(io: std.Io, context: *anyopaque) void {
-        const gap: *Gap = @ptrCast(@alignCast(context)); // safe: the plan's callback is made with a *Gap as its context
+    create: shakedown.Hook = .{ .run = created },
+
+    fn created(hook: *shakedown.Hook, io: std.Io) void {
+        const gap: *Gap = @fieldParentPtr("create", hook);
         gap.path.dir.writeFile(io, .{ .sub_path = gap.path.sub_path, .data = "{\"kind\":\"new\"}\n" }) catch
             @panic("could not write the replacement file");
     }
@@ -751,7 +752,7 @@ test "a path that names nothing between a rotation's rename and its create is wa
     var gap: Gap = .{ .path = .{ .dir = tmp.dir, .sub_path = "log.jsonl" } };
     const fio = try shakedown.FaultIo.init(testing.allocator, testing.io, .{ .plan = &.{.{
         .at = .{ .nth = .{ .call = .sleep, .n = 6 } },
-        .fault = .{ .call = .{ .ctx = &gap, .f = Gap.create } },
+        .fault = .{ .call = .{ .hook = &gap.create } },
     }} });
     defer fio.deinit();
     const io = fio.io();

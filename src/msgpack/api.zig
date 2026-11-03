@@ -87,7 +87,7 @@ pub const WriteOptions = struct {
 /// or allocating writer first where nothing must reach the sink unless all
 /// of it does. Writing allocates nothing in the compact profile.
 pub fn write(output: *std.Io.Writer, value: anytype, options: WriteOptions) @typeInfo(@TypeOf(core.serialize(value, @as(*WireEncoder, undefined), @as(*core.Context, undefined)))).error_union.error_set!void {
-    aegis.assert.pre(options.profile == .compact or options.allocator != null, "the deterministic profile sorts each map on an allocator");
+    aegis.assert.invariant(options.profile == .compact or options.allocator != null, "the deterministic profile sorts each map on an allocator");
     var no_scratch: [0]u8 = .{};
     var fixed: std.heap.FixedBufferAllocator = .init(&no_scratch);
     var c = core.Context.init(fixed.allocator(), options.limits, .borrowed);

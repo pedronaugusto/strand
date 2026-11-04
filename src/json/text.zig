@@ -103,7 +103,7 @@ inline fn load(bytes: []const u8) u64 {
 inline fn specialBytes(word: u64) u64 {
     const quote = word ^ (ones * '"');
     const slash = word ^ (ones * '\\');
-    return ((quote -% ones) & ~quote | (slash -% ones) & ~slash | (word -% ones * 0x20) & ~word) & high_bits;
+    return ((((((quote -% ones) & ~quote) | (slash -% ones)) & ~slash) | (word -% ones * 0x20)) & ~word) & high_bits;
 }
 /// A mask of the bytes of a word below byte `n`.
 inline fn below(n: usize) u64 {

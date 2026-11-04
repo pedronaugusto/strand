@@ -53,7 +53,7 @@ fn document(gpa: std.mem.Allocator, objects: usize) ![]u8 {
             .Key = keys[i % keys.len],
             .LastModified = "2026-10-25T12:30:45.000Z",
             .ETag = etags.items[start..],
-            .Size = i * 7919 % 10_000_000,
+            .Size = (i * 7919) % 10_000_000,
             .StorageClass = if (i % 7 == 0) "GLACIER" else "STANDARD",
             .Owner = .{ .ID = "75aa57f09aa0c8caeab4f8c24e99d10f8e7faeebf76c078efc7c6caea54ba06a", .DisplayName = "mtd@amazon.com" },
         };

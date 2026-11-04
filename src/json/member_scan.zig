@@ -284,7 +284,7 @@ fn closingAfter(bytes: []const u8) ?usize {
         var brackets = opens | closes;
         while (brackets != 0) : (brackets &= brackets - 1) {
             const bit: u6 = @intCast(@ctz(brackets));
-            if (opens >> bit & 1 == 1) {
+            if (((opens >> bit) & 1) == 1) {
                 depth += 1;
             } else {
                 depth -= 1;

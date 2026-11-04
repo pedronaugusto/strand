@@ -587,11 +587,11 @@ fn checkPretty(input: []const u8) !void {
 
     var previous: u64 = 0;
     while (true) {
-        const line = reader.next() catch |err| switch (err) {
+        const line = (reader.next() catch |err| switch (err) {
             // The one failure `.skip` does not swallow.
             error.LineTooLong => continue,
             else => return err,
-        } orelse break;
+        }) orelse break;
         try testing.expect(line.number > previous);
         previous = line.number;
         try testing.expect(line.number <= all.number);
@@ -930,10 +930,10 @@ fn checkTail(input: []const u8) !void {
     var reader: jsonl.Reader(Event) = .init(testing.allocator, &source, options);
     defer reader.deinit();
     while (true) {
-        const line = reader.next() catch |err| switch (err) {
+        const line = (reader.next() catch |err| switch (err) {
             error.LineTooLong => continue,
             else => return err,
-        } orelse break;
+        }) orelse break;
         try forward_lines.append(testing.allocator, try testing.allocator.dupe(u8, line.line));
         try forward_numbers.append(testing.allocator, line.number);
         try forward_offsets.append(testing.allocator, line.offset);
@@ -960,10 +960,10 @@ fn checkTail(input: []const u8) !void {
 
     var seen: usize = 0;
     while (true) {
-        const line = tail.prev() catch |err| switch (err) {
+        const line = (tail.prev() catch |err| switch (err) {
             error.LineTooLong => continue,
             else => return err,
-        } orelse break;
+        }) orelse break;
         if (seen >= forward_lines.items.len) return error.TestTailInventedALine;
         const i = forward_lines.items.len - 1 - seen;
         try testing.expectEqualStrings(forward_lines.items[i], line.line);

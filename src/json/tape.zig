@@ -49,10 +49,10 @@ const Word = struct {
         return @backingInt(k);
     }
     inline fn text(k: Kind, in_strings: bool, length: usize, start: usize) u64 {
-        return @as(u64, @backingInt(k)) | @as(u64, @intFromBool(in_strings)) << 3 | @as(u64, length) << 4 | @as(u64, start) << 32;
+        return @as(u64, @backingInt(k)) | (@as(u64, @intFromBool(in_strings)) << 3) | (@as(u64, length) << 4) | (@as(u64, start) << 32);
     }
     inline fn container(k: Kind, count: usize, last: usize) u64 {
-        return @as(u64, @backingInt(k)) | @as(u64, @min(count, max_count)) << 3 | @as(u64, last) << 32;
+        return @as(u64, @backingInt(k)) | (@as(u64, @min(count, max_count)) << 3) | (@as(u64, last) << 32);
     }
     inline fn unescaped(w: u64) bool {
         return w & 8 != 0;

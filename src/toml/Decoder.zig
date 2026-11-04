@@ -43,7 +43,7 @@ const none = syntax.none;
 const Step = enum(u2) { key, value, date, end };
 /// A place in the walk, as `offset` gives it: a node and its step.
 fn placeOf(node: u32, step: Step) usize {
-    return @as(usize, node) << 2 | @backingInt(step);
+    return (@as(usize, node) << 2) | @backingInt(step);
 }
 const done: usize = std.math.maxInt(usize);
 

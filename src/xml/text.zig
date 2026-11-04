@@ -57,7 +57,7 @@ const ascii_names: [128]u2 = blk: {
     for (0..128) |b| {
         const start: u2 = @intFromBool(isNameStart(@intCast(b)));
         const rest: u2 = @intFromBool(isName(@intCast(b)));
-        table[b] = start | rest << 1;
+        table[b] = start | (rest << 1);
     }
     break :blk table;
 };

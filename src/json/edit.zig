@@ -208,7 +208,7 @@ pub const Edit = struct {
         const last = kids[kids.len - 1];
         const after = space(text, last.value_end);
         if (after < text.len and text[after] == ',') {
-            const insert_at = if (container.lines) (lineRest(text, after + 1) orelse after + 1) else after + 1;
+            const insert_at = if (container.lines) (lineRest(text, after + 1) orelse (after + 1)) else after + 1;
             const replacement = if (container.lines)
                 try std.mem.concat(a, u8, &.{ "\n", indent, member.items, "," })
             else

@@ -309,7 +309,7 @@ fn protocol(gpa: std.mem.Allocator, arena: std.mem.Allocator) !void {
     var requests: jsonl.LineReader = .init(gpa, &socket, .{ .max_line_bytes = .literal("64KiB") });
     defer requests.deinit();
     while (true) {
-        const raw = requests.next() catch |err| switch (err) {
+        const raw = (requests.next() catch |err| switch (err) {
             // That line is gone, and the stream is at the start of the next
             // one: answer it and read on.
             error.LineTooLong => {
@@ -317,7 +317,7 @@ fn protocol(gpa: std.mem.Allocator, arena: std.mem.Allocator) !void {
                 continue;
             },
             else => |e| return e,
-        } orelse break;
+        }) orelse break;
         const request = json.parseLeaky(Request, arena, raw.line, .{}) catch {
             try replies.write(.{ .ok = false, .line = raw.number, .message = "not a request" });
             continue;

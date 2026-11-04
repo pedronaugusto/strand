@@ -40,7 +40,7 @@ fn document(gpa: std.mem.Allocator, entries: usize) ![]u8 {
     const list = try gpa.alloc(Entry, entries);
     defer gpa.free(list);
     for (list, 0..) |*entry, i| entry.* = .{
-        .id = @intCast(i * 7919 % 100_000), // safe: reduced below 100,000.
+        .id = @intCast((i * 7919) % 100_000), // safe: reduced below 100,000.
         .name = names[i % names.len],
         .weight = @as(f64, @floatFromInt(i)) * 0.37,
         .flags = .{ i % 2 == 0, i % 3 == 0, i % 5 == 0 },

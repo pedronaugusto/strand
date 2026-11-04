@@ -159,7 +159,7 @@ fn hexPair(bytes: []const u8) error{SyntaxError}!u21 {
     if (bytes.len < 2) return error.SyntaxError;
     const high = std.fmt.charToDigit(bytes[0], 16) catch return error.SyntaxError;
     const low = std.fmt.charToDigit(bytes[1], 16) catch return error.SyntaxError;
-    return @as(u21, high) << 4 | low;
+    return (@as(u21, high) << 4) | low;
 }
 
 /// Where the string in `quote` whose body begins at `bytes[0]` ends: the index

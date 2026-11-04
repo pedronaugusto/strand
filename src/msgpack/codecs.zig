@@ -73,7 +73,7 @@ pub const Timestamp = struct {
                 std.mem.writeInt(u32, buffer[0..4], @intCast(self.seconds), .big);
                 return buffer[0..4];
             }
-            std.mem.writeInt(u64, buffer[0..8], @as(u64, self.nanoseconds) << 34 | @as(u64, @intCast(self.seconds)), .big);
+            std.mem.writeInt(u64, buffer[0..8], (@as(u64, self.nanoseconds) << 34) | @as(u64, @intCast(self.seconds)), .big);
             return buffer[0..8];
         }
         std.mem.writeInt(u32, buffer[0..4], self.nanoseconds, .big);

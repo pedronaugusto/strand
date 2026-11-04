@@ -152,7 +152,7 @@ pub fn widenFloat(value: anytype) f128 {
     const raw: u128 = @as(@Int(.unsigned, bits), @bitCast(value));
     const sign = raw >> (bits - 1);
     const payload = raw & ((@as(u128, 1) << fraction) - 1);
-    return @bitCast(sign << 127 | @as(u128, 0x7fff) << 112 | payload << (112 - fraction));
+    return @bitCast((sign << 127) | (@as(u128, 0x7fff) << 112) | (payload << (112 - fraction)));
 }
 /// `value` as a `T`: a float rounded as a conversion rounds it, a NaN of the
 /// same sign and the payload's high bits, or the quiet NaN where none of them
@@ -167,7 +167,7 @@ pub fn narrowFloat(comptime T: type, value: f128) T {
     if (payload == 0) payload = @as(u128, 1) << (fraction - 1);
     const exponent = (@as(u128, 1) << std.math.floatExponentBits(T)) - 1;
     const U = @Int(.unsigned, bits);
-    return @bitCast(@as(U, @intCast((raw >> 127) << (bits - 1) | exponent << fraction | payload)));
+    return @bitCast(@as(U, @intCast(((raw >> 127) << (bits - 1)) | (exponent << fraction) | payload)));
 }
 /// The floats whose NaNs are moved bit for bit: those with no explicit
 /// integer bit, narrower than the event's.

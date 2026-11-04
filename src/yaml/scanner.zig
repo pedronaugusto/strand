@@ -681,7 +681,7 @@ pub const Scanner = struct {
             if (c == '%') {
                 const hi = std.fmt.charToDigit(self.byteAt(1), 16) catch return self.fail();
                 const lo = std.fmt.charToDigit(self.byteAt(2), 16) catch return self.fail();
-                try builder.byte(hi << 4 | lo);
+                try builder.byte((hi << 4) | lo);
                 self.advanceAscii(3);
                 continue;
             }
@@ -945,7 +945,7 @@ pub const Scanner = struct {
             var v: u32 = 0;
             for (0..width) |i| {
                 const d = std.fmt.charToDigit(self.byteAt(2 + i), 16) catch return self.fail();
-                v = v << 4 | d;
+                v = (v << 4) | d;
             }
             if (v > 0x10FFFF or (v >= 0xD800 and v <= 0xDFFF)) return self.fail();
             cp = @intCast(v);

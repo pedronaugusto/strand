@@ -190,7 +190,7 @@ test "a map's key or section given twice is not written, as it would not read ba
     var many: [200]ini.Member = undefined;
     var names: [200][4]u8 = undefined;
     for (&many, &names, 0..) |*m, *name, i| {
-        name.* = .{ 'k', '0' + @as(u8, @intCast(i / 100)), '0' + @as(u8, @intCast(i / 10 % 10)), '0' + @as(u8, @intCast(i % 10)) }; // safe: i under 200.
+        name.* = .{ 'k', '0' + @as(u8, @intCast(i / 100)), '0' + @as(u8, @intCast((i / 10) % 10)), '0' + @as(u8, @intCast(i % 10)) }; // safe: i under 200.
         m.* = .{ .key = name, .value = .{ .text = "v" } };
     }
     out.clearRetainingCapacity();

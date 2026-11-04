@@ -11,6 +11,14 @@ const Source = shakedown.Source;
 const strand = @import("strand.zig");
 const json = strand.json;
 const core = strand.core;
+const api = @import("json/api.zig");
+
+/// The parser the iterator is held to: the one that streams the input, as the
+/// iterator does, and so stops at the first error in input order. A parse that
+/// takes the tape checks the whole input first (docs/design.md, "JSON's tape").
+fn streamed(comptime T: type, a: std.mem.Allocator, bytes: []const u8, options: json.ParseOptions) json.ParseError(T)!T {
+    return api.parseLeakyWith(T, .json, .stream, a, bytes, options);
+}
 
 const Out = std.Io.Writer.Allocating;
 
@@ -180,7 +188,7 @@ fn checkBytes(bytes: []const u8) !void {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    const checked = json.parseLeaky(Nothing, a, bytes, passing);
+    const checked = streamed(Nothing, a, bytes, passing);
     // A `json.Value` nests a level deeper per container than the value it
     // reads: a deeper limit, for the members' contents alone.
     var deep = any;
@@ -260,7 +268,7 @@ fn verdicts(bytes: []const u8, limits: core.Limits) !struct { iterator: ?json.Me
     const iterator: ?json.MembersError = if (members.finish()) |_| null else |err| err;
     var options = passing;
     options.limits = limits;
-    const parser: ?anyerror = if (json.parseLeaky(Nothing, arena.allocator(), bytes, options)) |_| null else |err| err;
+    const parser: ?anyerror = if (streamed(Nothing, arena.allocator(), bytes, options)) |_| null else |err| err;
     return .{ .iterator = iterator, .parser = parser };
 }
 
@@ -304,7 +312,7 @@ fn itemsOf(bytes: []const u8) usize {
         defer arena.deinit();
         var options = passing;
         options.limits.items = n;
-        if (json.parseLeaky(Nothing, arena.allocator(), bytes, options)) |_| return n else |_| {}
+        if (streamed(Nothing, arena.allocator(), bytes, options)) |_| return n else |_| {}
     }
 }
 

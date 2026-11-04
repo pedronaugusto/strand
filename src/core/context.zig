@@ -181,6 +181,9 @@ pub const Context = struct {
     /// Internal replay: wire nodes/bytes were already validated and charged.
     replaying: bool = false,
     allocation_limited: bool = false,
+    /// Bytes charged to the allocation budget for memory a format held and
+    /// gave back before the operation ended (`hold`): requested, not retained.
+    held: usize = 0,
     /// Writing: an optional field that is null is left out of its record, whatever
     /// its type's own policy says.
     omit_nulls: bool = false,
@@ -274,6 +277,16 @@ pub const Context = struct {
         const memory = try self.storage.alloc(T, n);
         charge.consume();
         return memory;
+    }
+    /// Charges `n` bytes a format holds for the operation outside its
+    /// allocator, such as a tape of the input, as an allocation is charged.
+    pub fn hold(self: *Context, n: usize) error{AllocationLimit}!void {
+        self.allocation_budget.consume(n) catch return error.AllocationLimit;
+        self.held += n;
+    }
+    /// The bytes the operation may still allocate or hold.
+    pub fn allocationLeft(self: *const Context) usize {
+        return self.allocation_budget.remaining();
     }
     /// Preserve actual pointer alignment/sentinel using typed allocation. The
     /// reservation includes sentinel storage and conservative alignment padding.

@@ -66,7 +66,7 @@ pub fn acquireWith(comptime T: type, comptime ownership: context.Ownership, gpa:
     const value = result catch |err| return if (backing.limited) error.AllocationLimit else err;
     // Only the linked arena state survives. No pointer into stack-local backing
     // or arena/context survives publication; deinit promotes with the original gpa.
-    return .{ .value = value, .gpa = gpa, .state = arena.state, .requested_peak = c.allocationRequested(), .retained_bytes = c.allocationRequested(), .allocator_resident_bytes = backing.live, .work_used = c.workUsed() };
+    return .{ .value = value, .gpa = gpa, .state = arena.state, .requested_peak = c.allocationRequested(), .retained_bytes = c.allocationRequested() - c.held, .allocator_resident_bytes = backing.live, .work_used = c.workUsed() };
 }
 
 fn CallbackError(comptime D: type) type {
@@ -106,7 +106,7 @@ pub fn clone(gpa: std.mem.Allocator, value: anytype, limits: context.Limits) con
     errdefer arena.deinit();
     var c: context.Context = .init(arena.allocator(), limits, .owned);
     const copied = mapping.clone(T, value, &c) catch |err| return if (backing.limited) error.AllocationLimit else err;
-    return .{ .value = copied, .gpa = gpa, .state = arena.state, .requested_peak = c.allocationRequested(), .retained_bytes = c.allocationRequested(), .allocator_resident_bytes = backing.live, .work_used = c.workUsed() };
+    return .{ .value = copied, .gpa = gpa, .state = arena.state, .requested_peak = c.allocationRequested(), .retained_bytes = c.allocationRequested() - c.held, .allocator_resident_bytes = backing.live, .work_used = c.workUsed() };
 }
 /// `clone` onto an arena the caller owns and resets, as `acquireLeaky` parses
 /// onto one: requests are charged per operation, and a failed copy's storage

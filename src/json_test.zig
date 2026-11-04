@@ -13,7 +13,7 @@ test "S2 JSON exact decimal integers, shared field policy and lifetime" {
     var result = try json.parse(T, std.testing.allocator, &bytes, .{});
     defer result.deinit();
     try std.testing.expectEqual(std.math.maxInt(u128), result.value.n);
-    try std.testing.expectEqual(@as(usize, 0), result.requested_peak);
+    try std.testing.expectEqual(@as(usize, 0), result.retained_bytes);
     var owned = try json.parseOwned(T, std.testing.allocator, &bytes, .{});
     defer owned.deinit();
     @memset(&bytes, ' ');
@@ -296,7 +296,7 @@ test "S2 fixed hundred-field schema needs no heap or caller scratch" {
     var owner = try json.parse(T, std.testing.failing_allocator, output.buffered(), .{});
     defer owner.deinit();
     try std.testing.expectEqualDeep(value, owner.value);
-    try std.testing.expectEqual(@as(usize, 0), owner.requested_peak);
+    try std.testing.expectEqual(@as(usize, 0), owner.retained_bytes);
 }
 
 test "S2 wide integers, exponents and direct IEEE destination rounding" {

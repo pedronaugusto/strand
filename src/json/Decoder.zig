@@ -3,6 +3,7 @@
 //! event. A container's frame says what may come next in it; a string is found
 //! a vector at a time and borrowed from the input unless it has an escape.
 const std = @import("std");
+const aegis = @import("aegis");
 const limit = @import("../core/limit.zig");
 const core = @import("../core.zig");
 const numbers = @import("number.zig");
@@ -75,6 +76,9 @@ pub fn Dialect(comptime grammar: Grammar) type {
         /// counted, and not unescaped, since nothing will read it; keys are told
         /// apart by what they spell, escapes read as they go.
         checking: bool,
+        /// Where a tape's writer has strings unescaped (`initTape`), and not
+        /// into the operation's storage.
+        unescaped: ?*aegis.Region.Tail(u8),
         const Self = @This();
         const Accepting = struct { reject_duplicates: bool, unicode: strings.Unicode };
 
@@ -86,6 +90,13 @@ pub fn Dialect(comptime grammar: Grammar) type {
                 .reject_duplicates = c.acceptance.duplicates == .reject,
                 .unicode = c.acceptance.invalid_unicode,
             });
+        }
+        /// Starts `self` over `bytes` as a tape's writer reads it: a string with
+        /// an escape in it, or under `.replace` a byte that is not UTF-8, is
+        /// unescaped onto the end of `unescaped` and handed over `.transient`.
+        pub fn initTape(self: *Self, c: *core.Context, bytes: []const u8, unescaped: *aegis.Region.Tail(u8)) void {
+            self.init(c, bytes);
+            self.unescaped = unescaped;
         }
         /// Starts over `bytes`, reading from where the whitespace after `from` ends.
         fn begin(self: *Self, bytes: []const u8, from: usize, allocator: std.mem.Allocator, accepting: Accepting) void {
@@ -100,6 +111,7 @@ pub fn Dialect(comptime grammar: Grammar) type {
             self.accepting = accepting;
             self.root_done = false;
             self.checking = false;
+            self.unescaped = null;
         }
         pub fn deinit(self: *Self) void {
             self.extra.deinit(self.allocator);
@@ -144,12 +156,15 @@ pub fn Dialect(comptime grammar: Grammar) type {
         /// it. A comment that does not end stops it at its `/`, where the next
         /// token is then a syntax error.
         inline fn space(self: *const Self, from: usize) usize {
-            if (json5) return json5_tokens.space(self.input, from);
-            const at = blank(self.input, from);
-            return if (jsonc) self.comments(at) else at;
+            return spaceIn(self.input, from);
         }
-        fn comments(self: *const Self, from: usize) usize {
-            const bytes = self.input;
+        /// `space` in `bytes`.
+        pub inline fn spaceIn(bytes: []const u8, from: usize) usize {
+            if (json5) return json5_tokens.space(bytes, from);
+            const at = blank(bytes, from);
+            return if (jsonc) comments(bytes, at) else at;
+        }
+        fn comments(bytes: []const u8, from: usize) usize {
             var at = from;
             while (at + 1 < bytes.len and bytes[at] == '/') {
                 switch (bytes[at + 1]) {
@@ -162,8 +177,12 @@ pub fn Dialect(comptime grammar: Grammar) type {
         }
         /// Past the whitespace and one comma or colon before a value.
         fn leading(self: *const Self, from: usize) usize {
-            var at = self.space(from);
-            if (at < self.input.len and (self.input[at] == ',' or self.input[at] == ':')) at = self.space(at + 1);
+            return leadingIn(self.input, from);
+        }
+        /// `leading` in `bytes`.
+        pub fn leadingIn(bytes: []const u8, from: usize) usize {
+            var at = spaceIn(bytes, from);
+            if (at < bytes.len and (bytes[at] == ',' or bytes[at] == ':')) at = spaceIn(bytes, at + 1);
             return at;
         }
         /// After a comma, whether a JSONC or JSON5 container ends there instead of
@@ -465,6 +484,8 @@ pub fn Dialect(comptime grammar: Grammar) type {
                     // aegis: no-danger: the cursor never passes the input's end: it moves only through `finish`, to where a token ended
                     const rest = self.input[self.at..];
                     if (rest.len > quoted.len and startsWith(rest, quoted)) {
+                        // Held to the key limit as a key read below is.
+                        try c.span(names[h].len, true);
                         self.finish(self.at + quoted.len);
                         if (self.at >= self.input.len or self.input[self.at] != ':') return error.SyntaxError;
                         self.at = self.space(self.at + 1);
@@ -603,8 +624,21 @@ pub fn Dialect(comptime grammar: Grammar) type {
             const bits = @typeInfo(T).int.bits;
             if (bits == 0 or bits > 64) return null;
             if (!try self.toValue()) return null;
-            const bytes = self.input;
-            var at = self.at;
+            const found = (try integerAt(T, self.input, self.at, c)) orelse return null;
+            self.reading();
+            self.finish(found.end);
+            return found.value;
+        }
+        /// An integer that `integer` reads, and where it ends.
+        pub fn Whole(comptime T: type) type {
+            return struct { value: T, end: usize };
+        }
+        /// The integer spelled with digits alone at `from` in `bytes`, converted
+        /// and its digits charged, if it fits `T` of at most 64 bits; `null`
+        /// for anything else, nothing charged.
+        pub inline fn integerAt(comptime T: type, bytes: []const u8, from: usize, c: *core.Context) Error!?Whole(T) {
+            const bits = @typeInfo(T).int.bits;
+            var at = from;
             const negative = at < bytes.len and bytes[at] == '-';
             if (negative) at += 1;
             const first = at;
@@ -640,11 +674,9 @@ pub fn Dialect(comptime grammar: Grammar) type {
                 }
                 break :result std.math.cast(T, magnitude) orelse return null;
             };
-            // aegis: no-danger: `at` starts at the cursor and only grows
-            try c.chargeWork(at - self.at);
-            self.reading();
-            self.finish(at);
-            return result;
+            // aegis: no-danger: `at` starts at `from` and only grows
+            try c.chargeWork(at - from);
+            return .{ .value = result, .end = at };
         }
 
         /// The next value if it is a string, read; `null`, with nothing read, if it is
@@ -892,6 +924,11 @@ pub fn Dialect(comptime grammar: Grammar) type {
                 self.finish(start + end.at + 1);
                 return .{ .bytes = escaped, .lifetime = .borrowed };
             }
+            if (self.unescaped) |tail| {
+                const span = try onTape(c, tail, escaped, unicode, is_key);
+                self.finish(start + end.at + 1);
+                return span;
+            }
             // Nothing is shorter unescaped, so the escaped length bounds the
             // copy; a bad byte made U+FFFD is longer, so then it is counted.
             const storage = try c.alloc(u8, if (unicode == .refuse) escaped.len else strings.unescapedLength(escaped, unicode));
@@ -936,12 +973,27 @@ pub fn Dialect(comptime grammar: Grammar) type {
                 try c.span(json5_tokens.unescapedLength(body, unicode), is_key);
                 return .{ .bytes = body, .lifetime = .borrowed };
             }
+            if (self.unescaped) |tail| return onTape(c, tail, body, unicode, is_key);
             // As in JSON, the escaped length bounds the copy but under `.replace`.
             const storage = try c.alloc(u8, if (unicode == .refuse) body.len else json5_tokens.unescapedLength(body, unicode));
             const n = json5_tokens.unescape(body, storage, unicode);
             try c.span(n, is_key);
             // aegis: no-danger: `unescape` returns the length it wrote into `storage`, which was sized for it
             return .{ .bytes = storage[0..n], .lifetime = .owned };
+        }
+
+        /// `escaped`, a string's body as written, unescaped onto the end of a
+        /// tape writer's strings: the escaped length bounds it but under
+        /// `.replace`, as it bounds the copy into the operation's storage.
+        fn onTape(c: *core.Context, tail: *aegis.Region.Tail(u8), escaped: []const u8, unicode: strings.Unicode, is_key: bool) Error!core.Span {
+            const tokens = if (json5) json5_tokens else strings;
+            const room = tail.addMany(if (unicode == .refuse) escaped.len else tokens.unescapedLength(escaped, unicode)) catch return error.OutOfMemory;
+            const n = tokens.unescape(escaped, room, unicode);
+            // aegis: no-danger: `unescape` wrote `n` bytes into `room`, which was sized for them, at the tail's end
+            tail.shrink(tail.len() - (room.len - n));
+            try c.span(n, is_key);
+            // aegis: no-danger: `unescape` returns the length it wrote into `room`
+            return .{ .bytes = room[0..n], .lifetime = .transient };
         }
 
         /// Whether a value that begins with `b` is a number: in JSON5, also one

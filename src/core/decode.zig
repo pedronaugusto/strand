@@ -280,6 +280,18 @@ pub fn Cursor(comptime Backend: type) type {
             if (header.len) |n| try self.context.count(n);
             return header;
         }
+        /// How many items the container just opened holds, where the backend
+        /// knows before reading them (a tape): only a slice's first allocation
+        /// is sized by it, so every check runs as it does without it.
+        inline fn opened(self: *const Self) ?usize {
+            return if (comptime @hasDecl(Backend, "opened")) self.backend.opened() else null;
+        }
+        /// The capacity a growing slice of `current` items takes next: what the
+        /// backend said the container holds the first time, else twice as many.
+        inline fn capacityAfter(current: usize, hint: ?usize, ceiling: usize) error{AllocationLimit}!usize {
+            if (current == 0) if (hint) |n| return @min(@max(n, 1), ceiling);
+            return ctx.Context.grownCapacity(current, ceiling);
+        }
         fn equals(self: *Self, a: []const u8, b: []const u8) Error!bool {
             try self.context.chargeWork(@min(a.len, b.len));
             return std.mem.eql(u8, a, b);
@@ -922,13 +934,14 @@ pub fn Cursor(comptime Backend: type) type {
                 try self.end();
                 return values;
             }
+            const hint = self.opened();
             var values = try self.context.allocPointer(T, 0);
             var initialized: usize = 0;
             while (!try self.atEnd()) {
                 if (initialized >= policy.max_len or initialized >= self.context.limits.container_items) return error.LengthLimit;
                 try self.context.count(1);
                 if (initialized == values.len) {
-                    const capacity = try ctx.Context.grownCapacity(values.len, @min(policy.max_len, self.context.limits.container_items));
+                    const capacity = try capacityAfter(values.len, hint, @min(policy.max_len, self.context.limits.container_items));
                     const grown = try self.context.allocPointer(T, capacity);
                     try self.context.chargeWork(initialized);
                     @memcpy(grown[0..initialized], values[0..initialized]);
@@ -1293,13 +1306,14 @@ fn PolicyAccess(comptime Backend: type, comptime policy: descriptor.Field) type 
                 try sequence_access.finish();
                 return result;
             }
+            const hint = self.cursor.opened();
             var result: []T = &.{};
             var n: usize = 0;
             while (try sequence_access.hasNext()) {
                 if (n >= policy.max_len) return error.LengthLimit;
                 if (n >= self.cursor.context.limits.container_items) return error.ItemLimit;
                 if (n == result.len) {
-                    const capacity = try ctx.Context.grownCapacity(n, @min(policy.max_len, self.cursor.context.limits.container_items));
+                    const capacity = try Cursor(Backend).capacityAfter(n, hint, @min(policy.max_len, self.cursor.context.limits.container_items));
                     const grown = try self.alloc(T, capacity);
                     try self.chargeWork(n);
                     @memcpy(grown[0..n], result[0..n]);
@@ -1342,6 +1356,8 @@ fn PolicyAccess(comptime Backend: type, comptime policy: descriptor.Field) type 
             const unique = duplicates != null and duplicates.? != .reject;
             var map = try self.begin(.map);
             defer map.abort();
+            // A prior's entries come first, so the count sizes nothing then.
+            const hint = if (prior.len == 0) self.cursor.opened() else null;
             var storage: []model.Pair(K, V) = &.{};
             var n: usize = 0;
             if (prior.len != 0) {
@@ -1363,7 +1379,7 @@ fn PolicyAccess(comptime Backend: type, comptime policy: descriptor.Field) type 
                     continue;
                 };
                 if (n == storage.len) {
-                    const capacity = try ctx.Context.grownCapacity(n, @min(policy.max_len, self.cursor.context.limits.container_items));
+                    const capacity = try Cursor(Backend).capacityAfter(n, hint, @min(policy.max_len, self.cursor.context.limits.container_items));
                     const next = try self.alloc(model.Pair(K, V), capacity);
                     try self.chargeWork(n);
                     @memcpy(next[0..n], storage[0..n]);

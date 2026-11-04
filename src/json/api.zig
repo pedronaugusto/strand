@@ -5,6 +5,7 @@ const core = @import("../core.zig");
 const aegis = @import("aegis");
 const std_value = @import("std_value.zig");
 const decoding = @import("Decoder.zig");
+const tape = @import("tape.zig");
 const encoding = @import("Encoder.zig");
 const WireEncoder = encoding.Dialect(false);
 const indent = @import("indent.zig");
@@ -93,10 +94,16 @@ fn acceptance(options: ParseOptions) core.Acceptance {
 fn Decode(comptime T: type) type {
     return Dialect(T, .json);
 }
+/// Which reader a parse takes: the tape where it fits and else the input
+/// streamed (`either`, every parse's), or one of them, for the test that
+/// holds them to the same answers.
+pub const Backend = enum { either, stream, tape };
 fn Dialect(comptime T: type, comptime grammar: decoding.Grammar) type {
     const Wire = decoding.Dialect(grammar);
+    const Reader = tape.Reader(grammar);
     return struct {
-        const Error = @typeInfo(@TypeOf(core.deserialize(T, @as(*Wire, undefined), @as(*core.Context, undefined)))).error_union.error_set;
+        const Error = @typeInfo(@TypeOf(core.deserialize(T, @as(*Wire, undefined), @as(*core.Context, undefined)))).error_union.error_set ||
+            @typeInfo(@TypeOf(core.deserialize(T, @as(*Reader, undefined), @as(*core.Context, undefined)))).error_union.error_set;
         /// The parse's value in a type of its own, as aegis's boundary marker
         /// asks of what it refines, whatever `T` is.
         const Refined = struct { value: T };
@@ -105,15 +112,39 @@ fn Dialect(comptime T: type, comptime grammar: decoding.Grammar) type {
         /// (`input.Untrusted`), its one checked boundary, past which what it
         /// reads is the parse's.
         fn run(c: *core.Context, input: []const u8) Error!T {
+            return runBy(c, input, .either);
+        }
+        fn runBy(c: *core.Context, input: []const u8, comptime backend: Backend) Error!T {
             // aegis: design: `descriptor.same` and the decoder's `zero` recurse over T's own fields and children, as deep as T nests when strand compiles, never as deep as the input
-            return (try aegis.input.Untrusted([]const u8).init(input).parse(c, checked)).value;
+            return (try aegis.input.Untrusted([]const u8).init(input).parse(c, Checked(backend).checked)).value;
         }
-        fn checked(c: *core.Context, input: []const u8) Error!Refined {
-            return .{ .value = try parsed(c, input) };
+        fn Checked(comptime backend: Backend) type {
+            return struct {
+                fn checked(c: *core.Context, input: []const u8) Error!Refined {
+                    return .{ .value = try parsed(c, input, backend) };
+                }
+            };
         }
-        fn parsed(c: *core.Context, input: []const u8) Error!T {
+        /// The value of `input`, read off its tape where the tape fits
+        /// (`tape.fits`) and its regions can be reserved, else off the input.
+        fn parsed(c: *core.Context, input: []const u8, comptime backend: Backend) Error!T {
             work.parse();
             try c.input(input.len);
+            if (backend != .stream) {
+                if (tape.fits(c, input.len)) |sizes| if (try tape.write(grammar, c, input, sizes)) |written| {
+                    var held = written;
+                    defer held.deinit();
+                    var reader: Reader = undefined;
+                    reader.init(c, &held, input);
+                    defer reader.deinit();
+                    return core.deserialize(T, &reader, c) catch |err| {
+                        if (err == error.OutOfMemory and c.allocation_limited) return error.AllocationLimit;
+                        return err;
+                    };
+                };
+                // Only the differential test asks for the tape alone.
+                if (backend == .tape) return error.OutOfMemory;
+            }
             var decoder: Wire = undefined;
             decoder.init(c, input);
             defer decoder.deinit();
@@ -196,6 +227,20 @@ fn parseLeakyDialect(comptime T: type, comptime grammar: decoding.Grammar, arena
     var c = context(arena, options, grammar);
     if (limit.exceeds(input.len, options.limits.input_bytes)) return error.InputLimit;
     return Dialect(T, grammar).run(&c, input);
+}
+/// `parseLeaky` of a dialect by the reader `backend` names: the
+/// differential test's.
+pub fn parseLeakyWith(comptime T: type, comptime grammar: decoding.Grammar, comptime backend: Backend, arena: std.mem.Allocator, input: []const u8, options: ParseOptions) @typeInfo(@TypeOf(Dialect(T, grammar).run(@as(*core.Context, undefined), input))).error_union.error_set!T {
+    var c = context(arena, options, grammar);
+    if (limit.exceeds(input.len, options.limits.input_bytes)) return error.InputLimit;
+    return Dialect(T, grammar).runBy(&c, input, backend);
+}
+/// Writes `input`'s tape and drops it: what the differential test asks of
+/// writing alone, the syntax and wire limits it finds.
+pub fn writeTapeOnly(comptime grammar: decoding.Grammar, arena: std.mem.Allocator, input: []const u8, options: ParseOptions) core.DecodeError!void {
+    var c = context(arena, options, grammar);
+    var written = (try tape.write(grammar, &c, input, tape.fits(&c, input.len) orelse return error.OutOfMemory)) orelse return error.OutOfMemory;
+    written.deinit();
 }
 /// JSONC, the JSON of editors' settings and `tsconfig.json`: `//` and
 /// `/* */` comments wherever whitespace may be, and a comma after a

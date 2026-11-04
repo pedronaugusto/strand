@@ -809,6 +809,11 @@ format reads the same declaration; a format supplies only its syntax. The core
 uses `std` and [aegis](https://github.com/pedronaugusto/aegis), which is `std`
 alone; JSON Lines adds airlock for syncs and file identity.
 
+JSON is checked whole and written as a tape where it fits, then read into the
+type, so each slice is allocated once at its size. It reads the same as the
+input streamed, but malformed input is a syntax error before any type error.
+Where the tape does not fit, the input is streamed.
+
 A type that holds resources (an allocator, a file, a lock) or memory with no safe
 data meaning (many-item and C pointers) is refused when it is compiled, with the
 path to the field that is the problem. A type with a meaning of its own declares

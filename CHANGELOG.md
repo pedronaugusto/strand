@@ -10,13 +10,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - `Tail`'s `prev`, `prevRaw` and `last` report `error.Canceled` when the task is canceled during a block read, as `Follower.next` does, instead of `error.ReadFailed`: `Tail.NextError` gains `Canceled`.
 
+### Added
+
+- JSON, JSONC and JSON5 are read off a tape where it fits: the whole input is checked and written as a word per value, key and container end, with an index of where each was in the input, and then read into the type. A container's word says how many items it holds, so the slice it is read into is allocated once at its size. It is taken where address space can be reserved, the image stays under 4 GiB, the string, key and number limits are under 2^28 bytes, and the tape's worst case fits what the parse may still allocate; elsewhere, and for `parsePrefixLeaky`, the input is streamed as before. Input whose tape is written reads the same either way, the same value or the same error with the same diagnostics. Malformed input is a syntax error either way; on input both malformed and mistyped the tape reports the syntax error, where streaming reports the first error in input order. Wire limits (depth, a string's, a key's, a number's length) are found while the tape is written, so they come first too. docs/design.md ("JSON's tape") states the contract, and a differential test over both corpora and generated input holds it.
+- `core.Context.hold` charges memory a format holds outside the operation's allocator to the allocation budget, and `allocationLeft` says how much is left.
+
 ### Changed
 
 - aegis 0.3's names: `assert.invariant` where `assert.pre` and `assert.post` were, the one always-on contract. Pins aegis breaking-0.3 (7bdb587), and airlock (reflink-lock), xenoglyph and shakedown on it; the follow test's fault callback is a `shakedown.Hook`.
+- A tape's memory is charged to `allocation_bytes` and counted in `Parsed.requested_peak`, not in `retained_bytes`, since it is given back before the parse returns. Work and allocation are charged as each reader spends them, so a budget near its edge can admit on one reader what the other refuses.
+- The core sizes a slice's first allocation by the count of the container a backend opened, where it knows it (`opened`); every check runs as before.
+- `json.Value.Member` is the core's `Pair([]const u8, Value)`, with the same fields: an object's members are the pairs it was read as, with no copy.
 - Development: file identity belongs to airlock as a resolved rule, the way durability does: `ci/preflight.json` keeps std's `c.fstat`, `c.fstatat`, `c.statx`, `os.linux.statx` and `os.linux.IoUring.statx`, and every extern `fstat`, `fstatat` and `statx`, out of production code (P006, owned by airlock). The token rule in `ci/layers.zig` that matched their spellings is gone.
 
 ### Fixed
 
+- A record's key that matches the name the schema expects next is held to `key_bytes`, as every other key is: a field name longer than the limit was accepted on that path alone.
 - A writer's scratch (`ini`, `dotenv`, `zon` and `urlencoded`'s keys and frames past what they keep inline) holds a list where it lies as the list grows, its growth charged to the allocation budget as an allocation is: each growth took a new block and left the last behind, so a fixed scratch ran out at a size that depended on the target's growth steps (riscv64 needed 4256 bytes for 200 INI keys where x86_64 needed 2416, and a 4096-byte scratch failed with `OutOfMemory` there).
 
 ## [0.15.0] - 2026-10-27

@@ -161,6 +161,51 @@ writing anything, through a backend of the core that only looks at integers. The
 Appendix B samples and the cyberphone corpus are the evidence; a property checks that a
 double's spelling reads back as itself and that canonical form is a fixed point.
 
+## JSON's tape
+
+`parse`, `parseOwned` and `parseLeaky` of JSON, JSONC and JSON5 read in two
+passes where the input's tape fits. The first pass checks the whole input with
+the streaming decoder and writes a tape, simdjson's design: a 64-bit word for
+each value, key and container end, the strings that had an escape unescaped
+beside them, and a structural index of where the decoder stood before each
+word. A container's word says how many items it holds and where it ends, so the
+slice a sequence or a map is read into is allocated once at its size, and a
+value held for a later read (an internally tagged union's payload, a held map
+value) is found again by a binary search of the index. The second pass reads
+the tape with the decoder's protocol, its fast paths included, and stands
+where the decoder would stand in the input at every step, so diagnostics give
+the same offsets and paths.
+
+The tape is an `aegis.flat` image: its words stream into a reserved region as
+they are found, a container's word is written again when it closes, and the
+strings and the index are copied in when the input ends. Its worst case (a
+word per input byte, every string unescaped) is sized before anything is read;
+the tape is taken only where address space can be reserved, its offsets reach
+(an image under 4 GiB), the string, key and number limits fit a word's 28-bit
+length, and the worst case fits what the operation may still allocate. Its
+memory is charged to `allocation_bytes` when it is written, counted in
+`requested_peak` and not in `retained_bytes`, since it is given back before the
+parse returns. Anywhere else, and for `parsePrefixLeaky`, the input is
+streamed as before.
+
+The contract between the two readers, held by a differential test over the
+JSONTestSuite and json5-tests corpora and generated JSON, JSONC and JSON5, read
+into `Value` and typed shapes under drawn options and limits:
+
+- Input whose tape is written reads the same on both: the same value, or the
+  same error with the same diagnostics.
+- Malformed input is a syntax error on both. The tape checks the whole input
+  first, so input that is both malformed and mistyped is a syntax error on the
+  tape, where streaming reports the first error in input order.
+- Wire limits (depth, and a string's, a key's or a number's length) are found
+  while the tape is written, so like syntax errors they come first. Items,
+  container counts, duplicate keys and type errors are charged in the typed
+  pass, in streaming's order.
+- Work and allocation are charged as each reader spends them: the tape holds
+  its own memory and copies a kept escaped string once, and streaming grows
+  slices by doubling. A budget near its edge can admit on one what the other
+  refuses.
+
 ## JSON Lines on the core
 
 `jsonl.Reader` frames a line with `LineReader` and parses it with

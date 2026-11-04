@@ -2,7 +2,9 @@
 const json5_tokens = @import("json5.zig");
 const WireDecoder = @import("Decoder.zig").Dialect(.json);
 const core = @import("../core.zig");
-pub const Member = struct { key: []const u8, value: Value };
+/// An object's member: the core's key and value pair, so the pairs an object
+/// is read as are its members, with no copy.
+pub const Member = core.Pair([]const u8, Value);
 pub const Value = union(enum) {
     /// Null is one of its values: it reads null itself.
     pub const strand_nullable = true;
@@ -25,13 +27,8 @@ pub const Value = union(enum) {
             .text => .{ .string = try access.read([]const u8) },
             .begin => |header| if (header.kind == .sequence)
                 .{ .array = try access.read([]const Value) }
-            else blk: {
-                const pairs = try access.read(core.Pairs([]const u8, Value));
-                // Identical semantic pair storage, copied without wire re-parsing.
-                const members = try access.alloc(Member, pairs.items.len);
-                for (members, pairs.items) |*member, pair| member.* = .{ .key = pair.key, .value = pair.value };
-                break :blk .{ .object = members };
-            },
+            else
+                .{ .object = (try access.read(core.Pairs([]const u8, Value))).items },
             else => error.UnexpectedType,
         };
     }

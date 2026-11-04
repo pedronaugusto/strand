@@ -12,7 +12,7 @@ const json = strand.json;
 
 const Case = struct { name: []const u8, input: []const u8, expected: ?[]const u8 };
 
-const cases = [_]Case{
+pub const cases = [_]Case{
     .{ .name = "arrays/empty-array.json", .input = @embedFile("../corpus/json5-tests/arrays/empty-array.json"), .expected = "[]" },
     .{ .name = "arrays/leading-comma-array.js", .input = @embedFile("../corpus/json5-tests/arrays/leading-comma-array.js"), .expected = null },
     .{ .name = "arrays/lone-trailing-comma-array.js", .input = @embedFile("../corpus/json5-tests/arrays/lone-trailing-comma-array.js"), .expected = null },

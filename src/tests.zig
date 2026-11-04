@@ -24,6 +24,7 @@ test {
     _ = @import("testing/xml_suite.zig");
     _ = @import("testing/json_suite.zig");
     _ = @import("testing/json5_suite.zig");
+    _ = @import("testing/json_tape_test.zig");
     _ = @import("testing/dotenv_suite.zig");
     _ = @import("testing/toml_suite.zig");
     _ = @import("testing/yaml_suite.zig");

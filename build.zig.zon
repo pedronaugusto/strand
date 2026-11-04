@@ -29,8 +29,8 @@
 
         // Unicode's simple case folding, for member names read by folding.
         .xenoglyph = .{
-            .url = "git+https://github.com/pedronaugusto/xenoglyph#44027b1b9e3f95abe51997944ba62d37dbccdeb9",
-            .hash = "xenoglyph-0.5.1-YKXZlYT3RgDGVujB6BkWfO6XrIxQSv0T5r93sqUTBEvO",
+            .url = "git+https://github.com/pedronaugusto/xenoglyph#d6432607111da5deb5f0a481d1674da990872c96",
+            .hash = "xenoglyph-0.5.1-YKXZlXX6RgBGRl07HQns6W6M42ZLEP22hg8cEY37HouP",
         },
 
         // Test doubles, for the tests alone: no module a consumer builds

@@ -300,7 +300,7 @@ pub const Context = struct {
         return .{ .ptr = self, .vtable = &.{ .alloc = scratchAllocate, .resize = scratchResize, .remap = scratchRemap, .free = scratchFree } };
     }
     fn scratchAllocate(raw: *anyopaque, n: usize, alignment: std.mem.Alignment, address: usize) ?[*]u8 {
-        const self: *Context = @ptrCast(@alignCast(raw)); // aegis: no-danger: allocator's pointer is its live Context.
+        const self: *Context = @ptrCast(@alignCast(raw)); // allocator's pointer is its live Context.
         var charge = self.allocation_budget.reserve(n) catch {
             self.allocation_limited = true;
             return null;
@@ -321,7 +321,7 @@ pub const Context = struct {
         };
     }
     fn scratchResize(raw: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, address: usize) bool {
-        const self: *Context = @ptrCast(@alignCast(raw)); // aegis: no-danger: allocator's pointer is its live Context.
+        const self: *Context = @ptrCast(@alignCast(raw)); // allocator's pointer is its live Context.
         if (new_len <= memory.len) return self.storage.rawResize(memory, alignment, new_len, address);
         var charge = self.scratchGrowth(new_len - memory.len) orelse return false;
         if (self.storage.rawResize(memory, alignment, new_len, address)) {
@@ -332,7 +332,7 @@ pub const Context = struct {
         return false;
     }
     fn scratchRemap(raw: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, address: usize) ?[*]u8 {
-        const self: *Context = @ptrCast(@alignCast(raw)); // aegis: no-danger: allocator's pointer is its live Context.
+        const self: *Context = @ptrCast(@alignCast(raw)); // allocator's pointer is its live Context.
         if (new_len <= memory.len) return self.storage.rawRemap(memory, alignment, new_len, address);
         var charge = self.scratchGrowth(new_len - memory.len) orelse return null;
         const moved = self.storage.rawRemap(memory, alignment, new_len, address) orelse {
@@ -343,7 +343,7 @@ pub const Context = struct {
         return moved;
     }
     fn scratchFree(raw: *anyopaque, memory: []u8, alignment: std.mem.Alignment, address: usize) void {
-        const self: *Context = @ptrCast(@alignCast(raw)); // aegis: no-danger: allocator's pointer is its live Context.
+        const self: *Context = @ptrCast(@alignCast(raw)); // allocator's pointer is its live Context.
         self.storage.rawFree(memory, alignment, address);
     }
     /// An allocator for a format's working storage, which it gives back
@@ -384,7 +384,7 @@ pub const Scratch = struct {
         return self.context.scratchGrowth(n);
     }
     fn allocate(raw: *anyopaque, n: usize, alignment: std.mem.Alignment, address: usize) ?[*]u8 {
-        const self: *Scratch = @ptrCast(@alignCast(raw)); // aegis: no-danger: allocator's pointer is its live Scratch.
+        const self: *Scratch = @ptrCast(@alignCast(raw)); // allocator's pointer is its live Scratch.
         var reservation = self.charge(n) orelse return null;
         const memory = self.backing.rawAlloc(n, alignment, address) orelse {
             reservation.release();
@@ -394,7 +394,7 @@ pub const Scratch = struct {
         return memory;
     }
     fn resize(raw: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, address: usize) bool {
-        const self: *Scratch = @ptrCast(@alignCast(raw)); // aegis: no-danger: allocator's pointer is its live Scratch.
+        const self: *Scratch = @ptrCast(@alignCast(raw)); // allocator's pointer is its live Scratch.
         if (new_len <= memory.len) return self.backing.rawResize(memory, alignment, new_len, address);
         var reservation = self.charge(new_len - memory.len) orelse return false;
         if (self.backing.rawResize(memory, alignment, new_len, address)) {
@@ -405,7 +405,7 @@ pub const Scratch = struct {
         return false;
     }
     fn remap(raw: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, address: usize) ?[*]u8 {
-        const self: *Scratch = @ptrCast(@alignCast(raw)); // aegis: no-danger: allocator's pointer is its live Scratch.
+        const self: *Scratch = @ptrCast(@alignCast(raw)); // allocator's pointer is its live Scratch.
         if (new_len <= memory.len) return self.backing.rawRemap(memory, alignment, new_len, address);
         var reservation = self.charge(new_len - memory.len) orelse return null;
         const moved = self.backing.rawRemap(memory, alignment, new_len, address) orelse {
@@ -416,7 +416,7 @@ pub const Scratch = struct {
         return moved;
     }
     fn release(raw: *anyopaque, memory: []u8, alignment: std.mem.Alignment, address: usize) void {
-        const self: *Scratch = @ptrCast(@alignCast(raw)); // aegis: no-danger: allocator's pointer is its live Scratch.
+        const self: *Scratch = @ptrCast(@alignCast(raw)); // allocator's pointer is its live Scratch.
         self.backing.rawFree(memory, alignment, address);
     }
 };
@@ -437,7 +437,7 @@ pub const Backing = struct {
     }
     fn allocate(raw: *anyopaque, n: usize, alignment: std.mem.Alignment, address: usize) ?[*]u8 {
         @setRuntimeSafety(true);
-        // aegis: no-danger: the vtable is paired only with a live, aligned Backing pointer.
+        // the vtable is paired only with a live, aligned Backing pointer.
         const self: *Backing = @ptrCast(@alignCast(raw)); // safe: checked destination bounds or Zig-provided typed storage precede this conversion.
         if (n > self.limit - self.live) {
             self.limited = true;
@@ -450,7 +450,7 @@ pub const Backing = struct {
     }
     fn release(raw: *anyopaque, memory: []u8, alignment: std.mem.Alignment, address: usize) void {
         @setRuntimeSafety(true);
-        // aegis: no-danger: the vtable is paired only with a live, aligned Backing pointer.
+        // the vtable is paired only with a live, aligned Backing pointer.
         const self: *Backing = @ptrCast(@alignCast(raw)); // safe: checked destination bounds or Zig-provided typed storage precede this conversion.
         self.gpa.rawFree(memory, alignment, address);
         self.live -= memory.len;

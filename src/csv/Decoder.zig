@@ -42,7 +42,7 @@ mode: Mode,
 /// The header's names; a `Reader` hands them over for each row.
 names: []const core.Span,
 header_read: bool,
-// aegis: design: a parser's frame, whose transitions are its grammar: the next byte or event decides the edge, and one no edge takes is a syntax error, held to the format's suite and fuzzed
+// a parser's frame, whose transitions are its grammar: the next byte or event decides the edge, and one no edge takes is a syntax error, held to the format's suite and fuzzed
 frame: Frame,
 /// The row being read: the field it is at, whether its key was read, and
 /// whether its last field ended the record.

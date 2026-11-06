@@ -178,10 +178,12 @@ test "TOML 1.1 accepts what 1.0 refuses: inline tables across lines, \\e and \\x
         const last = i == newer.len - 1;
         const v1_1 = toml.parse(Value, gpa, input, .{ .version = .v1_1 });
         const v1_0 = toml.parse(Value, gpa, input, .{ .version = .v1_0 });
+        // glint-ignore: Z026 -- a version that refused the input has nothing to free; which refused is checked below
         if (v1_1) |p| {
             var x = p;
             x.deinit();
         } else |_| {}
+        // glint-ignore: Z026 -- a version that refused the input has nothing to free; which refused is checked below
         if (v1_0) |p| {
             var x = p;
             x.deinit();

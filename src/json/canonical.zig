@@ -165,7 +165,7 @@ pub fn ecmascript(buffer: *[64]u8, v: f64) []const u8 {
     }
     // The shortest digits that read back as `v`, and the exponent of the first.
     var scientific: [64]u8 = undefined;
-    const spelled = std.fmt.float.render(&scientific, @abs(v), .{}) catch unreachable; // aegis: no-danger: 64 bytes hold any double's shortest form
+    const spelled = std.fmt.float.render(&scientific, @abs(v), .{}) catch unreachable; // 64 bytes hold any double's shortest form
     const e_at = std.mem.findScalar(u8, spelled, 'e').?;
     var digits: [20]u8 = undefined;
     var k: usize = 0;
@@ -174,33 +174,33 @@ pub fn ecmascript(buffer: *[64]u8, v: f64) []const u8 {
         k += 1;
     };
     const s = digits[0..k];
-    const n = (std.fmt.parseInt(i32, spelled[e_at + 1 ..], 10) catch unreachable) + 1; // aegis: no-danger: render writes a decimal exponent
+    const n = (std.fmt.parseInt(i32, spelled[e_at + 1 ..], 10) catch unreachable) + 1; // render writes a decimal exponent
     const put = struct {
         fn bytes(b: *[64]u8, i: *usize, data: []const u8) void {
             @memcpy(b[i.*..][0..data.len], data);
             i.* += data.len;
         }
         fn zeros(b: *[64]u8, i: *usize, count: usize) void {
-            // aegis: no-danger: `count` is at most 21 zeros, and the 64-byte buffer holds a sign, 21 digits, a point and the zeros of any case below
+            // `count` is at most 21 zeros, and the 64-byte buffer holds a sign, 21 digits, a point and the zeros of any case below
             @memset(b[i.*..][0..count], '0');
-            // aegis: no-danger: `count` is at most 21, so the position stays inside the 64-byte buffer
+            // `count` is at most 21, so the position stays inside the 64-byte buffer
             i.* += count;
         }
     };
     const kk: i32 = @intCast(k);
     if (kk <= n and n <= 21) {
         put.bytes(buffer, &at, s);
-        // aegis: no-danger: `kk <= n <= 21`, the branch's condition: at most 21 zeros
+        // `kk <= n <= 21`, the branch's condition: at most 21 zeros
         put.zeros(buffer, &at, @intCast(n - kk));
     } else if (0 < n and n <= 21) {
-        // aegis: no-danger: `0 < n <= 21` and `n < kk`, the branch's condition and the one before it failing: `n` is inside the digits
+        // `0 < n <= 21` and `n < kk`, the branch's condition and the one before it failing: `n` is inside the digits
         put.bytes(buffer, &at, s[0..@intCast(n)]);
         put.bytes(buffer, &at, ".");
-        // aegis: no-danger: `0 < n <= 21` and `n < kk`, the branch's condition and the one before it failing: `n` is inside the digits
+        // `0 < n <= 21` and `n < kk`, the branch's condition and the one before it failing: `n` is inside the digits
         put.bytes(buffer, &at, s[@intCast(n)..]);
     } else if (-6 < n and n <= 0) {
         put.bytes(buffer, &at, "0.");
-        // aegis: no-danger: `-6 < n <= 0`, the branch's condition: at most 5 zeros
+        // `-6 < n <= 0`, the branch's condition: at most 5 zeros
         put.zeros(buffer, &at, @intCast(-n));
         put.bytes(buffer, &at, s);
     } else {
@@ -209,10 +209,10 @@ pub fn ecmascript(buffer: *[64]u8, v: f64) []const u8 {
             put.bytes(buffer, &at, ".");
             put.bytes(buffer, &at, s[1..]);
         }
-        // aegis: no-danger: `n` is a double's decimal exponent plus one, between -322 and 310, far from the ends of i32
+        // `n` is a double's decimal exponent plus one, between -322 and 310, far from the ends of i32
         put.bytes(buffer, &at, if (n - 1 < 0) "e-" else "e+");
         var exponent: [8]u8 = undefined;
-        put.bytes(buffer, &at, std.mem.print(&exponent, "{d}", .{@abs(n - 1)}) catch unreachable); // aegis: no-danger: an exponent has at most three digits
+        put.bytes(buffer, &at, std.mem.print(&exponent, "{d}", .{@abs(n - 1)}) catch unreachable); // an exponent has at most three digits
     }
     return buffer[0..at];
 }

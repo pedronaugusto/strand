@@ -115,7 +115,7 @@ fn Dialect(comptime T: type, comptime grammar: decoding.Grammar) type {
             return runBy(c, input, .either);
         }
         fn runBy(c: *core.Context, input: []const u8, comptime backend: Backend) Error!T {
-            // aegis: design: `descriptor.same` and the decoder's `zero` recurse over T's own fields and children, as deep as T nests when strand compiles, never as deep as the input
+            // `descriptor.same` and the decoder's `zero` recurse over T's own fields and children, as deep as T nests when strand compiles, never as deep as the input
             return (try aegis.input.Untrusted([]const u8).init(input).parse(c, Checked(backend).checked)).value;
         }
         fn Checked(comptime backend: Backend) type {

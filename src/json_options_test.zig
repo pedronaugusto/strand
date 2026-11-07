@@ -273,11 +273,14 @@ test "fuzz: any bytes are read or refused under every reading choice" {
             var state: std.heap.ArenaAllocator = .init(testing.allocator);
             defer state.deinit();
             const a = state.allocator();
-            // Refusing the bytes is an answer; only a crash is not.
+            // glint-ignore: Z026 -- fuzzed bytes may be refused; only a crash is not an answer
             if (batch(a, input)) |_| {} else |_| {}
+            // glint-ignore: Z026 -- fuzzed bytes may be refused; only a crash is not an answer
             if (json.parsePrefixLeaky(Batch, a, input, lenient)) |_| {} else |_| {}
+            // glint-ignore: Z026 -- fuzzed bytes may be refused; only a crash is not an answer
             if (json.parseLeaky(json.Value, a, input, lenient)) |_| {} else |_| {}
             // What the reading took is text: it reads again as it was read.
+            // glint-ignore: Z026 -- fuzzed bytes may be refused; the target checks only what reads
             if (json.parseLeaky(Batch, a, input, lenient)) |b| {
                 var out: std.Io.Writer.Allocating = .init(a);
                 try json.write(&out.writer, b, .{});

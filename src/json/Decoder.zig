@@ -52,7 +52,7 @@ pub fn Dialect(comptime grammar: Grammar) type {
         };
         /// `check_keys`: whether this object's keys are remembered to refuse one given
         /// twice. An object read as a typed record is not: mapping checks its keys.
-        // aegis: design: a parser's frame, whose transitions are its grammar: the next byte or event decides the edge, and one no edge takes is a syntax error, held to the format's suite and fuzzed
+        // a parser's frame, whose transitions are its grammar: the next byte or event decides the edge, and one no edge takes is a syntax error, held to the format's suite and fuzzed
         const Frame = struct { object: bool, check_keys: bool, state: State, key_start: usize };
 
         input: []const u8,
@@ -128,7 +128,7 @@ pub fn Dialect(comptime grammar: Grammar) type {
         pub fn raw(self: *const Self, start: usize, end: usize) core.Span {
             const from = self.leading(start);
             const to = if (end == self.at) self.last_end else end;
-            // aegis: no-danger: `from` and `to` are positions the decoder reached in its own input (past the separator, and the last token's end), each at most its length
+            // `from` and `to` are positions the decoder reached in its own input (past the separator, and the last token's end), each at most its length
             return .{ .bytes = self.input[from..@max(from, to)], .lifetime = .borrowed };
         }
         /// Starts `into` over a value already read, as the root of its own input.
@@ -423,7 +423,7 @@ pub fn Dialect(comptime grammar: Grammar) type {
             var name_end: usize = undefined;
             var escaped: bool = undefined;
             if (quoted) {
-                // aegis: no-danger: `from` is one past the quote at `key_at`, which the line above checked is inside the input
+                // `from` is one past the quote at `key_at`, which the line above checked is inside the input
                 const found = try json5_tokens.end(bytes[from..], bytes[key_at], unicode);
                 name_end = from + found.at;
                 escaped = found.escaped;
@@ -432,7 +432,7 @@ pub fn Dialect(comptime grammar: Grammar) type {
                 name_end = found.end;
                 escaped = found.escaped;
             }
-            // aegis: no-danger: `name_end` is where `end` or `identifier` found the name to end, inside the input and past `from`
+            // `name_end` is where `end` or `identifier` found the name to end, inside the input and past `from`
             const name = bytes[from..name_end];
             try c.span(if (escaped) json5_tokens.unescapedLength(name, unicode) else name.len, true);
             if (f.check_keys) try self.remember(c, name, true);
@@ -481,7 +481,7 @@ pub fn Dialect(comptime grammar: Grammar) type {
             f.state = .value;
             if (!json5 and !f.check_keys and names.len != 0) switch (hint) {
                 inline 0...names.len - 1 => |h| if (comptime literal(names[h])) |quoted| {
-                    // aegis: no-danger: the cursor never passes the input's end: it moves only through `finish`, to where a token ended
+                    // the cursor never passes the input's end: it moves only through `finish`, to where a token ended
                     const rest = self.input[self.at..];
                     if (rest.len > quoted.len and startsWith(rest, quoted)) {
                         // Held to the key limit as a key read below is.
@@ -610,10 +610,10 @@ pub fn Dialect(comptime grammar: Grammar) type {
             self.reading();
             const from = self.at;
             const end = try numberEnd(self.input, from);
-            // aegis: no-danger: `numberEnd` returns a position past `from` and inside the input
+            // `numberEnd` returns a position past `from` and inside the input
             if (limit.exceeds(end - from, c.limits.numeric_bytes)) return error.LengthLimit;
             self.finish(end);
-            // aegis: no-danger: `numberEnd` returns a position past `from` and inside the input
+            // `numberEnd` returns a position past `from` and inside the input
             return self.input[from..end];
         }
 
@@ -644,16 +644,16 @@ pub fn Dialect(comptime grammar: Grammar) type {
             const first = at;
             var magnitude: u64 = 0;
             // Nineteen digits always fit the accumulator.
-            // aegis: no-danger: `at` starts at `first` and only grows
+            // `at` starts at `first` and only grows
             while (at < bytes.len and at - first < 19) : (at += 1) {
                 const digit = bytes[at] -% '0';
                 if (digit > 9) break;
-                // aegis: no-danger: at most nineteen decimal digits, which u64 holds
+                // at most nineteen decimal digits, which u64 holds
                 magnitude = magnitude * 10 + digit;
             }
-            // aegis: no-danger: `at` starts at `first` and only grows
+            // `at` starts at `first` and only grows
             const digits = at - first;
-            // aegis: no-danger: `digits == 0` is refused first, so `first` is before `at`, inside the input
+            // `digits == 0` is refused first, so `first` is before `at`, inside the input
             if (digits == 0 or (bytes[first] == '0' and digits > 1)) return null;
             if (at < bytes.len) switch (bytes[at]) {
                 '0'...'9', '.', 'e', 'E' => return null,
@@ -670,11 +670,11 @@ pub fn Dialect(comptime grammar: Grammar) type {
             } else result: {
                 if (negative) {
                     if (magnitude > @as(u64, 1) << (bits - 1)) return null;
-                    break :result @intCast(-@as(i65, magnitude)); // aegis: no-danger: at most the magnitude of the signed minimum.
+                    break :result @intCast(-@as(i65, magnitude)); // at most the magnitude of the signed minimum.
                 }
                 break :result std.math.cast(T, magnitude) orelse return null;
             };
-            // aegis: no-danger: `at` starts at `from` and only grows
+            // `at` starts at `from` and only grows
             try c.chargeWork(at - from);
             return .{ .value = result, .end = at };
         }
@@ -716,9 +716,9 @@ pub fn Dialect(comptime grammar: Grammar) type {
                 '-', '0'...'9', '+', '.', 'I', 'N' => {
                     if (!startsNumber(bytes[at])) return error.SyntaxError;
                     const end = try numberEnd(bytes, at);
-                    // aegis: no-danger: `numberEnd` returns a position past `at` and inside the input
+                    // `numberEnd` returns a position past `at` and inside the input
                     if (limit.exceeds(end - at, c.limits.numeric_bytes)) return error.LengthLimit;
-                    // aegis: no-danger: `numberEnd` returns a position past `at` and inside the input
+                    // `numberEnd` returns a position past `at` and inside the input
                     try c.chargeWork(end - at);
                     self.last_end = end;
                     self.at = self.space(end);
@@ -753,10 +753,10 @@ pub fn Dialect(comptime grammar: Grammar) type {
         /// the vector registers its search takes are saved only around it.
         noinline fn passString(self: *Self, c: *core.Context) Error!void {
             const start = self.at + 1;
-            // aegis: no-danger: the cursor is on the string's quote, inside the input, so one past it is at most its length
+            // the cursor is on the string's quote, inside the input, so one past it is at most its length
             const body = self.input[start..];
             if (json5) {
-                // aegis: no-danger: the cursor is on the string's quote, the byte the caller switched on
+                // the cursor is on the string's quote, the byte the caller switched on
                 const found = try json5_tokens.end(body, self.input[self.at], self.accepting.unicode);
                 const len = if (found.escaped) json5_tokens.unescapedLength(body[0..found.at], self.accepting.unicode) else found.at;
                 try c.span(len, false);
@@ -876,11 +876,11 @@ pub fn Dialect(comptime grammar: Grammar) type {
                     if (!startsNumber(self.input[self.at])) return error.SyntaxError;
                     const start = self.at;
                     const end = try numberEnd(self.input, start);
-                    // aegis: no-danger: `numberEnd` returns a position past `start` and inside the input
+                    // `numberEnd` returns a position past `start` and inside the input
                     if (limit.exceeds(end - start, c.limits.numeric_bytes)) return error.LengthLimit;
                     self.finish(end);
                     self.ended();
-                    // aegis: no-danger: `numberEnd` returns a position past `start` and inside the input
+                    // `numberEnd` returns a position past `start` and inside the input
                     return .{ .number = .{ .bytes = self.input[start..end], .lifetime = .borrowed } };
                 },
                 else => return error.SyntaxError,
@@ -890,7 +890,7 @@ pub fn Dialect(comptime grammar: Grammar) type {
             if (self.depth == 0) self.root_done = true;
         }
         fn word(self: *Self, comptime spelling: []const u8, event: core.Event) Error!core.Event {
-            // aegis: no-danger: the cursor is at most the input's length, so the difference holds, and the slice is taken only once it is long enough
+            // the cursor is at most the input's length, so the difference holds, and the slice is taken only once it is long enough
             if (self.input.len - self.at < spelling.len or !std.mem.eql(u8, self.input[self.at..][0..spelling.len], spelling)) return error.SyntaxError;
             self.finish(self.at + spelling.len);
             self.ended();
@@ -902,7 +902,7 @@ pub fn Dialect(comptime grammar: Grammar) type {
         inline fn string(self: *Self, c: *core.Context, is_key: bool) Error!core.Span {
             if (json5) return self.string5(c, is_key);
             const start = self.at + 1;
-            // aegis: no-danger: the cursor is on the string's quote, inside the input, so one past it is at most its length
+            // the cursor is on the string's quote, inside the input, so one past it is at most its length
             const body = self.input[start..];
             // The common case, a string with no escape, takes one look.
             const found = strings.specialNear(body) orelse strings.special(body);
@@ -935,7 +935,7 @@ pub fn Dialect(comptime grammar: Grammar) type {
             const n = strings.unescape(escaped, storage, unicode);
             try c.span(n, is_key);
             self.finish(start + end.at + 1);
-            // aegis: no-danger: `unescape` returns the length it wrote into `storage`, which was sized for it
+            // `unescape` returns the length it wrote into `storage`, which was sized for it
             return .{ .bytes = storage[0..n], .lifetime = .owned };
         }
 
@@ -943,10 +943,10 @@ pub fn Dialect(comptime grammar: Grammar) type {
         /// as JSON's is.
         fn string5(self: *Self, c: *core.Context, is_key: bool) Error!core.Span {
             const start = self.at + 1;
-            // aegis: no-danger: the cursor is on the string's quote, inside the input, so one past it is at most its length
+            // the cursor is on the string's quote, inside the input, so one past it is at most its length
             const body = self.input[start..];
             const unicode = self.accepting.unicode;
-            // aegis: no-danger: the cursor is on the string's quote, the byte the caller switched on
+            // the cursor is on the string's quote, the byte the caller switched on
             const found = try json5_tokens.end(body, self.input[self.at], unicode);
             self.finish(start + found.at + 1);
             return self.text5(c, body[0..found.at], found.escaped, is_key);
@@ -955,7 +955,7 @@ pub fn Dialect(comptime grammar: Grammar) type {
         fn name5(self: *Self, c: *core.Context) Error!core.Span {
             if (startsString(try self.byte())) return self.string5(c, true);
             const found = try json5_tokens.identifier(self.input, self.at);
-            // aegis: no-danger: `identifier` returns an end at or past the cursor, inside the input
+            // `identifier` returns an end at or past the cursor, inside the input
             const body = self.input[self.at..found.end];
             self.finish(found.end);
             return self.text5(c, body, found.escaped, true);
@@ -978,7 +978,7 @@ pub fn Dialect(comptime grammar: Grammar) type {
             const storage = try c.alloc(u8, if (unicode == .refuse) body.len else json5_tokens.unescapedLength(body, unicode));
             const n = json5_tokens.unescape(body, storage, unicode);
             try c.span(n, is_key);
-            // aegis: no-danger: `unescape` returns the length it wrote into `storage`, which was sized for it
+            // `unescape` returns the length it wrote into `storage`, which was sized for it
             return .{ .bytes = storage[0..n], .lifetime = .owned };
         }
 
@@ -989,10 +989,10 @@ pub fn Dialect(comptime grammar: Grammar) type {
             const tokens = if (json5) json5_tokens else strings;
             const room = tail.addMany(if (unicode == .refuse) escaped.len else tokens.unescapedLength(escaped, unicode)) catch return error.OutOfMemory;
             const n = tokens.unescape(escaped, room, unicode);
-            // aegis: no-danger: `unescape` wrote `n` bytes into `room`, which was sized for them, at the tail's end
+            // `unescape` wrote `n` bytes into `room`, which was sized for them, at the tail's end
             tail.shrink(tail.len() - (room.len - n));
             try c.span(n, is_key);
-            // aegis: no-danger: `unescape` returns the length it wrote into `room`
+            // `unescape` returns the length it wrote into `room`
             return .{ .bytes = room[0..n], .lifetime = .transient };
         }
 

@@ -248,7 +248,7 @@ pub fn Reader(comptime grammar: decoding.Grammar) type {
         pub const parseInteger = Wire.parseInteger;
         pub const parseFloat = Wire.parseFloat;
         const State = enum(u8) { first, member, value, after };
-        // aegis: design: a parser's frame, whose transitions are the decoder's: the next word decides the edge, as the next byte decides the decoder's, held to the differential test against it
+        // a parser's frame, whose transitions are the decoder's: the next word decides the edge, as the next byte decides the decoder's, held to the differential test against it
         const Frame = struct { object: bool, check_keys: bool, state: State, key_start: usize };
         const Words = @TypeOf(@as(Image.View, undefined).get(.words));
         const Positions = @TypeOf(@as(Image.View, undefined).get(.positions));
@@ -331,9 +331,9 @@ pub fn Reader(comptime grammar: decoding.Grammar) type {
         /// tape's unescaped, which live as long as the read.
         fn spanAt(self: *const Self, i: usize) core.Span {
             const w = self.word(i);
-            // aegis: no-danger: the writer put a word's bytes where its start and length say, inside the input or the tape's strings
+            // the writer put a word's bytes where its start and length say, inside the input or the tape's strings
             if (Word.unescaped(w)) return .{ .bytes = self.tape_strings[Word.at(w)..][0..Word.len(w)], .lifetime = .transient };
-            // aegis: no-danger: the writer put a word's bytes where its start and length say, inside the input or the tape's strings
+            // the writer put a word's bytes where its start and length say, inside the input or the tape's strings
             return .{ .bytes = self.input[Word.at(w)..][0..Word.len(w)], .lifetime = .borrowed };
         }
 
@@ -345,7 +345,7 @@ pub fn Reader(comptime grammar: decoding.Grammar) type {
         pub fn raw(self: *const Self, start: usize, end: usize) core.Span {
             const from = Wire.leadingIn(self.input, start);
             const to = if (end == self.at) self.lastEnd() else end;
-            // aegis: no-danger: `from` and `to` are positions in the input the tape recorded, each at most its length
+            // `from` and `to` are positions in the input the tape recorded, each at most its length
             return .{ .bytes = self.input[from..@max(from, to)], .lifetime = .borrowed };
         }
         /// Where the last token read ended.
@@ -371,7 +371,7 @@ pub fn Reader(comptime grammar: decoding.Grammar) type {
             if (json5 and quote != '"' and quote != '\'') {
                 return (json5_tokens.identifier(self.input, start) catch return self.position(i + 1)).end;
             }
-            // aegis: no-danger: `start` is the string's opening quote, inside the input
+            // `start` is the string's opening quote, inside the input
             const body = self.input[start + 1 ..];
             const found = (if (json5) json5_tokens.end(body, quote, unicode) else strings.end(body, unicode)) catch return self.position(i + 1);
             return start + 1 + found.at + 1;

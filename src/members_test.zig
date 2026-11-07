@@ -312,6 +312,7 @@ fn itemsOf(bytes: []const u8) usize {
         defer arena.deinit();
         var options = passing;
         options.limits.items = n;
+        // glint-ignore: Z026 -- a limit too small refuses the document; the loop looks for the first that passes
         if (streamed(Nothing, arena.allocator(), bytes, options)) |_| return n else |_| {}
     }
 }

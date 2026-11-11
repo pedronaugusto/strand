@@ -389,7 +389,7 @@ pub const LineReader = struct {
         const first = record.line.len;
         aegis.assert.invariant(first <= end, "first <= end");
         aegis.assert.invariant(end < rest.len, "end < rest.len");
-        std.debug.assert(rest[end] == '\n');
+        aegis.assert.invariant(rest[end] == '\n', "rest[end] is the line's newline");
         if (limit.exceeds(end, self.options.max_line_bytes)) return null;
         const lines = newlinesAfter(rest[first .. end + 1]) orelse return null;
         self.input.toss(end - first);

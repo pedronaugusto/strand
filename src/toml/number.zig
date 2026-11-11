@@ -3,6 +3,7 @@
 //! that spelling into a Zig number. Integers are TOML's signed 64-bit profile;
 //! a float holds what a binary64 holds, rounded once into the destination.
 const std = @import("std");
+const aegis = @import("aegis");
 const core = @import("../core.zig");
 const json = @import("../json/number.zig");
 
@@ -71,7 +72,7 @@ pub fn normalize(token: []const u8, out: []u8) void {
         out[n] = byte;
         n += 1;
     }
-    std.debug.assert(n == out.len);
+    aegis.assert.invariant(n == out.len, "the digits fill the length measured for them");
 }
 
 /// A normal spelling's integer, or null for one that is not an integer's or

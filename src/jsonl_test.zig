@@ -6,6 +6,7 @@ const work_module = @import("json/work.zig");
 
 const builtin = @import("builtin");
 const std = @import("std");
+const aegis = @import("aegis");
 const testing = std.testing;
 const shakedown = @import("shakedown");
 const strand = @import("strand.zig");
@@ -3304,11 +3305,11 @@ test "policy types are the same for every record type" {
     const A = struct { a: u8 };
     const B = struct { b: []const u8 };
     comptime {
-        std.debug.assert(jsonl.Reader(A).Options == jsonl.Reader(B).Options);
-        std.debug.assert(jsonl.Reader(A).NextError == jsonl.Reader(B).NextError);
-        std.debug.assert(jsonl.Writer(A).Options == jsonl.Writer(B).Options);
-        std.debug.assert(jsonl.Tail(A).Options == jsonl.Tail(B).Options);
-        std.debug.assert(jsonl.Follower(A).Options == jsonl.Follower(B).Options);
-        std.debug.assert(jsonl.Follower(A).Checkpoint == jsonl.Follower(B).Checkpoint);
+        aegis.assert.invariant(jsonl.Reader(A).Options == jsonl.Reader(B).Options, "Reader's options");
+        aegis.assert.invariant(jsonl.Reader(A).NextError == jsonl.Reader(B).NextError, "Reader's errors");
+        aegis.assert.invariant(jsonl.Writer(A).Options == jsonl.Writer(B).Options, "Writer's options");
+        aegis.assert.invariant(jsonl.Tail(A).Options == jsonl.Tail(B).Options, "Tail's options");
+        aegis.assert.invariant(jsonl.Follower(A).Options == jsonl.Follower(B).Options, "Follower's options");
+        aegis.assert.invariant(jsonl.Follower(A).Checkpoint == jsonl.Follower(B).Checkpoint, "Follower's checkpoint");
     }
 }

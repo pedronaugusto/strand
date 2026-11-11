@@ -2,6 +2,7 @@
 //! comments, names, numbers, strings and characters end, and the bytes none of
 //! them may hold. Nothing here allocates; every scan is linear in what it reads.
 const std = @import("std");
+const aegis = @import("aegis");
 const literal = std.zig.string_literal;
 
 pub fn isSpace(b: u8) bool {
@@ -119,8 +120,8 @@ pub fn unescape(token: []const u8, out: []u8) void {
     var writer: std.Io.Writer = .fixed(out);
     // The length was measured by the same reader a moment ago.
     const result = literal.parseWrite(&writer, token) catch unreachable; // unreachable: a fixed writer sized by the measuring pass cannot fill.
-    std.debug.assert(result == .success);
-    std.debug.assert(writer.end == out.len);
+    aegis.assert.invariant(result == .success, "the literal was measured as valid");
+    aegis.assert.invariant(writer.end == out.len, "the literal fills the length measured for it");
 }
 
 pub const Character = struct { value: u21, end: usize };

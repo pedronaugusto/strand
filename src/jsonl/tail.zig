@@ -23,7 +23,6 @@ const std = @import("std");
 const limit = @import("../core/limit.zig");
 const aegis = @import("aegis");
 const Allocator = std.mem.Allocator;
-const assert = std.debug.assert;
 const testing = std.testing;
 
 const strand = struct {
@@ -295,8 +294,8 @@ pub fn Tail(comptime T: type) type {
         /// Ownership: the bytes borrow the reader's block buffer, and the
         /// next `prev` or `prevRaw` takes them back.
         pub fn prevRaw(self: *Self) NextError!?strand.RawLine {
-            assert(self.end <= self.buf.items.len);
-            defer assert(self.end <= self.buf.items.len);
+            aegis.assert.invariant(self.end <= self.buf.items.len, "the window ends inside the buffer");
+            defer aegis.assert.invariant(self.end <= self.buf.items.len, "the window ends inside the buffer");
             while (true) {
                 var raw = if (self.options.record_separator)
                     (self.prevSeparated() catch |err| switch (err) {
@@ -530,8 +529,8 @@ pub fn Tail(comptime T: type) type {
 
         /// Prepends the block of file bytes that ends where the buffer begins.
         fn fillBefore(self: *Self) NextError!void {
-            assert(self.lo > 0);
-            assert(self.end <= self.buf.items.len);
+            aegis.assert.invariant(self.lo > 0, "there is file before the buffer");
+            aegis.assert.invariant(self.end <= self.buf.items.len, "the window ends inside the buffer");
             const old_lo = self.lo;
             const take: usize = @intCast(@min(self.options.block_bytes.raw(), self.lo));
             const kept = self.end;
@@ -554,9 +553,9 @@ pub fn Tail(comptime T: type) type {
             };
             self.lo -= take;
             self.end = kept + take;
-            assert(self.lo < old_lo);
-            assert(self.lo + take == old_lo);
-            assert(self.end == self.buf.items.len);
+            aegis.assert.invariant(self.lo < old_lo, "the block moved the start back");
+            aegis.assert.invariant(self.lo + take == old_lo, "the block ends where the buffer began");
+            aegis.assert.invariant(self.end == self.buf.items.len, "the window ends at the buffer's end");
 
             if (!self.trimmed) {
                 self.trimmed = true;

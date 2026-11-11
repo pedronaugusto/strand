@@ -1,6 +1,7 @@
 //! The bytes that must not appear raw in a line, found a register at a time.
 
 const std = @import("std");
+const aegis = @import("aegis");
 const builtin = @import("builtin");
 const work = @import("work.zig");
 
@@ -89,7 +90,7 @@ inline fn firstHit(comptime n: usize, hits: @Vector(n, bool)) ?usize {
         return @ctz(mask);
     }
     if (comptime builtin.target.cpu.arch == .aarch64 or builtin.target.cpu.arch == .aarch64_be) {
-        comptime std.debug.assert(n < 256);
+        comptime aegis.assert.invariant(n < 256, "a lane index fits a byte");
         const indices = @select(u8, hits, std.simd.iota(u8, n), @as(@Vector(n, u8), @splat(255)));
         const first = @reduce(.Min, indices);
         return first;

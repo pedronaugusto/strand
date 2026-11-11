@@ -2,6 +2,7 @@
 //! input (where each ends, what it holds, whether its bytes can be lent as
 //! they are), and a key or a string spelled for writing.
 const std = @import("std");
+const aegis = @import("aegis");
 
 pub const Error = error{SyntaxError};
 
@@ -195,7 +196,7 @@ pub fn decode(scanned: Scanned, kind: Kind, out: []u8) void {
         n += 1;
         i += 1;
     }
-    std.debug.assert(n == out.len);
+    aegis.assert.invariant(n == out.len, "the decoded text fills the length measured for it");
 }
 
 /// Whether `key` can be written bare: one or more of `A-Za-z0-9_-`.

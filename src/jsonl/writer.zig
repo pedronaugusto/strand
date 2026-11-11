@@ -1,8 +1,8 @@
 //! `Writer`: values as JSON Lines on a `*std.Io.Writer`, counted, drained and
 //! synced as often as it is told to.
 const std = @import("std");
+const aegis = @import("aegis");
 const airlock = @import("airlock");
-const assert = std.debug.assert;
 const core = @import("../core.zig");
 const json = @import("../json/api.zig");
 const json_buffer = @import("Buffer.zig");
@@ -222,11 +222,11 @@ pub fn Writer(comptime T: type) type {
         /// than a setting.
         fn checkPolicies(options: Options) void {
             switch (options.flush) {
-                .per_records => |n| assert(n > 0),
+                .per_records => |n| aegis.assert.invariant(n > 0, "a flush every zero records is a mistake"),
                 else => {},
             }
             switch (options.sync) {
-                .per_records => |n| assert(n > 0),
+                .per_records => |n| aegis.assert.invariant(n > 0, "a sync every zero records is a mistake"),
                 else => {},
             }
         }
@@ -240,7 +240,7 @@ pub fn Writer(comptime T: type) type {
         /// A writer made this way has no file, so `options.sync` must be
         /// `.never`; `initFile` is the constructor that can sync.
         pub fn init(output: *std.Io.Writer, options: Options) Self {
-            assert(options.sync == .never);
+            aegis.assert.invariant(options.sync == .never, "a writer with no file cannot sync");
             checkPolicies(options);
             return .{ .output = output, .options = options };
         }
@@ -306,8 +306,8 @@ pub fn Writer(comptime T: type) type {
         pub fn write(self: *Self, value: T) Error!void {
             const before = self.count;
             defer {
-                assert(self.count >= before);
-                assert(self.count - before <= 1);
+                aegis.assert.invariant(self.count >= before, "a write never takes a record back");
+                aegis.assert.invariant(self.count - before <= 1, "a write counts at most its one record");
             }
             if (self.sync_failed) return error.SyncFailed;
             var staged: Staged = .init(self.output);
@@ -464,7 +464,7 @@ const Staged = struct {
 
     /// Publishes what is staged as `output`'s own buffered bytes.
     fn commit(self: *Staged) void {
-        assert(self.interface.end <= self.output.buffer.len - self.output.end);
+        aegis.assert.invariant(self.interface.end <= self.output.buffer.len - self.output.end, "what is staged fits the output's free buffer");
         self.output.end += self.interface.end;
         self.interface.buffer = self.output.unusedCapacitySlice();
         self.interface.end = 0;
@@ -481,7 +481,7 @@ const Staged = struct {
 
     fn rebase(w: *std.Io.Writer, preserve: usize, capacity: usize) std.Io.Writer.Error!void {
         const self: *Staged = @fieldParentPtr("interface", w);
-        assert(preserve <= w.end);
+        aegis.assert.invariant(preserve <= w.end, "a rebase preserves only buffered bytes");
         self.spilled = true;
         self.commit();
         try self.output.rebase(preserve, capacity);

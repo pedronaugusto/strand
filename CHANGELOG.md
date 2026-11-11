@@ -18,6 +18,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - The README states strand's stability policy (0.x, tracking Zig 0.17.x; a breaking change only in a minor release, with its CHANGELOG entry; a patch release never breaks) and names every format and namespace strand has (JSONC, JSON5, .env; `strand.xml`, `strand.ini`, `strand.dotenv`).
+- The contracts left on `std.debug.assert` (JSON Lines' writer, tail, follower, buffer and line reader; TOML's, ZON's and YAML's measured lengths and tokens; the aarch64 control scan; two compile-time test checks) are `aegis.assert.invariant`, each with what it holds, as strand's other contracts are: they now hold in every build, where they were undefined behaviour in ReleaseFast.
 - aegis 0.3's names: `assert.invariant` where `assert.pre` and `assert.post` were, the one always-on contract. Pins aegis breaking-0.3 (7bdb587), and airlock (reflink-lock), xenoglyph and shakedown on it; the follow test's fault callback is a `shakedown.Hook`.
 - A tape's memory is charged to `allocation_bytes` and counted in `Parsed.requested_peak`, not in `retained_bytes`, since it is given back before the parse returns. Work and allocation are charged as each reader spends them, so a budget near its edge can admit on one reader what the other refuses.
 - The core sizes a slice's first allocation by the count of the container a backend opened, where it knows it (`opened`); every check runs as before.

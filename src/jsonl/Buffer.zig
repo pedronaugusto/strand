@@ -36,7 +36,7 @@ pub fn diagnose(self: *const Self, err: std.Io.Writer.Error) (std.Io.Writer.Erro
 
 /// Transfer the bytes as one allocation of exactly their length.
 pub fn toOwnedSlice(self: *Self) std.mem.Allocator.Error![]u8 {
-    std.debug.assert(self.writer.end <= self.writer.buffer.len);
+    aegis.assert.invariant(self.writer.end <= self.writer.buffer.len, "the buffered bytes are inside the buffer");
     var storage: std.ArrayList(u8) = .{
         .items = self.writer.buffered(),
         .capacity = self.writer.buffer.len,
@@ -45,13 +45,13 @@ pub fn toOwnedSlice(self: *Self) std.mem.Allocator.Error![]u8 {
     const bytes = try storage.toOwnedSlice(self.gpa);
     self.writer.buffer = &.{};
     self.writer.end = 0;
-    std.debug.assert(self.writer.buffer.len == 0);
-    std.debug.assert(self.writer.end == 0);
+    aegis.assert.invariant(self.writer.buffer.len == 0, "the buffer is handed over whole");
+    aegis.assert.invariant(self.writer.end == 0, "nothing is left buffered");
     return bytes;
 }
 
 fn grow(self: *Self, additional: usize) std.Io.Writer.Error!void {
-    std.debug.assert(self.writer.end <= self.writer.buffer.len);
+    aegis.assert.invariant(self.writer.end <= self.writer.buffer.len, "the buffered bytes are inside the buffer");
     var storage: std.ArrayList(u8) = .{
         .items = self.writer.buffered(),
         .capacity = self.writer.buffer.len,
@@ -62,14 +62,14 @@ fn grow(self: *Self, additional: usize) std.Io.Writer.Error!void {
         return error.WriteFailed;
     };
     self.writer.buffer = storage.allocatedSlice();
-    std.debug.assert(self.writer.buffer.len - self.writer.end >= additional);
+    aegis.assert.invariant(self.writer.buffer.len - self.writer.end >= additional, "the growth leaves room for what was asked");
 }
 
 fn drain(writer: *std.Io.Writer, data: []const []const u8, splat: usize) std.Io.Writer.Error!usize {
     const self: *Self = @fieldParentPtr("writer", writer);
-    std.debug.assert(data.len > 0);
+    aegis.assert.invariant(data.len > 0, "a drain is given at least the splat slice");
     const start = writer.end;
-    defer std.debug.assert(writer.end <= writer.buffer.len);
+    defer aegis.assert.invariant(writer.end <= writer.buffer.len, "the buffered bytes are inside the buffer");
     for (data[0 .. data.len - 1]) |bytes| {
         try self.grow(bytes.len);
         @memcpy(writer.buffer[writer.end..][0..bytes.len], bytes);

@@ -4,6 +4,7 @@
 //! parser (a stack of states), held to YAML 1.2's rules for directives and
 //! document markers.
 const std = @import("std");
+const aegis = @import("aegis");
 const scanner = @import("scanner.zig");
 
 pub const Error = scanner.Error;
@@ -158,7 +159,7 @@ pub const Parser = struct {
 
     fn streamStart(self: *Parser) Error!Event {
         const token = try self.peek();
-        std.debug.assert(token.kind == .stream_start);
+        aegis.assert.invariant(token.kind == .stream_start, "a stream starts with its start token");
         const start = token.start;
         self.skip();
         self.state = .implicit_document_start;

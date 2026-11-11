@@ -34,7 +34,7 @@ test "aegis scalars are recognized by the literal each declares" {
 }
 
 test "aegis scalars made by another copy of aegis are read and written as aegis scalars" {
-    comptime std.debug.assert(other_aegis.int.Ranged(u16, 1, 4096) != aegis.int.Ranged(u16, 1, 4096));
+    comptime aegis.assert.invariant(other_aegis.int.Ranged(u16, 1, 4096) != aegis.int.Ranged(u16, 1, 4096), "the two copies of aegis make distinct types");
     const Job = struct {
         jobs: other_aegis.int.Ranged(u16, 1, 4096),
         timeout: other_aegis.units.Duration(.millisecond, u64),

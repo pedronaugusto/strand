@@ -8,6 +8,7 @@
 //! operation is charged for and gives back when the parse ends; what the
 //! result keeps is copied out of it by the core.
 const std = @import("std");
+const aegis = @import("aegis");
 const limit = @import("../core/limit.zig");
 const core = @import("../core.zig");
 const text = @import("text.zig");
@@ -240,7 +241,7 @@ fn ReaderOf(comptime recording: bool) type {
             self.nodes.items[child].key_decoded = segment.key.decoded;
             try self.link(table, child);
             const slot = self.index.getOrPutContextAdapted(self.allocator, Lookup{ .table = table, .key = self.keyBytes(segment.key) }, LookupContext{ .view = self.view() }, IndexContext{ .view = self.view() }) catch |err| return self.fail(err);
-            std.debug.assert(!slot.found_existing);
+            aegis.assert.invariant(!slot.found_existing, "a key given twice was refused before it is linked");
             slot.key_ptr.* = child;
         }
         /// How many containers lie above `table`.

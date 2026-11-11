@@ -24,6 +24,7 @@ const reader_module = @import("reader.zig");
 const core = @import("../core.zig");
 
 const std = @import("std");
+const aegis = @import("aegis");
 const FileId = @import("airlock").FileId;
 const Allocator = std.mem.Allocator;
 
@@ -484,7 +485,7 @@ pub fn Follower(comptime T: type) type {
         /// caller's and is left alone. Every `Line` this follower returned
         /// dangles afterwards.
         pub fn deinit(self: *Self, io: std.Io) void {
-            std.debug.assert(self.opened == null or self.options.reopen != null);
+            aegis.assert.invariant(self.opened == null or self.options.reopen != null, "a follower opens a file only through its opener");
             if (self.opened) |file| {
                 if (self.options.reopen) |opener| opener.close(io, file);
             }
@@ -681,7 +682,7 @@ pub fn Follower(comptime T: type) type {
 
         /// Puts the line layer back to where it stands at the top of a file.
         fn atStart(self: *Self) void {
-            std.debug.assert(self.source.logicalPos() == 0);
+            aegis.assert.invariant(self.source.logicalPos() == 0, "the source is at the top of the file");
             self.reader.lines.reset(.{});
             self.size_seen = null;
             self.held = null;

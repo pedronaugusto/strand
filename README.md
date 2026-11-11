@@ -1,7 +1,7 @@
 # strand
 
-strand reads and writes Zig values as JSON, JSON Lines, ZON, URL-encoded forms,
-CSV, CBOR, MessagePack, TOML, YAML, XML and INI, through one mapping core that every format shares. Zig 0.17.0 is required.
+strand reads and writes Zig values as JSON (with JSONC and JSON5), JSON Lines, ZON, URL-encoded forms,
+CSV, CBOR, MessagePack, TOML, YAML, XML, INI and .env, through one mapping core that every format shares. Zig 0.17 is required.
 
 A value of any plain Zig type is parsed straight into that type, borrowed from
 the input, copied into an owner of its own, or put on an arena the caller holds,
@@ -19,16 +19,23 @@ needs it.
 
 ## Install
 
-Requires Zig 0.17.0. Fetch with `zig fetch --save
+Requires Zig 0.17. Fetch with `zig fetch --save
 git+https://github.com/pedronaugusto/strand`, then obtain the `strand` module through
 `b.dependency` and add it to your executable's imports. Forward your target and optimize
 settings.
 
 The build exposes one module, `strand`, whose namespaces are `strand.core`,
 `strand.json`, `strand.jsonl`, `strand.zon`, `strand.urlencoded`, `strand.csv`,
-`strand.cbor`, `strand.msgpack`, `strand.toml` and `strand.yaml`. Zig analyses only what a program
+`strand.cbor`, `strand.msgpack`, `strand.toml`, `strand.yaml`, `strand.xml`, `strand.ini` and
+`strand.dotenv`. Zig analyses only what a program
 names, so a program that names only `strand.json` compiles no JSON Lines or
 airlock code.
+
+## Stability
+
+strand is 0.x and tracks Zig 0.17.x. A breaking change comes only in a minor release
+(0.15 to 0.16), with a CHANGELOG entry saying what changed and what to write instead; a
+patch release never breaks.
 
 ## Usage
 

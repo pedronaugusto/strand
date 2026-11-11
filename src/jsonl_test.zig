@@ -2249,9 +2249,12 @@ test "a writer says what its syncs reached, and a filesystem that declines the c
 
     // Declined is not failed: the writer carries on, on the strongest call
     // left, and says what that reached — on macOS the plain `fsync`, which
-    // the drive may still hold in its cache; elsewhere the full sync.
+    // the drive may still hold in its cache; on Linux and Windows the full
+    // sync; on the BSDs, whose data sync is already the one plain `fsync`,
+    // nothing is left after it.
     try log.write(.{ .kind = "two", .at = 2 });
-    const degraded: jsonl.Reached = if (builtin.target.os.tag.isDarwin()) .written else .full;
+    const os = builtin.target.os.tag;
+    const degraded: jsonl.Reached = if (os.isDarwin()) .written else if (os == .linux or os == .windows) .full else .none;
     try testing.expectEqual(degraded, log.reached);
     try testing.expect(!log.sync_failed);
 

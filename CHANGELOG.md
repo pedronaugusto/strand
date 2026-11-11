@@ -27,6 +27,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - A record's key that matches the name the schema expects next is held to `key_bytes`, as every other key is: a field name longer than the limit was accepted on that path alone.
 - A writer's scratch (`ini`, `dotenv`, `zon` and `urlencoded`'s keys and frames past what they keep inline) holds a list where it lies as the list grows, its growth charged to the allocation budget as an allocation is: each growth took a new block and left the last behind, so a fixed scratch ran out at a size that depended on the target's growth steps (riscv64 needed 4256 bytes for 200 INI keys where x86_64 needed 2416, and a 4096-byte scratch failed with `OutOfMemory` there).
+- `jsonl.Writer`'s sync documentation names the BSDs: the data sync there is the one plain `fsync`, so a file that declines it leaves `reached` at `.none`. The test of a declined sync expected Linux's `.full` on every platform but macOS and failed on FreeBSD.
 
 ## [0.15.0] - 2026-10-27
 

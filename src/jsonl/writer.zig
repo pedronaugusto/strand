@@ -76,6 +76,7 @@ const shared = struct {
         /// | Linux | `fdatasync`. A file that declines the call gets `fsync` |
         /// | macOS | `fcntl(F_FULLFSYNC)`, because `fsync` there hands the bytes to the drive without making it write them down. A filesystem with no such call (SMB, exFAT) gets `fsync`, which is then the strongest thing on it |
         /// | Windows | `NtFlushBuffersFileEx` with `DATA_SYNC_ONLY` on NTFS; a filesystem that declines it (FAT, ReFS, a network share) gets the full flush |
+        /// | BSDs | `fsync`, the one call there, so a file that declines it has nothing after it and the sync reached `.none`. Not tested on a BSD machine |
         ///
         /// A filesystem that declines the strong call makes the writer
         /// degrade rather than fail, and `Writer.reached` says what the
@@ -177,7 +178,8 @@ pub fn Writer(comptime T: type) type {
         /// `airlock.Reached.expected(.data)` where the filesystem takes the
         /// call, and less where it declines it — `.written` from a network
         /// mount on macOS, which survives the system crashing and not the
-        /// power failing. `reached.atLeast(.data)` is the check.
+        /// power failing, and `.none` from a file on a BSD that declines its
+        /// one `fsync`. `reached.atLeast(.data)` is the check.
         reached: airlock.Reached = .none,
         /// Set when a record failed after part of it had already reached the
         /// destination, which only a record longer than the destination's

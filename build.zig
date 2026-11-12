@@ -349,7 +349,7 @@ pub fn dev(b: *std.Build, tools: type) void {
         .portable_tests = true,
         .bench = .{
             .programs = &.{.{ .name = "strand-bench", .source = "bench/bench.zig" }},
-            .imports = benchImports,
+            .imports = tools.preflight.Bench.importsFrom(benchImports),
             .target = target,
             .optimize = optimize,
         },

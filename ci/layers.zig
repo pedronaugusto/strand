@@ -116,12 +116,15 @@ pub const layers: []const gantry.rules.Layer = &.{
         "src/strand.zig",
     } },
     .{ .name = "benchmark seam", .patterns = &.{"src/seam.zig"} },
+    .{ .name = "schema vocabulary", .patterns = &.{ "src/schema/Limits.zig", "src/schema/Location.zig", "src/schema/Decimal.zig" } },
+    .{ .name = "schema module", .patterns = &.{"src/strand_schema.zig"} },
 };
 
 pub const entries: []const []const u8 = &.{};
 
 pub const modules: []const gantry.NamedModule = &.{
     .{ .name = "strand", .path = "src/strand.zig" },
+    .{ .name = "strand_schema", .path = "src/strand_schema.zig" },
 };
 pub const references: []const gantry.rules.ReferenceRule = &.{
     .{

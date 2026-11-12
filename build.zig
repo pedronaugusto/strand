@@ -28,6 +28,22 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .imports = &.{ .{ .name = "aegis", .module = aegis }, .{ .name = "airlock", .module = airlock }, .{ .name = "xenoglyph", .module = xenoglyph } },
     });
+
+    // JSON Schema validation, `strand_schema`: off unless a project asks for
+    // it with `.schema = true`, since most validate by decoding into a type.
+    if (b.option(bool, "schema", "Build strand_schema, JSON Schema validation") orelse false) {
+        _ = b.addModule("strand_schema", schemaOptions(b, target, optimize, aegis));
+    }
+}
+
+/// The `strand_schema` module's sources and imports.
+fn schemaOptions(p: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize, aegis: *std.Build.Module) std.Build.Module.CreateOptions {
+    return .{
+        .root_source_file = p.path("src/strand_schema.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = p.allocator.dupe(std.Build.Module.Import, &.{.{ .name = "aegis", .module = aegis }}) catch @panic("OOM"),
+    };
 }
 
 /// strand's development: its tests, examples, checks and benchmarks, under
@@ -76,6 +92,17 @@ pub fn dev(b: *std.Build, tools: type) void {
     const test_step = b.step("test", "Run strand tests");
     // The assembly reaches every test once, in one executable.
     test_step.dependOn(&b.addRunArtifact(tests).step);
+    // strand_schema's tests, an executable of their own over the module.
+    const schema_module = b.createModule(schemaOptions(p, target, optimize, aegis));
+    schema_module.addImport("shakedown", shakedown.module("shakedown"));
+    const schema_tests = b.addTest(.{
+        .name = "strand-schema-tests",
+        .filters = if (test_filter) |filter| &.{filter} else &.{},
+        .root_module = schema_module,
+    });
+    test_step.dependOn(&b.addRunArtifact(schema_tests).step);
+    const schema_check = b.step("check-schema", "Compile strand_schema's tests without running them");
+    schema_check.dependOn(&schema_tests.step);
 
     const scratch_tests = b.addTest(.{
         .name = "logbook-scratch-tests",

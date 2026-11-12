@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `strand_schema`, JSON Schema validation, begins: a module of its own behind the build option `-Dschema` (`.schema = true` from a project), off by default, with nothing new to fetch. Its vocabulary so far: `Limits` (frames, per-container state, errors, the decimal exponent, depth and the schema's size); `Location`, JSON Pointers (RFC 6901) written as an evaluation descends and read from a schema's references; and `Decimal`, an exact `digits × 10^exponent` read from a number's text, ordered exactly (`1.0` equals `1`) and deciding `multipleOf` by modular arithmetic, never building either number, the exponent bounded (±4096 by default, past it refused).
+
 ### Breaking
 
 - `Tail`'s `prev`, `prevRaw` and `last` report `error.Canceled` when the task is canceled during a block read, as `Follower.next` does, instead of `error.ReadFailed`: `Tail.NextError` gains `Canceled`.

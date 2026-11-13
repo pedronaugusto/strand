@@ -18,6 +18,74 @@ pub fn deserialize(comptime T: type, backend: anytype, c: *ctx.Context) Errors(T
     return value;
 }
 
+/// A value made by `seed`: a value whose `strandDeserializeSeed(self, access)` reads
+/// one value through its access, as a codec does, and returns what it makes. A seed
+/// carries what the type alone cannot (serde's `DeserializeSeed`): state the reading
+/// needs, handed down to each nested value by a seed of its own (`elementSeed`).
+/// Its return type is written out, its errors a named set.
+pub fn deserializeSeeded(seed: anytype, backend: anytype, c: *ctx.Context) SeedErrors(@TypeOf(seed), @TypeOf(backend.*))!SeedOut(@TypeOf(seed), @TypeOf(backend.*)) {
+    var cursor: Cursor(@TypeOf(backend.*)) = .{ .backend = backend, .context = c };
+    const value = try cursor.readSeed(seed);
+    try backend.endInput(c);
+    return value;
+}
+
+/// What a format's runner reads: a type, or a seed's value when `T` is `Seeded`.
+pub fn Seeded(comptime Seed: type) type {
+    return struct {
+        pub const strand_seed = Seed;
+    };
+}
+
+fn isSeeded(comptime T: type) bool {
+    return switch (@typeInfo(T)) {
+        .@"struct" => @hasDecl(T, "strand_seed"),
+        else => false,
+    };
+}
+
+/// The runtime seed a runner of `T` holds: the seed for `Seeded`, nothing otherwise.
+pub fn SeedOf(comptime T: type) type {
+    return if (isSeeded(T)) T.strand_seed else struct {};
+}
+
+/// The seed a runner of a plain `T` holds, which is none; a seeded runner is
+/// always given its seed.
+pub fn unseeded(comptime T: type) SeedOf(T) {
+    return if (isSeeded(T)) undefined else .{};
+}
+
+/// What reading `T` from `Backend` makes: `T`, or the seed's value.
+pub fn Out(comptime T: type, comptime Backend: type) type {
+    return if (isSeeded(T)) SeedOut(T.strand_seed, Backend) else T;
+}
+
+fn DecodeAsErrors(comptime T: type, comptime Backend: type) type {
+    return if (isSeeded(T)) SeedErrors(T.strand_seed, Backend) else Errors(T, Backend);
+}
+
+/// `deserialize`, or `deserializeSeeded` with `seed` when `T` is `Seeded`: the one
+/// call every format's runner makes.
+pub fn decodeAs(comptime T: type, seed: SeedOf(T), backend: anytype, c: *ctx.Context) DecodeAsErrors(T, @TypeOf(backend.*))!Out(T, @TypeOf(backend.*)) {
+    if (comptime isSeeded(T)) return deserializeSeeded(seed, backend, c);
+    return deserialize(T, backend, c);
+}
+
+fn SeedResult(comptime Seed: type, comptime Backend: type) type {
+    return @TypeOf(@as(Seed, undefined).strandDeserializeSeed(@as(*Access(Backend), undefined)));
+}
+
+/// The value a seed makes.
+pub fn SeedOut(comptime Seed: type, comptime Backend: type) type {
+    return @typeInfo(SeedResult(Seed, Backend)).error_union.payload;
+}
+
+fn SeedErrors(comptime Seed: type, comptime Backend: type) type {
+    const errors = @typeInfo(SeedResult(Seed, Backend)).error_union.error_set;
+    if (@typeInfo(errors).error_set.error_names == null) @compileError("seeds require a named error set");
+    return ctx.DecodeError || Backend.Error || errors;
+}
+
 /// Whether `name` is `spelling`, a name the schema spells at compile time:
 /// a short one is compared a byte at a time with no call.
 inline fn spelled(name: []const u8, comptime spelling: []const u8) bool {
@@ -647,6 +715,18 @@ pub fn Cursor(comptime Backend: type) type {
         /// element or as a map's value: a `null` that `Nulls.keep` takes for a
         /// type without one is the type's zero. A record's field is the
         /// record's to keep, and an optional's value its own.
+        /// One value read by `seed` through an access, as a codec reads it.
+        pub fn readSeed(self: *Self, seed: anytype) SeedErrors(@TypeOf(seed), Backend)!SeedOut(@TypeOf(seed), Backend) {
+            self.request = .{};
+            try self.context.node();
+            try self.context.chargeWork(1);
+            try self.context.enterHook();
+            defer self.context.leaveHook();
+            var access: Access(Backend) = .{ .cursor = self };
+            const value = try seed.strandDeserializeSeed(&access);
+            if (!access.used or !access.complete) return error.CustomRejected;
+            return value;
+        }
         pub inline fn readFresh(self: *Self, comptime T: type, comptime policy: descriptor.Field) Errors(T, Backend)!T {
             if (try self.keptByNull(T, policy)) return self.zero(T);
             return self.read(T, policy);
@@ -1216,10 +1296,6 @@ fn PolicyAccess(comptime Backend: type, comptime policy: descriptor.Field) type 
         pub fn peek(self: *Self) Error!model.Event {
             return self.cursor.peek();
         }
-        /// What the operation's caller handed its codecs (`ParseOptions.codec_state`).
-        pub fn state(self: *const Self) ?*anyopaque {
-            return self.cursor.context.codec_state;
-        }
         pub fn number(self: *Self) Error![]const u8 {
             if (self.used) return error.CustomRejected;
             self.used = true;
@@ -1612,6 +1688,16 @@ fn PolicyCompoundAccess(comptime Backend: type, comptime policy: descriptor.Fiel
         pub fn element(self: *Self, comptime T: type) Errors(T, Backend)!T {
             return self.elementPolicy(T, .{});
         }
+        /// The next member's value or item, read by `seed`, which may be of any seed
+        /// type: each nested position its own.
+        pub fn elementSeed(self: *Self, seed: anytype) SeedErrors(@TypeOf(seed), Backend)!SeedOut(@TypeOf(seed), Backend) {
+            if (!self.live or ((self.header.kind == .map or self.header.kind == .record) and !self.key_pending)) return error.CustomRejected;
+            if (self.count >= policy.max_len) return error.LengthLimit;
+            if (self.count >= self.access.cursor.context.limits.container_items) return error.ItemLimit;
+            self.key_pending = false;
+            self.count += 1;
+            return self.access.cursor.readSeed(seed);
+        }
         fn elementPolicy(self: *Self, comptime T: type, comptime field_policy: descriptor.Field) Errors(T, Backend)!T {
             if (!self.live or ((self.header.kind == .map or self.header.kind == .record) and !self.key_pending)) return error.CustomRejected;
             if (self.count >= policy.max_len) return error.LengthLimit;
@@ -1648,6 +1734,17 @@ fn PolicyCompoundAccess(comptime Backend: type, comptime policy: descriptor.Fiel
             cursor.backend.replay(&backend, held.start, held.end);
             defer if (@hasDecl(Replayed(Backend), "deinit")) backend.deinit();
             return deserialize(T, &backend, cursor.context);
+        }
+        /// A held value, read by `seed`.
+        pub fn readHeldSeed(self: *Self, seed: anytype, held: Held) SeedErrors(@TypeOf(seed), Replayed(Backend))!SeedOut(@TypeOf(seed), Replayed(Backend)) {
+            const cursor = self.access.cursor;
+            const was_replaying = cursor.context.replaying;
+            cursor.context.replaying = true;
+            defer cursor.context.replaying = was_replaying;
+            var backend: Replayed(Backend) = undefined;
+            cursor.backend.replay(&backend, held.start, held.end);
+            defer if (@hasDecl(Replayed(Backend), "deinit")) backend.deinit();
+            return deserializeSeeded(seed, &backend, cursor.context);
         }
         pub fn finish(self: *Self) Error!void {
             if (!self.live or self.key_pending) return error.CustomRejected;

@@ -80,10 +80,6 @@ pub const ParseOptions = struct {
     /// and member names are read so too; a `Raw` keeps its bytes as written.
     invalid_unicode: core.InvalidUnicode = .refuse,
     diagnostics: ?*core.Diagnostics = null,
-    /// Handed to every codec the parse runs, which reads it through its
-    /// access's `state()`: a codec that keeps its work outside the value it
-    /// returns (strand_schema's validator) finds it there.
-    codec_state: ?*anyopaque = null,
 };
 fn acceptance(options: ParseOptions) core.Acceptance {
     return .{
@@ -106,32 +102,39 @@ fn Dialect(comptime T: type, comptime grammar: decoding.Grammar) type {
     const Wire = decoding.Dialect(grammar);
     const Reader = tape.Reader(grammar);
     return struct {
-        const Error = @typeInfo(@TypeOf(core.deserialize(T, @as(*Wire, undefined), @as(*core.Context, undefined)))).error_union.error_set ||
-            @typeInfo(@TypeOf(core.deserialize(T, @as(*Reader, undefined), @as(*core.Context, undefined)))).error_union.error_set;
+        pub const Error = @typeInfo(@TypeOf(core.decodeAs(T, @as(core.SeedOf(T), undefined), @as(*Wire, undefined), @as(*core.Context, undefined)))).error_union.error_set ||
+            @typeInfo(@TypeOf(core.decodeAs(T, @as(core.SeedOf(T), undefined), @as(*Reader, undefined), @as(*core.Context, undefined)))).error_union.error_set;
+        /// What the parse makes: `T`, or a seed's value.
+        pub const Made = core.Out(T, Wire);
         /// The parse's value in a type of its own, as aegis's boundary marker
         /// asks of what it refines, whatever `T` is.
-        const Refined = struct { value: T };
+        const Refined = struct { value: Made };
         const RefinedPrefix = struct { value: Prefix(T) };
+        /// What a parse carries past the boundary: its context and its seed.
+        const Run = struct { c: *core.Context, seed: core.SeedOf(T) };
         /// Where bytes enter the JSON reader: through aegis's boundary marker
         /// (`input.Untrusted`), its one checked boundary, past which what it
         /// reads is the parse's.
-        fn run(c: *core.Context, input: []const u8) Error!T {
+        fn run(c: *core.Context, input: []const u8) Error!Made {
             return runBy(c, input, .either);
         }
-        fn runBy(c: *core.Context, input: []const u8, comptime backend: Backend) Error!T {
+        fn runBy(c: *core.Context, input: []const u8, comptime backend: Backend) Error!Made {
+            return runSeeded(c, input, .{}, backend);
+        }
+        pub fn runSeeded(c: *core.Context, input: []const u8, seed: core.SeedOf(T), comptime backend: Backend) Error!Made {
             // `descriptor.same` and the decoder's `zero` recurse over T's own fields and children, as deep as T nests when strand compiles, never as deep as the input
-            return (try aegis.input.Untrusted([]const u8).init(input).parse(c, Checked(backend).checked)).value;
+            return (try aegis.input.Untrusted([]const u8).init(input).parse(Run{ .c = c, .seed = seed }, Checked(backend).checked)).value;
         }
         fn Checked(comptime backend: Backend) type {
             return struct {
-                fn checked(c: *core.Context, input: []const u8) Error!Refined {
-                    return .{ .value = try parsed(c, input, backend) };
+                fn checked(r: Run, input: []const u8) Error!Refined {
+                    return .{ .value = try parsed(r.c, input, r.seed, backend) };
                 }
             };
         }
         /// The value of `input`, read off its tape where the tape fits
         /// (`tape.fits`) and its regions can be reserved, else off the input.
-        fn parsed(c: *core.Context, input: []const u8, comptime backend: Backend) Error!T {
+        fn parsed(c: *core.Context, input: []const u8, seed: core.SeedOf(T), comptime backend: Backend) Error!Made {
             work.parse();
             try c.input(input.len);
             if (backend != .stream) {
@@ -141,7 +144,7 @@ fn Dialect(comptime T: type, comptime grammar: decoding.Grammar) type {
                     var reader: Reader = undefined;
                     reader.init(c, &held, input);
                     defer reader.deinit();
-                    return core.deserialize(T, &reader, c) catch |err| {
+                    return core.decodeAs(T, seed, &reader, c) catch |err| {
                         if (err == error.OutOfMemory and c.allocation_limited) return error.AllocationLimit;
                         return err;
                     };
@@ -152,7 +155,7 @@ fn Dialect(comptime T: type, comptime grammar: decoding.Grammar) type {
             var decoder: Wire = undefined;
             decoder.init(c, input);
             defer decoder.deinit();
-            const result = core.deserialize(T, &decoder, c) catch |err| {
+            const result = core.decodeAs(T, seed, &decoder, c) catch |err| {
                 if (err == error.OutOfMemory and c.allocation_limited) return error.AllocationLimit;
                 return err;
             };
@@ -193,7 +196,6 @@ fn context(arena: std.mem.Allocator, options: ParseOptions, grammar: decoding.Gr
     var c = core.Context.init(arena, options.limits, .borrowed);
     c.acceptance = acceptance(options);
     c.diagnostics = options.diagnostics;
-    c.codec_state = options.codec_state;
     return c;
 }
 fn parseWith(comptime T: type, comptime ownership: core.Ownership, gpa: std.mem.Allocator, input: []const u8, options: ParseOptions) @typeInfo(@TypeOf(core.acquireWith(T, ownership, gpa, input, .{}, Decode(T).run))).error_union.error_set!Parsed(T) {
@@ -227,6 +229,16 @@ pub fn parseOwned(comptime T: type, gpa: std.mem.Allocator, input: []const u8, o
 /// Bounds requests per operation; caller-owned arena backing and reset are external.
 pub fn parseLeaky(comptime T: type, arena: std.mem.Allocator, input: []const u8, options: ParseOptions) @typeInfo(@TypeOf(Decode(T).run(@as(*core.Context, undefined), input))).error_union.error_set!T {
     return parseLeakyDialect(T, .json, arena, input, options);
+}
+/// What `seed` makes of `input`: a seed reads with state its type alone cannot
+/// carry (`core.deserializeSeeded`), and hands each nested value a seed of its own.
+pub fn parseLeakySeeded(seed: anytype, arena: std.mem.Allocator, input: []const u8, options: ParseOptions) Dialect(core.Seeded(@TypeOf(seed)), .json).Error!Dialect(core.Seeded(@TypeOf(seed)), .json).Made {
+    return parseLeakySeededDialect(seed, .json, arena, input, options);
+}
+fn parseLeakySeededDialect(seed: anytype, comptime grammar: decoding.Grammar, arena: std.mem.Allocator, input: []const u8, options: ParseOptions) Dialect(core.Seeded(@TypeOf(seed)), grammar).Error!Dialect(core.Seeded(@TypeOf(seed)), grammar).Made {
+    var c = context(arena, options, grammar);
+    if (limit.exceeds(input.len, options.limits.input_bytes)) return error.InputLimit;
+    return Dialect(core.Seeded(@TypeOf(seed)), grammar).runSeeded(&c, input, seed, .either);
 }
 fn parseLeakyDialect(comptime T: type, comptime grammar: decoding.Grammar, arena: std.mem.Allocator, input: []const u8, options: ParseOptions) @typeInfo(@TypeOf(Dialect(T, grammar).run(@as(*core.Context, undefined), input))).error_union.error_set!T {
     var c = context(arena, options, grammar);
@@ -265,6 +277,10 @@ pub const jsonc = struct {
     pub fn parseLeaky(comptime T: type, arena: std.mem.Allocator, input: []const u8, options: ParseOptions) @typeInfo(@TypeOf(parseLeakyDialect(T, .jsonc, arena, input, options))).error_union.error_set!T {
         return parseLeakyDialect(T, .jsonc, arena, input, options);
     }
+    /// `parseLeakySeeded` in JSONC.
+    pub fn parseLeakySeeded(seed: anytype, arena: std.mem.Allocator, input: []const u8, options: ParseOptions) Dialect(core.Seeded(@TypeOf(seed)), .jsonc).Error!Dialect(core.Seeded(@TypeOf(seed)), .jsonc).Made {
+        return parseLeakySeededDialect(seed, .jsonc, arena, input, options);
+    }
 };
 /// JSON5 (json5.org), JSON for people to write: JSONC's comments and final
 /// commas, and keys as ECMAScript identifier names, strings in single quotes
@@ -288,6 +304,10 @@ pub const json5 = struct {
     /// `json.parseLeaky` of JSON5.
     pub fn parseLeaky(comptime T: type, arena: std.mem.Allocator, input: []const u8, options: ParseOptions) @typeInfo(@TypeOf(parseLeakyDialect(T, .json5, arena, input, options))).error_union.error_set!T {
         return parseLeakyDialect(T, .json5, arena, input, options);
+    }
+    /// `parseLeakySeeded` in JSON5.
+    pub fn parseLeakySeeded(seed: anytype, arena: std.mem.Allocator, input: []const u8, options: ParseOptions) Dialect(core.Seeded(@TypeOf(seed)), .json5).Error!Dialect(core.Seeded(@TypeOf(seed)), .json5).Made {
+        return parseLeakySeededDialect(seed, .json5, arena, input, options);
     }
     /// Everything writing a `T` as JSON5 can fail with.
     pub fn WriteError(comptime T: type) type {

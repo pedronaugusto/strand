@@ -11,6 +11,7 @@ pub const ParseError = api.ParseError;
 pub const parse = api.parse;
 pub const parseOwned = api.parseOwned;
 pub const parseLeaky = api.parseLeaky;
+pub const parseLeakySeeded = api.parseLeakySeeded;
 pub const Prefix = api.Prefix;
 pub const parsePrefixLeaky = api.parsePrefixLeaky;
 pub const parseStdValue = api.parseStdValue;
@@ -20,6 +21,7 @@ pub const jsonc = struct {
     pub const parse = api.jsonc.parse;
     pub const parseOwned = api.jsonc.parseOwned;
     pub const parseLeaky = api.jsonc.parseLeaky;
+    pub const parseLeakySeeded = api.jsonc.parseLeakySeeded;
     pub const Edit = @import("json/edit.zig").Edit;
     pub const EditOptions = @import("json/edit.zig").EditOptions;
 };
@@ -30,6 +32,7 @@ pub const json5 = struct {
     pub const parse = api.json5.parse;
     pub const parseOwned = api.json5.parseOwned;
     pub const parseLeaky = api.json5.parseLeaky;
+    pub const parseLeakySeeded = api.json5.parseLeakySeeded;
     pub const write = api.json5.write;
     pub const WriteError = api.json5.WriteError;
 };

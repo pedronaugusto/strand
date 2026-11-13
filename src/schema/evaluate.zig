@@ -9,9 +9,9 @@
 //! children's, the deepest first. Memory is the slots of the values open at
 //! once, bounded by `Limits.frames`, and per object a bit for each name its
 //! schemas mention; a value's canonical encoding, for `const` and `enum` on
-//! a container, is the one place a value is held whole.
+//! a container, is the one place a value is held whole. The reading is a
+//! strand seed (`Read`), so every format the core reads is validated alike.
 const std = @import("std");
-const aegis = @import("aegis");
 const strand = @import("strand");
 const Limits = @import("Limits.zig");
 const Decimal = @import("Decimal.zig");
@@ -42,9 +42,6 @@ pub const Evaluator = struct {
     limits: Limits,
     /// Slots open now, across every value being read.
     frames: usize = 0,
-    /// The slots the next value is read against, made by the reader of the
-    /// container it is in (or by `validate` for the root).
-    next: ?*Location = null,
 
     /// The slots for `roots` at one location: each root and, below it, what
     /// it applies in place.
@@ -142,16 +139,15 @@ pub const Slot = struct {
 /// JSON's type of a value, as `type` names it (`integer` aside).
 const Kind = enum { null, boolean, number, string, object, array };
 
-/// Reads one value against the slots `Evaluator.next` holds and settles them.
-/// A strand codec: it consumes exactly one value through its access, in any
-/// format, and builds nothing.
-pub const Instance = struct {
-    pub fn strandDeserialize(access: anytype) (@TypeOf(access.*).Error || Error)!Instance {
-        const e: *Evaluator = @ptrCast(@alignCast(access.state() orelse aegis.assert.never("validate hands every read its evaluator")));
-        const at = e.next orelse aegis.assert.never("each value is read with its slots made");
-        e.next = null;
-        try read(e, at, access);
-        return .{};
+/// Reads one value against the slots of `at` and settles them: a strand
+/// seed, which consumes exactly one value through its access, in any format,
+/// builds nothing, and hands each member and item a seed of its own.
+pub const Read = struct {
+    e: *Evaluator,
+    at: *Location,
+
+    pub fn strandDeserializeSeed(self: Read, access: anytype) (@TypeOf(access.*).Error || Error)!void {
+        try read(self.e, self.at, access);
     }
 };
 
@@ -392,11 +388,9 @@ fn child(e: *Evaluator, at: *Location, compound: anytype, roots: []const Node, o
             error.Invalid => error.TooLarge,
             else => |x| x,
         };
-        e.next = inner;
-        _ = try compound.readHeld(Instance, held);
+        try compound.readHeldSeed(Read{ .e = e, .at = inner }, held);
     } else {
-        e.next = inner;
-        _ = try compound.element(Instance);
+        try compound.elementSeed(Read{ .e = e, .at = inner });
     }
     for (owners, 0..) |owner, k| {
         const valid = inner.outcome(k);

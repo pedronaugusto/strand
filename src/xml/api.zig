@@ -29,19 +29,23 @@ pub const ParseOptions = struct {
 };
 fn Decode(comptime T: type) type {
     return struct {
-        const Error = @typeInfo(@TypeOf(core.deserialize(T, @as(*WireDecoder, undefined), @as(*core.Context, undefined)))).error_union.error_set;
+        pub const Error = @typeInfo(@TypeOf(core.decodeAs(T, @as(core.SeedOf(T), undefined), @as(*WireDecoder, undefined), @as(*core.Context, undefined)))).error_union.error_set;
+        /// What a parse makes: `T`, or a seed's value.
+        pub const Made = core.Out(T, WireDecoder);
         /// Where the document's working storage comes from: the caller's
         /// allocator, given back once the value is read, or the caller's
         /// arena in a leaky parse.
         backing: std.mem.Allocator,
         options: ParseOptions,
-        pub fn run(self: @This(), c: *core.Context, input: []const u8) Error!T {
+        /// The seed a seeded parse reads with.
+        seed: core.SeedOf(T) = core.unseeded(T),
+        pub fn run(self: @This(), c: *core.Context, input: []const u8) Error!Made {
             try c.input(input.len);
             var scratch = c.scratch(self.backing);
             var decoder: WireDecoder = undefined;
             decoder.init(input, .{ .namespaces = self.options.namespaces }, self.options.root, scratch.allocator());
             defer decoder.deinit();
-            return core.deserialize(T, &decoder, c) catch |err| {
+            return core.decodeAs(T, self.seed, &decoder, c) catch |err| {
                 if (c.diagnostics) |d| {
                     d.offset = decoder.place(d.offset);
                     d.locate(input);
@@ -89,6 +93,19 @@ pub fn parseLeaky(comptime T: type, arena: std.mem.Allocator, input: []const u8,
     c.acceptance = acceptance(options);
     c.diagnostics = options.diagnostics;
     return (Decode(T){ .backing = arena, .options = options }).run(&c, input);
+}
+/// What `seed` makes of `input`, as `parseLeaky` reads it: a seed reads with
+/// state its type alone cannot carry (`core.deserializeSeeded`).
+pub fn parseLeakySeeded(seed: anytype, arena: std.mem.Allocator, input: []const u8, options: ParseOptions) Decode(core.Seeded(@TypeOf(seed))).Error!Decode(core.Seeded(@TypeOf(seed))).Made {
+    if (options.diagnostics) |d| {
+        d.* = .{};
+        d.format = "xml";
+    }
+    if (limit.exceeds(input.len, options.limits.input_bytes)) return error.InputLimit;
+    var c = core.Context.init(arena, options.limits, .borrowed);
+    c.acceptance = acceptance(options);
+    c.diagnostics = options.diagnostics;
+    return (Decode(core.Seeded(@TypeOf(seed))){ .seed = seed, .backing = arena, .options = options }).run(&c, input);
 }
 
 pub const WriteOptions = struct {

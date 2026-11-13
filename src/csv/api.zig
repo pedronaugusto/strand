@@ -21,15 +21,20 @@ pub const ParseOptions = struct {
 };
 fn Decode(comptime T: type) type {
     return struct {
-        const Error = @typeInfo(@TypeOf(core.deserialize(T, @as(*WireDecoder, undefined), @as(*core.Context, undefined)))).error_union.error_set;
-        fn run(c: *core.Context, input: []const u8, dialect: Dialect) Error!T {
+        pub const Error = @typeInfo(@TypeOf(core.decodeAs(T, @as(core.SeedOf(T), undefined), @as(*WireDecoder, undefined), @as(*core.Context, undefined)))).error_union.error_set;
+        /// What a parse makes: `T`, or a seed's value.
+        pub const Made = core.Out(T, WireDecoder);
+        fn run(c: *core.Context, input: []const u8, dialect: Dialect) Error!Made {
+            return runSeeded(c, input, dialect, .{});
+        }
+        fn runSeeded(c: *core.Context, input: []const u8, dialect: Dialect, seed: core.SeedOf(T)) Error!Made {
             aegis.assert.invariant(dialect.valid(), "the delimiter and the quote are two bytes, neither a line break");
             try c.input(input.len);
             var decoder: WireDecoder = undefined;
             decoder.init(c, input);
             decoder.dialect = dialect;
             defer decoder.deinit();
-            return core.deserialize(T, &decoder, c) catch |err| {
+            return core.decodeAs(T, seed, &decoder, c) catch |err| {
                 if (err == error.OutOfMemory and c.allocation_limited) return error.AllocationLimit;
                 return err;
             };
@@ -37,7 +42,7 @@ fn Decode(comptime T: type) type {
         /// The decoder with its dialect, as acquisition calls it.
         pub const Runner = struct {
             dialect: Dialect,
-            pub fn run(self: Runner, c: *core.Context, input: []const u8) Error!T {
+            pub fn run(self: Runner, c: *core.Context, input: []const u8) Error!Made {
                 return Decode(T).run(c, input, self.dialect);
             }
         };
@@ -79,6 +84,19 @@ pub fn parseLeaky(comptime T: type, arena: std.mem.Allocator, input: []const u8,
     c.acceptance = acceptance(options);
     c.diagnostics = options.diagnostics;
     return Decode(T).run(&c, input, options.dialect);
+}
+/// What `seed` makes of `input`, as `parseLeaky` reads it: a seed reads with
+/// state its type alone cannot carry (`core.deserializeSeeded`).
+pub fn parseLeakySeeded(seed: anytype, arena: std.mem.Allocator, input: []const u8, options: ParseOptions) Decode(core.Seeded(@TypeOf(seed))).Error!Decode(core.Seeded(@TypeOf(seed))).Made {
+    if (options.diagnostics) |d| {
+        d.* = .{};
+        d.format = "csv";
+    }
+    if (limit.exceeds(input.len, options.limits.input_bytes)) return error.InputLimit;
+    var c = core.Context.init(arena, options.limits, .borrowed);
+    c.acceptance = acceptance(options);
+    c.diagnostics = options.diagnostics;
+    return Decode(core.Seeded(@TypeOf(seed))).runSeeded(&c, input, options.dialect, seed);
 }
 
 pub const WriteOptions = struct {

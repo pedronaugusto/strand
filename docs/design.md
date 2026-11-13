@@ -950,10 +950,10 @@ are kilobytes a struct literal would build elsewhere and copy.
 
 `strand_schema`, behind `-Dschema`, compiles a schema once into a program and
 validates an instance by streaming the core's events through it, with no tree.
-The validator is a codec: `Schema.validate` parses the instance into its
-`Instance` type, whose `strandDeserialize` reads one value through the access and
-finds the validation's work in the parse's `codec_state`, so every format the core
-reads can be validated. At each value the schemas that apply there are slots, side
+The validator is a seed: `Schema.validate` parses the instance with
+`parseLeakySeeded` and its `Read` seed, which reads one value through its access
+carrying the validation's work, and hands each member and item a seed of its own,
+so every format the core reads can be validated. At each value the schemas that apply there are slots, side
 by side, each settled at the value's end from its checks and its children's.
 
 A schema that can apply itself again at the same instance location, reading none

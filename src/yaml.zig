@@ -11,6 +11,7 @@ pub const ParseOptions = api.ParseOptions;
 pub const parse = api.parse;
 pub const parseOwned = api.parseOwned;
 pub const parseLeaky = api.parseLeaky;
+pub const parseLeakySeeded = api.parseLeakySeeded;
 pub const parseStream = api.parseStream;
 pub const parseStreamOwned = api.parseStreamOwned;
 pub const parseStreamLeaky = api.parseStreamLeaky;

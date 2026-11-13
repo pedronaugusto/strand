@@ -46,7 +46,7 @@ pub fn validate(s: *const Schema, scratch: std.mem.Allocator, comptime Format: t
     var e: evaluate.Evaluator = .{ .program = &s.program, .scratch = scratch, .limits = s.limits };
     const at = try e.open(&.{s.program.root});
     defer e.close(at);
-    var options: Format.ParseOptions = .{ .codec_state = &e };
+    var options: Format.ParseOptions = .{};
     options.limits.depth = s.limits.depth;
     if (at.wantsEncoding(&s.program)) {
         // The root's own `const` or `enum`: the instance read whole once.
@@ -56,8 +56,7 @@ pub fn validate(s: *const Schema, scratch: std.mem.Allocator, comptime Format: t
             else => |x| x,
         };
     }
-    e.next = at;
-    _ = try Format.parseLeaky(evaluate.Instance, scratch, bytes, options);
+    try Format.parseLeakySeeded(evaluate.Read{ .e = &e, .at = at }, scratch, bytes, options);
     return at.outcome(0);
 }
 

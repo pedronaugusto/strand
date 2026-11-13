@@ -18,18 +18,22 @@ pub const ParseOptions = struct {
 /// A stream read as a `T`: one document, or every document as a `T` each.
 fn Decode(comptime T: type, comptime root: WireDecoder.Root) type {
     return struct {
-        const Error = @typeInfo(@TypeOf(core.deserialize(T, @as(*WireDecoder, undefined), @as(*core.Context, undefined)))).error_union.error_set;
+        pub const Error = @typeInfo(@TypeOf(core.decodeAs(T, @as(core.SeedOf(T), undefined), @as(*WireDecoder, undefined), @as(*core.Context, undefined)))).error_union.error_set;
+        /// What a parse makes: `T`, or a seed's value.
+        pub const Made = core.Out(T, WireDecoder);
         /// Where the stream's working storage comes from: the caller's
         /// allocator, given back once the value is read, or the caller's
         /// arena in a leaky parse.
         backing: std.mem.Allocator,
-        pub fn run(self: @This(), c: *core.Context, input: []const u8) Error!T {
+        /// The seed a seeded parse reads with.
+        seed: core.SeedOf(T) = core.unseeded(T),
+        pub fn run(self: @This(), c: *core.Context, input: []const u8) Error!Made {
             try c.input(input.len);
             var scratch = c.scratch(self.backing);
             var decoder: WireDecoder = undefined;
             decoder.init(c, input, root, scratch.allocator());
             defer decoder.deinit();
-            return core.deserialize(T, &decoder, c) catch |err| {
+            return core.decodeAs(T, self.seed, &decoder, c) catch |err| {
                 if (c.diagnostics) |d| {
                     d.offset = decoder.place(d.offset);
                     d.locate(input);
@@ -52,6 +56,9 @@ fn parseWith(comptime T: type, comptime root: WireDecoder.Root, comptime ownersh
     }, Decode(T, root){ .backing = gpa });
 }
 fn leaky(comptime T: type, comptime root: WireDecoder.Root, arena: std.mem.Allocator, input: []const u8, options: ParseOptions) Decode(T, root).Error!T {
+    return leakyWith(T, root, .{}, arena, input, options);
+}
+fn leakyWith(comptime T: type, comptime root: WireDecoder.Root, seed: core.SeedOf(T), arena: std.mem.Allocator, input: []const u8, options: ParseOptions) Decode(T, root).Error!Decode(T, root).Made {
     if (options.diagnostics) |d| {
         d.* = .{};
         d.format = "yaml";
@@ -60,7 +67,7 @@ fn leaky(comptime T: type, comptime root: WireDecoder.Root, arena: std.mem.Alloc
     var c = core.Context.init(arena, options.limits, .borrowed);
     c.acceptance = .{ .reject_unknown_fields = !options.ignore_unknown_fields };
     c.diagnostics = options.diagnostics;
-    return (Decode(T, root){ .backing = arena }).run(&c, input);
+    return (Decode(T, root){ .backing = arena, .seed = seed }).run(&c, input);
 }
 
 /// The one document of `input` as a `T` (no document is an empty one,
@@ -77,6 +84,12 @@ pub fn parseOwned(comptime T: type, gpa: std.mem.Allocator, input: []const u8, o
 /// Bounds requests per operation; caller-owned arena backing and reset are external.
 pub fn parseLeaky(comptime T: type, arena: std.mem.Allocator, input: []const u8, options: ParseOptions) Decode(T, .document).Error!T {
     return leaky(T, .document, arena, input, options);
+}
+/// What `seed` makes of the one document of `input`, as `parseLeaky` reads
+/// it: a seed reads with state its type alone cannot carry
+/// (`core.deserializeSeeded`).
+pub fn parseLeakySeeded(seed: anytype, arena: std.mem.Allocator, input: []const u8, options: ParseOptions) Decode(core.Seeded(@TypeOf(seed)), .document).Error!Decode(core.Seeded(@TypeOf(seed)), .document).Made {
+    return leakyWith(core.Seeded(@TypeOf(seed)), .document, seed, arena, input, options);
 }
 /// Every document of `input`, each a `T`, borrowed as `parse` borrows.
 pub fn parseStream(comptime T: type, gpa: std.mem.Allocator, input: []const u8, options: ParseOptions) @typeInfo(@TypeOf(parseWith([]const T, .stream, .borrowed, gpa, input, options))).error_union.error_set!Parsed([]const T) {

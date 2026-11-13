@@ -24,6 +24,8 @@ const canonical = @import("canonical.zig");
 const Program = @import("Program.zig");
 const Pointer = @import("Location.zig");
 const dialect = @import("dialect.zig");
+const formats = @import("formats.zig");
+const spectra = @import("spectra");
 
 const Node = Program.Node;
 const Value = strand.json.Value;
@@ -37,10 +39,12 @@ pub const Error = error{
     TooDeep,
     /// A number past `Limits.exponent`, or state past `Limits.state`.
     TooLarge,
-    /// A keyword this build does not evaluate yet: `pattern` and
-    /// `patternProperties`. Never passed over in silence.
-    Unsupported,
+    /// The validation's `Io` was canceled; it checks once per MiB read.
+    Canceled,
 };
+
+/// How much of the instance is read between checks for cancellation.
+const cancel_interval = 1 << 20;
 
 /// The resources entered on the way to a slot, innermost first: the dynamic
 /// scope.
@@ -82,6 +86,17 @@ pub const Evaluator = struct {
     records: std.ArrayList(Record) = .empty,
     /// Where in the instance the value being read is.
     instance: Pointer = .{},
+    /// The validation's `Io`, checked for cancellation.
+    io: std.Io,
+    /// Bytes of instance read, and where the next check for cancellation
+    /// falls.
+    read_bytes: usize = 0,
+    next_check: usize = cancel_interval,
+    /// Each pattern's search cache, made when it is first run.
+    caches: std.AutoHashMapUnmanaged(*const spectra.Regex, spectra.Regex.Cache) = .empty,
+    /// The downgraded keywords the validation passed through, as indexes
+    /// into `Program.downgrades`.
+    passed: std.AutoArrayHashMapUnmanaged(u32, void) = .empty,
 
     /// The slots for `roots` at one location: each root and, below it, what
     /// it applies in place.
@@ -109,6 +124,7 @@ pub const Evaluator = struct {
         // Entering a resource adds it to the dynamic scope.
         const scope: *const Scope = if (outer) |o| (if (std.mem.eql(u8, o.base, info.base)) o else try e.enter(info.base, o)) else try e.enter(info.base, null);
         try at.slots.append(e.scratch, .{ .node = n, .ok = info.verdict != .none, .links = @intCast(at.links.items.len), .scope = scope, .path = path });
+        for (info.downgraded) |d| try e.passed.put(e.scratch, d, {});
         if (info.verdict != .keywords) {
             if (info.verdict == .none) try e.fail(at, index, null, "the schema is false");
             return index;
@@ -120,7 +136,6 @@ pub const Evaluator = struct {
         for (e.program.instructionsOf(n)) |ins| {
             const before = children.items.len;
             switch (ins.op) {
-                .pattern, .pattern_properties => return error.Unsupported,
                 .dynamic_ref => |d| try children.append(e.scratch, if (d.anchor) |name| e.dynamicTarget(scope, name) orelse d.node else d.node),
                 .recursive_ref => |r| try children.append(e.scratch, if (r.anchored) e.recursiveTarget(scope) orelse r.node else r.node),
                 else => try ins.op.inPlace(&children, e.scratch),
@@ -187,6 +202,22 @@ pub const Evaluator = struct {
             .message = why,
         });
         try s.errors.append(e.scratch, @intCast(e.records.items.len - 1));
+    }
+
+    /// Counts `bytes` of instance read, and once per MiB checks whether the
+    /// validation was canceled.
+    fn consumed(e: *Evaluator, bytes: usize) Error!void {
+        e.read_bytes += bytes;
+        if (e.read_bytes < e.next_check) return;
+        e.next_check = e.read_bytes + cancel_interval;
+        e.io.checkCancel() catch return error.Canceled;
+    }
+
+    /// Whether `re` matches anywhere in `s`, as ECMAScript's `test` does.
+    fn matches(e: *Evaluator, re: *const spectra.Regex, s: []const u8) Error!bool {
+        const entry = try e.caches.getOrPut(e.scratch, re);
+        if (!entry.found_existing) entry.value_ptr.* = try re.cache(e.scratch);
+        return re.isMatch(entry.value_ptr, s) catch error.TooLarge;
     }
 
     /// Charges `bytes` of per-container state.
@@ -319,6 +350,8 @@ fn message(op: Program.Op) []const u8 {
         .multiple_of => "the number is not a multiple of the divisor",
         .min_length => "the string is shorter than the minimum length",
         .max_length => "the string is longer than the maximum length",
+        .pattern => "the string does not match the pattern",
+        .format => "the string is not of the format",
         .min_items => "the array has fewer items than the minimum",
         .max_items => "the array has more items than the maximum",
         .unique_items => "the array has two equal items",
@@ -356,14 +389,17 @@ fn read(e: *Evaluator, at: *Location, access: anytype) (@TypeOf(access.*).Error 
     switch (try access.peek()) {
         .none => {
             _ = try access.read(?bool);
+            try e.consumed(1);
             try scalar(e, at, .null, .{ .null_value = {} });
         },
         .boolean => {
             const b = try access.read(bool);
+            try e.consumed(1);
             try scalar(e, at, .boolean, .{ .boolean = b });
         },
         .number => {
             const text = try access.number();
+            try e.consumed(text.len + 1);
             try scalar(e, at, .number, .{ .number = text });
         },
         .integer => {
@@ -373,6 +409,7 @@ fn read(e: *Evaluator, at: *Location, access: anytype) (@TypeOf(access.*).Error 
         },
         .text => {
             const s = try access.read([]const u8);
+            try e.consumed(s.len + 2);
             try scalar(e, at, .string, .{ .string = s });
         },
         .begin => |header| switch (header.kind) {
@@ -384,6 +421,7 @@ fn read(e: *Evaluator, at: *Location, access: anytype) (@TypeOf(access.*).Error 
                 try prepareObject(e, at);
                 while (try compound.hasNext()) {
                     const key = try compound.key([]const u8);
+                    try e.consumed(key.len + 4);
                     try member(e, at, &compound, key);
                 }
                 try compound.finish();
@@ -430,6 +468,8 @@ fn scalar(e: *Evaluator, at: *Location, kind: Kind, value: Value) Error!void {
                 .multiple_of => |m| if (number) |n| try n.multipleOf(m, e.scratch) else true,
                 .min_length => |m| if (value == .string) codePoints(value.string) >= m else true,
                 .max_length => |m| if (value == .string) codePoints(value.string) <= m else true,
+                .pattern => |re| if (value == .string) try e.matches(re, value.string) else true,
+                .format => |format| if (value == .string) try formats.check(e.scratch, format, value.string) else true,
                 else => true,
             };
             if (!pass) {
@@ -547,10 +587,18 @@ fn member(e: *Evaluator, at: *Location, compound: anytype, key: []const u8) !voi
                 try roots.append(e.scratch, .{ .node = prop.node, .scope = s.scope, .path = try childPath(e, s, ins, prop.name) });
                 try owners.append(e.scratch, .{ .slot = slot, .kind = .all });
             },
+            .pattern_properties => |list| for (list) |entry| if (try e.matches(entry.pattern, key)) {
+                try roots.append(e.scratch, .{ .node = entry.node, .scope = s.scope, .path = if (e.collect) try below(e, s.path, ins.keyword.name(), entry.source) else "" });
+                try owners.append(e.scratch, .{ .slot = slot, .kind = .all });
+            },
             .additional_properties => |ap| {
-                const named = for (ap.names) |name| {
+                var named = for (ap.names) |name| {
                     if (std.mem.eql(u8, name, key)) break true;
                 } else false;
+                if (!named) for (ap.patterns) |re| if (try e.matches(re, key)) {
+                    named = true;
+                    break;
+                };
                 if (!named) {
                     try roots.append(e.scratch, .{ .node = ap.node, .scope = s.scope, .path = try childPath(e, s, ins, null) });
                     try owners.append(e.scratch, .{ .slot = slot, .kind = .all });

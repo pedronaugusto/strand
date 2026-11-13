@@ -15,6 +15,8 @@ const canonical = @import("canonical.zig");
 const dialect = @import("dialect.zig");
 const registry = @import("registry.zig");
 const Program = @import("Program.zig");
+const formats = @import("formats.zig");
+const spectra = @import("spectra");
 
 const Value = strand.json.Value;
 const Member = strand.core.Pair([]const u8, Value);
@@ -35,6 +37,15 @@ pub const Options = struct {
     limits: Limits = .{},
     /// Where a schema failed to compile, and why.
     diagnostics: ?*Diagnostic = null,
+    /// `format` an annotation, as 2019-09 and 2020-12 have it by default, or
+    /// asserted, each format by its strict recognizer.
+    formats: enum { annotate, assert } = .annotate,
+    /// A `pattern` or `patternProperties` spectra cannot run in linear time
+    /// (a backreference, a lookbehind, a nested lookaround): refused with
+    /// `UnsupportedPattern`, or compiled as an annotation and listed in
+    /// `Program.downgrades`, every validation that passes through it saying
+    /// so. Never run slowly, never silent.
+    unsupported_pattern: enum { refuse, downgrade } = .refuse,
 };
 
 pub const Error = error{
@@ -50,6 +61,8 @@ pub const Error = error{
     UnresolvedReference,
     /// References that apply a schema again where it already is.
     ReferenceCycle,
+    /// A pattern spectra cannot run in linear time, under `.refuse`.
+    UnsupportedPattern,
     /// Past one of `Limits`' bounds on a schema.
     TooLarge,
 } || Loader.LoadError;
@@ -81,7 +94,7 @@ pub const Diagnostic = struct {
 /// documents and the program's memory on `arena`.
 pub fn compile(arena: std.mem.Allocator, io: std.Io, root: *const Value, options: Options) Error!Program {
     var r: Registry = .init(arena, io, options.loader, options.limits);
-    var c: Compiler = .{ .arena = arena, .registry = &r, .limits = options.limits };
+    var c: Compiler = .{ .arena = arena, .registry = &r, .limits = options.limits, .options = options };
     return c.run(root, options) catch |err| {
         if (options.diagnostics) |d| c.diagnose(d, err);
         return err;
@@ -92,6 +105,11 @@ const Compiler = struct {
     arena: std.mem.Allocator,
     registry: *Registry,
     limits: Limits,
+    options: Options,
+    /// Keywords compiled as annotations, for `Program.downgrades`.
+    downgrades: std.ArrayList(Program.Downgrade) = .empty,
+    /// The construct spectra refused, for a diagnostic.
+    refused: []const u8 = "",
     nodes: std.ArrayList(Program.NodeInfo) = .empty,
     instructions: std.ArrayList(Program.Instruction) = .empty,
     /// Each schema compiled, its node.
@@ -134,7 +152,7 @@ const Compiler = struct {
             };
             if (scope.recursive_anchor) try recursive.append(c.arena, .{ .base = scope.base, .node = n });
         }
-        return .{ .nodes = c.nodes.items, .instructions = c.instructions.items, .root = first, .dynamic_anchors = dynamic.items, .recursive_roots = recursive.items };
+        return .{ .nodes = c.nodes.items, .instructions = c.instructions.items, .root = first, .dynamic_anchors = dynamic.items, .recursive_roots = recursive.items, .downgrades = c.downgrades.items };
     }
 
     fn drain(c: *Compiler) Error!void {
@@ -176,16 +194,21 @@ const Compiler = struct {
         for (members) |*m| {
             const k, const vocabulary = dialect.keyword(scope.dialect, m.key) orelse continue;
             if (hiding and k != .ref) continue;
-            if (vocabulary != .core and !scope.vocabularies.contains(vocabulary)) continue;
+            // `format` belongs to 2020-12's format-annotation and
+            // format-assertion vocabularies both.
+            const enabled = scope.vocabularies.contains(vocabulary) or (k == .format and scope.vocabularies.contains(.format_assertion));
+            if (vocabulary != .core and !enabled) continue;
             present.set(k, &m.value);
         }
         var ops: std.ArrayList(Program.Instruction) = .empty;
-        try c.keywords(&present, scope, &ops);
+        var downgraded: std.ArrayList(u32) = .empty;
+        try c.keywords(&present, scope, &ops, &downgraded);
         std.sort.insertion(Program.Instruction, ops.items, {}, cheaper);
         // Compiling the keywords made nodes, which may have moved the list.
         const done = &c.nodes.items[n.raw()];
         done.first = @intCast(c.instructions.items.len);
         done.count = @intCast(ops.items.len);
+        done.downgraded = downgraded.items;
         try c.instructions.appendSlice(c.arena, ops.items);
     }
 
@@ -199,8 +222,15 @@ const Compiler = struct {
 
     /// The instructions of a schema's keywords, `present` holding each one's
     /// value.
-    fn keywords(c: *Compiler, present: *std.EnumArray(Keyword, ?*const Value), scope: Scope, ops: *std.ArrayList(Program.Instruction)) Error!void {
+    fn keywords(c: *Compiler, present: *std.EnumArray(Keyword, ?*const Value), scope: Scope, ops: *std.ArrayList(Program.Instruction), downgraded: *std.ArrayList(u32)) Error!void {
         const d = scope.dialect;
+        // `patternProperties`' entries, read once for it and for
+        // `additionalProperties`: null where a pattern was downgraded.
+        var patterned: ?[]const Program.PatternProperty = &.{};
+        if (present.get(.pattern_properties)) |p| {
+            c.keyword = .pattern_properties;
+            patterned = try c.patternList(p, scope, downgraded);
+        }
         var it = present.iterator();
         while (it.next()) |entry| {
             const v = entry.value.* orelse continue;
@@ -226,8 +256,13 @@ const Compiler = struct {
                 },
                 .min_length => try c.emit(ops, k, .{ .min_length = try c.count(v) }),
                 .max_length => try c.emit(ops, k, .{ .max_length = try c.count(v) }),
-                .pattern => try c.emit(ops, k, .{ .pattern = try string(v) }),
-                .format => try c.emit(ops, k, .{ .format = try string(v) }),
+                .pattern => if (try c.regex(try string(v), k, downgraded)) |re| try c.emit(ops, k, .{ .pattern = re }),
+                .format => {
+                    const name = try string(v);
+                    const asserted = c.options.formats == .assert or scope.vocabularies.contains(.format_assertion);
+                    // An unknown format is an annotation.
+                    if (asserted) if (formats.Kind.fromName(name)) |kind| try c.emit(ops, k, .{ .format = kind });
+                },
                 .min_items => try c.emit(ops, k, .{ .min_items = try c.count(v) }),
                 .max_items => try c.emit(ops, k, .{ .max_items = try c.count(v) }),
                 .unique_items => if (try boolean(v)) try c.emit(ops, k, .unique_items),
@@ -235,12 +270,21 @@ const Compiler = struct {
                 .max_properties => try c.emit(ops, k, .{ .max_properties = try c.count(v) }),
                 .required => try c.emit(ops, k, .{ .required = try strings(c.arena, v) }),
                 .properties => try c.emit(ops, k, .{ .properties = try c.propertyList(v, scope) }),
-                .pattern_properties => try c.emit(ops, k, .{ .pattern_properties = try c.patternList(v, scope) }),
+                .pattern_properties => if (patterned) |list| try c.emit(ops, k, .{ .pattern_properties = list }),
                 .additional_properties => {
                     var names: []const []const u8 = &.{};
-                    var patterns: []const []const u8 = &.{};
+                    var patterns: []const *const spectra.Regex = &.{};
                     if (present.get(.properties)) |p| names = try keys(c.arena, p);
-                    if (present.get(.pattern_properties)) |p| patterns = try keys(c.arena, p);
+                    // Which members it leaves alone depends on every pattern:
+                    // with one downgraded, it is an annotation too.
+                    const list = patterned orelse {
+                        try c.downgrade(k, "patternProperties", downgraded);
+                        continue;
+                    };
+                    const regexes = try c.arena.alloc(*const spectra.Regex, list.len);
+                    for (list, regexes) |pp, *re| re.* = pp.pattern;
+                    patterns = regexes;
+                    c.keyword = k;
                     try c.emit(ops, k, .{ .additional_properties = .{ .node = try c.schema(v, scope), .names = names, .patterns = patterns } });
                 },
                 .property_names => try c.emit(ops, k, .{ .property_names = try c.schema(v, scope) }),
@@ -354,11 +398,45 @@ const Compiler = struct {
         return out;
     }
 
-    fn patternList(c: *Compiler, v: *const Value, around: Scope) Error![]const Program.PatternProperty {
+    /// `patternProperties`' entries, each pattern compiled; null where one
+    /// was downgraded, the keyword then an annotation.
+    fn patternList(c: *Compiler, v: *const Value, around: Scope, downgraded: *std.ArrayList(u32)) Error!?[]const Program.PatternProperty {
         const entries = try object(v);
         const out = try c.arena.alloc(Program.PatternProperty, entries.len);
-        for (entries, out) |*e, *o| o.* = .{ .pattern = e.key, .node = try c.schema(&e.value, around) };
+        for (entries, out) |*e, *o| {
+            const re = try c.regex(e.key, .pattern_properties, downgraded) orelse return null;
+            o.* = .{ .source = e.key, .pattern = re, .node = try c.schema(&e.value, around) };
+        }
         return out;
+    }
+
+    /// `pattern` compiled by spectra in ECMAScript's dialect; null where
+    /// spectra cannot run it in linear time and the option downgrades it.
+    fn regex(c: *Compiler, pattern: []const u8, k: Keyword, downgraded: *std.ArrayList(u32)) Error!?*const spectra.Regex {
+        var diagnostic: spectra.Regex.Diagnostic = .{};
+        const re = try c.arena.create(spectra.Regex);
+        re.* = spectra.Regex.compile(c.arena, .init(pattern), .{ .syntax = .{ .dialect = .ecmascript }, .diagnostic = &diagnostic }) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.Invalid => return error.Invalid,
+            error.TooLarge => return error.TooLarge,
+            error.Unsupported => {
+                c.refused = @tagName(diagnostic.reason);
+                if (c.options.unsupported_pattern == .refuse) return error.UnsupportedPattern;
+                try c.downgrade(k, c.refused, downgraded);
+                return null;
+            },
+        };
+        return re;
+    }
+
+    /// Records keyword `k` of the schema being compiled as an annotation.
+    fn downgrade(c: *Compiler, k: Keyword, construct: []const u8, downgraded: *std.ArrayList(u32)) Error!void {
+        const at = c.at.?;
+        const scope = c.registry.scopes.get(at);
+        const pointer = if (scope != null) try c.registry.pointerOf(c.arena, at) else "";
+        const base = if (scope) |s| s.base else "";
+        try c.downgrades.append(c.arena, .{ .location = try std.mem.concat(c.arena, u8, &.{ base, "#", pointer, "/", k.name() }), .construct = construct });
+        try downgraded.append(c.arena, @intCast(c.downgrades.items.len - 1));
     }
 
     /// The node a reference names, resolved against `scope`'s base.
@@ -508,6 +586,7 @@ const Compiler = struct {
             error.UnsupportedVocabulary => "a required vocabulary strand does not know",
             error.UnresolvedReference => "a reference to no schema",
             error.ReferenceCycle => "references that apply a schema again where it already is",
+            error.UnsupportedPattern => "a pattern spectra cannot run in linear time",
             error.TooLarge => "past a limit",
             error.OutOfMemory => "out of memory",
             else => "the loader failed",
@@ -521,7 +600,7 @@ const Compiler = struct {
             return;
         };
         // A reference that failed names the URI it was reading.
-        if (err != error.Invalid and err != error.ReferenceCycle and err != error.TooLarge and c.registry.failed.len > 0) {
+        if (err != error.Invalid and err != error.ReferenceCycle and err != error.TooLarge and err != error.UnsupportedPattern and c.registry.failed.len > 0) {
             d.set(what, &.{c.registry.failed});
             return;
         }

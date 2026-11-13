@@ -351,7 +351,7 @@ test "any schema and instance: streaming gives the verdict the specification's t
                 try randomInstance(a, s, &data, 0);
                 const value = try strand.json.parseLeaky(Value, a, data.items, .{});
                 const expected = valid(root, value, root);
-                const got = try compiled.validate(testing.io, a, strand.json, .init(data.items), .flag);
+                const got = try compiled.validate(testing.io, a, strand.json, .init(data.items), .{ .flag = null });
                 testing.expectEqual(expected, got) catch |err| {
                     std.debug.print("schema {s}\ninstance {s}\n", .{ text.items, data.items });
                     return err;

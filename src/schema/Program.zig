@@ -9,6 +9,8 @@ const aegis = @import("aegis");
 const strand = @import("strand");
 const Decimal = @import("Decimal.zig");
 const dialect = @import("dialect.zig");
+const spectra = @import("spectra");
+const formats = @import("formats.zig");
 
 /// A node of one program: positions only, branded so they are no other
 /// integer.
@@ -24,6 +26,14 @@ dynamic_anchors: []const DynamicAnchor = &.{},
 /// Each resource root marked `$recursiveAnchor: true` (2019-09).
 recursive_roots: []const RecursiveRoot = &.{},
 
+/// Keywords compiled as annotations because spectra cannot run their
+/// pattern in linear time (`unsupported_pattern = .downgrade`).
+downgrades: []const Downgrade = &.{},
+
+/// A keyword compiled as an annotation: its absolute location, and the
+/// construct spectra named.
+pub const Downgrade = struct { location: []const u8, construct: []const u8 };
+
 pub const DynamicAnchor = struct { base: []const u8, name: []const u8, node: Node };
 pub const RecursiveRoot = struct { base: []const u8, node: Node };
 
@@ -38,6 +48,8 @@ pub const NodeInfo = struct {
     source: *const strand.json.Value,
     /// Its absolute location: its resource's URI and the JSON Pointer to it.
     location: []const u8 = "",
+    /// Its keywords compiled as annotations, as indexes into `downgrades`.
+    downgraded: []const u32 = &.{},
     /// The base URI of the resource it is in: entering it adds the resource
     /// to the dynamic scope a `$dynamicRef` searches.
     base: []const u8,
@@ -55,7 +67,9 @@ pub const Type = enum { null, boolean, object, array, number, string, integer };
 pub const Types = std.EnumSet(Type);
 
 pub const Property = struct { name: []const u8, node: Node };
-pub const PatternProperty = struct { pattern: []const u8, node: Node };
+/// A `patternProperties` entry: its pattern as written, compiled, and its
+/// subschema.
+pub const PatternProperty = struct { source: []const u8, pattern: *const spectra.Regex, node: Node };
 pub const Dependency = struct { name: []const u8, required: []const []const u8 };
 
 pub const Op = union(enum) {
@@ -74,9 +88,11 @@ pub const Op = union(enum) {
     /// instance reaches it.
     min_length: u64,
     max_length: u64,
-    /// An ECMAScript pattern, compiled when patterns are.
-    pattern: []const u8,
-    format: []const u8,
+    /// An ECMAScript pattern, found anywhere in the string.
+    pattern: *const spectra.Regex,
+    /// A format asserted: by `Options.formats = .assert`, or a meta-schema
+    /// turning on 2020-12's format-assertion vocabulary.
+    format: formats.Kind,
     min_items: u64,
     max_items: u64,
     unique_items,
@@ -98,7 +114,7 @@ pub const Op = union(enum) {
     pattern_properties: []const PatternProperty,
     /// Every member neither `names` nor `patterns` (its siblings
     /// `properties` and `patternProperties`) matches.
-    additional_properties: struct { node: Node, names: []const []const u8, patterns: []const []const u8 },
+    additional_properties: struct { node: Node, names: []const []const u8, patterns: []const *const spectra.Regex },
     property_names: Node,
     dependent_required: []const Dependency,
     dependent_schemas: []const Property,

@@ -964,6 +964,19 @@ condition always comes out the same, so such a cycle either never runs or runs
 forever on that instance; the specification leaves that undefined, and refusing it
 at compile time means validation always finishes, with no check while it runs.
 
+Formats are annotations unless `Options.formats = .assert` or a meta-schema turns
+on 2020-12's format-assertion vocabulary; asserted, each is a strict recognizer of
+its grammar: almanac's RFC 3339 checks for `date-time`, `date`, `time` and
+`duration`, uplink's RFC 3986 and 3987 parser for the URI and IRI formats, spectra's
+ECMA-262 reading for `regex`, and grammars of strand's own for the rest.
+`idn-hostname` and `idn-email` check IDNA2008's validity of the name as written; a
+caller who wants UTS #46's mapping of user input first applies xenoglyph's
+`idna.toAscii`. `pattern` and `patternProperties` run on spectra's ECMAScript
+dialect; one spectra cannot run in linear time is refused, or under
+`unsupported_pattern = .downgrade` compiled as an annotation that every validation
+passing through it reports. A validation checks its `Io` for cancellation once per
+MiB of instance read.
+
 ## Measurements
 
 Timings are manual observations in private trials, never CI acceptance tests. The

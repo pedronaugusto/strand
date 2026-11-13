@@ -29,8 +29,8 @@
 
         // Unicode's simple case folding, for member names read by folding.
         .xenoglyph = .{
-            .url = "git+https://github.com/pedronaugusto/xenoglyph#d6432607111da5deb5f0a481d1674da990872c96",
-            .hash = "xenoglyph-0.5.1-YKXZlXX6RgBGRl07HQns6W6M42ZLEP22hg8cEY37HouP",
+            .url = "git+https://github.com/pedronaugusto/xenoglyph#ef20e2d20b0f07f165e708650861f177199db876",
+            .hash = "xenoglyph-0.5.1-YKXZldz2UwBKwlVX96IhMl4S19PRhaW6e21TmW7GG4b5",
         },
 
         // uplink's codecs, `uplink.wire`, for strand_schema's URI references:
@@ -38,6 +38,23 @@
         .uplink = .{
             .url = "git+https://github.com/pedronaugusto/uplink#b81dc35b8adc122e3a27cd9872d2091abc04b5dc",
             .hash = "uplink-0.10.2-0eVSJjwpHgCtI2cKjfjq9eP3vSAsV6C5p0eFHy45GdiX",
+            .lazy = true,
+        },
+
+        // ECMAScript patterns in linear time, for strand_schema's `pattern`,
+        // `patternProperties` and the `regex` format: fetched only by a build
+        // with `.schema = true`.
+        .spectra = .{
+            .url = "git+https://github.com/pedronaugusto/spectra#df8e64f98f6d0b53c701501dffda145a442d3747",
+            .hash = "spectra-0.0.0-t6DGCCMDDgCaSHwmOCa-7yjHbtLMqF6SxBXZ18GCmiD1",
+            .lazy = true,
+        },
+
+        // RFC 3339's grammar, for strand_schema's `date-time`, `date`, `time`
+        // and `duration` formats: fetched only by a build with `.schema = true`.
+        .almanac = .{
+            .url = "git+https://github.com/pedronaugusto/almanac#a7d862718d5a05b5af61d99708d3256d025f01fc",
+            .hash = "almanac-0.0.0-sQeSOZJWCgD4FwbPESSnmxckdDUFneliMzxb4yHpPduv",
             .lazy = true,
         },
 

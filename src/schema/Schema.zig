@@ -13,19 +13,35 @@ const Program = @import("Program.zig");
 pub const Options = compiler.Options;
 pub const Record = evaluate.Record;
 
-/// What a validation reports beside its verdict.
+pub const Downgrade = Program.Downgrade;
+
+/// What a validation reports beside its verdict. Either way the keywords
+/// compiled as annotations (`unsupported_pattern = .downgrade`) that it
+/// passed through are named, so a verdict says what it did not check.
 pub const Output = union(enum) {
-    /// The verdict alone.
-    flag,
+    /// The verdict, and where given, the downgraded keywords it passed.
+    flag: ?*Report,
     /// The verdict and, for an invalid instance, why: each failing keyword
     /// on the path to the verdict, up to `Limits.errors`.
     basic: *Errors,
 };
 
+/// A `flag` output's report, held in the validation's `scratch`.
+pub const Report = struct {
+    downgraded: []const Downgrade = &.{},
+};
+
 /// A `basic` output's errors, held in the validation's `scratch`.
 pub const Errors = struct {
     records: []const Record = &.{},
+    downgraded: []const Downgrade = &.{},
 };
+
+/// The keywords compiled as annotations under `.downgrade`, with their
+/// locations and the construct spectra refused.
+pub fn downgrades(s: *const Schema) []const Downgrade {
+    return s.program.downgrades;
+}
 pub const Diagnostic = compiler.Diagnostic;
 pub const CompileError = compiler.Error;
 
@@ -55,11 +71,12 @@ pub fn compile(gpa: std.mem.Allocator, io: std.Io, comptime Format: type, docume
 /// Whether `instance`, in `Format`, is valid: streamed through the program
 /// with no tree, its slots and state from `scratch` (an arena per
 /// validation is the expected use), within `limits`. `io` keys
-/// `uniqueItems`' hashes from its random source. An invalid instance is
+/// `uniqueItems`' hashes from its random source, and is checked for
+/// cancellation once per MiB of instance read. An invalid instance is
 /// `false`; an error is a malformed instance, a limit, or memory.
 pub fn validate(s: *const Schema, io: std.Io, scratch: std.mem.Allocator, comptime Format: type, instance: aegis.input.Untrusted([]const u8), output: Output) !bool {
     const bytes = instance.readForParse();
-    var e: evaluate.Evaluator = .{ .program = &s.program, .scratch = scratch, .limits = s.limits, .hash_key = undefined, .collect = output == .basic };
+    var e: evaluate.Evaluator = .{ .program = &s.program, .scratch = scratch, .limits = s.limits, .hash_key = undefined, .collect = output == .basic, .io = io };
     io.random(&e.hash_key);
     const at = try e.open(&.{.{ .node = s.program.root, .scope = null }});
     defer e.close(at);
@@ -75,10 +92,14 @@ pub fn validate(s: *const Schema, io: std.Io, scratch: std.mem.Allocator, compti
     }
     try Format.parseLeakySeeded(evaluate.Read{ .e = &e, .at = at }, scratch, bytes, options);
     const valid = at.outcome(0);
+    const passed = try scratch.alloc(Downgrade, e.passed.count());
+    for (e.passed.keys(), passed) |d, *out| out.* = s.program.downgrades[d];
     switch (output) {
-        .flag => {},
+        .flag => |report| if (report) |r| {
+            r.* = .{ .downgraded = passed };
+        },
         .basic => |errors| {
-            errors.* = .{};
+            errors.* = .{ .downgraded = passed };
             if (!valid) {
                 const indices = at.slots.items[at.roots.items[0]].errors.items;
                 const records = try scratch.alloc(Record, @min(indices.len, s.limits.errors));
@@ -140,7 +161,7 @@ test "an instance streams through the schema: valid, invalid, and every branch a
         .{ "{\"a\": 3}", false },
     };
     for (cases) |case| {
-        const valid = try s.validate(testing.io, state.allocator(), strand.json, .init(case[0]), .flag);
+        const valid = try s.validate(testing.io, state.allocator(), strand.json, .init(case[0]), .{ .flag = null });
         testing.expectEqual(case[1], valid) catch |err| {
             std.debug.print("instance {s}\n", .{case[0]});
             return err;
@@ -185,7 +206,57 @@ test "per-container state is charged to Limits.state, and past it the validation
     defer s.deinit();
     var state: std.heap.ArenaAllocator = .init(testing.allocator);
     defer state.deinit();
-    try testing.expect(try s.validate(testing.io, state.allocator(), strand.json, .init("[1, 2]"), .flag));
-    try testing.expect(!try s.validate(testing.io, state.allocator(), strand.json, .init("[1, 1.0]"), .flag));
-    try testing.expectError(error.TooLarge, s.validate(testing.io, state.allocator(), strand.json, .init("[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]"), .flag));
+    try testing.expect(try s.validate(testing.io, state.allocator(), strand.json, .init("[1, 2]"), .{ .flag = null }));
+    try testing.expect(!try s.validate(testing.io, state.allocator(), strand.json, .init("[1, 1.0]"), .{ .flag = null }));
+    try testing.expectError(error.TooLarge, s.validate(testing.io, state.allocator(), strand.json, .init("[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]"), .{ .flag = null }));
+}
+
+test "a pattern spectra cannot run in linear time: refused, or downgraded and reported by every validation through it" {
+    var d: Diagnostic = .{};
+    const text = "{\"properties\": {\"a\": {\"pattern\": \"(a)\\\\1\"}}}";
+    try testing.expectError(error.UnsupportedPattern, compile(testing.allocator, testing.io, strand.json, .init(text), .{ .diagnostics = &d }));
+    try testing.expectEqualStrings("urn:strand:schema#/properties/a/pattern", d.location());
+    var s = try compile(testing.allocator, testing.io, strand.json, .init(text), .{ .unsupported_pattern = .downgrade });
+    defer s.deinit();
+    try testing.expectEqual(1, s.downgrades().len);
+    try testing.expectEqualStrings("urn:strand:schema#/properties/a/pattern", s.downgrades()[0].location);
+    var state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer state.deinit();
+    var report: Report = .{};
+    // Through the downgraded keyword: valid, and saying what it did not check.
+    try testing.expect(try s.validate(testing.io, state.allocator(), strand.json, .init("{\"a\": \"xyz\"}"), .{ .flag = &report }));
+    try testing.expectEqual(1, report.downgraded.len);
+    // Not through it: nothing to say.
+    try testing.expect(try s.validate(testing.io, state.allocator(), strand.json, .init("{\"b\": 1}"), .{ .flag = &report }));
+    try testing.expectEqual(0, report.downgraded.len);
+}
+
+test "a validation checks for cancellation once per MiB, and a cancel stops it midway" {
+    const shakedown = @import("shakedown");
+    var s = try compile(testing.allocator, testing.io, strand.json, .init("{\"items\": {\"type\": \"string\"}}"), .{});
+    defer s.deinit();
+    // 6 MiB of strings, as the validation counts what it reads.
+    var text: std.ArrayList(u8) = .empty;
+    defer text.deinit(testing.allocator);
+    try text.append(testing.allocator, '[');
+    for (0..6 * 1024) |i| {
+        if (i > 0) try text.append(testing.allocator, ',');
+        try text.append(testing.allocator, '"');
+        try text.appendNTimes(testing.allocator, 'x', 1022);
+        try text.append(testing.allocator, '"');
+    }
+    try text.append(testing.allocator, ']');
+    var state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer state.deinit();
+    const fio = try shakedown.FaultIo.init(testing.allocator, testing.io, .{ .plan = &.{
+        .{ .at = .{ .nth = .{ .call = .checkCancel, .n = 3 } }, .fault = .cancel },
+    } });
+    defer fio.deinit();
+    try testing.expectError(error.Canceled, s.validate(fio.io(), state.allocator(), strand.json, .init(text.items), .{ .flag = null }));
+    try testing.expectEqual(3, fio.count(.checkCancel));
+    // Uncanceled, the whole instance is read and checked six times.
+    fio.reset();
+    try fio.setPlan(&.{});
+    try testing.expect(try s.validate(fio.io(), state.allocator(), strand.json, .init(text.items), .{ .flag = null }));
+    try testing.expectEqual(6, fio.count(.checkCancel));
 }

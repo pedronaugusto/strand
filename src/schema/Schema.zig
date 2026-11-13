@@ -276,3 +276,28 @@ test "a validation checks for cancellation once per MiB, and a cancel stops it m
     try testing.expect(try s.validate(fio.io(), state.allocator(), strand.json, .init(text.items), .{ .flag = null }));
     try testing.expectEqual(6, fio.count(.checkCancel));
 }
+
+test "numbers by their value, past a double's precision, and patterns as ECMAScript reads them" {
+    var state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer state.deinit();
+    const a = state.allocator();
+    const Case = struct { schema: []const u8, instance: []const u8, valid: bool };
+    const cases = [_]Case{
+        // Numbers by value, never as doubles: 2^53 + 1 is odd, and exactly
+        // 1.5 × 6004799503160662; 0.3 is exactly 3 × 0.1.
+        .{ .schema = "{\"multipleOf\": 2}", .instance = "9007199254740993", .valid = false },
+        .{ .schema = "{\"multipleOf\": 1.5}", .instance = "9007199254740993", .valid = true },
+        .{ .schema = "{\"multipleOf\": 0.1}", .instance = "0.3", .valid = true },
+        // A pattern as ECMAScript reads it, whatever its author meant by it:
+        // this IPv6 pattern has no IPv4 tail.
+        .{ .schema = "{\"pattern\": \"^(([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|:((:[0-9a-fA-F]{1,4}){1,7}|:))$\"}", .instance = "\"::ffff:192.168.0.1\"", .valid = false },
+        .{ .schema = "{\"pattern\": \"^[A-Za-z0-9_-]*$\"}", .instance = "\"a\"", .valid = true },
+    };
+    for (cases) |c| {
+        var s = try compile(testing.allocator, testing.io, strand.json, .init(c.schema), .{});
+        defer s.deinit();
+        try testing.expectEqual(c.valid, try s.validate(testing.io, a, strand.json, .init(c.instance), .{ .flag = null }));
+    }
+    // `(?i)` is Rust's syntax, not ECMA-262's: the schema is not valid.
+    try testing.expectError(error.Invalid, compile(testing.allocator, testing.io, strand.json, .init("{\"pattern\": \"(?i)a\"}"), .{}));
+}

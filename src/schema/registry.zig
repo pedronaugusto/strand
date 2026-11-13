@@ -10,63 +10,15 @@ const Limits = @import("Limits.zig");
 const Location = @import("Location.zig");
 const Loader = @import("Loader.zig");
 const metaschemas = @import("metaschemas.zig");
+const dialect = @import("dialect.zig");
 
 const Value = strand.json.Value;
 /// An object's member, as `Value` holds it.
 const Member = strand.core.Pair([]const u8, Value);
 const uri = wire.uri;
 
-/// The drafts a schema may be written in.
-pub const Dialect = enum {
-    draft7,
-    draft2019_09,
-    draft2020_12,
-
-    /// The dialect a `$schema` names, with or without its empty fragment.
-    pub fn fromUri(text: []const u8) ?Dialect {
-        const name = if (std.mem.endsWith(u8, text, "#")) text[0 .. text.len - 1] else text;
-        for (std.enums.values(Dialect)) |d| {
-            if (std.mem.eql(u8, name, d.uri())) return d;
-        }
-        return null;
-    }
-
-    /// Its meta-schema's URI, with no fragment.
-    pub fn uri(d: Dialect) []const u8 {
-        return switch (d) {
-            .draft7 => "http://json-schema.org/draft-07/schema",
-            .draft2019_09 => "https://json-schema.org/draft/2019-09/schema",
-            .draft2020_12 => "https://json-schema.org/draft/2020-12/schema",
-        };
-    }
-};
-
-/// How a keyword holds subschemas: the places a schema's identifiers may be.
-/// A keyword not listed holds none, so an `$id` inside `enum`, `const` or an
-/// unknown keyword's value identifies nothing.
-const Shape = enum { one, list, map, one_or_list };
-
-fn shape(d: Dialect, keyword: []const u8) ?Shape {
-    const common: std.StaticStringMap(Shape) = .initComptime(.{
-        .{ "additionalProperties", .one }, .{ "properties", .map },   .{ "patternProperties", .map },
-        .{ "not", .one },                  .{ "allOf", .list },       .{ "anyOf", .list },
-        .{ "oneOf", .list },               .{ "if", .one },           .{ "then", .one },
-        .{ "else", .one },                 .{ "contains", .one },     .{ "propertyNames", .one },
-        // Kept by the later meta-schemas, which still read their values as
-        // schemas; `dependencies`' arrays of names are skipped as values.
-        .{ "definitions", .map },          .{ "dependencies", .map },
-    });
-    if (common.get(keyword)) |s| return s;
-    const later: std.StaticStringMap(Shape) = .initComptime(.{
-        .{ "$defs", .map },                 .{ "dependentSchemas", .map }, .{ "unevaluatedItems", .one },
-        .{ "unevaluatedProperties", .one }, .{ "contentSchema", .one },
-    });
-    return switch (d) {
-        .draft7 => if (std.mem.eql(u8, keyword, "items")) .one_or_list else if (std.mem.eql(u8, keyword, "additionalItems")) .one else null,
-        .draft2019_09 => if (std.mem.eql(u8, keyword, "items")) .one_or_list else if (std.mem.eql(u8, keyword, "additionalItems")) .one else later.get(keyword),
-        .draft2020_12 => if (std.mem.eql(u8, keyword, "items")) .one else if (std.mem.eql(u8, keyword, "prefixItems")) .list else later.get(keyword),
-    };
-}
+pub const Dialect = dialect.Dialect;
+const Vocabularies = dialect.Vocabularies;
 
 /// The base URI of a document read with none: a schema compiled from bytes
 /// with no `$id` resolves its relative references against this.
@@ -80,8 +32,13 @@ pub const Error = error{
     /// A reference to no schema: a document no one has, or a fragment that
     /// names nothing in it.
     UnresolvedReference,
-    /// Past `Limits.schema_bytes` or `Limits.subschemas`.
+    /// Past `Limits.schema_bytes`, `Limits.subschemas`, or
+    /// `Limits.reference_chain` meta-schemas deep.
     TooLarge,
+    /// A `$schema` naming a meta-schema strand neither has nor can load.
+    UnknownDialect,
+    /// A meta-schema requiring a vocabulary strand does not know.
+    UnsupportedVocabulary,
 } || Loader.LoadError;
 
 /// Where a schema sits: the base URI its references resolve against, and the
@@ -89,8 +46,26 @@ pub const Error = error{
 pub const Scope = struct {
     base: []const u8,
     dialect: Dialect,
+    /// The vocabularies its meta-schema turns on: the dialect's own, or a
+    /// custom meta-schema's `$vocabulary`.
+    vocabularies: Vocabularies,
     /// `$recursiveAnchor: true` at a resource's root (2019-09).
     recursive_anchor: bool = false,
+    /// The schema it is in, null for a document's root.
+    parent: ?*const Value = null,
+    /// The JSON Pointer from `parent` to it, as written (`/properties/a~1b`).
+    path: []const u8 = "",
+    /// Whether a resource begins here: a document's root, or an `$id`.
+    resource: bool = false,
+};
+
+/// Where a subschema is being read from: the scope around it.
+const Around = struct {
+    base: []const u8,
+    dialect: Dialect,
+    vocabularies: Vocabularies,
+    parent: ?*const Value = null,
+    path: []const u8 = "",
 };
 
 pub const Anchor = struct {
@@ -121,6 +96,8 @@ pub const Registry = struct {
     subschemas: usize = 0,
     /// The URI the last failed `add` or `lookup` was reading.
     failed: []const u8 = "",
+    /// Meta-schemas being read for a `$schema` right now, one inside another.
+    meta_depth: usize = 0,
 
     pub fn init(arena: std.mem.Allocator, io: std.Io, loader: ?*Loader, limits: Limits) Registry {
         return .{ .arena = arena, .io = io, .loader = loader, .limits = limits };
@@ -128,23 +105,23 @@ pub const Registry = struct {
 
     /// Reads `root`, a document from `retrieval` (`default_base` when null),
     /// in `dialect` unless its `$schema` names another.
-    pub fn add(r: *Registry, retrieval: ?[]const u8, root: *const Value, dialect: Dialect) Error!Target {
+    pub fn add(r: *Registry, retrieval: ?[]const u8, root: *const Value, d: Dialect) Error!Target {
         const base = retrieval orelse default_base;
         r.failed = base;
         const parsed = uri.parse(.init(base), .absolute, .iri, null) catch return error.Invalid;
         _ = parsed;
-        try r.index(root, try r.arena.dupe(u8, base), dialect, true);
+        try r.index(root, .{ .base = try r.arena.dupe(u8, base), .dialect = d, .vocabularies = dialect.defaults(d) }, true);
         return r.targetOf(root);
     }
 
     /// The schema `reference` names, resolved against `base`; a document not
     /// yet read is read in `dialect` unless its `$schema` names another.
-    pub fn lookup(r: *Registry, base: []const u8, reference: []const u8, dialect: Dialect) Error!Target {
+    pub fn lookup(r: *Registry, base: []const u8, reference: []const u8, d: Dialect) Error!Target {
         r.failed = reference;
         const target = try r.resolve(base, reference);
         r.failed = target;
         const parts = splitFragment(target);
-        const root = r.resources.get(parts.uri) orelse try r.fetch(parts.uri, dialect);
+        const root = r.resources.get(parts.uri) orelse try r.fetch(parts.uri, d);
         const fragment = parts.fragment orelse "";
         if (fragment.len == 0) return r.targetOf(root);
         // The fragment is percent-encoded (uri.parse checked each escape).
@@ -153,6 +130,21 @@ pub const Registry = struct {
         const key = try std.mem.concat(r.arena, u8, &.{ parts.uri, "#", decoded });
         const anchor = r.anchors.get(key) orelse return error.UnresolvedReference;
         return r.targetOf(anchor.value);
+    }
+
+    /// The name of the anchor `reference` names, resolved against `base`,
+    /// when it is a `$dynamicAnchor`: where a `$dynamicRef` searches the
+    /// dynamic scope. Null for a pointer, or a plain anchor. The document it
+    /// names is one already read.
+    pub fn dynamicAnchorName(r: *Registry, base: []const u8, reference: []const u8) Error!?[]const u8 {
+        const parts = splitFragment(try r.resolve(base, reference));
+        const fragment = parts.fragment orelse return null;
+        if (fragment.len == 0) return null;
+        const decoded = wire.url.percentDecode(try r.arena.alloc(u8, fragment.len), fragment);
+        if (decoded[0] == '/') return null;
+        const key = try std.mem.concat(r.arena, u8, &.{ parts.uri, "#", decoded });
+        const anchor = r.anchors.get(key) orelse return null;
+        return if (anchor.dynamic) decoded else null;
     }
 
     /// Where `value`, a subschema the registry read, sits.
@@ -198,7 +190,7 @@ pub const Registry = struct {
     }
 
     /// The document at `address`: embedded, or the loader's.
-    fn fetch(r: *Registry, address: []const u8, dialect: Dialect) Error!*const Value {
+    fn fetch(r: *Registry, address: []const u8, d: Dialect) Error!*const Value {
         const bytes = metaschemas.get(address) orelse blk: {
             const loader = r.loader orelse return error.UnresolvedReference;
             break :blk try loader.load(r.arena, r.io, address);
@@ -207,41 +199,39 @@ pub const Registry = struct {
         const value = try r.arena.create(Value);
         value.* = strand.json.parseLeaky(Value, r.arena, bytes, .{}) catch |err|
             return if (err == error.OutOfMemory) error.OutOfMemory else error.Invalid;
-        try r.index(value, address, dialect, true);
+        try r.index(value, .{ .base = address, .dialect = d, .vocabularies = dialect.defaults(d) }, true);
         return value;
     }
 
-    /// Reads the schema `value` and every subschema in it, `base` and
-    /// `dialect` where it sits; `root` for a document's root, which its
-    /// retrieval URI names too.
-    fn index(r: *Registry, value: *const Value, parent_base: []const u8, parent_dialect: Dialect, root: bool) Error!void {
+    /// Reads the schema `value` and every subschema in it, `around` where
+    /// it sits; `root` for a document's root, which its retrieval URI names
+    /// too.
+    fn index(r: *Registry, value: *const Value, around: Around, root: bool) Error!void {
         r.subschemas += 1;
         if (r.subschemas > r.limits.subschemas) return error.TooLarge;
+        var scope: Scope = .{ .base = around.base, .dialect = around.dialect, .vocabularies = around.vocabularies, .parent = around.parent, .path = around.path, .resource = root };
         const members = switch (value.*) {
             .object => |m| m,
             else => {
                 // `true`, `false`, or what compiling refuses as a schema.
-                try r.scopes.put(r.arena, value, .{ .base = parent_base, .dialect = parent_dialect });
-                if (root) try r.putResource(parent_base, value);
+                try r.scopes.put(r.arena, value, scope);
+                if (root) try r.putResource(scope.base, value);
                 return;
             },
         };
-        var scope: Scope = .{ .base = parent_base, .dialect = parent_dialect };
         const id = member(members, "$id");
         // In draft-07 `$ref` hides its siblings, `$id` among them.
-        const hidden = parent_dialect == .draft7 and member(members, "$ref") != null;
+        const hidden = around.dialect == .draft7 and member(members, "$ref") != null;
         const id_text: ?[]const u8 = if (id == null or hidden) null else switch (id.?.*) {
             .string => |s| s,
             else => return error.Invalid,
         };
         // `$schema` where a resource begins.
         if (root or id_text != null) if (member(members, "$schema")) |s| switch (s.*) {
-            .string => |text| if (Dialect.fromUri(text)) |d| {
-                scope.dialect = d;
-            },
+            .string => |text| try r.metaschema(&scope, text),
             else => return error.Invalid,
         };
-        if (root) try r.putResource(parent_base, value);
+        if (root) try r.putResource(scope.base, value);
         if (id_text) |text| {
             if (scope.dialect == .draft7 and std.mem.startsWith(u8, text, "#")) {
                 // A plain-name fragment: an anchor in the base it is in.
@@ -252,6 +242,7 @@ pub const Registry = struct {
                 // Only draft-07 lets an `$id` carry a fragment.
                 if (fragment.len > 0 and scope.dialect != .draft7) return error.Invalid;
                 scope.base = parts.uri;
+                scope.resource = true;
                 try r.putResource(scope.base, value);
                 if (fragment.len > 0) try r.putAnchor(scope.base, fragment, value, false);
             }
@@ -269,29 +260,94 @@ pub const Registry = struct {
             };
         }
         try r.scopes.put(r.arena, value, scope);
-        const inner: Scope = .{ .base = scope.base, .dialect = scope.dialect };
         for (members) |*m| {
-            const s = shape(scope.dialect, m.key) orelse continue;
+            const s = dialect.shape(scope.dialect, m.key) orelse continue;
+            const inner: Around = .{ .base = scope.base, .dialect = scope.dialect, .vocabularies = scope.vocabularies, .parent = value };
             switch (s) {
-                .one => try r.indexOne(&m.value, inner),
-                .list => try r.indexList(&m.value, inner),
-                .map => if (m.value == .object) for (m.value.object) |*entry| try r.indexOne(&entry.value, inner),
-                .one_or_list => if (m.value == .array) try r.indexList(&m.value, inner) else try r.indexOne(&m.value, inner),
+                .one => try r.indexOne(&m.value, inner, &.{.{ .name = m.key }}),
+                .list => try r.indexList(&m.value, inner, m.key),
+                .map => if (m.value == .object) for (m.value.object) |*entry| {
+                    try r.indexOne(&entry.value, inner, &.{ .{ .name = m.key }, .{ .name = entry.key } });
+                },
+                .one_or_list => if (m.value == .array) try r.indexList(&m.value, inner, m.key) else try r.indexOne(&m.value, inner, &.{.{ .name = m.key }}),
             }
         }
     }
 
-    /// `value` if it is a schema: an object or a boolean.
-    fn indexOne(r: *Registry, value: *const Value, scope: Scope) Error!void {
-        switch (value.*) {
-            .object, .boolean => try r.index(value, scope.base, scope.dialect, false),
-            else => {},
+    /// Reads the meta-schema a resource's `$schema` names into `scope`: one
+    /// of the three drafts, or a custom meta-schema, whose own `$schema`
+    /// gives the dialect and whose `$vocabulary` the vocabularies.
+    fn metaschema(r: *Registry, scope: *Scope, text: []const u8) Error!void {
+        if (Dialect.fromUri(text)) |d| {
+            scope.dialect = d;
+            scope.vocabularies = dialect.defaults(d);
+            return;
+        }
+        r.meta_depth += 1;
+        defer r.meta_depth -= 1;
+        if (r.meta_depth > r.limits.reference_chain) return error.TooLarge;
+        const meta = r.lookup(scope.base, text, scope.dialect) catch |err| return switch (err) {
+            error.UnresolvedReference, error.NotFound => error.UnknownDialect,
+            else => err,
+        };
+        // A meta-schema still being read, its own or one that names it.
+        const meta_scope = r.scopes.get(meta.value) orelse return error.Invalid;
+        scope.dialect = meta_scope.dialect;
+        scope.vocabularies = meta_scope.vocabularies;
+        if (meta_scope.dialect == .draft7 or meta.value.* != .object) return;
+        const declared = member(meta.value.object, "$vocabulary") orelse return;
+        if (declared.* != .object) return error.Invalid;
+        scope.vocabularies = .empty;
+        for (declared.object) |entry| {
+            const required = switch (entry.value) {
+                .boolean => |b| b,
+                else => return error.Invalid,
+            };
+            if (dialect.vocabularyFromUri(meta_scope.dialect, entry.key)) |v| {
+                scope.vocabularies.insert(v);
+            } else if (required) return error.UnsupportedVocabulary;
         }
     }
 
-    fn indexList(r: *Registry, value: *const Value, scope: Scope) Error!void {
+    /// The JSON Pointer from the resource `value` is in to `value`, as an
+    /// absolute location writes it after its URI's `#`.
+    pub fn pointerOf(r: *const Registry, gpa: std.mem.Allocator, value: *const Value) error{OutOfMemory}![]const u8 {
+        var parts: std.ArrayList([]const u8) = .empty;
+        defer parts.deinit(gpa);
+        var at = value;
+        while (true) {
+            const scope = r.scopes.get(at).?; // only a value the registry read is asked about
+            if (scope.resource) break;
+            try parts.append(gpa, scope.path);
+            at = scope.parent orelse break;
+        }
+        std.mem.reverse([]const u8, parts.items);
+        return std.mem.concat(gpa, u8, parts.items);
+    }
+
+    /// `value` if it is a schema (an object or a boolean), `steps` below
+    /// the schema around it.
+    fn indexOne(r: *Registry, value: *const Value, around: Around, steps: []const Location.Step) Error!void {
+        switch (value.*) {
+            .object, .boolean => {},
+            else => return,
+        }
+        var path: std.Io.Writer.Allocating = .init(r.arena);
+        for (steps) |step| {
+            path.writer.writeByte('/') catch return error.OutOfMemory;
+            switch (step) {
+                .name => |n| Location.writeToken(&path.writer, n) catch return error.OutOfMemory,
+                .index => |i| path.writer.print("{d}", .{i}) catch return error.OutOfMemory,
+            }
+        }
+        var inner = around;
+        inner.path = path.written();
+        try r.index(value, inner, false);
+    }
+
+    fn indexList(r: *Registry, value: *const Value, around: Around, keyword: []const u8) Error!void {
         if (value.* != .array) return;
-        for (value.array) |*item| try r.indexOne(item, scope);
+        for (value.array, 0..) |*item, i| try r.indexOne(item, around, &.{ .{ .name = keyword }, .{ .index = i } });
     }
 
     fn putResource(r: *Registry, key: []const u8, value: *const Value) Error!void {
@@ -543,14 +599,6 @@ test "remote documents come through the loader, once, within the limits" {
     try testing.expectError(error.TooLarge, small.lookup(default_base, "http://localhost:1234/name.json", .draft2020_12));
     var few: Registry = .init(a, testing.io, &table.loader, .{ .subschemas = 3 });
     try testing.expectError(error.TooLarge, few.lookup(default_base, "http://localhost:1234/name.json", .draft2020_12));
-}
-
-test "a dialect is named by its meta-schema's URI, with or without the empty fragment" {
-    try testing.expectEqual(Dialect.draft7, Dialect.fromUri("http://json-schema.org/draft-07/schema#").?);
-    try testing.expectEqual(Dialect.draft7, Dialect.fromUri("http://json-schema.org/draft-07/schema").?);
-    try testing.expectEqual(Dialect.draft2020_12, Dialect.fromUri("https://json-schema.org/draft/2020-12/schema").?);
-    try testing.expectEqual(Dialect.draft2019_09, Dialect.fromUri("https://json-schema.org/draft/2019-09/schema#").?);
-    try testing.expect(Dialect.fromUri("http://json-schema.org/draft-04/schema#") == null);
 }
 
 test "any document: each subschema's base, identifiers and anchors, as RFC 3986 and its draft define them" {

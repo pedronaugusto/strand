@@ -116,8 +116,12 @@ pub const layers: []const gantry.rules.Layer = &.{
         "src/strand.zig",
     } },
     .{ .name = "benchmark seam", .patterns = &.{"src/seam.zig"} },
-    .{ .name = "schema vocabulary", .patterns = &.{ "src/schema/Limits.zig", "src/schema/Location.zig", "src/schema/Decimal.zig" } },
+    .{ .name = "schema vocabulary", .patterns = &.{ "src/schema/Limits.zig", "src/schema/Location.zig", "src/schema/Decimal.zig", "src/schema/dialect.zig" } },
+    .{ .name = "schema values", .patterns = &.{"src/schema/canonical.zig"} },
     .{ .name = "schema resolve", .patterns = &.{ "src/schema/Loader.zig", "src/schema/metaschemas.zig", "src/schema/registry.zig" } },
+    .{ .name = "schema program", .patterns = &.{"src/schema/Program.zig"} },
+    .{ .name = "schema compile", .patterns = &.{"src/schema/compile.zig"} },
+    .{ .name = "schema public", .patterns = &.{"src/schema/Schema.zig"} },
     .{ .name = "schema module", .patterns = &.{"src/schema.zig"} },
 };
 

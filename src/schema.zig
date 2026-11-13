@@ -30,6 +30,8 @@ test {
     _ = @import("schema/evaluate.zig");
     _ = @import("schema/formats.zig");
     _ = @import("schema/formats_test.zig");
+    _ = @import("schema/fuzz_test.zig");
+    _ = @import("schema/generated_test.zig");
     _ = @import("schema/suite_test.zig");
     _ = @import("schema/evaluate_test.zig");
 }

@@ -103,6 +103,8 @@ pub const Evaluator = struct {
     pub fn open(e: *Evaluator, roots: []const Root) Error!*Location {
         const at = try e.scratch.create(Location);
         at.* = .{};
+        // A failed opening gives back the slots it made.
+        errdefer e.frames -= at.slots.items.len;
         for (roots) |root| try at.roots.append(e.scratch, try e.expand(at, root.node, root.scope, root.path));
         for (at.slots.items) |slot| for (e.program.instructionsOf(slot.node)) |ins| switch (ins.op) {
             .unevaluated_items, .unevaluated_properties => at.tracking = true,
@@ -117,13 +119,14 @@ pub const Evaluator = struct {
     /// searching reference applies what the dynamic scope finds. The depth
     /// is the compiler's bounded chain.
     fn expand(e: *Evaluator, at: *Location, n: Node, outer: ?*const Scope, path: []const u8) Error!u32 {
-        e.frames += 1;
-        if (e.frames > e.limits.frames) return error.TooManyFrames;
+        if (e.frames >= e.limits.frames) return error.TooManyFrames;
         const index: u32 = @intCast(at.slots.items.len);
         const info = e.program.node(n);
         // Entering a resource adds it to the dynamic scope.
         const scope: *const Scope = if (outer) |o| (if (std.mem.eql(u8, o.base, info.base)) o else try e.enter(info.base, o)) else try e.enter(info.base, null);
         try at.slots.append(e.scratch, .{ .node = n, .ok = info.verdict != .none, .links = @intCast(at.links.items.len), .scope = scope, .path = path });
+        // Counted once it exists, so a failed opening gives back exactly it.
+        e.frames += 1;
         for (info.downgraded) |d| try e.passed.put(e.scratch, d, {});
         if (info.verdict != .keywords) {
             if (info.verdict == .none) try e.fail(at, index, null, "the schema is false");
@@ -220,10 +223,12 @@ pub const Evaluator = struct {
         return re.isMatch(entry.value_ptr, s) catch error.TooLarge;
     }
 
-    /// Charges `bytes` of per-container state.
-    fn charge(e: *Evaluator, bytes: usize) Error!void {
+    /// Charges `bytes` of per-container state to `at`, given back when it
+    /// closes; past `Limits.state` nothing is charged.
+    fn charge(e: *Evaluator, at: *Location, bytes: usize) Error!void {
+        if (bytes > e.limits.state.raw() -| e.state) return error.TooLarge;
         e.state += bytes;
-        if (e.state > e.limits.state.raw()) return error.TooLarge;
+        at.charged += bytes;
     }
 
     /// Closes `at`: its slots are no longer open.
@@ -402,6 +407,15 @@ fn read(e: *Evaluator, at: *Location, access: anytype) (@TypeOf(access.*).Error 
             try e.consumed(text.len + 1);
             try scalar(e, at, .number, .{ .number = text });
         },
+        .floating => {
+            // A format's binary float (TOML's, CBOR's): its exact decimal
+            // value, which a double's shortest spelling reads back as.
+            const f = try access.read(f64);
+            if (!std.math.isFinite(f)) return error.UnexpectedType;
+            const text = try std.fmt.allocPrint(e.scratch, "{e}", .{f});
+            try e.consumed(text.len);
+            try scalar(e, at, .number, .{ .number = text });
+        },
         .integer => {
             const n = try access.read(i128);
             const text = try std.fmt.allocPrint(e.scratch, "{d}", .{n});
@@ -568,8 +582,7 @@ fn track(e: *Evaluator, at: *Location, index: u64) Error!void {
     }
     // Two bits a slot, rounded up a byte a member.
     const bytes = at.slots.items.len / 4 + 1;
-    try e.charge(bytes);
-    at.charged += bytes;
+    try e.charge(at, bytes);
 }
 
 fn member(e: *Evaluator, at: *Location, compound: anytype, key: []const u8) !void {
@@ -669,8 +682,7 @@ fn item(e: *Evaluator, at: *Location, compound: anytype, i: u64) !void {
         const other = try encodeHeld(e, compound, .{ .start = earlier.start, .end = earlier.end });
         if (std.mem.eql(u8, other, encoding)) at.duplicate = true;
     };
-    try e.charge(@sizeOf(Location.Hashed));
-    at.charged += @sizeOf(Location.Hashed);
+    try e.charge(at, @sizeOf(Location.Hashed));
     try at.hashes.append(e.scratch, .{ .hash = hash, .start = held.start, .end = held.end });
     try child(e, at, compound, roots.items, owners.items, i, .{ .start = held.start, .end = held.end, .encoding = encoding });
 }

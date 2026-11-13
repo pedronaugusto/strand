@@ -78,8 +78,16 @@ pub fn validate(s: *const Schema, io: std.Io, scratch: std.mem.Allocator, compti
     const bytes = instance.readForParse();
     var e: evaluate.Evaluator = .{ .program = &s.program, .scratch = scratch, .limits = s.limits, .hash_key = undefined, .collect = output == .basic, .io = io };
     io.random(&e.hash_key);
-    const at = try e.open(&.{.{ .node = s.program.root, .scope = null }});
-    defer e.close(at);
+    const at = e.open(&.{.{ .node = s.program.root, .scope = null }}) catch |err| {
+        aegis.assert.invariant(e.state == 0, "no state is charged before the instance is read");
+        return err;
+    };
+    // Every slot and byte of state charged is given back, whatever ended
+    // the validation: the recount.
+    defer {
+        e.close(at);
+        aegis.assert.invariant(e.frames == 0 and e.state == 0, "a validation gives back every slot and byte of state it charged");
+    }
     var options: Format.ParseOptions = .{};
     options.limits.depth = s.limits.depth;
     if (at.wantsEncoding(&s.program)) {
@@ -100,11 +108,19 @@ pub fn validate(s: *const Schema, io: std.Io, scratch: std.mem.Allocator, compti
         },
         .basic => |errors| {
             errors.* = .{ .downgraded = passed };
-            if (!valid) {
+            if (!valid and s.limits.errors > 0) {
                 const indices = at.slots.items[at.roots.items[0]].errors.items;
-                const records = try scratch.alloc(Record, @min(indices.len, s.limits.errors));
-                for (records, indices[0..records.len]) |*r, i| r.* = e.records.items[i];
-                errors.records = records;
+                if (indices.len == 0) {
+                    // Every record was made and dropped before the one that
+                    // decided: an invalid instance still says it is.
+                    const one = try scratch.alloc(Record, 1);
+                    one[0] = .{ .instance_location = "", .keyword_location = "", .absolute_keyword_location = s.program.node(s.program.root).location, .message = "the instance is invalid; the errors that say why went past Limits.errors" };
+                    errors.records = one;
+                } else {
+                    const records = try scratch.alloc(Record, @min(indices.len, s.limits.errors));
+                    for (records, indices[0..records.len]) |*r, i| r.* = e.records.items[i];
+                    errors.records = records;
+                }
             }
         },
     }

@@ -95,7 +95,119 @@ fn member(members: []const Member, name: []const u8) ?Value {
     return null;
 }
 
-const Tally = struct { passed: usize = 0, refused: usize = 0, skipped: usize = 0, failed: usize = 0 };
+const Tally = struct {
+    passed: usize = 0,
+    refused: usize = 0,
+    skipped: usize = 0,
+    failed: usize = 0,
+    /// Instances rewritten as YAML and as TOML, each giving the verdict JSON
+    /// gives; those TOML cannot spell (a null, a root that is no table, a
+    /// number past its range) are not rewritten.
+    yaml: usize = 0,
+    toml: usize = 0,
+};
+
+/// `value` as a YAML document in block style, its strings and keys double
+/// quoted with JSON's escapes, which YAML's double-quoted style reads.
+fn yamlText(gpa: std.mem.Allocator, value: Value) ![]const u8 {
+    var out: std.Io.Writer.Allocating = .init(gpa);
+    try yamlValue(&out.writer, value, 0);
+    try out.writer.writeByte('\n');
+    return out.written();
+}
+
+fn yamlValue(w: *std.Io.Writer, value: Value, indent: usize) !void {
+    switch (value) {
+        .array => |items| {
+            if (items.len == 0) return w.writeAll("[]");
+            for (items, 0..) |item, i| {
+                if (i > 0 or indent > 0) {
+                    try w.writeByte('\n');
+                    try w.splatByteAll(' ', indent);
+                }
+                try w.writeAll("- ");
+                try yamlValue(w, item, indent + 2);
+            }
+        },
+        .object => |members| {
+            if (members.len == 0) return w.writeAll("{}");
+            for (members, 0..) |m, i| {
+                if (i > 0 or indent > 0) {
+                    try w.writeByte('\n');
+                    try w.splatByteAll(' ', indent);
+                }
+                try strand.json.write(w, Value{ .string = m.key }, .{});
+                try w.writeAll(": ");
+                try yamlValue(w, m.value, indent + 2);
+            }
+        },
+        else => try strand.json.write(w, value, .{}),
+    }
+}
+
+/// `value` as a TOML document: a table, its tables inline, its strings
+/// basic. Null where TOML cannot spell it: a null, a root that is no table,
+/// an integer past 64 bits, a number past a double's range.
+fn tomlText(gpa: std.mem.Allocator, value: Value) !?[]const u8 {
+    if (value != .object) return null;
+    var out: std.Io.Writer.Allocating = .init(gpa);
+    for (value.object) |m| {
+        try strand.json.write(&out.writer, Value{ .string = m.key }, .{});
+        try out.writer.writeAll(" = ");
+        if (!try tomlValue(&out.writer, m.value)) return null;
+        try out.writer.writeByte('\n');
+    }
+    return out.written();
+}
+
+fn tomlValue(w: *std.Io.Writer, value: Value) !bool {
+    switch (value) {
+        .null_value => return false,
+        .boolean => |b| try w.writeAll(if (b) "true" else "false"),
+        .number => |n| {
+            const integer = std.mem.findAny(u8, n, ".eE") == null;
+            if (integer) {
+                _ = std.fmt.parseInt(i64, n, 10) catch return false;
+                try w.writeAll(if (std.mem.eql(u8, n, "-0")) "0" else n);
+            } else {
+                const f = std.fmt.parseFloat(f64, n) catch return false;
+                if (!std.math.isFinite(f)) return false;
+                // TOML's float wants a digit each side of a point.
+                try w.print("{e}", .{f});
+            }
+        },
+        .string => |t| {
+            // TOML's basic strings take JSON's escapes but `\/`.
+            try w.writeByte('"');
+            for (t) |c| switch (c) {
+                '"' => try w.writeAll("\\\""),
+                '\\' => try w.writeAll("\\\\"),
+                0...0x1F, 0x7F => try w.print("\\u{X:0>4}", .{c}),
+                else => try w.writeByte(c),
+            };
+            try w.writeByte('"');
+        },
+        .array => |items| {
+            try w.writeByte('[');
+            for (items, 0..) |item, i| {
+                if (i > 0) try w.writeAll(", ");
+                if (!try tomlValue(w, item)) return false;
+            }
+            try w.writeByte(']');
+        },
+        .object => |members| {
+            try w.writeByte('{');
+            for (members, 0..) |m, i| {
+                if (i > 0) try w.writeAll(", ");
+                try strand.json.write(w, Value{ .string = m.key }, .{});
+                try w.writeAll(" = ");
+                if (!try tomlValue(w, m.value)) return false;
+            }
+            try w.writeByte('}');
+        },
+    }
+    return true;
+}
 
 /// Patterns spectra refuses to run, by file and case: a backreference or a
 /// lookbehind ECMA-262 has and linear time does not.
@@ -208,6 +320,22 @@ fn runDraft(d: Dialect, mode: Mode, files: []const suite.File, tally: *Tally) !v
                     tally.failed += 1;
                     continue;
                 };
+                // The same instance as YAML and as TOML: the same verdict.
+                if (mode == .annotate) inline for (.{ strand.yaml, strand.toml }, .{ "yaml", "toml" }) |Format, name| {
+                    const data = member(t.object, "data").?;
+                    const spelled: ?[]const u8 = if (Format == strand.yaml) try yamlText(scratch.allocator(), data) else try tomlText(scratch.allocator(), data);
+                    if (spelled) |other| {
+                        const again = schema.validate(std.testing.io, scratch.allocator(), Format, .init(other), .{ .flag = null }) catch |err| blk: {
+                            std.debug.print("{s} {s} \"{s}\" / \"{s}\" as {s}: {s}\n{s}\n", .{ @tagName(d), file.name, description, member(t.object, "description").?.string, name, @errorName(err), other });
+                            tally.failed += 1;
+                            break :blk expected;
+                        };
+                        if (again != expected) {
+                            std.debug.print("{s} {s} \"{s}\" / \"{s}\" as {s}: expected {}, got {}\n{s}\n", .{ @tagName(d), file.name, description, member(t.object, "description").?.string, name, expected, again, other });
+                            tally.failed += 1;
+                        } else @field(tally, name) += 1;
+                    }
+                };
                 if (valid == expected) {
                     tally.passed += 1;
                 } else {
@@ -227,7 +355,7 @@ test "the JSON-Schema-Test-Suite, draft-07, 2019-09 and 2020-12" {
     for ([_]Dialect{ .draft7, .draft2019_09, .draft2020_12 }) |d| for ([_]Mode{ .annotate, .assert }) |mode| {
         var tally: Tally = .{};
         try runDraft(d, mode, files, &tally);
-        std.debug.print("{s} formats {s}: {d} passed, {d} refused as named, {d} skipped as named, {d} failed\n", .{ @tagName(d), @tagName(mode), tally.passed, tally.refused, tally.skipped, tally.failed });
+        std.debug.print("{s} formats {s}: {d} passed, {d} refused as named, {d} skipped as named, {d} failed; {d} as YAML, {d} as TOML\n", .{ @tagName(d), @tagName(mode), tally.passed, tally.refused, tally.skipped, tally.failed, tally.yaml, tally.toml });
         failed += tally.failed;
     };
     try std.testing.expectEqual(0, failed);

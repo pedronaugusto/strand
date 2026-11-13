@@ -899,3 +899,7 @@ dispatched; variable wall-clock performance never gates correctness.
 ## Licence
 
 MIT. See [LICENSE](LICENSE).
+
+The JSON Schema meta-schemas `strand_schema` embeds, in `src/schema/metaschemas`, are
+json-schema-org's, byte for byte, under the AFL or the BSD licence: see
+[their LICENSE](src/schema/metaschemas/LICENSE).

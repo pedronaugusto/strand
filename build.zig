@@ -12,7 +12,8 @@ pub fn build(b: *std.Build) void {
     // airlock (which syncs the file under a writer and tells one file from
     // another for a follower): nothing to link and nothing to vendor. One
     // build option, `schema`, off unless asked for, adds the `strand_schema`
-    // module beside `strand` and changes nothing in it. core, json, jsonl and
+    // module beside `strand`, and uplink's codecs for it, and changes nothing
+    // in `strand`. core, json, jsonl and
     // zon are namespaces of it, not modules of their own: every user fetches
     // the same two packages whichever part they take, no part links anything,
     // and Zig analyzes only the part a program names. The layering inside is
@@ -27,18 +28,30 @@ pub fn build(b: *std.Build) void {
     // it with `.schema = true`, since most validate by decoding into a type.
     // `strand.built_with.schema` says which.
     const schema = b.option(bool, "schema", "Build strand_schema, JSON Schema validation") orelse false;
-    _ = b.addModule("strand", .{
+    const strand = b.addModule("strand", .{
         .root_source_file = b.path("src/strand.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{ .{ .name = "aegis", .module = aegis }, .{ .name = "airlock", .module = airlock }, .{ .name = "xenoglyph", .module = xenoglyph }, .{ .name = "strand_options", .module = featureOptions(b, schema) } },
     });
-    if (schema) _ = b.addModule("strand_schema", .{
+    if (!schema) return;
+    // strand_schema resolves references by RFC 3986 through `uplink.wire`,
+    // the codecs alone: uplink is fetched only for it, lazily, and without
+    // its client.
+    const wire = uplinkWire(b, target, optimize) orelse return;
+    _ = b.addModule("strand_schema", .{
         .root_source_file = b.path("src/schema.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{.{ .name = "aegis", .module = aegis }},
+        .imports = &.{ .{ .name = "strand", .module = strand }, .{ .name = "aegis", .module = aegis }, .{ .name = "uplink.wire", .module = wire } },
     });
+}
+
+/// `uplink.wire`, from uplink built without its client; null until the lazy
+/// package is fetched, which ends this configure pass.
+fn uplinkWire(p: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize) ?*std.Build.Module {
+    const uplink = p.dependencyLazy("uplink", .{ .target = target, .optimize = optimize, .client = false }) catch return null;
+    return uplink.module("uplink.wire");
 }
 
 /// `strand_options`, saying whether `strand_schema` was built.
@@ -50,12 +63,12 @@ fn featureOptions(p: *std.Build, schema: bool) *std.Build.Module {
 
 /// The `strand_schema` module's sources and imports, as `build` adds it,
 /// for its tests.
-fn schemaOptions(p: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize, aegis: *std.Build.Module) std.Build.Module.CreateOptions {
+fn schemaOptions(p: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize, strand: *std.Build.Module, aegis: *std.Build.Module, wire: *std.Build.Module) std.Build.Module.CreateOptions {
     return .{
         .root_source_file = p.path("src/schema.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = p.allocator.dupe(std.Build.Module.Import, &.{.{ .name = "aegis", .module = aegis }}) catch @panic("OOM"),
+        .imports = p.allocator.dupe(std.Build.Module.Import, &.{ .{ .name = "strand", .module = strand }, .{ .name = "aegis", .module = aegis }, .{ .name = "uplink.wire", .module = wire } }) catch @panic("OOM"),
     };
 }
 
@@ -106,7 +119,8 @@ pub fn dev(b: *std.Build, tools: type) void {
     // The assembly reaches every test once, in one executable.
     test_step.dependOn(&b.addRunArtifact(tests).step);
     // strand_schema's tests, an executable of their own over the module.
-    const schema_module = b.createModule(schemaOptions(p, target, optimize, aegis));
+    const wire = uplinkWire(p, target, optimize) orelse return;
+    const schema_module = b.createModule(schemaOptions(p, target, optimize, module, aegis, wire));
     schema_module.addImport("shakedown", shakedown.module("shakedown"));
     const schema_tests = b.addTest(.{
         .name = "strand-schema-tests",
@@ -396,12 +410,12 @@ pub fn dev(b: *std.Build, tools: type) void {
     });
     // A project that depends on strand by path, with airlock, aegis and xenoglyph
     // and nothing else to fetch: the build a consumer gets, once plain and once
-    // with `.schema = true`.
+    // with `.schema = true`, which reads uplink too.
     preflight.addConsumerCheck(b, p, .{
         .package = "strand",
         .modules = &.{"strand"},
         .program = p.path("ci/consumer.zig"),
-        .packages = &.{ p.dependency("aegis", .{}), p.dependency("airlock", .{}), p.dependency("xenoglyph", .{}) },
+        .packages = &.{ p.dependency("aegis", .{}), p.dependency("airlock", .{}), p.dependency("xenoglyph", .{}), p.dependency("uplink", .{ .client = false }) },
         // Plain, and with `strand_schema`.
         .configurations = &.{
             .{ .options = &.{.{ .name = "schema", .value = .{ .flag = false } }} },

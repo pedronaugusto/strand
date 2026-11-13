@@ -117,6 +117,7 @@ pub const layers: []const gantry.rules.Layer = &.{
     } },
     .{ .name = "benchmark seam", .patterns = &.{"src/seam.zig"} },
     .{ .name = "schema vocabulary", .patterns = &.{ "src/schema/Limits.zig", "src/schema/Location.zig", "src/schema/Decimal.zig" } },
+    .{ .name = "schema resolve", .patterns = &.{ "src/schema/Loader.zig", "src/schema/metaschemas.zig", "src/schema/registry.zig" } },
     .{ .name = "schema module", .patterns = &.{"src/schema.zig"} },
 };
 
@@ -141,6 +142,7 @@ pub const references: []const gantry.rules.ReferenceRule = &.{
             "shakedown",
             "std",
             "strand_options",
+            "uplink.wire",
             "xenoglyph",
         },
     },

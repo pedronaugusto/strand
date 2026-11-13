@@ -1,0 +1,8 @@
+The JSON Schema meta-schemas, byte for byte from json-schema-org/json-schema-spec,
+whose README on each branch reads "licensed under the AFL or BSD license"; LICENSE
+is that repository's, from main, which gives both in full.
+
+draft2020-12/  branch 2020-12   601a66c8b0f25246bf0e1fb488c5b5f030a79b72
+draft2019-09/  branch 2019-09   c8eb3d320f60eca7cfb18da25337a426ceb40eaa
+draft-07/      branch draft-07  20a3fee852db88519dcb3bb329b7a872ebad8953
+LICENSE        branch main      d053430e82cf7809cf077bcf704444bdd0ea7c5e

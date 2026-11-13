@@ -33,6 +33,14 @@
             .hash = "xenoglyph-0.5.1-YKXZlXX6RgBGRl07HQns6W6M42ZLEP22hg8cEY37HouP",
         },
 
+        // uplink's codecs, `uplink.wire`, for strand_schema's URI references:
+        // fetched only by a build with `.schema = true`, without the client.
+        .uplink = .{
+            .url = "git+https://github.com/pedronaugusto/uplink#b81dc35b8adc122e3a27cd9872d2091abc04b5dc",
+            .hash = "uplink-0.10.2-0eVSJjwpHgCtI2cKjfjq9eP3vSAsV6C5p0eFHy45GdiX",
+            .lazy = true,
+        },
+
         // Test doubles, for the tests alone: no module a consumer builds
         // imports it, and a consumer never fetches it.
 

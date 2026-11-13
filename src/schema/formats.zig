@@ -5,7 +5,6 @@
 //! for `regex`, and the grammars here for the rest. A format strand does not
 //! know is an annotation; every format passes a value that is not a string.
 const std = @import("std");
-const aegis = @import("aegis");
 const almanac = @import("almanac");
 const spectra = @import("spectra");
 const wire = @import("uplink.wire");
@@ -80,7 +79,9 @@ pub fn check(gpa: std.mem.Allocator, kind: Kind, s: []const u8) error{ OutOfMemo
 }
 
 fn isUri(s: []const u8, form: wire.uri.Form, charset: wire.uri.Charset) bool {
-    _ = wire.uri.parse(aegis.input.Untrusted([]const u8).init(s), form, charset, null) catch return false;
+    // `.init` names uplink's own boundary type: in a consumer's build its
+    // aegis may be another copy than strand's.
+    _ = wire.uri.parse(.init(s), form, charset, null) catch return false;
     return true;
 }
 

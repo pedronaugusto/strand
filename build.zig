@@ -33,7 +33,12 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .imports = &.{ .{ .name = "aegis", .module = aegis }, .{ .name = "airlock", .module = airlock }, .{ .name = "xenoglyph", .module = xenoglyph }, .{ .name = "strand_options", .module = featureOptions(b, schema) } },
     });
-    if (schema) _ = b.addModule("strand_schema", schemaOptions(b, target, optimize, aegis));
+    if (schema) _ = b.addModule("strand_schema", .{
+        .root_source_file = b.path("src/schema.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "aegis", .module = aegis }},
+    });
 }
 
 /// `strand_options`, saying whether `strand_schema` was built.
@@ -43,10 +48,11 @@ fn featureOptions(p: *std.Build, schema: bool) *std.Build.Module {
     return features.createModule();
 }
 
-/// The `strand_schema` module's sources and imports.
+/// The `strand_schema` module's sources and imports, as `build` adds it,
+/// for its tests.
 fn schemaOptions(p: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize, aegis: *std.Build.Module) std.Build.Module.CreateOptions {
     return .{
-        .root_source_file = p.path("src/strand_schema.zig"),
+        .root_source_file = p.path("src/schema.zig"),
         .target = target,
         .optimize = optimize,
         .imports = p.allocator.dupe(std.Build.Module.Import, &.{.{ .name = "aegis", .module = aegis }}) catch @panic("OOM"),

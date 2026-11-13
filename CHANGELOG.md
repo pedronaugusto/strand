@@ -13,6 +13,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Breaking
 
+- `json.Value.Member` is the core's `Pair([]const u8, Value)`, with the same fields, and `json.Value.object` a slice of it: an object's members are the pairs it was read as, with no copy.
 - `Tail`'s `prev`, `prevRaw` and `last` report `error.Canceled` when the task is canceled during a block read, as `Follower.next` does, instead of `error.ReadFailed`: `Tail.NextError` gains `Canceled`.
 
 ### Added
@@ -29,7 +30,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - aegis 0.3's names: `assert.invariant` where `assert.pre` and `assert.post` were, the one always-on contract. Pins aegis breaking-0.3 (7bdb587), and airlock (reflink-lock), xenoglyph and shakedown on it; the follow test's fault callback is a `shakedown.Hook`.
 - A tape's memory is charged to `allocation_bytes` and counted in `Parsed.requested_peak`, not in `retained_bytes`, since it is given back before the parse returns. Work and allocation are charged as each reader spends them, so a budget near its edge can admit on one reader what the other refuses.
 - The core sizes a slice's first allocation by the count of the container a backend opened, where it knows it (`opened`); every check runs as before.
-- `json.Value.Member` is the core's `Pair([]const u8, Value)`, with the same fields: an object's members are the pairs it was read as, with no copy.
 - Development: file identity belongs to airlock as a resolved rule, the way durability does: `ci/preflight.json` keeps std's `c.fstat`, `c.fstatat`, `c.statx`, `os.linux.statx` and `os.linux.IoUring.statx`, and every extern `fstat`, `fstatat` and `statx`, out of production code (P006, owned by airlock). The token rule in `ci/layers.zig` that matched their spellings is gone.
 
 ### Fixed

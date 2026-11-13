@@ -11,6 +11,21 @@ const Limits = @import("Limits.zig");
 const Program = @import("Program.zig");
 
 pub const Options = compiler.Options;
+pub const Record = evaluate.Record;
+
+/// What a validation reports beside its verdict.
+pub const Output = union(enum) {
+    /// The verdict alone.
+    flag,
+    /// The verdict and, for an invalid instance, why: each failing keyword
+    /// on the path to the verdict, up to `Limits.errors`.
+    basic: *Errors,
+};
+
+/// A `basic` output's errors, held in the validation's `scratch`.
+pub const Errors = struct {
+    records: []const Record = &.{},
+};
 pub const Diagnostic = compiler.Diagnostic;
 pub const CompileError = compiler.Error;
 
@@ -39,12 +54,14 @@ pub fn compile(gpa: std.mem.Allocator, io: std.Io, comptime Format: type, docume
 
 /// Whether `instance`, in `Format`, is valid: streamed through the program
 /// with no tree, its slots and state from `scratch` (an arena per
-/// validation is the expected use), within `limits`. An invalid instance is
+/// validation is the expected use), within `limits`. `io` keys
+/// `uniqueItems`' hashes from its random source. An invalid instance is
 /// `false`; an error is a malformed instance, a limit, or memory.
-pub fn validate(s: *const Schema, scratch: std.mem.Allocator, comptime Format: type, instance: aegis.input.Untrusted([]const u8)) !bool {
+pub fn validate(s: *const Schema, io: std.Io, scratch: std.mem.Allocator, comptime Format: type, instance: aegis.input.Untrusted([]const u8), output: Output) !bool {
     const bytes = instance.readForParse();
-    var e: evaluate.Evaluator = .{ .program = &s.program, .scratch = scratch, .limits = s.limits };
-    const at = try e.open(&.{s.program.root});
+    var e: evaluate.Evaluator = .{ .program = &s.program, .scratch = scratch, .limits = s.limits, .hash_key = undefined, .collect = output == .basic };
+    io.random(&e.hash_key);
+    const at = try e.open(&.{.{ .node = s.program.root, .scope = null }});
     defer e.close(at);
     var options: Format.ParseOptions = .{};
     options.limits.depth = s.limits.depth;
@@ -57,7 +74,20 @@ pub fn validate(s: *const Schema, scratch: std.mem.Allocator, comptime Format: t
         };
     }
     try Format.parseLeakySeeded(evaluate.Read{ .e = &e, .at = at }, scratch, bytes, options);
-    return at.outcome(0);
+    const valid = at.outcome(0);
+    switch (output) {
+        .flag => {},
+        .basic => |errors| {
+            errors.* = .{};
+            if (!valid) {
+                const indices = at.slots.items[at.roots.items[0]].errors.items;
+                const records = try scratch.alloc(Record, @min(indices.len, s.limits.errors));
+                for (records, indices[0..records.len]) |*r, i| r.* = e.records.items[i];
+                errors.records = records;
+            }
+        },
+    }
+    return valid;
 }
 
 pub fn deinit(s: *Schema) void {
@@ -110,10 +140,52 @@ test "an instance streams through the schema: valid, invalid, and every branch a
         .{ "{\"a\": 3}", false },
     };
     for (cases) |case| {
-        const valid = try s.validate(state.allocator(), strand.json, .init(case[0]));
+        const valid = try s.validate(testing.io, state.allocator(), strand.json, .init(case[0]), .flag);
         testing.expectEqual(case[1], valid) catch |err| {
             std.debug.print("instance {s}\n", .{case[0]});
             return err;
         };
     }
+}
+
+test "a basic output says where an instance failed: the instance location, the keyword's, and its absolute location" {
+    var s = try compile(testing.allocator, testing.io, strand.json, .init(
+        \\{"$id": "http://example.com/s.json", "type": "object",
+        \\ "properties": {"a": {"$ref": "#/$defs/positive"}, "b": {"anyOf": [{"type": "string"}, {"type": "null"}]}},
+        \\ "required": ["c"], "$defs": {"positive": {"minimum": 1}}}
+    ), .{});
+    defer s.deinit();
+    var state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer state.deinit();
+    var errors: Errors = .{};
+    try testing.expect(!try s.validate(testing.io, state.allocator(), strand.json, .init("{\"a\": 0, \"b\": 5}"), .{ .basic = &errors }));
+    const expected = [_][3][]const u8{
+        .{ "", "/required", "http://example.com/s.json#/required" },
+        .{ "/a", "/properties/a/$ref/minimum", "http://example.com/s.json#/$defs/positive/minimum" },
+        .{ "/b", "/properties/b/anyOf", "http://example.com/s.json#/properties/b/anyOf" },
+        .{ "/b", "/properties/b/anyOf/0/type", "http://example.com/s.json#/properties/b/anyOf/0/type" },
+        .{ "/b", "/properties/b/anyOf/1/type", "http://example.com/s.json#/properties/b/anyOf/1/type" },
+    };
+    var found: usize = 0;
+    for (expected) |want| for (errors.records) |r| {
+        if (std.mem.eql(u8, r.instance_location, want[0]) and std.mem.eql(u8, r.keyword_location, want[1]) and std.mem.eql(u8, r.absolute_keyword_location, want[2])) found += 1;
+    };
+    testing.expectEqual(expected.len, found) catch |err| {
+        for (errors.records) |r| std.debug.print("{s} | {s} | {s} | {s}\n", .{ r.instance_location, r.keyword_location, r.absolute_keyword_location, r.message });
+        return err;
+    };
+    try testing.expectEqual(expected.len, errors.records.len);
+    // A valid instance has none.
+    try testing.expect(try s.validate(testing.io, state.allocator(), strand.json, .init("{\"a\": 2, \"c\": 1}"), .{ .basic = &errors }));
+    try testing.expectEqual(0, errors.records.len);
+}
+
+test "per-container state is charged to Limits.state, and past it the validation stops" {
+    var s = try compile(testing.allocator, testing.io, strand.json, .init("{\"uniqueItems\": true}"), .{ .limits = .{ .state = .fromRaw(64) } });
+    defer s.deinit();
+    var state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer state.deinit();
+    try testing.expect(try s.validate(testing.io, state.allocator(), strand.json, .init("[1, 2]"), .flag));
+    try testing.expect(!try s.validate(testing.io, state.allocator(), strand.json, .init("[1, 1.0]"), .flag));
+    try testing.expectError(error.TooLarge, s.validate(testing.io, state.allocator(), strand.json, .init("[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]"), .flag));
 }

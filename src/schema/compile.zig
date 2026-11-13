@@ -122,7 +122,19 @@ const Compiler = struct {
             if (c.nodes.items.len == before) break;
         }
         try c.checkCycles();
-        return .{ .nodes = c.nodes.items, .instructions = c.instructions.items, .root = first };
+        var dynamic: std.ArrayList(Program.DynamicAnchor) = .empty;
+        var recursive: std.ArrayList(Program.RecursiveRoot) = .empty;
+        for (c.nodes.items, c.scopes.items, 0..) |*info, scope, i| {
+            const n: Node = @fromBackingInt(@as(u32, @intCast(i)));
+            const pointer = if (c.registry.scopes.contains(info.source)) try c.registry.pointerOf(c.arena, info.source) else "";
+            info.location = try std.mem.concat(c.arena, u8, &.{ scope.base, "#", pointer });
+            if (info.source.* != .object) continue;
+            if (scope.dialect == .draft2020_12) if (member(info.source.object, "$dynamicAnchor")) |a| if (a.* == .string) {
+                try dynamic.append(c.arena, .{ .base = scope.base, .name = a.string, .node = n });
+            };
+            if (scope.recursive_anchor) try recursive.append(c.arena, .{ .base = scope.base, .node = n });
+        }
+        return .{ .nodes = c.nodes.items, .instructions = c.instructions.items, .root = first, .dynamic_anchors = dynamic.items, .recursive_roots = recursive.items };
     }
 
     fn drain(c: *Compiler) Error!void {
@@ -273,7 +285,7 @@ const Compiler = struct {
                     if (present.get(.min_contains)) |m| min = try c.count(m);
                     if (present.get(.max_contains)) |m| max = try c.count(m);
                     c.keyword = k;
-                    try c.emit(ops, k, .{ .contains = .{ .node = try c.schema(v, scope), .min = min, .max = max } });
+                    try c.emit(ops, k, .{ .contains = .{ .node = try c.schema(v, scope), .min = min, .max = max, .evaluates = d == .draft2020_12 } });
                 },
                 // Read with `contains`; alone, they do nothing.
                 .min_contains, .max_contains => _ = try c.count(v),

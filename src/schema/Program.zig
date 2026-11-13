@@ -18,6 +18,14 @@ nodes: []const NodeInfo,
 instructions: []const Instruction,
 /// The node a validation starts at.
 root: Node,
+/// Each `$dynamicAnchor` (2020-12), by the resource it is in and its name:
+/// where a searching `$dynamicRef` may land.
+dynamic_anchors: []const DynamicAnchor = &.{},
+/// Each resource root marked `$recursiveAnchor: true` (2019-09).
+recursive_roots: []const RecursiveRoot = &.{},
+
+pub const DynamicAnchor = struct { base: []const u8, name: []const u8, node: Node };
+pub const RecursiveRoot = struct { base: []const u8, node: Node };
 
 pub const NodeInfo = struct {
     /// `true` and `false` decide alone; a schema object runs its
@@ -28,6 +36,8 @@ pub const NodeInfo = struct {
     count: u32 = 0,
     /// The schema it was compiled from, in the program's own documents.
     source: *const strand.json.Value,
+    /// Its absolute location: its resource's URI and the JSON Pointer to it.
+    location: []const u8 = "",
     /// The base URI of the resource it is in: entering it adds the resource
     /// to the dynamic scope a `$dynamicRef` searches.
     base: []const u8,
@@ -77,8 +87,10 @@ pub const Op = union(enum) {
     /// length of `prefixItems`), an earlier draft's schema `items` (from 0)
     /// or `additionalItems` (from the length of `items`).
     items: struct { from: u64, node: Node },
-    /// At least `min` and at most `max` items valid against `node`.
-    contains: struct { node: Node, min: u64, max: ?u64 },
+    /// At least `min` and at most `max` items valid against `node`;
+    /// `evaluates` where the items it matches count as evaluated for
+    /// `unevaluatedItems` (2020-12).
+    contains: struct { node: Node, min: u64, max: ?u64, evaluates: bool = false },
     min_properties: u64,
     max_properties: u64,
     required: []const []const u8,

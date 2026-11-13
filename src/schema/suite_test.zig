@@ -123,7 +123,7 @@ fn runDraft(d: Dialect, files: []const suite.File, tally: *Tally) !void {
                 const expected = member(t.object, "valid").?.boolean;
                 var scratch: std.heap.ArenaAllocator = .init(gpa);
                 defer scratch.deinit();
-                const valid = schema.validate(scratch.allocator(), strand.json, .init(instance)) catch |err| {
+                const valid = schema.validate(std.testing.io, scratch.allocator(), strand.json, .init(instance), .flag) catch |err| {
                     if (err == error.Unsupported) {
                         tally.pending += 1;
                         continue;

@@ -54,13 +54,29 @@ fn typeIs(name: []const u8, v: Value) bool {
     };
 }
 
-/// The specification's reading, keyword by keyword, over the whole instance.
+/// What a schema makes of a value: whether it is valid and, if so, which of
+/// an object's members (by name, a bit each for `a`, `b`, `c`) and an
+/// array's items (by position) its keywords and their passing in-place
+/// subschemas evaluated: the annotations `unevaluated*` reads.
+const Walked = struct { valid: bool, members: u8 = 0, items: u8 = 0 };
+
+fn bit(name: []const u8) u8 {
+    for (names, 0..) |n, i| if (std.mem.eql(u8, n, name)) return @as(u8, 1) << @intCast(i);
+    unreachable;
+}
+
 fn valid(subschema: Value, instance: Value, root: Value) bool {
+    return walk(subschema, instance, root).valid;
+}
+
+/// The specification's reading, keyword by keyword, over the whole instance.
+fn walk(subschema: Value, instance: Value, root: Value) Walked {
     const members = switch (subschema) {
-        .boolean => |b| return b,
+        .boolean => |b| return .{ .valid = b },
         .object => |m| m,
         else => unreachable,
     };
+    var out: Walked = .{ .valid = true };
     for (members) |m| {
         const v = m.value;
         const k = m.key;
@@ -74,49 +90,97 @@ fn valid(subschema: Value, instance: Value, root: Value) bool {
             if (equal(c, instance)) break true;
         } else false else if (std.mem.eql(u8, k, "minimum")) instance != .number or number(instance) >= number(v) else if (std.mem.eql(u8, k, "maximum")) instance != .number or number(instance) <= number(v) else if (std.mem.eql(u8, k, "exclusiveMinimum")) instance != .number or number(instance) > number(v) else if (std.mem.eql(u8, k, "exclusiveMaximum")) instance != .number or number(instance) < number(v) else if (std.mem.eql(u8, k, "multipleOf")) instance != .number or @rem(number(instance), number(v)) == 0 else if (std.mem.eql(u8, k, "minLength")) instance != .string or instance.string.len >= @as(usize, @intFromFloat(number(v))) else if (std.mem.eql(u8, k, "maxLength")) instance != .string or instance.string.len <= @as(usize, @intFromFloat(number(v))) else if (std.mem.eql(u8, k, "required")) instance != .object or for (v.array) |r| {
             if (get(instance.object, r.string) == null) break false;
+        } else true else if (std.mem.eql(u8, k, "dependentRequired")) instance != .object or for (v.object) |d| {
+            if (get(instance.object, d.key) == null) continue;
+            if (for (d.value.array) |r| {
+                if (get(instance.object, r.string) == null) break true;
+            } else false) break false;
         } else true else if (std.mem.eql(u8, k, "minProperties")) instance != .object or instance.object.len >= @as(usize, @intFromFloat(number(v))) else if (std.mem.eql(u8, k, "maxProperties")) instance != .object or instance.object.len <= @as(usize, @intFromFloat(number(v))) else if (std.mem.eql(u8, k, "properties")) instance != .object or for (v.object) |p| {
-            if (get(instance.object, p.key)) |child| if (!valid(p.value, child, root)) break false;
+            if (get(instance.object, p.key)) |child| {
+                out.members |= bit(p.key);
+                if (!walk(p.value, child, root).valid) break false;
+            }
         } else true else if (std.mem.eql(u8, k, "additionalProperties")) instance != .object or for (instance.object) |im| {
             const named = if (get(members, "properties")) |props| get(props.object, im.key) != null else false;
-            if (!named and !valid(v, im.value, root)) break false;
+            if (named) continue;
+            out.members |= bit(im.key);
+            if (!walk(v, im.value, root).valid) break false;
         } else true else if (std.mem.eql(u8, k, "propertyNames")) instance != .object or for (instance.object) |im| {
-            if (!valid(v, .{ .string = im.key }, root)) break false;
-        } else true else if (std.mem.eql(u8, k, "minItems")) instance != .array or instance.array.len >= @as(usize, @intFromFloat(number(v))) else if (std.mem.eql(u8, k, "maxItems")) instance != .array or instance.array.len <= @as(usize, @intFromFloat(number(v))) else if (std.mem.eql(u8, k, "prefixItems")) instance != .array or for (v.array, 0..) |s, i| {
-            if (i < instance.array.len and !valid(s, instance.array[i], root)) break false;
+            if (!walk(v, .{ .string = im.key }, root).valid) break false;
+        } else true else if (std.mem.eql(u8, k, "minItems")) instance != .array or instance.array.len >= @as(usize, @intFromFloat(number(v))) else if (std.mem.eql(u8, k, "maxItems")) instance != .array or instance.array.len <= @as(usize, @intFromFloat(number(v))) else if (std.mem.eql(u8, k, "uniqueItems")) instance != .array or !v.boolean or for (instance.array, 0..) |x, i| {
+            if (for (instance.array[i + 1 ..]) |y| {
+                if (equal(x, y)) break true;
+            } else false) break false;
+        } else true else if (std.mem.eql(u8, k, "prefixItems")) instance != .array or for (v.array, 0..) |sub, i| {
+            if (i >= instance.array.len) continue;
+            out.items |= @as(u8, 1) << @intCast(i);
+            if (!walk(sub, instance.array[i], root).valid) break false;
         } else true else if (std.mem.eql(u8, k, "items")) instance != .array or blk: {
             const from = if (get(members, "prefixItems")) |p| p.array.len else 0;
-            for (instance.array, 0..) |item, i| if (i >= from and !valid(v, item, root)) break :blk false;
+            for (instance.array, 0..) |item, i| if (i >= from) {
+                out.items |= @as(u8, 1) << @intCast(i);
+                if (!walk(v, item, root).valid) break :blk false;
+            };
             break :blk true;
         } else if (std.mem.eql(u8, k, "contains")) instance != .array or blk: {
             var matched: usize = 0;
-            for (instance.array) |item| if (valid(v, item, root)) {
+            for (instance.array, 0..) |item, i| if (walk(v, item, root).valid) {
                 matched += 1;
+                out.items |= @as(u8, 1) << @intCast(i);
             };
             const min: usize = if (get(members, "minContains")) |x| @intFromFloat(number(x)) else 1;
             const max: ?usize = if (get(members, "maxContains")) |x| @intFromFloat(number(x)) else null;
             break :blk matched >= min and (max == null or matched <= max.?);
-        } else if (std.mem.eql(u8, k, "allOf")) for (v.array) |s| {
-            if (!valid(s, instance, root)) break false;
-        } else true else if (std.mem.eql(u8, k, "anyOf")) for (v.array) |s| {
-            if (valid(s, instance, root)) break true;
-        } else false else if (std.mem.eql(u8, k, "oneOf")) blk: {
+        } else if (std.mem.eql(u8, k, "allOf")) for (v.array) |sub| {
+            if (!take(&out, walk(sub, instance, root))) break false;
+        } else true else if (std.mem.eql(u8, k, "anyOf")) blk: {
+            var any = false;
+            for (v.array) |sub| any = take(&out, walk(sub, instance, root)) or any;
+            break :blk any;
+        } else if (std.mem.eql(u8, k, "oneOf")) blk: {
             var count: usize = 0;
-            for (v.array) |s| if (valid(s, instance, root)) {
+            for (v.array) |sub| if (take(&out, walk(sub, instance, root))) {
                 count += 1;
             };
             break :blk count == 1;
-        } else if (std.mem.eql(u8, k, "not")) !valid(v, instance, root) else if (std.mem.eql(u8, k, "if")) blk: {
-            if (valid(v, instance, root)) {
-                break :blk if (get(members, "then")) |t| valid(t, instance, root) else true;
+        } else if (std.mem.eql(u8, k, "not")) !walk(v, instance, root).valid else if (std.mem.eql(u8, k, "if")) blk: {
+            if (take(&out, walk(v, instance, root))) {
+                break :blk if (get(members, "then")) |t| take(&out, walk(t, instance, root)) else true;
             }
-            break :blk if (get(members, "else")) |e| valid(e, instance, root) else true;
-        } else if (std.mem.eql(u8, k, "$ref")) blk: {
+            break :blk if (get(members, "else")) |e| take(&out, walk(e, instance, root)) else true;
+        } else if (std.mem.eql(u8, k, "dependentSchemas")) instance != .object or for (v.object) |d| {
+            if (get(instance.object, d.key) == null) continue;
+            if (!take(&out, walk(d.value, instance, root))) break false;
+        } else true else if (std.mem.eql(u8, k, "$ref")) blk: {
             const name = v.string["#/$defs/".len..];
-            break :blk valid(get(get(root.object, "$defs").?.object, name).?, instance, root);
+            break :blk take(&out, walk(get(get(root.object, "$defs").?.object, name).?, instance, root));
         } else true;
-        if (!ok) return false;
+        if (!ok) out.valid = false;
     }
-    return true;
+    // `unevaluated*` last, over what nothing else evaluated.
+    if (get(members, "unevaluatedProperties")) |u| if (instance == .object) {
+        for (instance.object) |im| if (out.members & bit(im.key) == 0) {
+            if (!walk(u, im.value, root).valid) out.valid = false;
+        };
+        for (instance.object) |im| out.members |= bit(im.key);
+    };
+    if (get(members, "unevaluatedItems")) |u| if (instance == .array) {
+        for (instance.array, 0..) |item, i| if (out.items & (@as(u8, 1) << @intCast(i)) == 0) {
+            if (!walk(u, item, root).valid) out.valid = false;
+        };
+        for (0..instance.array.len) |i| out.items |= @as(u8, 1) << @intCast(i);
+    };
+    if (!out.valid) return .{ .valid = false };
+    return out;
+}
+
+/// A passing in-place subschema's annotations become the schema's.
+fn take(out: *Walked, w: Walked) bool {
+    if (w.valid) {
+        out.members |= w.members;
+        out.items |= w.items;
+    }
+    return w.valid;
 }
 
 /// A random schema, written as JSON: `defs` names the definitions a
@@ -127,10 +191,11 @@ fn randomSchema(a: std.mem.Allocator, s: *shakedown.Source, out: *std.ArrayList(
     try out.append(a, '{');
     var first = true;
     const keywords = [_][]const u8{
-        "type",          "const",       "enum",     "minimum",    "exclusiveMaximum",     "multipleOf",
-        "minLength",     "maxLength",   "required", "properties", "additionalProperties", "propertyNames",
-        "maxProperties", "prefixItems", "items",    "contains",   "minItems",             "allOf",
-        "anyOf",         "oneOf",       "not",      "if",         "$ref",
+        "type",              "const",            "enum",                  "minimum",          "exclusiveMaximum",     "multipleOf",
+        "minLength",         "maxLength",        "required",              "properties",       "additionalProperties", "propertyNames",
+        "maxProperties",     "prefixItems",      "items",                 "contains",         "minItems",             "allOf",
+        "anyOf",             "oneOf",            "not",                   "if",               "$ref",                 "uniqueItems",
+        "dependentRequired", "dependentSchemas", "unevaluatedProperties", "unevaluatedItems",
     };
     for (keywords) |k| {
         if (gen.intRange(s, u8, 0, 7) != 0) continue;
@@ -186,6 +251,14 @@ fn randomSchema(a: std.mem.Allocator, s: *shakedown.Source, out: *std.ArrayList(
             if (gen.boolean(s)) try out.print(a, ", \"maxContains\": {d}", .{gen.intRange(s, u8, 1, 3)});
         } else if (std.mem.eql(u8, k, "$ref")) {
             try out.print(a, "\"#/$defs/d{d}\"", .{gen.intRange(s, usize, 0, defs - 1)});
+        } else if (std.mem.eql(u8, k, "uniqueItems")) {
+            try out.appendSlice(a, if (gen.boolean(s)) "true" else "false");
+        } else if (std.mem.eql(u8, k, "dependentRequired")) {
+            try out.print(a, "{{\"{s}\": [\"{s}\"]}}", .{ names[gen.intRange(s, usize, 0, names.len - 1)], names[gen.intRange(s, usize, 0, names.len - 1)] });
+        } else if (std.mem.eql(u8, k, "dependentSchemas")) {
+            try out.print(a, "{{\"{s}\": ", .{names[gen.intRange(s, usize, 0, names.len - 1)]});
+            try randomSchema(a, s, out, depth + 1, defs);
+            try out.append(a, '}');
         } else {
             try randomSchema(a, s, out, depth + 1, defs);
         }
@@ -230,6 +303,24 @@ fn randomInstance(a: std.mem.Allocator, s: *shakedown.Source, out: *std.ArrayLis
     }
 }
 
+/// Whether `pointer` names a value in `v`.
+fn resolves(v: Value, pointer: []const u8) bool {
+    if (pointer.len == 0) return true;
+    if (pointer[0] != '/') return false;
+    const rest = pointer[1..];
+    const end = std.mem.findScalar(u8, rest, '/') orelse rest.len;
+    const token = rest[0..end];
+    const next = rest[end..];
+    return switch (v) {
+        .object => |members| if (get(members, token)) |child| resolves(child, next) else false,
+        .array => |items| blk: {
+            const i = std.fmt.parseInt(usize, token, 10) catch break :blk false;
+            break :blk i < items.len and resolves(items[i], next);
+        },
+        else => false,
+    };
+}
+
 test "any schema and instance: streaming gives the verdict the specification's tree walk gives" {
     try shakedown.check(testing.allocator, {}, struct {
         fn one(_: void, case: *shakedown.Case) anyerror!void {
@@ -260,11 +351,21 @@ test "any schema and instance: streaming gives the verdict the specification's t
                 try randomInstance(a, s, &data, 0);
                 const value = try strand.json.parseLeaky(Value, a, data.items, .{});
                 const expected = valid(root, value, root);
-                const got = try compiled.validate(a, strand.json, .init(data.items));
+                const got = try compiled.validate(testing.io, a, strand.json, .init(data.items), .flag);
                 testing.expectEqual(expected, got) catch |err| {
                     std.debug.print("schema {s}\ninstance {s}\n", .{ text.items, data.items });
                     return err;
                 };
+                // `basic` gives the same verdict, and an invalid one says
+                // why, each record's instance location a value in the
+                // instance and its keyword location one in the schema.
+                var errors: Schema.Errors = .{};
+                try testing.expectEqual(got, try compiled.validate(testing.io, a, strand.json, .init(data.items), .{ .basic = &errors }));
+                try testing.expectEqual(got, errors.records.len == 0);
+                for (errors.records) |r| {
+                    try testing.expect(resolves(value, r.instance_location));
+                    try testing.expect(std.mem.startsWith(u8, r.absolute_keyword_location, "urn:strand:schema#"));
+                }
             }
         }
     }.one, .{ .cases = 3000, .seed = 0xe7a1 });

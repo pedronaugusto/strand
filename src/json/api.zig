@@ -80,6 +80,10 @@ pub const ParseOptions = struct {
     /// and member names are read so too; a `Raw` keeps its bytes as written.
     invalid_unicode: core.InvalidUnicode = .refuse,
     diagnostics: ?*core.Diagnostics = null,
+    /// Handed to every codec the parse runs, which reads it through its
+    /// access's `state()`: a codec that keeps its work outside the value it
+    /// returns (strand_schema's validator) finds it there.
+    codec_state: ?*anyopaque = null,
 };
 fn acceptance(options: ParseOptions) core.Acceptance {
     return .{
@@ -189,6 +193,7 @@ fn context(arena: std.mem.Allocator, options: ParseOptions, grammar: decoding.Gr
     var c = core.Context.init(arena, options.limits, .borrowed);
     c.acceptance = acceptance(options);
     c.diagnostics = options.diagnostics;
+    c.codec_state = options.codec_state;
     return c;
 }
 fn parseWith(comptime T: type, comptime ownership: core.Ownership, gpa: std.mem.Allocator, input: []const u8, options: ParseOptions) @typeInfo(@TypeOf(core.acquireWith(T, ownership, gpa, input, .{}, Decode(T).run))).error_union.error_set!Parsed(T) {

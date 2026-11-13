@@ -121,6 +121,7 @@ pub const layers: []const gantry.rules.Layer = &.{
     .{ .name = "schema resolve", .patterns = &.{ "src/schema/Loader.zig", "src/schema/metaschemas.zig", "src/schema/registry.zig" } },
     .{ .name = "schema program", .patterns = &.{"src/schema/Program.zig"} },
     .{ .name = "schema compile", .patterns = &.{"src/schema/compile.zig"} },
+    .{ .name = "schema evaluate", .patterns = &.{"src/schema/evaluate.zig"} },
     .{ .name = "schema public", .patterns = &.{"src/schema/Schema.zig"} },
     .{ .name = "schema module", .patterns = &.{"src/schema.zig"} },
 };
@@ -140,6 +141,7 @@ pub const references: []const gantry.rules.ReferenceRule = &.{
             "airlock",
             "airlock.testing",
             "builtin",
+            "json_schema_suite",
             "other_aegis",
             "rejection_options",
             "xmlconf_documents",

@@ -946,6 +946,24 @@ remembers keys only where mapping cannot, in maps and skipped values.
 Decoders and encoders are built in place, field by field: their frames and keys
 are kilobytes a struct literal would build elsewhere and copy.
 
+## JSON Schema validation
+
+`strand_schema`, behind `-Dschema`, compiles a schema once into a program and
+validates an instance by streaming the core's events through it, with no tree.
+The validator is a codec: `Schema.validate` parses the instance into its
+`Instance` type, whose `strandDeserialize` reads one value through the access and
+finds the validation's work in the parse's `codec_state`, so every format the core
+reads can be validated. At each value the schemas that apply there are slots, side
+by side, each settled at the value's end from its checks and its children's.
+
+A schema that can apply itself again at the same instance location, reading none
+of the instance (a `$ref` back to itself, through `allOf`, `anyOf`, `oneOf`, `not`,
+`if`, `then`, `else` or `dependentSchemas`, or a dynamic reference that could land
+on it), is refused when it is compiled, with `ReferenceCycle`. At one location a
+condition always comes out the same, so such a cycle either never runs or runs
+forever on that instance; the specification leaves that undefined, and refusing it
+at compile time means validation always finishes, with no check while it runs.
+
 ## Measurements
 
 Timings are manual observations in private trials, never CI acceptance tests. The

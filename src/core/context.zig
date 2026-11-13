@@ -187,6 +187,10 @@ pub const Context = struct {
     /// Writing: an optional field that is null is left out of its record, whatever
     /// its type's own policy says.
     omit_nulls: bool = false,
+    /// What the caller handed the operation for its codecs (`ParseOptions.codec_state`),
+    /// which a codec reads back through its access (`state`): a reader that keeps its
+    /// work outside the value it returns.
+    codec_state: ?*anyopaque = null,
 
     pub fn init(storage: std.mem.Allocator, limits: Limits, ownership: Ownership) Context {
         return .{

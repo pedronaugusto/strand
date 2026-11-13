@@ -122,6 +122,7 @@ pub fn dev(b: *std.Build, tools: type) void {
     const wire = uplinkWire(p, target, optimize) orelse return;
     const schema_module = b.createModule(schemaOptions(p, target, optimize, module, aegis, wire));
     schema_module.addImport("shakedown", shakedown.module("shakedown"));
+    schema_module.addImport("json_schema_suite", jsonSchemaSuite(b));
     const schema_tests = b.addTest(.{
         .name = "strand-schema-tests",
         .filters = if (test_filter) |filter| &.{filter} else &.{},
@@ -482,6 +483,96 @@ const clone_rejections = [_][]const u8{
 
 /// A module of the W3C XML suite's documents, one per line of strand's
 /// manifest and in its order: `documents`, or `null` without the suite.
+/// The JSON-Schema-Test-Suite's validation tests, each file embedded from where
+/// the build fetched them (`null` when it runs without lazy dependencies).
+fn jsonSchemaSuite(b: *std.Build) *std.Build.Module {
+    const files = b.addWriteFiles();
+    var source: std.ArrayList(u8) = .empty;
+    if (b.dependencyLazy("json_schema_test_suite", .{})) |suite| {
+        source.appendSlice(b.allocator, "pub const File = struct { name: []const u8, text: []const u8 };\npub const files: ?[]const File = &.{\n") catch @panic("OOM");
+        for (json_schema_suite_files) |name| {
+            _ = files.addCopyFile(suite.path(b.fmt("validation/tests/{s}", .{name})), b.fmt("suite/{s}", .{name}));
+            source.print(b.allocator, "    .{{ .name = \"{s}\", .text = @embedFile(\"suite/{s}\") }},\n", .{ name, name }) catch @panic("OOM");
+        }
+        source.appendSlice(b.allocator, "};\n") catch @panic("OOM");
+    } else |_| source.appendSlice(b.allocator, "pub const File = struct { name: []const u8, text: []const u8 };\npub const files: ?[]const File = null;\n") catch @panic("OOM");
+    return b.createModule(.{ .root_source_file = files.add("suite.zig", source.items) });
+}
+
+/// The suite's validation test files, listed rather than globbed; its
+/// `optional/` and `proposals/` are not among them.
+const json_schema_suite_files = [_][]const u8{
+    "additionalProperties.json",
+    "allOf.json",
+    "anchor-legacy.json",
+    "anchor.json",
+    "anyOf.json",
+    "boolean_schema.json",
+    "const.json",
+    "contains.json",
+    "content.json",
+    "default.json",
+    "dependentRequired.json",
+    "dependentSchemas.json",
+    "disallow.json",
+    "dynamicRef.json",
+    "enum.json",
+    "extends.json",
+    "format-color.json",
+    "format-date-time.json",
+    "format-date.json",
+    "format-duration.json",
+    "format-email.json",
+    "format-host-name.json",
+    "format-hostname.json",
+    "format-idn-email.json",
+    "format-idn-hostname.json",
+    "format-ip-address.json",
+    "format-ipv4.json",
+    "format-ipv6.json",
+    "format-iri-reference.json",
+    "format-iri.json",
+    "format-json-pointer.json",
+    "format-regex.json",
+    "format-relative-json-pointer.json",
+    "format-time.json",
+    "format-unknown.json",
+    "format-uri-reference.json",
+    "format-uri-template.json",
+    "format-uri.json",
+    "format-uuid.json",
+    "id-legacy.json",
+    "id.json",
+    "if-then-else.json",
+    "infinite-loop-detection-legacy.json",
+    "infinite-loop-detection.json",
+    "items.json",
+    "maximum.json",
+    "maxItems.json",
+    "maxLength.json",
+    "maxProperties.json",
+    "minimum.json",
+    "minItems.json",
+    "minLength.json",
+    "minProperties.json",
+    "multipleOf.json",
+    "not.json",
+    "oneOf.json",
+    "pattern.json",
+    "patternProperties.json",
+    "properties.json",
+    "propertyNames.json",
+    "recursiveRef.json",
+    "ref-legacy.json",
+    "ref.json",
+    "required.json",
+    "type.json",
+    "unevaluatedItems.json",
+    "unevaluatedProperties.json",
+    "uniqueItems.json",
+    "vocabulary.json",
+};
+
 fn xmlconfDocuments(b: *std.Build, p: *std.Build) *std.Build.Module {
     const files = b.addWriteFiles();
     var source: std.ArrayList(u8) = .empty;

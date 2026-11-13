@@ -1216,6 +1216,10 @@ fn PolicyAccess(comptime Backend: type, comptime policy: descriptor.Field) type 
         pub fn peek(self: *Self) Error!model.Event {
             return self.cursor.peek();
         }
+        /// What the operation's caller handed its codecs (`ParseOptions.codec_state`).
+        pub fn state(self: *const Self) ?*anyopaque {
+            return self.cursor.context.codec_state;
+        }
         pub fn number(self: *Self) Error![]const u8 {
             if (self.used) return error.CustomRejected;
             self.used = true;

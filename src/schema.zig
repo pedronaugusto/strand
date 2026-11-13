@@ -27,4 +27,7 @@ test {
     _ = Program;
     _ = Schema;
     _ = @import("schema/compile.zig");
+    _ = @import("schema/evaluate.zig");
+    _ = @import("schema/suite_test.zig");
+    _ = @import("schema/evaluate_test.zig");
 }

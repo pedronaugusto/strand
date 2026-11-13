@@ -10,8 +10,9 @@ pub fn build(b: *std.Build) void {
     //=====================================================================
     // The module. Pure Zig on `std`, aegis (the checked work in the core) and
     // airlock (which syncs the file under a writer and tells one file from
-    // another for a follower): nothing to link, nothing to vendor, no build
-    // options, and so nothing a consumer has to match. core, json, jsonl and
+    // another for a follower): nothing to link and nothing to vendor. One
+    // build option, `schema`, off unless asked for, adds the `strand_schema`
+    // module beside `strand` and changes nothing in it. core, json, jsonl and
     // zon are namespaces of it, not modules of their own: every user fetches
     // the same two packages whichever part they take, no part links anything,
     // and Zig analyzes only the part a program names. The layering inside is
@@ -22,18 +23,24 @@ pub fn build(b: *std.Build) void {
     const airlock = airlock_dependency.module("airlock");
     const aegis = b.dependency("aegis", .{ .target = target, .optimize = optimize }).module("aegis");
     const xenoglyph = b.dependency("xenoglyph", .{ .target = target, .optimize = optimize }).module("xenoglyph");
+    // JSON Schema validation, `strand_schema`: off unless a project asks for
+    // it with `.schema = true`, since most validate by decoding into a type.
+    // `strand.built_with.schema` says which.
+    const schema = b.option(bool, "schema", "Build strand_schema, JSON Schema validation") orelse false;
     _ = b.addModule("strand", .{
         .root_source_file = b.path("src/strand.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{ .{ .name = "aegis", .module = aegis }, .{ .name = "airlock", .module = airlock }, .{ .name = "xenoglyph", .module = xenoglyph } },
+        .imports = &.{ .{ .name = "aegis", .module = aegis }, .{ .name = "airlock", .module = airlock }, .{ .name = "xenoglyph", .module = xenoglyph }, .{ .name = "strand_options", .module = featureOptions(b, schema) } },
     });
+    if (schema) _ = b.addModule("strand_schema", schemaOptions(b, target, optimize, aegis));
+}
 
-    // JSON Schema validation, `strand_schema`: off unless a project asks for
-    // it with `.schema = true`, since most validate by decoding into a type.
-    if (b.option(bool, "schema", "Build strand_schema, JSON Schema validation") orelse false) {
-        _ = b.addModule("strand_schema", schemaOptions(b, target, optimize, aegis));
-    }
+/// `strand_options`, saying whether `strand_schema` was built.
+fn featureOptions(p: *std.Build, schema: bool) *std.Build.Module {
+    const features = p.addOptions();
+    features.addOption(bool, "schema", schema);
+    return features.createModule();
 }
 
 /// The `strand_schema` module's sources and imports.
@@ -73,7 +80,7 @@ pub fn dev(b: *std.Build, tools: type) void {
             .root_source_file = p.path("src/tests.zig"),
             .target = target,
             .optimize = optimize,
-            .imports = &.{ .{ .name = "aegis", .module = aegis }, .{ .name = "airlock", .module = airlock }, .{ .name = "xenoglyph", .module = xenoglyph } },
+            .imports = &.{ .{ .name = "aegis", .module = aegis }, .{ .name = "airlock", .module = airlock }, .{ .name = "xenoglyph", .module = xenoglyph }, .{ .name = "strand_options", .module = featureOptions(p, false) } },
         }),
     });
     // shakedown, and airlock's seam built on it.
@@ -382,12 +389,18 @@ pub fn dev(b: *std.Build, tools: type) void {
         },
     });
     // A project that depends on strand by path, with airlock, aegis and xenoglyph
-    // and nothing else to fetch: the build a consumer gets.
+    // and nothing else to fetch: the build a consumer gets, once plain and once
+    // with `.schema = true`.
     preflight.addConsumerCheck(b, p, .{
         .package = "strand",
         .modules = &.{"strand"},
         .program = p.path("ci/consumer.zig"),
         .packages = &.{ p.dependency("aegis", .{}), p.dependency("airlock", .{}), p.dependency("xenoglyph", .{}) },
+        // Plain, and with `strand_schema`.
+        .configurations = &.{
+            .{ .options = &.{.{ .name = "schema", .value = .{ .flag = false } }} },
+            .{ .options = &.{.{ .name = "schema", .value = .{ .flag = true } }}, .modules = &.{ "strand", "strand_schema" } },
+        },
     });
 }
 
@@ -408,7 +421,7 @@ fn benchSeam(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang
     const airlock = p.dependency("airlock", .{ .target = target, .optimize = optimize }).module("airlock");
     const aegis = p.dependency("aegis", .{ .target = target, .optimize = optimize }).module("aegis");
     const xenoglyph = p.dependency("xenoglyph", .{ .target = target, .optimize = optimize }).module("xenoglyph");
-    return b.createModule(.{ .root_source_file = p.path("src/seam.zig"), .target = target, .optimize = optimize, .imports = &.{ .{ .name = "aegis", .module = aegis }, .{ .name = "airlock", .module = airlock }, .{ .name = "xenoglyph", .module = xenoglyph } } });
+    return b.createModule(.{ .root_source_file = p.path("src/seam.zig"), .target = target, .optimize = optimize, .imports = &.{ .{ .name = "aegis", .module = aegis }, .{ .name = "airlock", .module = airlock }, .{ .name = "xenoglyph", .module = xenoglyph }, .{ .name = "strand_options", .module = featureOptions(p, false) } } });
 }
 
 /// Every example, listed rather than globbed: a build graph that scans a

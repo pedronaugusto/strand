@@ -13,3 +13,13 @@ pub const yaml = @import("yaml.zig");
 pub const xml = @import("xml.zig");
 pub const ini = @import("ini.zig");
 pub const dotenv = @import("dotenv.zig");
+
+/// Which optional parts strand was built with.
+pub const Features = struct {
+    /// JSON Schema validation: the `strand_schema` module, which exists only
+    /// with it.
+    schema: bool,
+};
+
+/// This build's parts, as the dependency's `.schema` option sets them.
+pub const built_with: Features = .{ .schema = @import("strand_options").schema };

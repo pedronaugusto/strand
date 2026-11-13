@@ -9,6 +9,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - `strand_schema`, JSON Schema validation, begins: a module of its own behind the build option `-Dschema` (`.schema = true` from a project), off by default, with nothing new to fetch. Its vocabulary so far: `Limits` (frames, per-container state, errors, the decimal exponent, depth and the schema's size); `Location`, JSON Pointers (RFC 6901) written as an evaluation descends and read from a schema's references; and `Decimal`, an exact `digits × 10^exponent` read from a number's text, ordered exactly (`1.0` equals `1`) and deciding `multipleOf` by modular arithmetic, never building either number, the exponent bounded (±4096 by default, past it refused).
+- `strand.built_with` says which optional parts this build of strand has (`.schema`), so a program that depends on strand can import `strand_schema` only where it exists.
 
 ### Breaking
 
@@ -21,7 +22,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- Pins aegis c8982a8, still 0.2.4: six additive commits after 3c0b13e (the role declarations a linter reads, `lint_rules`), the aegis the development build's preflight selects. Nothing strand calls changed.
+- Pins aegis 4d1390b, still 0.2.4: the commits after 3c0b13e (the role declarations a linter reads, `lint_rules`, and its types' fields renamed under aegis's prefix), one past the aegis the development build's preflight selects. Nothing strand calls changed.
 - Pins airlock 55f0265, still 0.6.0, the commit the development build's preflight selects (bay tidy), where it pinned f0b59c4.
 - The README states strand's stability policy (0.x, tracking Zig 0.17.x; a breaking change only in a minor release, with its CHANGELOG entry; a patch release never breaks) and names every format and namespace strand has (JSONC, JSON5, .env; `strand.xml`, `strand.ini`, `strand.dotenv`).
 - The contracts left on `std.debug.assert` (JSON Lines' writer, tail, follower, buffer and line reader; TOML's, ZON's and YAML's measured lengths and tokens; the aarch64 control scan; two compile-time test checks) are `aegis.assert.invariant`, each with what it holds, as strand's other contracts are: they now hold in every build, where they were undefined behaviour in ReleaseFast.

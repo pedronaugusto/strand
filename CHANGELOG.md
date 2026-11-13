@@ -27,6 +27,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- The README describes `strand_schema` (JSON Schema, Install's `.schema = true`, Scope, Built with, Testing), its example `examples/validate.zig` run by `bay examples`.
 - Pins xenoglyph ef20e2d, still 0.5.1, for `idna.check2008`, IDNA2008's validity of a name as written.
 - Pins aegis 4d1390b, still 0.2.4: the commits after 3c0b13e (the role declarations a linter reads, `lint_rules`, and its types' fields renamed under aegis's prefix), one past the aegis the development build's preflight selects. Nothing strand calls changed.
 - Pins airlock 55f0265, still 0.6.0, the commit the development build's preflight selects (bay tidy), where it pinned f0b59c4.

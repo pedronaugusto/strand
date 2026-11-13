@@ -247,6 +247,21 @@ pub fn dev(b: *std.Build, tools: type) void {
         examples_step.dependOn(&b.addRunArtifact(example).step);
         check_step.dependOn(&example.step);
     }
+    // strand_schema's example, against strand built with `.schema = true`.
+    {
+        const with_schema = b.dependency("strand", .{ .target = target, .optimize = optimize, .schema = true });
+        const example = b.addExecutable(.{
+            .name = "validate",
+            .root_module = b.createModule(.{
+                .root_source_file = p.path("examples/validate.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{ .{ .name = "strand", .module = with_schema.module("strand") }, .{ .name = "strand_schema", .module = with_schema.module("strand_schema") } },
+            }),
+        });
+        examples_step.dependOn(&b.addRunArtifact(example).step);
+        check_step.dependOn(&example.step);
+    }
     test_step.dependOn(examples_step);
 
     //=====================================================================

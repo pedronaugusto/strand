@@ -52,6 +52,14 @@
         "strand"
       ]
     },
+    "zig build docs -- validate": {
+      "source": "examples/validate.zig",
+      "region": "validate",
+      "imports": [
+        "strand",
+        "strand_schema"
+      ]
+    },
     "zig build docs -- form": {
       "source": "examples/form.zig",
       "region": "form",

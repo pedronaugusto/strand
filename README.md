@@ -31,6 +31,9 @@ The build exposes one module, `strand`, whose namespaces are `strand.core`,
 names, so a program that names only `strand.json` compiles no JSON Lines or
 airlock code.
 
+With `.schema = true` (`b.dependency("strand", .{ .schema = true })`), the build also
+exposes `strand_schema`, JSON Schema validation, and `strand.built_with.schema` says so.
+
 ## Stability
 
 strand is 0.x and tracks Zig 0.17.x. A breaking change comes only in a minor release
@@ -735,6 +738,65 @@ std.debug.assert(std.mem.eql(u8, out.written(), "NAME=relay\nMOTD='Hello, world 
 ```
 <!-- END GENERATED -->
 
+## JSON Schema
+
+`strand_schema` validates any document strand reads against a JSON Schema: draft 2020-12
+with every vocabulary, and 2019-09 and draft-07 by `$schema`. It is a module of its own,
+built when a project sets `.schema = true` on strand, and only then are its dependencies
+fetched: uplink's codecs for URIs, spectra for ECMAScript patterns and almanac for RFC 3339
+dates and times. `Schema.compile` reads a schema once into a program; `Schema.validate`
+streams an instance through it with no tree in memory, every branch of `anyOf`, `oneOf`
+and their kin read in the same pass. Numbers compare as exact decimals, so `1.0` equals
+`1` and `multipleOf` is never rounded. An invalid instance is `false`, never an error;
+`.basic` output gives each failing keyword with its instance location, its keyword
+location and its absolute location.
+
+References resolve by RFC 3986 against `$id`, anchors and JSON Pointers, the official
+meta-schemas built in, remote documents only through a `Loader` the caller supplies.
+`$dynamicRef`, `$recursiveRef`, `unevaluatedProperties` and `unevaluatedItems` follow the
+specification. A schema that can apply itself again at the same place in an instance is
+refused when it is compiled, so validation always finishes. Formats are annotations
+unless `.formats = .assert`, and then each is a strict recognizer of its RFC's grammar;
+`idn-hostname` and `idn-email` check IDNA2008 validity as written, and a caller who wants
+UTS #46 mapping applies xenoglyph's `idna.toAscii` first. A pattern spectra cannot run
+in linear time is refused, or with `.unsupported_pattern = .downgrade` compiled as an
+annotation that every validation passing through it reports. Every bound is a
+`schema.Limits` field: frames, per container state, errors, exponent, depth, schema size,
+subschemas and reference chains.
+[examples/validate.zig](examples/validate.zig) checks a tool's result.
+
+<!-- BEGIN GENERATED zig build docs -- validate -->
+```zig
+const strand = @import("strand");
+const strand_schema = @import("strand_schema");
+
+var schema = try strand_schema.Schema.compile(gpa, io, strand.json, .init(
+    \\{"type": "object", "required": ["city", "celsius"],
+    \\ "properties": {"city": {"type": "string", "minLength": 1},
+    \\   "celsius": {"type": "number", "minimum": -273.15},
+    \\   "observed": {"type": "string", "format": "date-time"}},
+    \\ "additionalProperties": false}
+), .{ .formats = .assert });
+defer schema.deinit();
+
+var scratch: std.heap.ArenaAllocator = .init(gpa);
+defer scratch.deinit();
+const good = "{\"city\": \"Lisbon\", \"celsius\": 21.5, \"observed\": \"2026-10-14T09:30:00Z\"}";
+std.debug.assert(try schema.validate(io, scratch.allocator(), strand.json, .init(good), .{ .flag = null }));
+
+// An invalid result is `false`, never an error; `basic` says where and why.
+var errors: strand_schema.Schema.Errors = .{};
+const bad = "{\"city\": \"\", \"celsius\": -300, \"observed\": \"yesterday\"}";
+std.debug.assert(!try schema.validate(io, scratch.allocator(), strand.json, .init(bad), .{ .basic = &errors }));
+std.debug.assert(errors.records.len == 3);
+std.debug.assert(std.mem.eql(u8, errors.records[0].instance_location, "/city"));
+
+// The same schema reads the same result from YAML.
+const yaml = "city: Porto\ncelsius: 18\n";
+std.debug.assert(try schema.validate(io, scratch.allocator(), strand.yaml, .init(yaml), .{ .flag = null }));
+```
+<!-- END GENERATED -->
+
 ## Editing
 
 `strand.toml.Edit`, `strand.yaml.Edit` and `strand.json.jsonc.Edit` hold a document as
@@ -839,6 +901,7 @@ and nonzero checks included.
 - It fetches no external XML entity or DTD, applies no `ATTLIST` default, and does not validate against a DTD or a schema.
 - It interpolates no INI value (`%(name)s`, `${name}`) and gives no section `[DEFAULT]`'s keys.
 - It expands no .env variable (`$NAME`, `${NAME}`) and reads no process environment.
+- `strand_schema` fetches no remote schema itself, asserts no format unless asked, decodes no `contentEncoding`, and reads drafts 4 and 6 and custom vocabularies not at all.
 
 ## Built with
 
@@ -854,6 +917,11 @@ and nonzero checks included.
   the tests and CI. It is a dev dependency too: with [bay](https://github.com/pedronaugusto/bay),
   shakedown and preflight belong to strand's own development, and a project that
   depends on strand never sees them.
+- With `.schema = true`: [uplink](https://github.com/pedronaugusto/uplink)'s codecs
+  resolve references and check the URI formats, [spectra](https://github.com/pedronaugusto/spectra)
+  runs ECMAScript patterns in linear time, [almanac](https://github.com/pedronaugusto/almanac)
+  checks RFC 3339 dates and times, and [xenoglyph](https://github.com/pedronaugusto/xenoglyph)
+  checks IDNA2008 names.
 
 ## Testing
 
@@ -862,7 +930,8 @@ Development runs through bay.
 `bay test` runs the unit suite, scratch tests and examples in Debug by default.
 The suite covers each format's own standard suite (JSONTestSuite, json5-tests, python-dotenv's parser cases, RFC 8785's and the
 cyberphone vectors, RFC 8949's Appendix A, msgpack-test-suite, toml-test, yaml-test-suite, the W3C XML
-Conformance Test Suite, which the build fetches from the W3C), round trips
+Conformance Test Suite, which the build fetches from the W3C, and for `strand_schema` the
+JSON-Schema-Test-Suite in draft-07, 2019-09 and 2020-12, its instances also as YAML and TOML), round trips
 through every reader and writer, framing, checked copies, rotation, cancellation and
 malformed records. Properties are shakedown `check` runs of seeded
 cases; `SHAKEDOWN_CASES` and `SHAKEDOWN_SEED` select a larger or a repeated run. `zig

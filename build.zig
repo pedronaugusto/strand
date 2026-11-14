@@ -87,7 +87,11 @@ fn schemaOptions(p: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
 pub fn dev(b: *std.Build, tools: type) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
-    const package = b.dependency("strand", .{ .target = target, .optimize = optimize });
+    // A configuration's option (ci/workflow.json): the package is built
+    // with strand_schema or without, as a project would build it, and
+    // checked so. strand_schema's own tests below build it either way.
+    const with_strand_schema = b.option(bool, "schema", "Build the package with strand_schema, as a configuration checks it") orelse false;
+    const package = b.dependency("strand", .{ .target = target, .optimize = optimize, .schema = with_strand_schema });
     const p = package.builder;
     const preflight = tools.preflight;
     const module = package.module("strand");

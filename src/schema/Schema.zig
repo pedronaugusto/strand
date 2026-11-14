@@ -54,7 +54,7 @@ limits: Limits,
 /// the loader's, for a remote document.
 pub fn compile(gpa: std.mem.Allocator, io: std.Io, comptime Format: type, document: aegis.input.Untrusted([]const u8), options: Options) CompileError!Schema {
     const bytes = document.readForParse();
-    if (bytes.len > options.limits.schema_bytes.raw()) return error.TooLarge;
+    if (aegis.units.Bytes(usize).fromRaw(bytes.len).compare(options.limits.schema_bytes) == .gt) return error.TooLarge;
     const arena = try gpa.create(std.heap.ArenaAllocator);
     arena.* = .init(gpa);
     errdefer {

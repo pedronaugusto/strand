@@ -84,7 +84,7 @@ pub const Token = union(enum) {
 };
 
 const Span32 = struct { start: u32, len: u32 };
-const Place = enum { prolog, after_doctype, inside, epilog };
+pub const Place = enum { prolog, after_doctype, inside, epilog };
 
 input: []const u8,
 at: usize,

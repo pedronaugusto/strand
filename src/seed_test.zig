@@ -4,7 +4,6 @@
 //! type, each carrying what its position needs.
 const std = @import("std");
 const strand = @import("strand.zig");
-const core = strand.core;
 const testing = std.testing;
 
 /// Counts the numbers in a document into `total`, by depth, and returns how

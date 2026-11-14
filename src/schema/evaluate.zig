@@ -227,7 +227,8 @@ pub const Evaluator = struct {
     /// Charges `bytes` of per-container state to `at`, given back when it
     /// closes; past `Limits.state` nothing is charged.
     fn charge(e: *Evaluator, at: *Location, bytes: usize) Error!void {
-        if (bytes > e.limits.state.raw() -| e.state) return error.TooLarge;
+        const charged = aegis.units.Bytes(usize).fromRaw(e.state).add(.fromRaw(bytes)) catch return error.TooLarge;
+        if (charged.compare(e.limits.state) == .gt) return error.TooLarge;
         e.state += bytes;
         at.charged += bytes;
     }

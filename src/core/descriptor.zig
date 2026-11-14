@@ -115,11 +115,7 @@ pub fn default(comptime T: type, comptime name: []const u8) ?@FieldType(T, name)
     }
     const info = @typeInfo(T).@"struct";
     inline for (info.field_names, info.field_attrs) |n, attrs| {
-        if (std.mem.eql(u8, n, name)) return if (attrs.default_value_ptr) |p| blk: {
-            // Zig provides the correctly typed and aligned default storage.
-            const value: *const @FieldType(T, name) = @ptrCast(@alignCast(p)); // safe: checked destination bounds or Zig-provided typed storage precede this conversion.
-            break :blk value.*;
-        } else null;
+        if (std.mem.eql(u8, n, name)) return attrs.defaultValue(@FieldType(T, name));
     }
     unreachable;
 }

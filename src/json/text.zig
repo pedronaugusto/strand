@@ -112,9 +112,11 @@ inline fn below(n: usize) u64 {
 }
 
 /// Copies a few bytes, as a piece of output usually is, without a call: two
-/// overlapping loads and stores cover any length up to sixteen.
-pub inline fn copy(to: [*]u8, from: []const u8) void {
+/// overlapping loads and stores cover any length up to sixteen. `to` holds
+/// at least `from`.
+pub inline fn copy(to: []u8, from: []const u8) void {
     const n = from.len;
+    aegis.assert.invariant(to.len >= n, "the destination holds what is copied");
     if (n >= 16) return @memcpy(to[0..n], from);
     if (n >= 8) {
         const head = std.mem.readInt(u64, from[0..8], .little);

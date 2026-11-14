@@ -82,7 +82,8 @@ pub const Opener = struct {
 /// The struct must outlive the `Follower`, since the follower holds a pointer
 /// to it, and so must `sub_path`.
 pub const PathOpener = struct {
-    dir: std.Io.Dir,
+    /// The caller's directory, opened and closed by it.
+    dir: aegis.own.Unowned(std.Io.Dir),
     sub_path: []const u8,
 
     /// The interface over this path. The directory is opened once, here, and
@@ -95,7 +96,7 @@ pub const PathOpener = struct {
     // an Opener's file, given back through `closePath` exactly once by the follower, as the Opener contract says
     fn openPath(io: std.Io, context: *anyopaque) Opener.OpenError!std.Io.File {
         const self: *PathOpener = @ptrCast(@alignCast(context)); // `opener` is the only maker of this interface, with a *PathOpener as its context
-        return self.dir.openFile(io, self.sub_path, .{}) catch |err| switch (err) {
+        return self.dir.get().openFile(io, self.sub_path, .{}) catch |err| switch (err) {
             error.Canceled => error.Canceled,
             error.FileNotFound => error.FileNotFound,
             else => error.OpenFailed,
@@ -220,7 +221,7 @@ const shared = struct {
         /// file and reading one.
         reader: strand.Reader(void).Options = .{},
         /// How to wait when the file has nothing more on it yet.
-        wait: Wait = .{ .poll = .fromMilliseconds(20) },
+        wait: Wait = .{ .poll = .literal("20ms") },
         /// How to get the file the path names now, or `null` to follow
         /// the open handle and nothing else — which is the default, and
         /// what every earlier version did.
@@ -253,11 +254,14 @@ const shared = struct {
         identity: Identity = .file_id,
     };
 
+    /// A length of time a follower waits, to the nanosecond.
+    pub const Interval = aegis.units.Duration(.nanosecond, i96);
+
     /// How a follower waits for the file to grow.
     pub const Wait = union(enum) {
         /// Sleep for this long and look again. What `tail -f` itself
         /// does, and what works on every platform without help.
-        poll: std.Io.Duration,
+        poll: Interval,
         /// Wait until `event` is set — by a filesystem watch, or by the
         /// writer when it is in the same program — or until `timeout`
         /// passes, whichever is first. The event is reset before each
@@ -265,8 +269,8 @@ const shared = struct {
         /// lost; the timeout is there so that a set that is lost anyway
         /// costs one late line rather than a hung task.
         wake: struct {
-            event: *std.Io.Event,
-            timeout: std.Io.Duration = .fromSeconds(1),
+            pulse: *aegis.Pulse,
+            timeout: Interval = .literal("1s"),
         },
     };
 
@@ -363,7 +367,10 @@ pub fn Follower(comptime T: type) type {
         /// Private: The handle this follower opened for itself, which is the
         /// only one it may close. `null` while it is still reading the one it
         /// was given.
-        opened: ?std.Io.File = null,
+        opened: ?aegis.own.Unowned(std.Io.File) = null,
+        /// Private: The wake's generation this follower last waited past:
+        /// a bump since, while it was reading, ends the next wait at once.
+        seen: ?aegis.Pulse.Generation = null,
         /// Private: What the file this follower is reading was, when it
         /// started reading it. Taken at the first read rather than at `init`,
         /// which cannot fail, and taken again for every file adopted since.
@@ -378,6 +385,7 @@ pub fn Follower(comptime T: type) type {
         pub const Options = shared.Options;
 
         pub const Wait = shared.Wait;
+        pub const Interval = shared.Interval;
 
         pub const NextError = shared.NextError;
 
@@ -477,6 +485,10 @@ pub fn Follower(comptime T: type) type {
                     .offset = source.logicalPos(),
                 }, reader_options),
                 .options = options,
+                .seen = switch (options.wait) {
+                    .poll => null,
+                    .wake => |wake| wake.pulse.current(),
+                },
             };
         }
 
@@ -487,7 +499,7 @@ pub fn Follower(comptime T: type) type {
         pub fn deinit(self: *Self, io: std.Io) void {
             aegis.assert.invariant(self.opened == null or self.options.reopen != null, "a follower opens a file only through its opener");
             if (self.opened) |file| {
-                if (self.options.reopen) |opener| opener.close(io, file);
+                if (self.options.reopen) |opener| opener.close(io, file.get());
             }
             self.reader.deinit();
             self.* = undefined;
@@ -576,16 +588,16 @@ pub fn Follower(comptime T: type) type {
         /// means.
         fn waitForGrowth(self: *Self, io: std.Io, position: u64) NextError!void {
             switch (self.options.wait) {
-                .poll => |duration| try io.sleep(duration, .awake),
+                .poll => |interval| try io.sleep(interval.toIoDuration(), .awake),
                 .wake => |wake| {
-                    wake.event.waitTimeout(io, .{ .duration = .{
-                        .raw = wake.timeout,
+                    const seen = self.seen orelse wake.pulse.current();
+                    self.seen = wake.pulse.waitPastTimeout(io, seen, .{ .duration = .{
+                        .raw = wake.timeout.toIoDuration(),
                         .clock = .awake,
                     } }) catch |err| switch (err) {
-                        error.Timeout => {},
+                        error.Timeout => wake.pulse.current(),
                         error.Canceled => return error.Canceled,
                     };
-                    wake.event.reset();
                 },
             }
 
@@ -649,8 +661,8 @@ pub fn Follower(comptime T: type) type {
                 // The old file has been read to its end — that is what
                 // brought us here — so the new one starts from its own.
                 adopted = true;
-                if (self.opened) |old| opener.close(io, old);
-                self.opened = fresh;
+                if (self.opened) |old| opener.close(io, old.get());
+                self.opened = .of(fresh);
                 self.source.* = fresh.reader(io, self.source.interface.buffer);
                 self.atStart();
                 self.held = there;
@@ -731,7 +743,7 @@ test "a rotated follower checkpoints the identity it adopted before reading" {
     defer file.close(testing.io);
     var buffer: [8]u8 = undefined;
     var source = file.reader(testing.io, &buffer);
-    var path: PathOpener = .{ .dir = tmp.dir, .sub_path = "new.jsonl" };
+    var path: PathOpener = .{ .dir = .of(tmp.dir), .sub_path = "new.jsonl" };
     const identity: Identity = .{ .fingerprint = .{ .length = 14 } };
     var follower = Follower(Event).init(testing.allocator, &source, .{
         .reopen = path.opener(),

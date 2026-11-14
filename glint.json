@@ -77,5 +77,14 @@
         "airlock"
       ]
     }
+  ],
+  "seams": [
+    {
+      "file": "src/jsonl/follow.zig",
+      "rules": [
+        "A009"
+      ],
+      "reason": "the follower's reads of the file it follows: a log another program is writing, read as it grows, each line then parsed by the JSONL reader under its line limit"
+    }
   ]
 }

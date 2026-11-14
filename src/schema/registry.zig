@@ -4,6 +4,7 @@
 //! and finds a reference's target in a document already read, among the
 //! embedded meta-schemas, or through the caller's loader.
 const std = @import("std");
+const aegis = @import("aegis");
 const strand = @import("strand");
 const wire = @import("uplink.wire");
 const Limits = @import("Limits.zig");
@@ -195,7 +196,7 @@ pub const Registry = struct {
             const loader = r.loader orelse return error.UnresolvedReference;
             break :blk try loader.load(r.arena, r.io, address);
         };
-        if (bytes.len > r.limits.schema_bytes.raw()) return error.TooLarge;
+        if (aegis.units.Bytes(usize).fromRaw(bytes.len).compare(r.limits.schema_bytes) == .gt) return error.TooLarge;
         const value = try r.arena.create(Value);
         value.* = strand.json.parseLeaky(Value, r.arena, bytes, .{}) catch |err|
             return if (err == error.OutOfMemory) error.OutOfMemory else error.Invalid;

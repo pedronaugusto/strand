@@ -7,6 +7,7 @@
 //! reading none of the instance, is `ReferenceCycle`, and a chain of such
 //! applications longer than `Limits.reference_chain` is `TooLarge`.
 const std = @import("std");
+const aegis = @import("aegis");
 const strand = @import("strand");
 const Limits = @import("Limits.zig");
 const Decimal = @import("Decimal.zig");
@@ -143,7 +144,7 @@ const Compiler = struct {
         var dynamic: std.ArrayList(Program.DynamicAnchor) = .empty;
         var recursive: std.ArrayList(Program.RecursiveRoot) = .empty;
         for (c.nodes.items, c.scopes.items, 0..) |*info, scope, i| {
-            const n: Node = @fromBackingInt(@as(u32, @intCast(i)));
+            const n = c.nodeAt(i);
             const pointer = if (c.registry.scopes.contains(info.source)) try c.registry.pointerOf(c.arena, info.source) else "";
             info.location = try std.mem.concat(c.arena, u8, &.{ scope.base, "#", pointer });
             if (info.source.* != .object) continue;
@@ -153,6 +154,11 @@ const Compiler = struct {
             if (scope.recursive_anchor) try recursive.append(c.arena, .{ .base = scope.base, .node = n });
         }
         return .{ .nodes = c.nodes.items, .instructions = c.instructions.items, .root = first, .dynamic_anchors = dynamic.items, .recursive_roots = recursive.items, .downgrades = c.downgrades.items };
+    }
+
+    /// The node at position `i` among those made so far.
+    fn nodeAt(c: *const Compiler, i: usize) Node {
+        return Node.from(@intCast(i), c.nodes.items.len) catch aegis.assert.never("a position among the nodes made is a node");
     }
 
     fn drain(c: *Compiler) Error!void {
@@ -165,9 +171,10 @@ const Compiler = struct {
     fn nodeFor(c: *Compiler, value: *const Value, around: Scope) Error!Node {
         if (c.memo.get(value)) |n| return n;
         if (c.nodes.items.len >= c.limits.subschemas) return error.TooLarge;
-        const n: Node = @fromBackingInt(@as(u32, @intCast(c.nodes.items.len)));
+        const at = c.nodes.items.len;
         const scope = c.registry.scopes.get(value) orelse around;
         try c.nodes.append(c.arena, .{ .verdict = .keywords, .source = value, .base = scope.base });
+        const n = c.nodeAt(at);
         try c.scopes.append(c.arena, scope);
         try c.memo.put(c.arena, value, n);
         try c.queue.append(c.arena, n);
@@ -271,22 +278,7 @@ const Compiler = struct {
                 .required => try c.emit(ops, k, .{ .required = try strings(c.arena, v) }),
                 .properties => try c.emit(ops, k, .{ .properties = try c.propertyList(v, scope) }),
                 .pattern_properties => if (patterned) |list| try c.emit(ops, k, .{ .pattern_properties = list }),
-                .additional_properties => {
-                    var names: []const []const u8 = &.{};
-                    var patterns: []const *const spectra.Regex = &.{};
-                    if (present.get(.properties)) |p| names = try keys(c.arena, p);
-                    // Which members it leaves alone depends on every pattern:
-                    // with one downgraded, it is an annotation too.
-                    const list = patterned orelse {
-                        try c.downgrade(k, "patternProperties", downgraded);
-                        continue;
-                    };
-                    const regexes = try c.arena.alloc(*const spectra.Regex, list.len);
-                    for (list, regexes) |pp, *re| re.* = pp.pattern;
-                    patterns = regexes;
-                    c.keyword = k;
-                    try c.emit(ops, k, .{ .additional_properties = .{ .node = try c.schema(v, scope), .names = names, .patterns = patterns } });
-                },
+                .additional_properties => try c.additionalProperties(ops, present, patterned, v, scope, downgraded),
                 .property_names => try c.emit(ops, k, .{ .property_names = try c.schema(v, scope) }),
                 .dependent_required => {
                     const entries = try object(v);
@@ -308,17 +300,7 @@ const Compiler = struct {
                 // Read with `if`; alone, they do nothing.
                 .then, .@"else" => {},
                 .prefix_items => try c.emit(ops, k, .{ .prefix_items = try c.schemaList(v, scope) }),
-                .items => switch (d) {
-                    .draft2020_12 => {
-                        const from: u64 = if (present.get(.prefix_items)) |p| (try array(p)).len else 0;
-                        try c.emit(ops, k, .{ .items = .{ .from = from, .node = try c.schema(v, scope) } });
-                    },
-                    .draft7, .draft2019_09 => if (v.* == .array) {
-                        try c.emit(ops, k, .{ .prefix_items = try c.schemaList(v, scope) });
-                    } else {
-                        try c.emit(ops, k, .{ .items = .{ .from = 0, .node = try c.schema(v, scope) } });
-                    },
-                },
+                .items => try c.items(ops, d, present, v, scope),
                 // Only after an array `items`; otherwise it does nothing.
                 .additional_items => if (present.get(.items)) |items| if (items.* == .array) {
                     try c.emit(ops, k, .{ .items = .{ .from = items.array.len, .node = try c.schema(v, scope) } });
@@ -334,21 +316,8 @@ const Compiler = struct {
                 // Read with `contains`; alone, they do nothing.
                 .min_contains, .max_contains => _ = try c.count(v),
                 .ref => try c.emit(ops, k, .{ .ref = try c.reference(scope, try string(v)) }),
-                .dynamic_ref => {
-                    const text = try string(v);
-                    const target = try c.reference(scope, text);
-                    // It searches the dynamic scope only when the schema it
-                    // names statically is a dynamic anchor of that name.
-                    const anchor = try c.registry.dynamicAnchorName(scope.base, text);
-                    if (anchor) |name| try c.dynamic_names.put(c.arena, name, {});
-                    try c.emit(ops, k, .{ .dynamic_ref = .{ .node = target, .anchor = anchor } });
-                },
-                .recursive_ref => {
-                    const target = try c.reference(scope, try string(v));
-                    const anchored = c.scopes.items[target.raw()].recursive_anchor;
-                    if (anchored) c.recursive = true;
-                    try c.emit(ops, k, .{ .recursive_ref = .{ .node = target, .anchored = anchored } });
-                },
+                .dynamic_ref => try c.dynamicRef(ops, v, scope),
+                .recursive_ref => try c.recursiveRef(ops, v, scope),
                 .unevaluated_items => try c.emit(ops, k, .{ .unevaluated_items = try c.schema(v, scope) }),
                 .unevaluated_properties => try c.emit(ops, k, .{ .unevaluated_properties = try c.schema(v, scope) }),
                 // Read by the registry, or annotations.
@@ -358,6 +327,57 @@ const Compiler = struct {
             }
         }
         c.keyword = null;
+    }
+
+    /// `additionalProperties`: its schema over the members neither
+    /// `properties` names nor a `patternProperties` pattern matches.
+    fn additionalProperties(c: *Compiler, ops: *std.ArrayList(Program.Instruction), present: *std.EnumArray(Keyword, ?*const Value), patterned: ?[]const Program.PatternProperty, v: *const Value, scope: Scope, downgraded: *std.ArrayList(u32)) Error!void {
+        const k: Keyword = .additional_properties;
+        var names: []const []const u8 = &.{};
+        if (present.get(.properties)) |p| names = try keys(c.arena, p);
+        // Which members it leaves alone depends on every pattern: with one
+        // downgraded, it is an annotation too.
+        const list = patterned orelse return c.downgrade(k, "patternProperties", downgraded);
+        const regexes = try c.arena.alloc(*const spectra.Regex, list.len);
+        for (list, regexes) |pp, *re| re.* = pp.pattern;
+        c.keyword = k;
+        try c.emit(ops, k, .{ .additional_properties = .{ .node = try c.schema(v, scope), .names = names, .patterns = regexes } });
+    }
+
+    /// `items`: from past `prefixItems` in 2020-12; a list or one schema in
+    /// the drafts before it.
+    fn items(c: *Compiler, ops: *std.ArrayList(Program.Instruction), d: Dialect, present: *std.EnumArray(Keyword, ?*const Value), v: *const Value, scope: Scope) Error!void {
+        const k: Keyword = .items;
+        switch (d) {
+            .draft2020_12 => {
+                const from: u64 = if (present.get(.prefix_items)) |p| (try array(p)).len else 0;
+                try c.emit(ops, k, .{ .items = .{ .from = from, .node = try c.schema(v, scope) } });
+            },
+            .draft7, .draft2019_09 => if (v.* == .array) {
+                try c.emit(ops, k, .{ .prefix_items = try c.schemaList(v, scope) });
+            } else {
+                try c.emit(ops, k, .{ .items = .{ .from = 0, .node = try c.schema(v, scope) } });
+            },
+        }
+    }
+
+    /// `$dynamicRef`: it searches the dynamic scope only when the schema it
+    /// names statically is a dynamic anchor of that name.
+    fn dynamicRef(c: *Compiler, ops: *std.ArrayList(Program.Instruction), v: *const Value, scope: Scope) Error!void {
+        const text = try string(v);
+        const target = try c.reference(scope, text);
+        const anchor = try c.registry.dynamicAnchorName(scope.base, text);
+        if (anchor) |name| try c.dynamic_names.put(c.arena, name, {});
+        try c.emit(ops, .dynamic_ref, .{ .dynamic_ref = .{ .node = target, .anchor = anchor } });
+    }
+
+    /// `$recursiveRef`: dynamic where the schema it names is a recursive
+    /// anchor.
+    fn recursiveRef(c: *Compiler, ops: *std.ArrayList(Program.Instruction), v: *const Value, scope: Scope) Error!void {
+        const target = try c.reference(scope, try string(v));
+        const anchored = c.scopes.items[target.raw()].recursive_anchor;
+        if (anchored) c.recursive = true;
+        try c.emit(ops, .recursive_ref, .{ .recursive_ref = .{ .node = target, .anchored = anchored } });
     }
 
     /// draft-07's `dependencies`: names required, or a schema applied, when
@@ -479,10 +499,10 @@ const Compiler = struct {
             try ins.op.inPlace(out, c.arena);
             switch (ins.op) {
                 .dynamic_ref => |dr| if (dr.anchor) |name| for (c.nodes.items, 0..) |other, i| {
-                    if (c.isDynamicAnchor(other.source, name)) try out.append(c.arena, @fromBackingInt(@as(u32, @intCast(i))));
+                    if (c.isDynamicAnchor(other.source, name)) try out.append(c.arena, c.nodeAt(i));
                 },
                 .recursive_ref => |rr| if (rr.anchored) for (c.scopes.items, 0..) |s, i| {
-                    if (s.recursive_anchor) try out.append(c.arena, @fromBackingInt(@as(u32, @intCast(i))));
+                    if (s.recursive_anchor) try out.append(c.arena, c.nodeAt(i));
                 },
                 else => {},
             }
@@ -508,7 +528,7 @@ const Compiler = struct {
         const children = try c.arena.alloc([]const Node, total);
         var scratch: std.ArrayList(Node) = .empty;
         for (0..total) |i| {
-            try c.inPlace(@fromBackingInt(@as(u32, @intCast(i))), &scratch);
+            try c.inPlace(c.nodeAt(i), &scratch);
             children[i] = try c.arena.dupe(Node, scratch.items);
         }
         const Frame = struct { node: u32, next: usize };
@@ -525,7 +545,7 @@ const Compiler = struct {
                     top.next += 1;
                     switch (state[child]) {
                         .open => {
-                            c.culprit = @fromBackingInt(child);
+                            c.culprit = c.nodeAt(child);
                             return error.ReferenceCycle;
                         },
                         .done => {},
@@ -540,7 +560,7 @@ const Compiler = struct {
                 for (kids) |k| longest = @max(longest, chain[k.raw()]);
                 chain[top.node] = longest + 1;
                 if (chain[top.node] > c.limits.reference_chain) {
-                    c.culprit = @fromBackingInt(top.node);
+                    c.culprit = c.nodeAt(top.node);
                     return error.TooLarge;
                 }
                 state[top.node] = .done;

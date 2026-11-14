@@ -1,5 +1,6 @@
 //! follow scenarios through the public API.
 const std = @import("std");
+const aegis = @import("aegis");
 const strand = @import("strand.zig");
 const json = strand.json;
 const jsonl = strand.jsonl;
@@ -45,7 +46,7 @@ fn produce(io: std.Io, file: std.Io.File, buffer: []u8, count: u64) !void {
 /// test.
 fn consume(io: std.Io, source: *std.Io.File.Reader, count: u64) !void {
     var follower: Follower(Event) = .init(testing.allocator, source, .{
-        .wait = .{ .poll = .fromMicroseconds(100) },
+        .wait = .{ .poll = .literal("100us") },
     });
     defer follower.deinit(io);
 
@@ -88,7 +89,7 @@ test "a producer task and a follower task over one growing file" {
 /// Follows `source` until it is cancelled, which is the only way it ends.
 fn followUntilCanceled(io: std.Io, source: *std.Io.File.Reader) Follower(Event).NextError!void {
     var follower: Follower(Event) = .init(testing.allocator, source, .{
-        .wait = .{ .poll = .fromMilliseconds(1) },
+        .wait = .{ .poll = .literal("1ms") },
     });
     defer follower.deinit(io);
     while (true) _ = try follower.next(io);
@@ -155,7 +156,7 @@ test "an over-long line finished after it was refused is not read twice" {
 
     var follower: Follower(Event) = .init(testing.allocator, &fixture.reader, .{
         .reader = .{ .max_line_bytes = .fromRaw(16) },
-        .wait = .{ .poll = .fromMicroseconds(100) },
+        .wait = .{ .poll = .literal("100us") },
     });
     defer follower.deinit(testing.io);
 
@@ -177,7 +178,7 @@ test "an over-long line finished while the follower waits is not read twice" {
 
     var follower: Follower(Event) = .init(testing.allocator, &fixture.reader, .{
         .reader = .{ .max_line_bytes = .fromRaw(16) },
-        .wait = .{ .poll = .fromMicroseconds(100) },
+        .wait = .{ .poll = .literal("100us") },
     });
     defer follower.deinit(testing.io);
     try testing.expectError(error.LineTooLong, follower.next(testing.io));
@@ -206,7 +207,7 @@ test "a follower still recognizes a byte-order mark after starting empty" {
     defer fixture.deinit();
 
     var follower: Follower(Event) = .init(testing.allocator, &fixture.reader, .{
-        .wait = .{ .poll = .fromMicroseconds(100) },
+        .wait = .{ .poll = .literal("100us") },
     });
     defer follower.deinit(testing.io);
 
@@ -223,7 +224,7 @@ test "a follower does not revisit a skipped complete line while waiting" {
 
     var follower: Follower(Event) = .init(testing.allocator, &fixture.reader, .{
         .reader = .{ .on_malformed = .skip },
-        .wait = .{ .poll = .fromMicroseconds(100) },
+        .wait = .{ .poll = .literal("100us") },
     });
     defer follower.deinit(testing.io);
 
@@ -249,15 +250,15 @@ test "a wake is a way to wait that is not a sleep" {
     defer fixture.deinit();
     try fixture.write_file.writeStreamingAll(testing.io, "{\"kind\":\"first\"}\n");
 
-    var event: std.Io.Event = .unset;
+    var pulse: aegis.Pulse = .init();
     var follower: Follower(Event) = .init(testing.allocator, &fixture.reader, .{
-        .wait = .{ .wake = .{ .event = &event, .timeout = .fromMilliseconds(50) } },
+        .wait = .{ .wake = .{ .pulse = &pulse, .timeout = .literal("50ms") } },
     });
     defer follower.deinit(testing.io);
 
     try testing.expectEqualStrings("first", (try follower.next(testing.io)).value.kind);
     try fixture.write_file.writeStreamingAll(testing.io, "{\"kind\":\"second\"}\n");
-    event.set(testing.io);
+    pulse.bump(testing.io);
     try testing.expectEqualStrings("second", (try follower.next(testing.io)).value.kind);
 }
 
@@ -267,7 +268,7 @@ test "a truncated file is reported rather than spliced onto the old one" {
     try fixture.write_file.writeStreamingAll(testing.io, "{\"kind\":\"before\"}\n");
 
     var follower: Follower(Event) = .init(testing.allocator, &fixture.reader, .{
-        .wait = .{ .poll = .fromMicroseconds(100) },
+        .wait = .{ .poll = .literal("100us") },
     });
     defer follower.deinit(testing.io);
 
@@ -338,7 +339,7 @@ test "a follower resumed from a checkpoint reads every line exactly once" {
     var point: Follower(Event).Checkpoint = undefined;
     {
         var follower: Follower(Event) = .init(testing.allocator, &fixture.reader, .{
-            .wait = .{ .poll = .fromMicroseconds(100) },
+            .wait = .{ .poll = .literal("100us") },
             .identity = .{ .fingerprint = .{ .length = 32 } },
         });
         defer follower.deinit(testing.io);
@@ -361,7 +362,7 @@ test "a follower resumed from a checkpoint reads every line exactly once" {
         &again,
         point,
         .{
-            .wait = .{ .poll = .fromMicroseconds(100) },
+            .wait = .{ .poll = .literal("100us") },
             .identity = .{ .fingerprint = .{ .length = 32 } },
         },
     );
@@ -392,7 +393,7 @@ test "a checkpoint of a log that rotated while nothing read it begins the new fi
     });
 
     const options: Follower(Event).Options = .{
-        .wait = .{ .poll = .fromMicroseconds(100) },
+        .wait = .{ .poll = .literal("100us") },
         .identity = .{ .fingerprint = .{ .length = 20 } },
     };
 
@@ -440,7 +441,7 @@ test "a checkpoint is a line like any other" {
     defer fixture.deinit();
 
     var follower: Follower(Event) = .init(testing.allocator, &fixture.reader, .{
-        .wait = .{ .poll = .fromMicroseconds(100) },
+        .wait = .{ .poll = .literal("100us") },
     });
     defer follower.deinit(testing.io);
     _ = try follower.next(testing.io);
@@ -516,7 +517,7 @@ test "the opener is an interface, and a test hands over the files itself" {
     var source = first.reader(testing.io, &buffer);
     {
         var follower: Follower(Event) = .init(testing.allocator, &source, .{
-            .wait = .{ .poll = .fromMicroseconds(100) },
+            .wait = .{ .poll = .literal("100us") },
             .reopen = staged.opener(),
         });
         defer follower.deinit(testing.io);
@@ -635,9 +636,9 @@ test "a rotation that keeps the file's number is followed by its content" {
     var buffer: [256]u8 = undefined;
     var source = file.reader(testing.io, &buffer);
 
-    var path: PathOpener = .{ .dir = tmp.dir, .sub_path = "log.jsonl" };
+    var path: PathOpener = .{ .dir = .of(tmp.dir), .sub_path = "log.jsonl" };
     var follower: Follower(Event) = .init(testing.allocator, &source, .{
-        .wait = .{ .poll = .fromMicroseconds(100) },
+        .wait = .{ .poll = .literal("100us") },
         .reopen = path.opener(),
         .identity = .{ .fingerprint = .{} },
     });
@@ -668,9 +669,9 @@ test "a follower given an opener follows the path across a rename" {
     var buffer: [256]u8 = undefined;
     var source = file.reader(testing.io, &buffer);
 
-    var path: PathOpener = .{ .dir = tmp.dir, .sub_path = "log.jsonl" };
+    var path: PathOpener = .{ .dir = .of(tmp.dir), .sub_path = "log.jsonl" };
     var follower: Follower(Event) = .init(testing.allocator, &source, .{
-        .wait = .{ .poll = .fromMicroseconds(100) },
+        .wait = .{ .poll = .literal("100us") },
         .reopen = path.opener(),
     });
     defer follower.deinit(testing.io);
@@ -749,7 +750,7 @@ test "a path that names nothing between a rotation's rename and its create is wa
     // on this thread, so the interleaving is the same on every run. A
     // follower looks at the path once its file has stood still for two
     // waits; by the sixth it has looked at least twice and found nothing.
-    var gap: Gap = .{ .path = .{ .dir = tmp.dir, .sub_path = "log.jsonl" } };
+    var gap: Gap = .{ .path = .{ .dir = .of(tmp.dir), .sub_path = "log.jsonl" } };
     const fio = try shakedown.FaultIo.init(testing.allocator, testing.io, .{ .plan = &.{.{
         .at = .{ .nth = .{ .call = .sleep, .n = 6 } },
         .fault = .{ .call = .{ .hook = &gap.create } },
@@ -758,7 +759,7 @@ test "a path that names nothing between a rotation's rename and its create is wa
     const io = fio.io();
 
     var follower: Follower(Event) = .init(testing.allocator, &source, .{
-        .wait = .{ .poll = .fromMicroseconds(100) },
+        .wait = .{ .poll = .literal("100us") },
         .reopen = gap.opener(),
     });
     defer follower.deinit(io);
@@ -791,7 +792,7 @@ test "an opener that fails for any other reason ends the follow" {
     };
     var context: u8 = 0;
     var follower: Follower(Event) = .init(testing.allocator, &fixture.reader, .{
-        .wait = .{ .poll = .fromMicroseconds(100) },
+        .wait = .{ .poll = .literal("100us") },
         .reopen = .{ .context = &context, .openFn = Refusing.open, .closeFn = Refusing.close },
     });
     defer follower.deinit(testing.io);
@@ -812,9 +813,9 @@ test "the old file is read to its end before the new one is started" {
     var buffer: [16]u8 = undefined;
     var source = file.reader(testing.io, &buffer);
 
-    var path: PathOpener = .{ .dir = tmp.dir, .sub_path = "log.jsonl" };
+    var path: PathOpener = .{ .dir = .of(tmp.dir), .sub_path = "log.jsonl" };
     var follower: Follower(Event) = .init(testing.allocator, &source, .{
-        .wait = .{ .poll = .fromMicroseconds(100) },
+        .wait = .{ .poll = .literal("100us") },
         .reopen = path.opener(),
     });
     defer follower.deinit(testing.io);
@@ -856,9 +857,9 @@ test "a truncation is begun again rather than reported when there is an opener" 
     var buffer: [256]u8 = undefined;
     var source = file.reader(testing.io, &buffer);
 
-    var path: PathOpener = .{ .dir = tmp.dir, .sub_path = "log.jsonl" };
+    var path: PathOpener = .{ .dir = .of(tmp.dir), .sub_path = "log.jsonl" };
     var follower: Follower(Event) = .init(testing.allocator, &source, .{
-        .wait = .{ .poll = .fromMicroseconds(100) },
+        .wait = .{ .poll = .literal("100us") },
         .reopen = path.opener(),
     });
     defer follower.deinit(testing.io);

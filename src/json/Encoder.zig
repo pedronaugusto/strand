@@ -76,7 +76,7 @@ pub fn Dialect(comptime json5: bool) type {
         /// that end is the writer's until then, so a refused stage leaves nothing.
         inline fn put(self: *Self, data: []const u8, c: *core.Context) Error!void {
             if (data.len <= self.stage.len - self.staged) {
-                strings.copy(self.stage[self.staged..].ptr, data);
+                strings.copy(self.stage[self.staged..], data);
                 self.staged += data.len;
                 return;
             }
@@ -121,7 +121,7 @@ pub fn Dialect(comptime json5: bool) type {
                 if (found.at == spelling.len) {
                     if (found.non_ascii and !std.unicode.utf8ValidateSlice(spelling)) return error.InvalidUtf8;
                     self.stage[self.staged] = '"';
-                    strings.copy(self.stage[self.staged + 1 ..].ptr, spelling);
+                    strings.copy(self.stage[self.staged + 1 ..], spelling);
                     self.stage[self.staged + 1 + spelling.len] = '"';
                     self.staged += spelling.len + 2;
                     return;

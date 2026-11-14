@@ -172,7 +172,7 @@ fn escape(input: []const u8, at: usize, version_1_1: bool) Error!Escape {
     for (input[at + 2 ..][0..digits]) |byte| value = value * 16 + (std.fmt.charToDigit(byte, 16) catch return error.SyntaxError);
     if (value > 0x10ffff or (value >= 0xd800 and value <= 0xdfff)) return error.SyntaxError;
     const scalar: u21 = @intCast(value); // safe: checked against U+10FFFF above.
-    return .{ .end = at + 2 + digits, .len = std.unicode.utf8CodepointSequenceLength(scalar) catch unreachable, .scalar = scalar }; // unreachable: a scalar value has a length.
+    return .{ .end = at + 2 + digits, .len = std.unicode.utf8CodepointSequenceLength(scalar) catch unreachable, .scalar = scalar }; // glint-ignore: Z026 -- a scalar value has a length.
 }
 
 /// A scanned string's value into `out`, which is `Scanned.len` long.
@@ -183,12 +183,12 @@ pub fn decode(scanned: Scanned, kind: Kind, out: []u8) void {
     while (i < content.len) {
         const byte = content[i];
         if (byte == '\\' and (kind == .basic or kind == .multiline_basic)) {
-            if (kind == .multiline_basic) if (lineEnding(content, i) catch unreachable) |end| { // unreachable: scanned already.
+            if (kind == .multiline_basic) if (lineEnding(content, i) catch unreachable) |end| { // glint-ignore: Z026 -- scanned already.
                 i = end;
                 continue;
             };
-            const e = escape(content, i, true) catch unreachable; // unreachable: scanned already, in its version.
-            n += std.unicode.utf8Encode(e.scalar, out[n..]) catch unreachable; // unreachable: a scalar value, and its length was counted.
+            const e = escape(content, i, true) catch unreachable; // glint-ignore: Z026 -- scanned already, in its version.
+            n += std.unicode.utf8Encode(e.scalar, out[n..]) catch unreachable; // glint-ignore: Z026 -- a scalar value, and its length was counted.
             i = e.end;
             continue;
         }

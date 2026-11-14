@@ -21,7 +21,7 @@ test "ipv4: a dotted-quad exactly as RFC 2673 writes one" {
             const s = case.source;
             // Four octets written plainly: accepted.
             var buf: [32]u8 = undefined;
-            const quad = try std.fmt.bufPrint(&buf, "{d}.{d}.{d}.{d}", .{ gen.intRange(s, u8, 0, 255), gen.intRange(s, u8, 0, 255), gen.intRange(s, u8, 0, 255), gen.intRange(s, u8, 0, 255) });
+            const quad = try std.mem.print(&buf, "{d}.{d}.{d}.{d}", .{ gen.intRange(s, u8, 0, 255), gen.intRange(s, u8, 0, 255), gen.intRange(s, u8, 0, 255), gen.intRange(s, u8, 0, 255) });
             try testing.expect(net.isIpv4(quad));
             // Any string of digits and dots: the RFC's verdict.
             var any: [16]u8 = undefined;

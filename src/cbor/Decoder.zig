@@ -209,7 +209,7 @@ fn string(self: *Self, c: *core.Context, h: wire.Head) Error!core.Span {
     const out = try c.alloc(u8, total);
     var written: usize = 0;
     while (self.input[self.at] != 0xff) {
-        const chunk = wire.head(self.input, self.at) catch unreachable; // unreachable: the first pass read it
+        const chunk = wire.head(self.input, self.at) catch unreachable; // glint-ignore: Z026 -- the first pass read it
         self.at += chunk.len;
         const n: usize = @intCast(chunk.argument);
         @memcpy(out[written..][0..n], self.input[self.at..][0..n]);

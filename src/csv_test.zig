@@ -223,12 +223,10 @@ fn anyBytes(_: void, case: *shakedown.Case) anyerror!void {
     const input = try gen.string(case.source, case.gpa, .{ .kind = .bytes, .max_len = 96 });
     case.note("input: {any}", .{input});
     const options: csv.ParseOptions = .{ .ignore_unknown_fields = true, .limits = .{ .work = 1 << 16 } };
-    // glint-ignore: Z026 -- a generated input may parse or not; the property checks only what parses
     if (csv.parse([]const Generated, case.gpa, input, options)) |p| {
         var parsed = p;
         parsed.deinit();
     } else |_| {}
-    // glint-ignore: Z026 -- a generated input may parse or not; the property checks only what parses
     if (csv.parse([]const []const []const u8, case.gpa, input, .{ .dialect = .{ .header = false } })) |p| {
         var parsed = p;
         // A table of text, written again, reads back as the same table.
@@ -280,7 +278,6 @@ test "fuzz: a number in a CSV field or a form value reads as its JSON spelling s
             };
             // Read: the spelling is a JSON number, and it is this integer exactly.
             try std.testing.expectEqual(@as(f128, @floatFromInt(value)), try std.fmt.parseFloat(f128, input));
-            // glint-ignore: Z026 -- a spelling that is no plain integer (an exponent, a fraction) is checked as the float above
             if (std.fmt.parseInt(i64, input, 10)) |plain| try std.testing.expectEqual(plain, value) else |_| {}
         }
         fn body(_: void, case: *shakedown.Case) !void {

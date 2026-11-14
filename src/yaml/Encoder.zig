@@ -213,7 +213,7 @@ fn string(self: *Self, value: []const u8, c: *core.Context) Error!void {
     const flow = if (self.top()) |f| f.flow else self.flow;
     if (plain(value, flow)) return self.scalarValue(value, c);
     var counting: std.Io.Writer.Discarding = .init(&.{});
-    quote(&counting.writer, value) catch unreachable; // unreachable: counting fails at nothing.
+    quote(&counting.writer, value) catch unreachable; // glint-ignore: Z026 -- counting fails at nothing.
     self.quoting = value;
     try self.placed(std.math.cast(usize, counting.fullCount()) orelse return error.OutputLimit, null, c);
 }

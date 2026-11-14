@@ -17,6 +17,7 @@
 //! searches. The reading is a strand seed (`Read`), so every format the core
 //! reads is validated alike.
 const std = @import("std");
+const aegis = @import("aegis");
 const strand = @import("strand");
 const Limits = @import("Limits.zig");
 const Decimal = @import("Decimal.zig");
@@ -96,7 +97,7 @@ pub const Evaluator = struct {
     caches: std.AutoHashMapUnmanaged(*const spectra.Regex, spectra.Regex.Cache) = .empty,
     /// The downgraded keywords the validation passed through, as indexes
     /// into `Program.downgrades`.
-    passed: std.AutoArrayHashMapUnmanaged(u32, void) = .empty,
+    passed: std.array_hash_map.Auto(u32, void) = .empty,
 
     /// The slots for `roots` at one location: each root and, below it, what
     /// it applies in place.
@@ -316,14 +317,14 @@ pub const Slot = struct {
 fn inPlacePaths(e: *Evaluator, path: []const u8, ins: Program.Instruction, count: usize, out: *std.ArrayList([]const u8)) Error!void {
     const name = ins.keyword.name();
     switch (ins.op) {
-        .all_of, .any_of, .one_of => for (0..count) |k| try out.append(e.scratch, try std.fmt.allocPrint(e.scratch, "{s}/{s}/{d}", .{ path, name, k })),
+        .all_of, .any_of, .one_of => for (0..count) |k| try out.append(e.scratch, try e.scratch.print("{s}/{s}/{d}", .{ path, name, k })),
         .conditional => |c| {
-            try out.append(e.scratch, try std.fmt.allocPrint(e.scratch, "{s}/if", .{path}));
-            if (c.then != null) try out.append(e.scratch, try std.fmt.allocPrint(e.scratch, "{s}/then", .{path}));
-            if (c.@"else" != null) try out.append(e.scratch, try std.fmt.allocPrint(e.scratch, "{s}/else", .{path}));
+            try out.append(e.scratch, try e.scratch.print("{s}/if", .{path}));
+            if (c.then != null) try out.append(e.scratch, try e.scratch.print("{s}/then", .{path}));
+            if (c.@"else" != null) try out.append(e.scratch, try e.scratch.print("{s}/else", .{path}));
         },
         .dependent_schemas => |deps| for (deps) |dep| try out.append(e.scratch, try below(e, path, name, dep.name)),
-        else => for (0..count) |_| try out.append(e.scratch, try std.fmt.allocPrint(e.scratch, "{s}/{s}", .{ path, name })),
+        else => for (0..count) |_| try out.append(e.scratch, try e.scratch.print("{s}/{s}", .{ path, name })),
     }
 }
 
@@ -339,7 +340,7 @@ fn below(e: *Evaluator, path: []const u8, keyword: []const u8, token: []const u8
 fn childPath(e: *Evaluator, s: *const Slot, ins: Program.Instruction, token: ?[]const u8) Error![]const u8 {
     if (!e.collect) return "";
     if (token) |t| return below(e, s.path, ins.keyword.name(), t);
-    return std.fmt.allocPrint(e.scratch, "{s}/{s}", .{ s.path, ins.keyword.name() });
+    return e.scratch.print("{s}/{s}", .{ s.path, ins.keyword.name() });
 }
 
 /// Why an instruction failed, in a few words.
@@ -412,13 +413,13 @@ fn read(e: *Evaluator, at: *Location, access: anytype) (@TypeOf(access.*).Error 
             // value, which a double's shortest spelling reads back as.
             const f = try access.read(f64);
             if (!std.math.isFinite(f)) return error.UnexpectedType;
-            const text = try std.fmt.allocPrint(e.scratch, "{e}", .{f});
+            const text = try e.scratch.print("{e}", .{f});
             try e.consumed(text.len);
             try scalar(e, at, .number, .{ .number = text });
         },
         .integer => {
             const n = try access.read(i128);
-            const text = try std.fmt.allocPrint(e.scratch, "{d}", .{n});
+            const text = try e.scratch.print("{d}", .{n});
             try scalar(e, at, .number, .{ .number = text });
         },
         .text => {
@@ -646,7 +647,7 @@ fn item(e: *Evaluator, at: *Location, compound: anytype, i: u64) !void {
     var roots: std.ArrayList(Root) = .empty;
     var owners: std.ArrayList(Owner) = .empty;
     var position: [24]u8 = undefined;
-    const token = std.fmt.bufPrint(&position, "{d}", .{i}) catch unreachable;
+    const token = std.mem.print(&position, "{d}", .{i}) catch aegis.assert.never("an index of at most 20 digits fits 24 bytes");
     for (at.slots.items, 0..) |*s, si| {
         if (e.program.node(s.node).verdict != .keywords) continue;
         const slot: u32 = @intCast(si);

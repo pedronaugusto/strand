@@ -284,7 +284,6 @@ fn anyBytes(_: void, case: *shakedown.Case) anyerror!void {
     case.note("input: {any}", .{input});
     const options: form.ParseOptions = .{ .ignore_unknown_fields = true, .limits = .{ .work = 1 << 16 } };
     inline for (.{ Generated, Account, core.Pairs([]const u8, []const u8) }) |T| {
-        // glint-ignore: Z026 -- a generated input may parse or not; the property checks only what parses
         if (form.parse(T, case.gpa, input, options)) |p| {
             var parsed = p;
             parsed.deinit();

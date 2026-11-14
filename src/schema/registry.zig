@@ -560,7 +560,7 @@ test "anchors: each draft's spelling, dynamic anchors, and no two schemas with o
     };
     for (bad, 0..) |case, i| {
         var each: Registry = .init(a, testing.io, null, .{});
-        const uri_text = try std.fmt.allocPrint(a, "http://example.com/bad{d}.json", .{i});
+        const uri_text = try a.print("http://example.com/bad{d}.json", .{i});
         try testing.expectError(error.Invalid, each.add(uri_text, try document(a, case[1]), case[0]));
     }
     var r19: Registry = .init(a, testing.io, null, .{});
@@ -677,22 +677,22 @@ test "any document: each subschema's base, identifiers and anchors, as RFC 3986 
                     first = false;
                     const dir = directory(base);
                     const id_and_path: [2][]const u8 = switch (kind) {
-                        1 => .{ try std.fmt.allocPrint(g.a, "f{d}.json", .{n}), try std.fmt.allocPrint(g.a, "{s}f{d}.json", .{ dir, n }) },
-                        2 => .{ try std.fmt.allocPrint(g.a, "d{d}/f{d}.json", .{ n, n }), try std.fmt.allocPrint(g.a, "{s}d{d}/f{d}.json", .{ dir, n, n }) },
-                        3 => .{ try std.fmt.allocPrint(g.a, "../f{d}.json", .{n}), try std.fmt.allocPrint(g.a, "{s}f{d}.json", .{ parent(dir), n }) },
-                        4 => .{ try std.fmt.allocPrint(g.a, host ++ "/a{d}/f{d}.json", .{ n, n }), try std.fmt.allocPrint(g.a, "/a{d}/f{d}.json", .{ n, n }) },
-                        5 => .{ try std.fmt.allocPrint(g.a, "d{d}/", .{n}), try std.fmt.allocPrint(g.a, "{s}d{d}/", .{ dir, n }) },
+                        1 => .{ try g.a.print("f{d}.json", .{n}), try g.a.print("{s}f{d}.json", .{ dir, n }) },
+                        2 => .{ try g.a.print("d{d}/f{d}.json", .{ n, n }), try g.a.print("{s}d{d}/f{d}.json", .{ dir, n, n }) },
+                        3 => .{ try g.a.print("../f{d}.json", .{n}), try g.a.print("{s}f{d}.json", .{ parent(dir), n }) },
+                        4 => .{ try g.a.print(host ++ "/a{d}/f{d}.json", .{ n, n }), try g.a.print("/a{d}/f{d}.json", .{ n, n }) },
+                        5 => .{ try g.a.print("d{d}/", .{n}), try g.a.print("{s}d{d}/", .{ dir, n }) },
                         // draft-07's plain-name fragment, an anchor.
-                        else => .{ try std.fmt.allocPrint(g.a, "#n{d}", .{n}), base },
+                        else => .{ try g.a.print("#n{d}", .{n}), base },
                     };
                     try g.write("\"$id\": \"{s}\"", .{id_and_path[0]});
                     if (!hidden) {
                         if (kind == 6) {
-                            e.anchor = try std.fmt.allocPrint(g.a, host ++ "{s}#n{d}", .{ base, n });
+                            e.anchor = try g.a.print(host ++ "{s}#n{d}", .{ base, n });
                             try g.claim(e.anchor.?);
                         } else {
                             e.base = id_and_path[1];
-                            e.identified = try std.fmt.allocPrint(g.a, host ++ "{s}", .{e.base});
+                            e.identified = try g.a.print(host ++ "{s}", .{e.base});
                             try g.claim(e.identified.?);
                         }
                     }
@@ -702,7 +702,7 @@ test "any document: each subschema's base, identifiers and anchors, as RFC 3986 
                     first = false;
                     const name: []const u8 = if (gen.boolean(g.s)) "a" else "b";
                     try g.write("\"$anchor\": \"{s}\"", .{name});
-                    e.anchor = try std.fmt.allocPrint(g.a, host ++ "{s}#{s}", .{ e.base, name });
+                    e.anchor = try g.a.print(host ++ "{s}#{s}", .{ e.base, name });
                     try g.claim(e.anchor.?);
                 }
                 try g.schemas.append(g.a, e);
@@ -715,21 +715,21 @@ test "any document: each subschema's base, identifiers and anchors, as RFC 3986 
                         if (!first) try g.write(", ", .{});
                         first = false;
                         try g.write("\"{s}\": ", .{keyword});
-                        const at = try std.fmt.allocPrint(g.a, "{s}/{s}", .{ pointer, keyword });
+                        const at = try g.a.print("{s}/{s}", .{ pointer, keyword });
                         const holds = schemaKeyword(g.d, keyword);
                         if (!holds) {
                             try g.opaqueValue(keyword, at, e.base);
                         } else if (std.mem.eql(u8, keyword, "properties") or std.mem.eql(u8, keyword, "$defs")) {
                             try g.write("{{\"k0\": ", .{});
-                            try g.schema(try std.fmt.allocPrint(g.a, "{s}/k0", .{at}), e.base, depth + 1);
+                            try g.schema(try g.a.print("{s}/k0", .{at}), e.base, depth + 1);
                             try g.write(", \"k1\": ", .{});
-                            try g.schema(try std.fmt.allocPrint(g.a, "{s}/k1", .{at}), e.base, depth + 1);
+                            try g.schema(try g.a.print("{s}/k1", .{at}), e.base, depth + 1);
                             try g.write("}}", .{});
                         } else if (std.mem.eql(u8, keyword, "allOf") or std.mem.eql(u8, keyword, "prefixItems")) {
                             try g.write("[", .{});
-                            try g.schema(try std.fmt.allocPrint(g.a, "{s}/0", .{at}), e.base, depth + 1);
+                            try g.schema(try g.a.print("{s}/0", .{at}), e.base, depth + 1);
                             try g.write(", ", .{});
-                            try g.schema(try std.fmt.allocPrint(g.a, "{s}/1", .{at}), e.base, depth + 1);
+                            try g.schema(try g.a.print("{s}/1", .{at}), e.base, depth + 1);
                             try g.write("]", .{});
                         } else {
                             try g.schema(at, e.base, depth + 1);
@@ -742,10 +742,10 @@ test "any document: each subschema's base, identifiers and anchors, as RFC 3986 
             /// A value with an object holding an `$id` where no schema is.
             fn opaqueValue(g: *Gen, keyword: []const u8, at: []const u8, base: []const u8) !void {
                 g.unique += 1;
-                const id = try std.fmt.allocPrint(g.a, host ++ "/never{d}.json", .{g.unique});
+                const id = try g.a.print(host ++ "/never{d}.json", .{g.unique});
                 const array = std.mem.eql(u8, keyword, "enum") or std.mem.eql(u8, keyword, "prefixItems");
                 const map = std.mem.eql(u8, keyword, "$defs");
-                const pointer = if (array) try std.fmt.allocPrint(g.a, "{s}/0", .{at}) else if (map) try std.fmt.allocPrint(g.a, "{s}/k0", .{at}) else at;
+                const pointer = if (array) try g.a.print("{s}/0", .{at}) else if (map) try g.a.print("{s}/k0", .{at}) else at;
                 if (array) try g.write("[", .{}) else if (map) try g.write("{{\"k0\": ", .{});
                 try g.write("{{\"$id\": \"{s}\", \"type\": \"string\"}}", .{id});
                 if (array) try g.write("]", .{}) else if (map) try g.write("}}", .{});
@@ -778,8 +778,8 @@ test "any document: each subschema's base, identifiers and anchors, as RFC 3986 
             // Each schema position: its base by RFC 3986 through every `$id`
             // above it, and found by its URI and its anchor as by its pointer.
             for (g.schemas.items) |e| {
-                const at = try r.lookup(retrieval, try std.fmt.allocPrint(a, "#{s}", .{e.pointer}), d);
-                try testing.expectEqualStrings(try std.fmt.allocPrint(a, host ++ "{s}", .{e.base}), at.scope.base);
+                const at = try r.lookup(retrieval, try a.print("#{s}", .{e.pointer}), d);
+                try testing.expectEqualStrings(try a.print(host ++ "{s}", .{e.base}), at.scope.base);
                 if (e.identified) |u| {
                     const by = try r.lookup(retrieval, u, d);
                     try testing.expect(by.value == at.value);
@@ -791,8 +791,8 @@ test "any document: each subschema's base, identifiers and anchors, as RFC 3986 
             // reaches it, in the base of the schema around it.
             for (g.opaque_ids.items) |o| {
                 try testing.expectError(error.UnresolvedReference, r.lookup(retrieval, o.id, d));
-                const at = try r.lookup(retrieval, try std.fmt.allocPrint(a, "#{s}", .{o.pointer}), d);
-                try testing.expectEqualStrings(try std.fmt.allocPrint(a, host ++ "{s}", .{o.base}), at.scope.base);
+                const at = try r.lookup(retrieval, try a.print("#{s}", .{o.pointer}), d);
+                try testing.expectEqualStrings(try a.print(host ++ "{s}", .{o.base}), at.scope.base);
             }
             // Every schema counted against `Limits.subschemas`, and refused
             // past it.

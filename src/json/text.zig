@@ -2,6 +2,7 @@
 //! is UTF-8, and what an escape means. The decoder and the encoder share these,
 //! and JSON5's tokens build on them.
 const std = @import("std");
+const aegis = @import("aegis");
 const core = @import("../core.zig");
 const work = @import("work.zig");
 
@@ -252,11 +253,9 @@ pub fn unescape(body: []const u8, out: []u8, unicode: Unicode) usize {
     while (std.mem.findScalarPos(u8, body, from, '\\')) |slash| {
         // `slash` is a search's answer at or past `from` in `body`; `out` is as long as `unescapedLength` counts, the caller's contract, and `to` is what has been written
         to += copyRun(body[from..slash], out[to..], unicode);
-        // `end` checked every escape in this body.
-        const e = escape(body[slash + 1 ..], unicode) catch unreachable;
+        const e = escape(body[slash + 1 ..], unicode) catch aegis.assert.never("`end` checked every escape in this body");
         var encoded: [4]u8 = undefined;
-        // a scalar `escape` decoded is at most U+10FFFF and no surrogate.
-        const n = std.unicode.utf8Encode(e.scalar, &encoded) catch unreachable;
+        const n = std.unicode.utf8Encode(e.scalar, &encoded) catch aegis.assert.never("a scalar `escape` decoded is at most U+10FFFF and no surrogate");
         // `n` is the length of the scalar encoded, at most 4; `out` is as long as `unescapedLength` counts
         @memcpy(out[to..][0..n], encoded[0..n]);
         to += n;
@@ -340,10 +339,8 @@ pub const Unescaped = struct {
             defer self.rest = self.rest[1..];
             return self.rest[0];
         }
-        // `end` checked every escape in this body.
-        const e = escape(self.rest[1..], self.unicode) catch unreachable;
-        // an escape decodes to a Unicode scalar, never a surrogate half.
-        self.len = std.unicode.utf8Encode(e.scalar, &self.pending) catch unreachable;
+        const e = escape(self.rest[1..], self.unicode) catch aegis.assert.never("`end` checked every escape in this body");
+        self.len = std.unicode.utf8Encode(e.scalar, &self.pending) catch aegis.assert.never("an escape decodes to a Unicode scalar, never a surrogate half");
         self.at = 1;
         self.rest = self.rest[1 + e.len ..];
         return self.pending[0];
@@ -384,10 +381,8 @@ pub fn unescapedLength(body: []const u8, unicode: Unicode) usize {
     var n: usize = 0;
     var from: usize = 0;
     while (std.mem.findScalarPos(u8, body, from, '\\')) |slash| {
-        // `end` checked every escape in this body.
-        const e = escape(body[slash + 1 ..], unicode) catch unreachable;
-        // an escape decodes to a Unicode scalar, never a surrogate half.
-        n += runLength(body[from..slash], unicode) + (std.unicode.utf8CodepointSequenceLength(e.scalar) catch unreachable);
+        const e = escape(body[slash + 1 ..], unicode) catch aegis.assert.never("`end` checked every escape in this body");
+        n += runLength(body[from..slash], unicode) + (std.unicode.utf8CodepointSequenceLength(e.scalar) catch aegis.assert.never("an escape decodes to a Unicode scalar, never a surrogate half"));
         from = slash + 1 + e.len;
     }
     // `from` is past the last escape, inside `body`

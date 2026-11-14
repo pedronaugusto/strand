@@ -152,7 +152,7 @@ pub fn Dialect(comptime json5: bool) type {
                     try self.put(escaped, c);
                 } else {
                     var buffer: [6]u8 = undefined;
-                    const escaped = std.mem.print(&buffer, "\\u00{x:0>2}", .{byte}) catch unreachable; // unreachable: a six-byte escape fits exactly.
+                    const escaped = std.mem.print(&buffer, "\\u00{x:0>2}", .{byte}) catch unreachable; // glint-ignore: Z026 -- a six-byte escape fits exactly.
                     try self.put(escaped, c);
                 }
                 from = i + 1;

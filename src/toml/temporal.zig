@@ -151,24 +151,24 @@ pub const max_len = "9999-12-31T23:59:60.999999999+23:59".len;
 /// reads it, and so does every RFC 3339 reader. The parts must be `valid`.
 pub fn format(parts: Parts, buffer: *[max_len]u8) []const u8 {
     var out: std.Io.Writer = .fixed(buffer);
-    if (parts.kind != .local_time) out.print("{d:0>4}-{d:0>2}-{d:0>2}", .{ parts.year, parts.month, parts.day }) catch unreachable; // unreachable: max_len holds the longest spelling of valid parts.
+    if (parts.kind != .local_time) out.print("{d:0>4}-{d:0>2}-{d:0>2}", .{ parts.year, parts.month, parts.day }) catch unreachable; // glint-ignore: Z026 -- max_len holds the longest spelling of valid parts.
     if (parts.kind == .local_date) return out.buffered();
-    if (parts.kind != .local_time) out.writeByte('T') catch unreachable; // unreachable: within max_len.
-    out.print("{d:0>2}:{d:0>2}:{d:0>2}", .{ parts.hour, parts.minute, parts.second }) catch unreachable; // unreachable: within max_len.
+    if (parts.kind != .local_time) out.writeByte('T') catch unreachable; // glint-ignore: Z026 -- within max_len.
+    out.print("{d:0>2}:{d:0>2}:{d:0>2}", .{ parts.hour, parts.minute, parts.second }) catch unreachable; // glint-ignore: Z026 -- within max_len.
     if (parts.nanosecond != 0) {
         var digits: [9]u8 = undefined;
-        _ = std.mem.print(&digits, "{d:0>9}", .{parts.nanosecond}) catch unreachable; // unreachable: below 10^9, nine digits.
+        _ = std.mem.print(&digits, "{d:0>9}", .{parts.nanosecond}) catch unreachable; // glint-ignore: Z026 -- below 10^9, nine digits.
         var len: usize = 9;
         while (digits[len - 1] == '0') len -= 1;
-        out.writeByte('.') catch unreachable; // unreachable: within max_len.
-        out.writeAll(digits[0..len]) catch unreachable; // unreachable: within max_len.
+        out.writeByte('.') catch unreachable; // glint-ignore: Z026 -- within max_len.
+        out.writeAll(digits[0..len]) catch unreachable; // glint-ignore: Z026 -- within max_len.
     }
     if (parts.kind == .offset_date_time) {
         if (parts.offset_minutes == 0) {
-            out.writeByte('Z') catch unreachable; // unreachable: within max_len.
+            out.writeByte('Z') catch unreachable; // glint-ignore: Z026 -- within max_len.
         } else {
             const magnitude = @abs(parts.offset_minutes);
-            out.print("{c}{d:0>2}:{d:0>2}", .{ @as(u8, if (parts.offset_minutes < 0) '-' else '+'), magnitude / 60, magnitude % 60 }) catch unreachable; // unreachable: within max_len.
+            out.print("{c}{d:0>2}:{d:0>2}", .{ @as(u8, if (parts.offset_minutes < 0) '-' else '+'), magnitude / 60, magnitude % 60 }) catch unreachable; // glint-ignore: Z026 -- within max_len.
         }
     }
     return out.buffered();

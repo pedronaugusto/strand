@@ -253,11 +253,11 @@ const Generator = struct {
         const at = gen.intRange(g.s, usize, 0, g.len - 1);
         switch (gen.intRange(g.s, u8, 0, 2)) {
             0 => {
-                std.mem.copyForwards(u8, g.buffer[at .. g.len - 1], g.buffer[at + 1 .. g.len]);
+                @memmove(g.buffer[at .. g.len - 1], g.buffer[at + 1 .. g.len]);
                 g.len -= 1;
             },
             1 => if (g.len < g.buffer.len) {
-                std.mem.copyBackwards(u8, g.buffer[at + 1 .. g.len + 1], g.buffer[at..g.len]);
+                @memmove(g.buffer[at + 1 .. g.len + 1], g.buffer[at..g.len]);
                 g.len += 1;
             },
             else => g.buffer[at] = "{}[],:\"'/x0 "[gen.intRange(g.s, usize, 0, 12)],

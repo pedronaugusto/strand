@@ -246,7 +246,7 @@ fn skippedIn(d: Dialect, file: []const u8, case: []const u8, test_description: [
         if (entry[1].len > 0 and !std.mem.eql(u8, entry[1], case) and !std.mem.eql(u8, entry[1], test_description)) continue;
         if (entry[2].len == 0) return true;
         var drafts = std.mem.splitScalar(u8, entry[2], ',');
-        while (drafts.next()) |r| if (std.fmt.parseInt(u32, r, 10) catch 0 == release(d)) return true;
+        while (drafts.next()) |r| if ((std.fmt.parseInt(u32, r, 10) catch 0) == release(d)) return true;
     }
     return false;
 }

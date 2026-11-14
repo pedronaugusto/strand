@@ -40,7 +40,7 @@ fn document(gpa: std.mem.Allocator, services: usize) ![]u8 {
     defer gpa.free(list);
     for (list, names, 0..) |*entry, *name, i| {
         var w = std.Io.Writer.fixed(name);
-        // unreachable: under 100,000 services, `svc99999` is eight bytes.
+        // glint-ignore: Z026 -- under 100,000 services, `svc99999` is eight bytes.
         w.print("svc{d:0>5}", .{i}) catch unreachable;
         entry.* = .{
             .key = w.buffered(),

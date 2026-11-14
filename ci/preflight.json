@@ -158,15 +158,7 @@
         "level": "gate"
       },
       {
-        "id": "A010",
-        "level": "gate"
-      },
-      {
         "id": "A011",
-        "level": "gate"
-      },
-      {
-        "id": "A012",
         "level": "gate"
       },
       {
@@ -174,7 +166,7 @@
         "level": "gate"
       },
       {
-        "id": "A014",
+        "id": "P009",
         "level": "gate"
       },
       {
@@ -182,15 +174,11 @@
         "level": "gate"
       },
       {
-        "id": "A016",
+        "id": "P008",
         "level": "gate"
       },
       {
-        "id": "A019",
-        "level": "gate"
-      },
-      {
-        "id": "A020",
+        "id": "P007",
         "level": "gate"
       },
       {
@@ -200,85 +188,6 @@
       {
         "id": "Z026",
         "level": "gate"
-      }
-    ],
-    "disallowed": [
-      {
-        "source": "std",
-        "declaration": "c.fstat",
-        "reason": "file identity belongs to airlock: strand asks it, as for durability",
-        "replacement": "airlock's file identity (strand's follower and tail call it)",
-        "scope": "production",
-        "owners": [
-          "airlock"
-        ]
-      },
-      {
-        "source": "std",
-        "declaration": "c.fstatat",
-        "reason": "file identity belongs to airlock: strand asks it, as for durability",
-        "replacement": "airlock's file identity (strand's follower and tail call it)",
-        "scope": "production",
-        "owners": [
-          "airlock"
-        ]
-      },
-      {
-        "source": "std",
-        "declaration": "c.statx",
-        "reason": "file identity belongs to airlock: strand asks it, as for durability",
-        "replacement": "airlock's file identity (strand's follower and tail call it)",
-        "scope": "production",
-        "owners": [
-          "airlock"
-        ]
-      },
-      {
-        "source": "std",
-        "declaration": "os.linux.statx",
-        "reason": "file identity belongs to airlock: strand asks it, as for durability",
-        "replacement": "airlock's file identity (strand's follower and tail call it)",
-        "scope": "production",
-        "owners": [
-          "airlock"
-        ]
-      },
-      {
-        "source": "std",
-        "declaration": "os.linux.IoUring.statx",
-        "reason": "file identity belongs to airlock: strand asks it, as for durability",
-        "replacement": "airlock's file identity (strand's follower and tail call it)",
-        "scope": "production",
-        "owners": [
-          "airlock"
-        ]
-      },
-      {
-        "declaration": "fstat",
-        "reason": "file identity belongs to airlock: strand asks it, as for durability",
-        "replacement": "airlock's file identity (strand's follower and tail call it)",
-        "scope": "production",
-        "owners": [
-          "airlock"
-        ]
-      },
-      {
-        "declaration": "fstatat",
-        "reason": "file identity belongs to airlock: strand asks it, as for durability",
-        "replacement": "airlock's file identity (strand's follower and tail call it)",
-        "scope": "production",
-        "owners": [
-          "airlock"
-        ]
-      },
-      {
-        "declaration": "statx",
-        "reason": "file identity belongs to airlock: strand asks it, as for durability",
-        "replacement": "airlock's file identity (strand's follower and tail call it)",
-        "scope": "production",
-        "owners": [
-          "airlock"
-        ]
       }
     ]
   }

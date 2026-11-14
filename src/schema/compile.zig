@@ -119,7 +119,7 @@ const Compiler = struct {
     /// Nodes whose instructions are still to be compiled.
     queue: std.ArrayList(Node) = .empty,
     /// The anchor names `$dynamicRef`s search for.
-    dynamic_names: std.StringArrayHashMapUnmanaged(void) = .empty,
+    dynamic_names: std.array_hash_map.String(void) = .empty,
     /// Whether a `$recursiveRef` searches.
     recursive: bool = false,
     /// What is being compiled, for a diagnostic.
@@ -810,7 +810,7 @@ test "every embedded meta-schema compiles, each in its own draft" {
     defer state.deinit();
     const a = state.allocator();
     for ([_]Dialect{ .draft7, .draft2019_09, .draft2020_12 }) |d| {
-        const text = try std.fmt.allocPrint(a, "{{\"$ref\": \"{s}\"}}", .{d.uri()});
+        const text = try a.print("{{\"$ref\": \"{s}\"}}", .{d.uri()});
         const p = try compiled(a, text, .{});
         try testing.expect(p.nodes.len > 20);
     }
@@ -917,7 +917,7 @@ test "any graph of references: refused exactly when one applies a schema again i
                     if (gen.intRange(s, u8, 0, 2) != 0) continue;
                     const j = gen.intRange(s, usize, 0, n - 1);
                     if (inPlaceKind(kind)) reach[i][j] = true;
-                    const ref = try std.fmt.allocPrint(a, "{{\"$ref\": \"#/$defs/d{d}\"}}", .{j});
+                    const ref = try a.print("{{\"$ref\": \"#/$defs/d{d}\"}}", .{j});
                     switch (kind) {
                         .ref => try text.print(a, ", \"$ref\": \"#/$defs/d{d}\"", .{j}),
                         .all_of => try text.print(a, ", \"allOf\": [{s}]", .{ref}),

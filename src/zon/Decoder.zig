@@ -330,7 +330,7 @@ fn character(self: *Self, c: *core.Context, request: core.Request) Error!core.Ev
     self.at = read.end;
     self.markScalar();
     if (request.expected == .scalar) return .{ .scalar = read.value };
-    const spelling = std.mem.print(&self.digits, "{d}", .{read.value}) catch unreachable; // unreachable: a code point has seven digits at most.
+    const spelling = std.mem.print(&self.digits, "{d}", .{read.value}) catch unreachable; // glint-ignore: Z026 -- a code point has seven digits at most.
     return .{ .number = .{ .bytes = spelling, .lifetime = .transient } };
 }
 

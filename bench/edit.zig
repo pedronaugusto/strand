@@ -29,7 +29,7 @@ fn key(buffer: *[6]u8, i: usize, count: usize) []const u8 {
     if (i == count / 2) return "mid";
     if (i == count / 2 + 1) return "old";
     var w = std.Io.Writer.fixed(buffer);
-    // unreachable: under 100,000 entries, `e99999` is six bytes.
+    // glint-ignore: Z026 -- under 100,000 entries, `e99999` is six bytes.
     w.print("e{d}", .{i}) catch unreachable;
     return w.buffered();
 }

@@ -291,9 +291,9 @@ fn joined(self: *Self, c: *core.Context, e: Entry) Error!core.Span {
     const out = c.alloc(u8, length) catch |err| return failure(c, err);
     var w = std.Io.Writer.fixed(out);
     for (lines[0..n], 0..) |l, i| {
-        // unreachable: `out` holds the lines and the line feeds between them.
+        // glint-ignore: Z026 -- `out` holds the lines and the line feeds between them.
         if (i > 0) w.writeByte('\n') catch unreachable;
-        // unreachable: as above.
+        // glint-ignore: Z026 -- as above.
         w.writeAll(l) catch unreachable;
     }
     return .{ .bytes = out, .lifetime = .owned };

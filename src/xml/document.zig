@@ -467,7 +467,7 @@ const Builder = struct {
         switch (ref) {
             .char => |cp| {
                 var buffer: [4]u8 = undefined;
-                const len = std.unicode.utf8Encode(cp.value, &buffer) catch unreachable; // unreachable: a Char is a scalar.
+                const len = std.unicode.utf8Encode(cp.value, &buffer) catch unreachable; // glint-ignore: Z026 -- a Char is a scalar.
                 out.appendSlice(self.allocator, buffer[0..len]) catch return self.oom();
                 return cp.end;
             },

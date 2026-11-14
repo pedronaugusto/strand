@@ -23,8 +23,8 @@
         // finite budgets, checked arithmetic, closed public diagnostics and
         // always-on contracts. std only, pinned to a commit.
         .aegis = .{
-            .url = "git+https://github.com/pedronaugusto/aegis#2dd07e601bf4a1f6b2a971cb61d9d01a2a8a311f",
-            .hash = "aegis-0.2.4-rsxoukl6DQDU1qFoCk1wsrnFjEqR1vB_UV0hv0_6XA08",
+            .url = "git+https://github.com/pedronaugusto/aegis#dc3ed602f9c18b4473e9c649d1b1f36403603018",
+            .hash = "aegis-0.2.4-rsxouheoDQB7ckAmyiNbPdOdlqJnN1Sj56bM7_iPKhpY",
         },
 
         // Unicode's simple case folding, for member names read by folding.
@@ -53,8 +53,8 @@
         // RFC 3339's grammar, for strand_schema's `date-time`, `date`, `time`
         // and `duration` formats: fetched only by a build with `.schema = true`.
         .almanac = .{
-            .url = "git+https://github.com/pedronaugusto/almanac#a7d862718d5a05b5af61d99708d3256d025f01fc",
-            .hash = "almanac-0.0.0-sQeSOZJWCgD4FwbPESSnmxckdDUFneliMzxb4yHpPduv",
+            .url = "git+https://github.com/pedronaugusto/almanac#c11d303e8e9b551df0e37ae584a0273a841588a4",
+            .hash = "almanac-0.0.0-sQeSOc1jCgDnM3kPCQGesykZXF9b2x3mB06ENUKE-RLl",
             .lazy = true,
         },
 

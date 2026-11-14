@@ -1018,10 +1018,10 @@ fn checkRotation(a: []const u8, b: []const u8) !void {
 
     var buffer: [64]u8 = undefined;
     var source = file.reader(testing.io, &buffer);
-    var path: jsonl.PathOpener = .{ .dir = tmp.dir, .sub_path = "log.jsonl" };
+    var path: jsonl.PathOpener = .{ .dir = .of(tmp.dir), .sub_path = "log.jsonl" };
     var follower: jsonl.Follower(Event) = .init(testing.allocator, &source, .{
         .reader = .{ .parse = event_parse, .on_malformed = .skip },
-        .wait = .{ .poll = .fromMicroseconds(50) },
+        .wait = .{ .poll = .literal("50us") },
         .reopen = path.opener(),
     });
     defer follower.deinit(testing.io);

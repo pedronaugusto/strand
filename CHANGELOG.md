@@ -18,6 +18,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Breaking
 
+- `jsonl.PathOpener.dir` is an `aegis.own.Unowned(std.Io.Dir)`, the caller's directory given as `.of(dir)`.
+- A follower's `Options.wait` takes aegis durations (`.poll = .literal("20ms")`), and its wake is an `aegis.Pulse` (`.wake = .{ .pulse = &pulse }`), bumped where `std.Io.Event` was set: the follower keeps the generation it last waited past, so a bump while it reads ends its next wait at once.
+- `json.Members.phase` is of the public type `json.Members.Phase`, and `xml.Scanner.place` of the public type `xml.Scanner.Place`.
+
 - `json.Value.Member` is the core's `Pair([]const u8, Value)`, with the same fields, and `json.Value.object` a slice of it: an object's members are the pairs it was read as, with no copy.
 - `Tail`'s `prev`, `prevRaw` and `last` report `error.Canceled` when the task is canceled during a block read, as `Follower.next` does, instead of `error.ReadFailed`: `Tail.NextError` gains `Canceled`.
 

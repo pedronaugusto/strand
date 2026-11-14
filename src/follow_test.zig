@@ -713,7 +713,7 @@ const Gap = struct {
 
     fn created(hook: *shakedown.Hook, io: std.Io) void {
         const gap: *Gap = @fieldParentPtr("create", hook);
-        gap.path.dir.writeFile(io, .{ .sub_path = gap.path.sub_path, .data = "{\"kind\":\"new\"}\n" }) catch
+        gap.path.dir.get().writeFile(io, .{ .sub_path = gap.path.sub_path, .data = "{\"kind\":\"new\"}\n" }) catch
             @panic("could not write the replacement file");
     }
 

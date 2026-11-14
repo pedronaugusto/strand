@@ -300,7 +300,7 @@ const Compiler = struct {
                 // Read with `if`; alone, they do nothing.
                 .then, .@"else" => {},
                 .prefix_items => try c.emit(ops, k, .{ .prefix_items = try c.schemaList(v, scope) }),
-                .items => try c.items(ops, d, present, v, scope),
+                .items => try c.itemsKeyword(ops, d, present, v, scope),
                 // Only after an array `items`; otherwise it does nothing.
                 .additional_items => if (present.get(.items)) |items| if (items.* == .array) {
                     try c.emit(ops, k, .{ .items = .{ .from = items.array.len, .node = try c.schema(v, scope) } });
@@ -346,7 +346,7 @@ const Compiler = struct {
 
     /// `items`: from past `prefixItems` in 2020-12; a list or one schema in
     /// the drafts before it.
-    fn items(c: *Compiler, ops: *std.ArrayList(Program.Instruction), d: Dialect, present: *std.EnumArray(Keyword, ?*const Value), v: *const Value, scope: Scope) Error!void {
+    fn itemsKeyword(c: *Compiler, ops: *std.ArrayList(Program.Instruction), d: Dialect, present: *std.EnumArray(Keyword, ?*const Value), v: *const Value, scope: Scope) Error!void {
         const k: Keyword = .items;
         switch (d) {
             .draft2020_12 => {

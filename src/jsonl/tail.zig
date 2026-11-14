@@ -434,11 +434,11 @@ pub fn Tail(comptime T: type) type {
                     // At most the bound plus the possible CR is retained.
                     // Once that suffix is full, all earlier bytes are only
                     // scanned; they cannot be part of an accepted payload.
-                    const room = (self.options.max_line_bytes.raw() +| 1) - self.record.items.len;
+                    const room = limit.withOne(self.options.max_line_bytes) - self.record.items.len;
                     const take = @min(room, chunk.len);
                     if (take != 0) {
                         const kept = self.record.items.len;
-                        const capacity = @min(self.options.max_line_bytes.raw() +| 1, @max(kept + take, self.record.capacity *| 2));
+                        const capacity = @min(limit.withOne(self.options.max_line_bytes), @max(kept + take, self.record.capacity *| 2));
                         try self.record.ensureTotalCapacityPrecise(self.gpa, capacity);
                         self.record.items.len = kept + take;
                         @memmove(self.record.items[take..], self.record.items[0..kept]);
@@ -496,7 +496,7 @@ pub fn Tail(comptime T: type) type {
                     self.number += 1;
                     return self.emit(line, over);
                 }
-                if (!over and self.end > self.options.max_line_bytes.raw() +| line_mod.bom.len +| 1) {
+                if (!over and self.end > limit.withOne(self.options.max_line_bytes) +| line_mod.bom.len) {
                     // Longer than the bound allows to be held: drop what has
                     // been read of it and keep scanning back for where it
                     // began, so that the line before it is still reachable.

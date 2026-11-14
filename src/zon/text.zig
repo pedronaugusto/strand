@@ -119,7 +119,7 @@ pub fn unescapedLength(token: []const u8) error{SyntaxError}!usize {
 pub fn unescape(token: []const u8, out: []u8) void {
     var writer: std.Io.Writer = .fixed(out);
     // The length was measured by the same reader a moment ago.
-    const result = literal.parseWrite(&writer, token) catch unreachable; // unreachable: a fixed writer sized by the measuring pass cannot fill.
+    const result = literal.parseWrite(&writer, token) catch unreachable; // glint-ignore: Z026 -- a fixed writer sized by the measuring pass cannot fill.
     aegis.assert.invariant(result == .success, "the literal was measured as valid");
     aegis.assert.invariant(writer.end == out.len, "the literal fills the length measured for it");
 }

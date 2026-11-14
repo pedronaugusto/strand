@@ -129,7 +129,7 @@ pub const Members = struct {
     /// Where the object ends, once it has.
     end_at: usize,
 
-    const Phase = union(enum) { before, inside, after, failed: MembersError };
+    pub const Phase = union(enum) { before, inside, after, failed: MembersError };
 
     /// Starts over `bytes`, where `members` lies: a decoder's frames are
     /// kilobytes, which a value handed back would build and then copy.

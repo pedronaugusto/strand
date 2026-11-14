@@ -122,8 +122,39 @@ test "the tape and streaming stand at the same offset when a typed read fails" {
     try expectSameEverywhere(.json5, "{e: {x: 'a\\x41'} // after\n}", .{});
 }
 
+test "a number's length is its token's, the minus included, read either way" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const one: json.ParseOptions = .{ .limits = .{ .numeric_bytes = .fromRaw(1) } };
+    inline for (.{ .stream, .tape }) |backend| {
+        try testing.expectError(error.LengthLimit, api.parseLeakyWith(u8, .json, backend, arena, " -0", one));
+        try testing.expectError(error.LengthLimit, api.parseLeakyWith(i32, .json, backend, arena, "-7", one));
+        try testing.expectEqual(@as(u8, 7), try api.parseLeakyWith(u8, .json, backend, arena, "7", one));
+    }
+    try expectSameEverywhere(.json, " -0", one);
+    try expectSameEverywhere(.jsonc, "-7 ", one);
+}
+
+test "-0 is an unsigned zero, or refused where integers are digits alone, read either way" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    inline for (.{ .stream, .tape }) |backend| {
+        try testing.expectEqual(@as(u8, 0), try api.parseLeakyWith(u8, .json, backend, arena, "-0", .{}));
+        try testing.expectError(error.UnexpectedType, api.parseLeakyWith(u8, .json, backend, arena, "-0", .{ .integers = .digits }));
+        try testing.expectEqual(@as(i8, 0), try api.parseLeakyWith(i8, .json, backend, arena, "-0", .{ .integers = .digits }));
+    }
+}
+
 test "fuzz: the tape and streaming read generated JSON alike" {
-    try shakedown.check(testing.allocator, {}, fuzzSame, .{ .cases = 256 });
+    try shakedown.check(testing.allocator, {}, fuzzSame, .{
+        .cases = 256,
+        .regressions = &.{
+            // ` -0` read as a `u8` under a one-byte numeric limit.
+            "0:0:2:1:0:1:0:0:0:0:1",
+        },
+    });
 }
 
 fn fuzzSame(_: void, case: *shakedown.Case) anyerror!void {
@@ -253,11 +284,11 @@ const Generator = struct {
         const at = gen.intRange(g.s, usize, 0, g.len - 1);
         switch (gen.intRange(g.s, u8, 0, 2)) {
             0 => {
-                std.mem.copyForwards(u8, g.buffer[at .. g.len - 1], g.buffer[at + 1 .. g.len]);
+                @memmove(g.buffer[at .. g.len - 1], g.buffer[at + 1 .. g.len]);
                 g.len -= 1;
             },
             1 => if (g.len < g.buffer.len) {
-                std.mem.copyBackwards(u8, g.buffer[at + 1 .. g.len + 1], g.buffer[at..g.len]);
+                @memmove(g.buffer[at + 1 .. g.len + 1], g.buffer[at..g.len]);
                 g.len += 1;
             },
             else => g.buffer[at] = "{}[],:\"'/x0 "[gen.intRange(g.s, usize, 0, 12)],

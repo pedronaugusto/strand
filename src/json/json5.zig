@@ -209,12 +209,10 @@ pub fn unescape(body: []const u8, out: []u8, unicode: Unicode) usize {
     while (std.mem.findScalarPos(u8, body, from, '\\')) |slash| {
         // `slash` is a search's answer at or past `from` in `body`; `out` is as long as `unescapedLength` counts, the caller's contract, and `to` is what has been written
         to += strings.copyRun(body[from..slash], out[to..], unicode);
-        // `end` checked every escape in this body.
-        const e = escape(body[slash + 1 ..], unicode) catch unreachable;
+        const e = escape(body[slash + 1 ..], unicode) catch aegis.assert.never("`end` checked every escape in this body");
         if (e.scalar) |scalar| {
             var encoded: [4]u8 = undefined;
-            // a scalar `escape` decoded is at most U+10FFFF and no surrogate.
-            const n = std.unicode.utf8Encode(scalar, &encoded) catch unreachable;
+            const n = std.unicode.utf8Encode(scalar, &encoded) catch aegis.assert.never("a scalar `escape` decoded is at most U+10FFFF and no surrogate");
             // `n` is the length of the scalar encoded, at most 4; `out` is as long as `unescapedLength` counts
             @memcpy(out[to..][0..n], encoded[0..n]);
             to += n;
@@ -230,12 +228,10 @@ pub fn unescapedLength(body: []const u8, unicode: Unicode) usize {
     var n: usize = 0;
     var from: usize = 0;
     while (std.mem.findScalarPos(u8, body, from, '\\')) |slash| {
-        // `end` checked every escape in this body.
-        const e = escape(body[slash + 1 ..], unicode) catch unreachable;
+        const e = escape(body[slash + 1 ..], unicode) catch aegis.assert.never("`end` checked every escape in this body");
         // `slash` is a search's answer at or past `from` in `body`
         n += strings.runLength(body[from..slash], unicode);
-        // an escape decodes to a Unicode scalar, never a surrogate half.
-        if (e.scalar) |scalar| n += std.unicode.utf8CodepointSequenceLength(scalar) catch unreachable;
+        if (e.scalar) |scalar| n += std.unicode.utf8CodepointSequenceLength(scalar) catch aegis.assert.never("an escape decodes to a Unicode scalar, never a surrogate half");
         from = slash + 1 + e.len;
     }
     // `from` is past the last escape, inside `body`
@@ -256,11 +252,9 @@ const Unescaped = struct {
             if (self.rest.len == 0) return null;
             self.at = 0;
             if (self.rest[0] == '\\') {
-                // `end` checked every escape in this body.
-                const e = escape(self.rest[1..], self.unicode) catch unreachable;
+                const e = escape(self.rest[1..], self.unicode) catch aegis.assert.never("`end` checked every escape in this body");
                 self.rest = self.rest[1 + e.len ..];
-                // an escape decodes to a Unicode scalar, never a surrogate half.
-                self.len = if (e.scalar) |scalar| std.unicode.utf8Encode(scalar, &self.pending) catch unreachable else 0;
+                self.len = if (e.scalar) |scalar| std.unicode.utf8Encode(scalar, &self.pending) catch aegis.assert.never("an escape decodes to a Unicode scalar, never a surrogate half") else 0;
                 continue;
             }
             // A sequence goes by whole under `.replace`, as `copyRun` copies it.
@@ -376,7 +370,7 @@ fn hexadecimal(comptime T: type, negative: bool, digits: []const u8, c: *core.Co
     const Magnitude = @Int(.unsigned, @max(bits, 1));
     var magnitude: Magnitude = 0;
     for (digits) |digit| {
-        // unreachable: `numberEnd` checked these are hexadecimal digits.
+        // glint-ignore: Z026 -- `numberEnd` checked these are hexadecimal digits.
         const nibble = std.fmt.charToDigit(digit, 16) catch unreachable;
         magnitude = (aegis.int.Checked(Magnitude).init(magnitude).mul(16) catch return error.NumberOutOfRange).raw();
         magnitude = (aegis.int.Checked(Magnitude).init(magnitude).add(nibble) catch return error.NumberOutOfRange).raw();
@@ -427,9 +421,9 @@ pub fn floating(comptime T: type, text: []const u8, exact: bool, c: *core.Contex
 fn hexadecimalExact(comptime T: type, digits: []const u8) bool {
     const first = std.mem.findNone(u8, digits, "0") orelse return true;
     const last = std.mem.findLastNone(u8, digits, "0").?;
-    // unreachable: `numberEnd` checked these are hexadecimal digits.
+    // glint-ignore: Z026 -- `numberEnd` checked these are hexadecimal digits.
     const lead: u8 = std.fmt.charToDigit(digits[first], 16) catch unreachable;
-    // unreachable: as the one before.
+    // glint-ignore: Z026 -- as the one before.
     const tail: u8 = std.fmt.charToDigit(digits[last], 16) catch unreachable;
     const width = (last - first) * 4 + (8 - @clz(lead)) - @ctz(tail);
     return width <= std.math.floatFractionalBits(T) + 1;

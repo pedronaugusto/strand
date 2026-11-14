@@ -72,6 +72,7 @@ pub const Limits = struct {
     container_items: usize = 1024 * 1024,
     string_bytes: Bytes = .literal("8MiB"),
     key_bytes: Bytes = .literal("64KiB"),
+    /// A number's length as written, its sign included.
     numeric_bytes: Bytes = .literal("1KiB"),
     allocation_bytes: Bytes = .literal("32MiB"),
     work: usize = 128 * 1024 * 1024,

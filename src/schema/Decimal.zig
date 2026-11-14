@@ -147,10 +147,10 @@ fn smallMultiple(a_digits: []const u8, b_digits: []const u8, k: u64) bool {
     var base: u256 = 10 % m;
     var e = k;
     while (e > 0) : (e >>= 1) {
-        if (e & 1 == 1) power = power * base % m;
-        base = base * base % m;
+        if (e & 1 == 1) power = (power * base) % m;
+        base = (base * base) % m;
     }
-    return r * power % m == 0;
+    return (r * power) % m == 0;
 }
 
 fn bigMultiple(gpa: std.mem.Allocator, a_digits: []const u8, b_digits: []const u8, k: u64) error{OutOfMemory}!bool {
@@ -263,8 +263,8 @@ test "property: multipleOf and order agree with exact big-integer arithmetic" {
             const q = gen.intRange(s, i32, -40, 40);
             var a_full: [128]u8 = undefined;
             var b_full: [128]u8 = undefined;
-            const a_spelled = try std.fmt.bufPrint(&a_full, "{s}e{d}", .{ a_text[0..a_len], p });
-            const b_spelled = try std.fmt.bufPrint(&b_full, "{s}e{d}", .{ b_text[0..b_len], q });
+            const a_spelled = try std.mem.print(&a_full, "{s}e{d}", .{ a_text[0..a_len], p });
+            const b_spelled = try std.mem.print(&b_full, "{s}e{d}", .{ b_text[0..b_len], q });
             var ab: [128]u8 = undefined;
             var bb: [128]u8 = undefined;
             const a = try parse(a_spelled, &ab, 4096);

@@ -11,5 +11,23 @@
   ],
   "compile_once": true,
   "fast_shards": 2,
-  "hardened": true
+  "hardened": true,
+  "configurations": [
+    {
+      "name": "plain",
+      "options": {
+        "schema": false
+      }
+    },
+    {
+      "name": "schema",
+      "options": {
+        "schema": true
+      },
+      "modules": [
+        "strand",
+        "strand_schema"
+      ]
+    }
+  ]
 }

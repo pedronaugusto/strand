@@ -186,7 +186,7 @@ pub const Text = struct {
 
 /// Where the line holding `at` starts.
 pub fn lineStart(text: []const u8, at: usize) usize {
-    return if (std.mem.findScalarLast(u8, text[0..at], '\n')) |k| k + 1 else 0; // aegis: no-danger(A009): `at` is a position in `text` the caller's read found
+    return if (std.mem.findScalarLast(u8, text[0..at], '\n')) |k| k + 1 else 0;
 }
 /// Where the line holding `at` ends: past its line feed, or the text's end.
 pub fn lineEnd(text: []const u8, at: usize) usize {

@@ -1,0 +1,90 @@
+{
+  "disallowed": [
+    {
+      "source": "std",
+      "declaration": "c.fstat",
+      "reason": "file identity belongs to airlock: strand asks it, as for durability",
+      "replacement": "airlock's file identity (strand's follower and tail call it)",
+      "scope": "production",
+      "owners": [
+        "airlock"
+      ]
+    },
+    {
+      "source": "std",
+      "declaration": "c.fstatat",
+      "reason": "file identity belongs to airlock: strand asks it, as for durability",
+      "replacement": "airlock's file identity (strand's follower and tail call it)",
+      "scope": "production",
+      "owners": [
+        "airlock"
+      ]
+    },
+    {
+      "source": "std",
+      "declaration": "c.statx",
+      "reason": "file identity belongs to airlock: strand asks it, as for durability",
+      "replacement": "airlock's file identity (strand's follower and tail call it)",
+      "scope": "production",
+      "owners": [
+        "airlock"
+      ]
+    },
+    {
+      "source": "std",
+      "declaration": "os.linux.statx",
+      "reason": "file identity belongs to airlock: strand asks it, as for durability",
+      "replacement": "airlock's file identity (strand's follower and tail call it)",
+      "scope": "production",
+      "owners": [
+        "airlock"
+      ]
+    },
+    {
+      "source": "std",
+      "declaration": "os.linux.IoUring.statx",
+      "reason": "file identity belongs to airlock: strand asks it, as for durability",
+      "replacement": "airlock's file identity (strand's follower and tail call it)",
+      "scope": "production",
+      "owners": [
+        "airlock"
+      ]
+    },
+    {
+      "declaration": "fstat",
+      "reason": "file identity belongs to airlock: strand asks it, as for durability",
+      "replacement": "airlock's file identity (strand's follower and tail call it)",
+      "scope": "production",
+      "owners": [
+        "airlock"
+      ]
+    },
+    {
+      "declaration": "fstatat",
+      "reason": "file identity belongs to airlock: strand asks it, as for durability",
+      "replacement": "airlock's file identity (strand's follower and tail call it)",
+      "scope": "production",
+      "owners": [
+        "airlock"
+      ]
+    },
+    {
+      "declaration": "statx",
+      "reason": "file identity belongs to airlock: strand asks it, as for durability",
+      "replacement": "airlock's file identity (strand's follower and tail call it)",
+      "scope": "production",
+      "owners": [
+        "airlock"
+      ]
+    }
+  ],
+  "seams": [
+    {
+      "file": "src/jsonl/follow.zig",
+      "rules": [
+        "A009"
+      ],
+      "reason": "the follower's reads of the file it follows: a log another program is writing, read as it grows, each line then parsed by the JSONL reader under its line limit"
+    }
+  ]
+}

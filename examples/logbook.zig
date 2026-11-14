@@ -164,7 +164,7 @@ fn follow(comptime Entry: type, gpa: std.mem.Allocator, io: std.Io, dir: std.Io.
     // There is no end to a file being appended to, so a follower stops when
     // the `std.Io` cancels it — or, as here, when the caller stops asking.
     var follower: jsonl.Follower(jsonl.Versioned(Entry)) = .init(gpa, &file_reader, .{
-        .wait = .{ .poll = .fromMilliseconds(5) },
+        .wait = .{ .poll = .literal("5ms") },
     });
     defer follower.deinit(io);
 
@@ -198,7 +198,7 @@ fn follow(comptime Entry: type, gpa: std.mem.Allocator, io: std.Io, dir: std.Io.
     var reopened_reader = reopened.reader(io, &reopened_buffer);
 
     var resumed: jsonl.Follower(jsonl.Versioned(Entry)) = try .resumeFrom(gpa, io, &reopened_reader, point, .{
-        .wait = .{ .poll = .fromMilliseconds(5) },
+        .wait = .{ .poll = .literal("5ms") },
     });
     defer resumed.deinit(io);
 

@@ -341,7 +341,7 @@ test "a versioned log followed as it grows is migrated the same way" {
     var follower: jsonl.Follower(Versioned(Event)) = .init(
         testing.allocator,
         &fixture.reader,
-        .{ .wait = .{ .poll = .fromMicroseconds(100) } },
+        .{ .wait = .{ .poll = .literal("100us") } },
     );
     defer follower.deinit(testing.io);
 

@@ -634,8 +634,8 @@ pub fn Dialect(comptime grammar: Grammar) type {
             return struct { value: T, end: usize };
         }
         /// The integer spelled with digits alone at `from` in `bytes`, converted
-        /// and its digits charged, if it fits `T` of at most 64 bits; `null`
-        /// for anything else, nothing charged.
+        /// and its digits charged, if it fits `T` of at most 64 bits and the
+        /// numeric length limit; `null` for anything else, nothing charged.
         pub inline fn integerAt(comptime T: type, bytes: []const u8, from: usize, c: *core.Context) Error!?Whole(T) {
             const bits = @typeInfo(T).int.bits;
             var at = from;
@@ -661,7 +661,10 @@ pub fn Dialect(comptime grammar: Grammar) type {
                 'x', 'X' => if (json5) return null,
                 else => {},
             };
-            if (limit.exceeds(digits, c.limits.numeric_bytes)) return null;
+            // A number's length is its token's, the minus included, as the
+            // lexeme path and the tape measure it.
+            // `at` starts at `from` and only grows
+            if (limit.exceeds(at - from, c.limits.numeric_bytes)) return null;
             const result: T = if (@typeInfo(T).int.signedness == .unsigned) result: {
                 // `-0` is an unsigned zero unless integers are to be written as
                 // one, which the lexeme path then refuses.

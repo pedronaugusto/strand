@@ -638,7 +638,6 @@ fn checkPrettyInPlace(comptime T: type, input: []const u8, options: jsonl.Reader
         try testing.expectEqual(joined.lines.number, in_place.lines.number);
         try testing.expectEqual(joined.lines.consumed, in_place.lines.consumed);
         try testing.expectEqual(joined.lines.unfinished, in_place.lines.unfinished);
-        // glint-ignore: Z026 -- an error was compared with the other reader's above; the loop reads on
         if (want) |maybe| {
             if (maybe == null) break;
         } else |_| {}
@@ -1019,10 +1018,10 @@ fn checkRotation(a: []const u8, b: []const u8) !void {
 
     var buffer: [64]u8 = undefined;
     var source = file.reader(testing.io, &buffer);
-    var path: jsonl.PathOpener = .{ .dir = tmp.dir, .sub_path = "log.jsonl" };
+    var path: jsonl.PathOpener = .{ .dir = .of(tmp.dir), .sub_path = "log.jsonl" };
     var follower: jsonl.Follower(Event) = .init(testing.allocator, &source, .{
         .reader = .{ .parse = event_parse, .on_malformed = .skip },
-        .wait = .{ .poll = .fromMicroseconds(50) },
+        .wait = .{ .poll = .literal("50us") },
         .reopen = path.opener(),
     });
     defer follower.deinit(testing.io);
@@ -1487,14 +1486,11 @@ fn checkDecode(bytes: []const u8) !void {
     }
     // Written, a value is checked JSON again, repeated keys refused, and it
     // reads back as the bytes it was written as.
-    // glint-ignore: Z026 -- fuzzed bytes may be no JSON; the target checks only what reads
     if (json.parseLeaky(json.Value, a, bytes, .{})) |v| {
         const once = try written(a, v);
         try testing.expectEqualStrings(once, try written(a, try json.parseLeaky(json.Value, a, once, .{})));
     } else |_| {}
-    // glint-ignore: Z026 -- fuzzed bytes may be refused; only a crash is not an answer
     if (json.parseLeaky(Event, a, bytes, event_parse)) |_| {} else |_| {}
-    // glint-ignore: Z026 -- fuzzed bytes may be refused; only a crash is not an answer
     if (json.parseLeaky(Carrying, a, bytes, .{})) |_| {} else |_| {}
 }
 

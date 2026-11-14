@@ -594,7 +594,7 @@ pub const LineReader = struct {
         var line: SeparatedLine = .{ .scan = if (self.options.oversized_member) |name| .init(name) else null };
         // A record of exactly the bound may still carry the `\r` half of
         // its terminator.
-        const room = self.options.max_line_bytes.raw() +| 1;
+        const room = limit.withOne(self.options.max_line_bytes);
         var pending = prefix.slice();
         while (true) {
             const from_prefix = pending.len != 0;

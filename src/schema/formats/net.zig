@@ -41,7 +41,13 @@ pub fn isIdnHostname(s: []const u8) bool {
     while (i < s.len) {
         const len = std.unicode.utf8ByteSequenceLength(s[i]) catch return false;
         if (i + len > s.len) return false;
-        const cp = std.unicode.utf8Decode(s[i..][0..len]) catch return false;
+        const cp: u21 = switch (len) {
+            1 => s[i],
+            2 => std.unicode.utf8Decode2(s[i..][0..2].*) catch return false,
+            3 => std.unicode.utf8Decode3(s[i..][0..3].*) catch return false,
+            4 => std.unicode.utf8Decode4(s[i..][0..4].*) catch return false,
+            else => return false,
+        };
         if (cp == 0x3002 or cp == 0xFF0E or cp == 0xFF61) {
             buffer[n] = '.';
             n += 1;

@@ -18,6 +18,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Breaking
 
+- `jsonl.PathOpener.dir` is an `aegis.own.Unowned(std.Io.Dir)`, the caller's directory given as `.of(dir)`.
+- A follower's `Options.wait` takes aegis durations (`.poll = .literal("20ms")`), and its wake is an `aegis.Pulse` (`.wake = .{ .pulse = &pulse }`), bumped where `std.Io.Event` was set: the follower keeps the generation it last waited past, so a bump while it reads ends its next wait at once.
+- `json.Members.phase` is of the public type `json.Members.Phase`, and `xml.Scanner.place` of the public type `xml.Scanner.Place`.
 - `json.Value.Member` is the core's `Pair([]const u8, Value)`, with the same fields, and `json.Value.object` a slice of it: an object's members are the pairs it was read as, with no copy.
 - `Tail`'s `prev`, `prevRaw` and `last` report `error.Canceled` when the task is canceled during a block read, as `Follower.next` does, instead of `error.ReadFailed`: `Tail.NextError` gains `Canceled`.
 
@@ -28,6 +31,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Pins aegis dc3ed602, still 0.2.4, and on it xenoglyph 22f2b49, spectra 600167c, almanac c11d303 and shakedown 9005b65. Development is on preflight's ci-standard 0990716 and glint 0.8: the rules in 0.8's names, the disallowed names in `glint.json`, the build's configurations in `ci/workflow.json`.
 - The README describes `strand_schema` (JSON Schema, Install's `.schema = true`, Scope, Built with, Testing), its example `examples/validate.zig` run by `bay examples`.
 - Pins xenoglyph ef20e2d, still 0.5.1, for `idna.check2008`, IDNA2008's validity of a name as written.
 - Pins aegis 4d1390b, still 0.2.4: the commits after 3c0b13e (the role declarations a linter reads, `lint_rules`, and its types' fields renamed under aegis's prefix), one past the aegis the development build's preflight selects. Nothing strand calls changed.
@@ -41,6 +45,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A JSON integer read straight into an integer type is held to `numeric_bytes` by its whole token, the minus included, as every other number is: `-0` or `-7` under a one-byte limit was read on that path alone, where the tape refused it. `numeric_bytes` says so.
 - A record's key that matches the name the schema expects next is held to `key_bytes`, as every other key is: a field name longer than the limit was accepted on that path alone.
 - A writer's scratch (`ini`, `dotenv`, `zon` and `urlencoded`'s keys and frames past what they keep inline) holds a list where it lies as the list grows, its growth charged to the allocation budget as an allocation is: each growth took a new block and left the last behind, so a fixed scratch ran out at a size that depended on the target's growth steps (riscv64 needed 4256 bytes for 200 INI keys where x86_64 needed 2416, and a 4096-byte scratch failed with `OutOfMemory` there).
 - `jsonl.Writer`'s sync documentation names the BSDs: the data sync there is the one plain `fsync`, so a file that declines it leaves `reached` at `.none`. The test of a declined sync expected Linux's `.full` on every platform but macOS and failed on FreeBSD.

@@ -454,11 +454,6 @@ pub fn dev(b: *std.Build, tools: type) void {
         .modules = &.{"strand"},
         .program = p.path("ci/consumer.zig"),
         .packages = &.{ p.dependency("aegis", .{}), p.dependency("airlock", .{}), p.dependency("xenoglyph", .{}), p.dependency("uplink", .{ .client = false }), p.dependency("spectra", .{}), p.dependency("almanac", .{ .tzdb = .system }) },
-        // Plain, and with `strand_schema`.
-        .configurations = &.{
-            .{ .options = &.{.{ .name = "schema", .value = .{ .flag = false } }} },
-            .{ .options = &.{.{ .name = "schema", .value = .{ .flag = true } }}, .modules = &.{ "strand", "strand_schema" } },
-        },
     });
 }
 

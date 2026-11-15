@@ -94,7 +94,7 @@ pub fn scan(input: []const u8, at: usize, kind: Kind, version_1_1: bool) Error!S
                 }
                 if (quote == '"' and byte == '\\') {
                     plain = false;
-                    if (try lineEnding(input, i)) |end| {
+                    if (lineEnding(input, i)) |end| {
                         i = end;
                         continue;
                     }
@@ -126,7 +126,7 @@ pub fn scan(input: []const u8, at: usize, kind: Kind, version_1_1: bool) Error!S
 /// After a line-ending backslash at `input[at]`: where the next character
 /// that is no whitespace or newline is. `null` when the backslash ends no
 /// line (whitespace, then something other than a newline).
-fn lineEnding(input: []const u8, at: usize) Error!?usize {
+fn lineEnding(input: []const u8, at: usize) ?usize {
     var i = at + 1;
     while (i < input.len and (input[i] == ' ' or input[i] == '\t')) i += 1;
     if (i < input.len and input[i] == '\n') {
@@ -144,12 +144,21 @@ fn lineEnding(input: []const u8, at: usize) Error!?usize {
     return i;
 }
 
-const Escape = struct { end: usize, len: usize, scalar: u21 };
+const Escape = struct {
+    end: usize,
+    len: u3,
+    /// The character's UTF-8, its first `len` bytes.
+    utf8: [4]u8,
+
+    fn bytes(self: *const Escape) []const u8 {
+        return self.utf8[0..self.len];
+    }
+};
 /// The escape at `input[at]` (a backslash): where it ends, and the character
-/// it stands for and that character's UTF-8 length.
+/// it stands for, in UTF-8.
 fn escape(input: []const u8, at: usize, version_1_1: bool) Error!Escape {
     if (at + 1 >= input.len) return error.SyntaxError;
-    const simple: ?u21 = switch (input[at + 1]) {
+    const simple: ?u8 = switch (input[at + 1]) {
         'b' => 0x08,
         't' => '\t',
         'n' => '\n',
@@ -160,7 +169,7 @@ fn escape(input: []const u8, at: usize, version_1_1: bool) Error!Escape {
         'e' => if (version_1_1) 0x1b else return error.SyntaxError,
         else => null,
     };
-    if (simple) |scalar| return .{ .end = at + 2, .len = 1, .scalar = scalar };
+    if (simple) |byte| return .{ .end = at + 2, .len = 1, .utf8 = .{ byte, 0, 0, 0 } };
     const digits: usize = switch (input[at + 1]) {
         'x' => if (version_1_1) 2 else return error.SyntaxError,
         'u' => 4,
@@ -170,25 +179,30 @@ fn escape(input: []const u8, at: usize, version_1_1: bool) Error!Escape {
     if (at + 2 + digits > input.len) return error.SyntaxError;
     var value: u32 = 0;
     for (input[at + 2 ..][0..digits]) |byte| value = value * 16 + (std.fmt.charToDigit(byte, 16) catch return error.SyntaxError);
-    if (value > 0x10ffff or (value >= 0xd800 and value <= 0xdfff)) return error.SyntaxError;
-    const scalar: u21 = @intCast(value); // safe: checked against U+10FFFF above.
-    return .{ .end = at + 2 + digits, .len = std.unicode.utf8CodepointSequenceLength(scalar) catch unreachable, .scalar = scalar }; // glint-ignore: Z026 -- a scalar value has a length.
+    // Past U+10FFFF, or a surrogate: no scalar value, and UTF-8 has no
+    // spelling for it.
+    const code_point = std.math.cast(u21, value) orelse return error.SyntaxError;
+    var utf8: [4]u8 = undefined;
+    const len = std.unicode.utf8Encode(code_point, &utf8) catch return error.SyntaxError;
+    return .{ .end = at + 2 + digits, .len = len, .utf8 = utf8 };
 }
 
-/// A scanned string's value into `out`, which is `Scanned.len` long.
-pub fn decode(scanned: Scanned, kind: Kind, out: []u8) void {
+/// A scanned string's value into `out`, which is `Scanned.len` long. Its
+/// escapes are read again, and one `scan` did not pass is a syntax error.
+pub fn decode(scanned: Scanned, kind: Kind, out: []u8) Error!void {
     const content = scanned.content;
     var n: usize = 0;
     var i: usize = 0;
     while (i < content.len) {
         const byte = content[i];
         if (byte == '\\' and (kind == .basic or kind == .multiline_basic)) {
-            if (kind == .multiline_basic) if (lineEnding(content, i) catch unreachable) |end| { // glint-ignore: Z026 -- scanned already.
+            if (kind == .multiline_basic) if (lineEnding(content, i)) |end| {
                 i = end;
                 continue;
             };
-            const e = escape(content, i, true) catch unreachable; // glint-ignore: Z026 -- scanned already, in its version.
-            n += std.unicode.utf8Encode(e.scalar, out[n..]) catch unreachable; // glint-ignore: Z026 -- a scalar value, and its length was counted.
+            const e = try escape(content, i, true);
+            @memcpy(out[n..][0..e.len], e.bytes());
+            n += e.len;
             i = e.end;
             continue;
         }
@@ -259,7 +273,7 @@ test "each kind of string, its end and its value" {
         const scanned = try scan(case[0], 0, kind, true);
         var buffer: [64]u8 = undefined;
         const value = if (scanned.plain) scanned.content else blk: {
-            decode(scanned, kind, buffer[0..scanned.len]);
+            try decode(scanned, kind, buffer[0..scanned.len]);
             break :blk buffer[0..scanned.len];
         };
         try std.testing.expectEqualStrings(case[1], value);
@@ -281,7 +295,7 @@ test "a string written is read back as itself" {
         try std.testing.expectEqual(spelled.len, n);
         const scanned = try scan(spelled, 0, .basic, false);
         var out: [128]u8 = undefined;
-        decode(scanned, .basic, out[0..scanned.len]);
+        try decode(scanned, .basic, out[0..scanned.len]);
         try std.testing.expectEqualStrings(value, out[0..scanned.len]);
     }
 }

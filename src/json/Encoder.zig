@@ -151,9 +151,9 @@ pub fn Dialect(comptime json5: bool) type {
                 if (escape) |escaped| {
                     try self.put(escaped, c);
                 } else {
-                    var buffer: [6]u8 = undefined;
-                    const escaped = std.mem.print(&buffer, "\\u00{x:0>2}", .{byte}) catch unreachable; // glint-ignore: Z026 -- a six-byte escape fits exactly.
-                    try self.put(escaped, c);
+                    const digits = std.fmt.hex(byte);
+                    const escaped = [6]u8{ '\\', 'u', '0', '0', digits[0], digits[1] };
+                    try self.put(&escaped, c);
                 }
                 from = i + 1;
             }

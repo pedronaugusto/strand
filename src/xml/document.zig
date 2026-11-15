@@ -466,9 +466,7 @@ const Builder = struct {
         const ref = (try dtd_reader.reference(bytes, k)).?;
         switch (ref) {
             .char => |cp| {
-                var buffer: [4]u8 = undefined;
-                const len = std.unicode.utf8Encode(cp.value, &buffer) catch unreachable; // glint-ignore: Z026 -- a Char is a scalar.
-                out.appendSlice(self.allocator, buffer[0..len]) catch return self.oom();
+                out.appendSlice(self.allocator, cp.bytes()) catch return self.oom();
                 return cp.end;
             },
             .entity => |e| {

@@ -25,12 +25,12 @@ const Context = struct {
 };
 
 /// Entry `i` of `count`'s key: the two the edits name, else `e` and its number.
-fn key(buffer: *[6]u8, i: usize, count: usize) []const u8 {
+/// Past 99,999 entries the key outgrows `buffer`, and writing it fails.
+fn key(buffer: *[6]u8, i: usize, count: usize) std.Io.Writer.Error![]const u8 {
     if (i == count / 2) return "mid";
     if (i == count / 2 + 1) return "old";
     var w = std.Io.Writer.fixed(buffer);
-    // glint-ignore: Z026 -- under 100,000 entries, `e99999` is six bytes.
-    w.print("e{d}", .{i}) catch unreachable;
+    try w.print("e{d}", .{i});
     return w.buffered();
 }
 
@@ -41,9 +41,9 @@ fn write(format: Format, w: *std.Io.Writer, count: usize) std.Io.Writer.Error!vo
             try w.writeAll("# The service's manifest.\n[package]\nname = \"relay\"\nversion = \"0.1.0\" # bumped by the release\nedition = \"2024\"\n\n[dependencies]\n# Pinned for the wire format.\n");
             for (0..count) |i| {
                 if (i % 3 == 0) {
-                    try w.print("{s} = {{ version = \"1.{d}.0\", features = [\"std\", \"serde\"] }} # with features\n", .{ key(&b, i, count), i });
+                    try w.print("{s} = {{ version = \"1.{d}.0\", features = [\"std\", \"serde\"] }} # with features\n", .{ try key(&b, i, count), i });
                 } else {
-                    try w.print("{s} = \"0.{d}.{d}\"\n", .{ key(&b, i, count), i, i % 7 });
+                    try w.print("{s} = \"0.{d}.{d}\"\n", .{ try key(&b, i, count), i, i % 7 });
                 }
             }
             try w.writeAll("\n[profile.release]\n# Smaller and slower to build.\nlto = true\ncodegen-units = 1\n");
@@ -51,7 +51,7 @@ fn write(format: Format, w: *std.Io.Writer, count: usize) std.Io.Writer.Error!vo
         .yaml => {
             try w.writeAll("# The stack's services.\nversion: \"3.9\"\nservices:\n");
             for (0..count) |i| {
-                const k = key(&b, i, count);
+                const k = try key(&b, i, count);
                 try w.print("  {s}:\n    image: registry.example/{s}:1.{d} # pinned\n    replicas: {d}\n    ports: [{d}, {d}]\n    env:\n      LEVEL: info\n", .{ k, k, i, i % 4 + 1, 8000 + i % 1000, 9000 + i % 1000 });
             }
             try w.writeAll("# The end.\n");
@@ -61,7 +61,7 @@ fn write(format: Format, w: *std.Io.Writer, count: usize) std.Io.Writer.Error!vo
             for (0..count) |i| {
                 if (i > 0) try w.writeAll(",\n");
                 if (i % 10 == 0) try w.writeAll("    // A group of ten.\n");
-                try w.print("    \"{s}\": {{ \"enabled\": {}, \"level\": {d}, \"tags\": [\"a\", \"b\"] }}", .{ key(&b, i, count), i % 2 == 0, i % 5 });
+                try w.print("    \"{s}\": {{ \"enabled\": {}, \"level\": {d}, \"tags\": [\"a\", \"b\"] }}", .{ try key(&b, i, count), i % 2 == 0, i % 5 });
             }
             try w.writeAll("\n  }\n}\n");
         },

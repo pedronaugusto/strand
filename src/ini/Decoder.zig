@@ -289,12 +289,13 @@ fn joined(self: *Self, c: *core.Context, e: Entry) Error!core.Span {
     try c.span(length, false);
     try c.chargeWork(length);
     const out = c.alloc(u8, length) catch |err| return failure(c, err);
-    var w = std.Io.Writer.fixed(out);
-    for (lines[0..n], 0..) |l, i| {
-        // glint-ignore: Z026 -- `out` holds the lines and the line feeds between them.
-        if (i > 0) w.writeByte('\n') catch unreachable;
-        // glint-ignore: Z026 -- as above.
-        w.writeAll(l) catch unreachable;
+    // `out` holds the lines and the line feeds between them, exactly.
+    @memcpy(out[0..lines[0].len], lines[0]);
+    var at = lines[0].len;
+    for (lines[1..n]) |l| {
+        out[at] = '\n';
+        @memcpy(out[at + 1 ..][0..l.len], l);
+        at += 1 + l.len;
     }
     return .{ .bytes = out, .lifetime = .owned };
 }

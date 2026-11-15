@@ -362,7 +362,8 @@ pub fn integer(comptime T: type, text: []const u8, c: *core.Context) core.Decode
     return numbers.integer(T, if (text[0] == '+') text[1..] else text, c);
 }
 
-/// Hexadecimal digits, after a minus where `negative`, as a `T`.
+/// Hexadecimal digits, after a minus where `negative`, as a `T`. A byte that
+/// is no hexadecimal digit is a syntax error.
 fn hexadecimal(comptime T: type, negative: bool, digits: []const u8, c: *core.Context) core.DecodeError!T {
     try c.chargeWork(digits.len);
     const bits = @typeInfo(T).int.bits;
@@ -370,8 +371,7 @@ fn hexadecimal(comptime T: type, negative: bool, digits: []const u8, c: *core.Co
     const Magnitude = @Int(.unsigned, @max(bits, 1));
     var magnitude: Magnitude = 0;
     for (digits) |digit| {
-        // glint-ignore: Z026 -- `numberEnd` checked these are hexadecimal digits.
-        const nibble = std.fmt.charToDigit(digit, 16) catch unreachable;
+        const nibble = std.fmt.charToDigit(digit, 16) catch return error.SyntaxError;
         magnitude = (aegis.int.Checked(Magnitude).init(magnitude).mul(16) catch return error.NumberOutOfRange).raw();
         magnitude = (aegis.int.Checked(Magnitude).init(magnitude).add(nibble) catch return error.NumberOutOfRange).raw();
     }
@@ -410,21 +410,20 @@ pub fn floating(comptime T: type, text: []const u8, exact: bool, c: *core.Contex
         try c.chargeWork(text.len);
         const value = std.fmt.parseFloat(T, unsigned) catch return error.NumberOutOfRange;
         if (!std.math.isFinite(value)) return error.NumberOutOfRange;
-        if (exact and !hexadecimalExact(T, unsigned[2..])) return error.InexactNumber;
+        if (exact and !try hexadecimalExact(T, unsigned[2..])) return error.InexactNumber;
         return if (negative) -value else value;
     }
     return numbers.floating(T, if (text[0] == '+') text[1..] else text, exact, c);
 }
 
 /// Whether the integer hexadecimal `digits` spell, within `T`'s range, has
-/// no more significant bits than a `T` keeps.
-fn hexadecimalExact(comptime T: type, digits: []const u8) bool {
+/// no more significant bits than a `T` keeps. A byte that is no hexadecimal
+/// digit is a syntax error.
+fn hexadecimalExact(comptime T: type, digits: []const u8) error{SyntaxError}!bool {
     const first = std.mem.findNone(u8, digits, "0") orelse return true;
     const last = std.mem.findLastNone(u8, digits, "0").?;
-    // glint-ignore: Z026 -- `numberEnd` checked these are hexadecimal digits.
-    const lead: u8 = std.fmt.charToDigit(digits[first], 16) catch unreachable;
-    // glint-ignore: Z026 -- as the one before.
-    const tail: u8 = std.fmt.charToDigit(digits[last], 16) catch unreachable;
+    const lead: u8 = std.fmt.charToDigit(digits[first], 16) catch return error.SyntaxError;
+    const tail: u8 = std.fmt.charToDigit(digits[last], 16) catch return error.SyntaxError;
     const width = (last - first) * 4 + (8 - @clz(lead)) - @ctz(tail);
     return width <= std.math.floatFractionalBits(T) + 1;
 }

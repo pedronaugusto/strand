@@ -45,7 +45,9 @@ pending: Pending,
 /// Where the last token ended, before the trivia after it.
 last_end: usize,
 root_done: bool,
-digits: [12]u8 = undefined,
+/// A character literal's code point spelled as a number: as long as the
+/// widest code point's spelling, so any fits.
+digits: [std.fmt.count("{d}", .{std.math.maxInt(@FieldType(text.Character, "value"))})]u8 = undefined,
 const Self = @This();
 
 /// Starts `self` over `bytes`, which the caller has charged to `c.input`. It
@@ -330,8 +332,8 @@ fn character(self: *Self, c: *core.Context, request: core.Request) Error!core.Ev
     self.at = read.end;
     self.markScalar();
     if (request.expected == .scalar) return .{ .scalar = read.value };
-    const spelling = std.mem.print(&self.digits, "{d}", .{read.value}) catch unreachable; // glint-ignore: Z026 -- a code point has seven digits at most.
-    return .{ .number = .{ .bytes = spelling, .lifetime = .transient } };
+    const len = std.fmt.printInt(&self.digits, read.value, 10, .lower, .{});
+    return .{ .number = .{ .bytes = self.digits[0..len], .lifetime = .transient } };
 }
 
 /// `"..."` from the opening quote: borrowed if it holds no escape, else
@@ -350,7 +352,7 @@ fn quoted(self: *Self, c: *core.Context, is_key: bool) Error!core.Span {
     try c.span(length, is_key);
     try c.chargeWork(body.len);
     const out = try c.alloc(u8, length);
-    text.unescape(token, out);
+    text.unescape(token, out) catch |err| return failure(c, err);
     return .{ .bytes = out, .lifetime = .owned };
 }
 

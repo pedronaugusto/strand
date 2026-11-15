@@ -116,11 +116,15 @@ pub fn unescapedLength(token: []const u8) error{SyntaxError}!usize {
     }
 }
 
-pub fn unescape(token: []const u8, out: []u8) void {
+/// The bytes a string literal means into `out`, as long as `unescapedLength`
+/// measured them. What is no string literal is a syntax error, as it is
+/// there, and so is a literal that outgrows `out`.
+pub fn unescape(token: []const u8, out: []u8) error{SyntaxError}!void {
     var writer: std.Io.Writer = .fixed(out);
-    // The length was measured by the same reader a moment ago.
-    const result = literal.parseWrite(&writer, token) catch unreachable; // glint-ignore: Z026 -- a fixed writer sized by the measuring pass cannot fill.
-    aegis.assert.invariant(result == .success, "the literal was measured as valid");
+    switch (literal.parseWrite(&writer, token) catch return error.SyntaxError) {
+        .success => {},
+        .failure => return error.SyntaxError,
+    }
     aegis.assert.invariant(writer.end == out.len, "the literal fills the length measured for it");
 }
 

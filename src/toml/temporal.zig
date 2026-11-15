@@ -143,36 +143,69 @@ pub fn valid(parts: Parts) bool {
     return true;
 }
 
-/// The longest spelling `format` writes.
-pub const max_len = "9999-12-31T23:59:60.999999999+23:59".len;
+/// The longest spelling `format` writes, of any parts: valid parts spell at
+/// most `9999-12-31T23:59:60.999999999+23:59`, and parts out of range have
+/// each number written whole, as wide as its type lets it be.
+pub const max_len = "65535-255-255T255:255:255.4294967295-546:08".len;
 
 /// The parts spelled as RFC 3339 spells them, seconds always written, a
 /// fraction with its trailing zeros left off, a zero offset as `Z`: TOML 1.0
-/// reads it, and so does every RFC 3339 reader. The parts must be `valid`.
+/// reads it, and so does every RFC 3339 reader. Parts that are not `valid`
+/// spell no date or time, but still fit `max_len`.
 pub fn format(parts: Parts, buffer: *[max_len]u8) []const u8 {
-    var out: std.Io.Writer = .fixed(buffer);
-    if (parts.kind != .local_time) out.print("{d:0>4}-{d:0>2}-{d:0>2}", .{ parts.year, parts.month, parts.day }) catch unreachable; // glint-ignore: Z026 -- max_len holds the longest spelling of valid parts.
-    if (parts.kind == .local_date) return out.buffered();
-    if (parts.kind != .local_time) out.writeByte('T') catch unreachable; // glint-ignore: Z026 -- within max_len.
-    out.print("{d:0>2}:{d:0>2}:{d:0>2}", .{ parts.hour, parts.minute, parts.second }) catch unreachable; // glint-ignore: Z026 -- within max_len.
+    var out: Spelling = .{ .buffer = buffer };
+    if (parts.kind != .local_time) {
+        out.number(parts.year, 4);
+        out.byte('-');
+        out.number(parts.month, 2);
+        out.byte('-');
+        out.number(parts.day, 2);
+        if (parts.kind == .local_date) return out.written();
+        out.byte('T');
+    }
+    out.number(parts.hour, 2);
+    out.byte(':');
+    out.number(parts.minute, 2);
+    out.byte(':');
+    out.number(parts.second, 2);
     if (parts.nanosecond != 0) {
-        var digits: [9]u8 = undefined;
-        _ = std.mem.print(&digits, "{d:0>9}", .{parts.nanosecond}) catch unreachable; // glint-ignore: Z026 -- below 10^9, nine digits.
-        var len: usize = 9;
-        while (digits[len - 1] == '0') len -= 1;
-        out.writeByte('.') catch unreachable; // glint-ignore: Z026 -- within max_len.
-        out.writeAll(digits[0..len]) catch unreachable; // glint-ignore: Z026 -- within max_len.
+        out.byte('.');
+        out.number(parts.nanosecond, 9);
+        // The trailing zeros are left off: a fraction that is not zero has
+        // a digit that is not.
+        while (out.buffer[out.len - 1] == '0') out.len -= 1;
     }
     if (parts.kind == .offset_date_time) {
         if (parts.offset_minutes == 0) {
-            out.writeByte('Z') catch unreachable; // glint-ignore: Z026 -- within max_len.
+            out.byte('Z');
         } else {
             const magnitude = @abs(parts.offset_minutes);
-            out.print("{c}{d:0>2}:{d:0>2}", .{ @as(u8, if (parts.offset_minutes < 0) '-' else '+'), magnitude / 60, magnitude % 60 }) catch unreachable; // glint-ignore: Z026 -- within max_len.
+            out.byte(if (parts.offset_minutes < 0) '-' else '+');
+            out.number(magnitude / 60, 2);
+            out.byte(':');
+            out.number(magnitude % 60, 2);
         }
     }
-    return out.buffered();
+    return out.written();
 }
+
+/// `format`'s buffer and how much of it is written. Every number is written
+/// whole, zero-padded to its width, and `max_len` holds the widest of each.
+const Spelling = struct {
+    buffer: *[max_len]u8,
+    len: usize = 0,
+
+    fn byte(self: *Spelling, b: u8) void {
+        self.buffer[self.len] = b;
+        self.len += 1;
+    }
+    fn number(self: *Spelling, value: anytype, width: usize) void {
+        self.len += std.fmt.printInt(self.buffer[self.len..], value, 10, .lower, .{ .width = width, .fill = '0' });
+    }
+    fn written(self: *const Spelling) []const u8 {
+        return self.buffer[0..self.len];
+    }
+};
 
 test "each kind read, and what is none" {
     const odt = parse("1979-05-27T07:32:00.999999-07:00").?;
@@ -203,4 +236,22 @@ test "a spelling written is read back as the same parts" {
         try std.testing.expectEqualStrings(text, format(parts, &buffer));
         try std.testing.expectEqual(parts, parse(format(parts, &buffer)).?);
     }
+}
+
+test "parts out of range spell their numbers whole, within max_len" {
+    var buffer: [max_len]u8 = undefined;
+    const widest: Parts = .{
+        .kind = .offset_date_time,
+        .year = std.math.maxInt(u16),
+        .month = std.math.maxInt(u8),
+        .day = std.math.maxInt(u8),
+        .hour = std.math.maxInt(u8),
+        .minute = std.math.maxInt(u8),
+        .second = std.math.maxInt(u8),
+        .nanosecond = std.math.maxInt(u32),
+        .offset_minutes = std.math.minInt(i16),
+    };
+    try std.testing.expect(!valid(widest));
+    try std.testing.expectEqualStrings("65535-255-255T255:255:255.4294967295-546:08", format(widest, &buffer));
+    try std.testing.expectEqualStrings("10000-13-00", format(.{ .kind = .local_date, .year = 10000, .month = 13 }, &buffer));
 }

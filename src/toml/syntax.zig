@@ -344,7 +344,7 @@ fn ReaderOf(comptime recording: bool) type {
             const end = std.math.cast(u32, self.decoded.items.len + len) orelse return error.AllocationLimit;
             const out = self.decoded.addManyAsSlice(self.allocator, len) catch |err| return self.fail(err);
             switch (what) {
-                .string => |s| text.decode(s.scanned, s.kind, out),
+                .string => |s| try text.decode(s.scanned, s.kind, out),
                 .number => |token| number.normalize(token, out),
             }
             return .{ .start = start, .len = end - start, .decoded = true };

@@ -264,9 +264,7 @@ const Reader = struct {
             const ref = try reference(value, k) orelse return r.fail(bytes, at + k);
             switch (ref) {
                 .char => |cp| {
-                    var buffer: [4]u8 = undefined;
-                    const len = std.unicode.utf8Encode(cp.value, &buffer) catch unreachable; // glint-ignore: Z026 -- a Char is a scalar.
-                    try out.appendSlice(r.allocator, buffer[0..len]);
+                    try out.appendSlice(r.allocator, cp.bytes());
                     i = cp.end;
                 },
                 .entity => |e| {
@@ -443,8 +441,20 @@ pub fn read(c: *core.Context, allocator: std.mem.Allocator, dtd: *Dtd, subset: [
 }
 
 pub const Reference = union(enum) {
-    char: struct { value: u21, end: usize },
+    char: CharReference,
     entity: struct { name: []const u8, end: usize },
+};
+/// A character reference: the character it stands for, in UTF-8, and where
+/// it ends.
+pub const CharReference = struct {
+    len: u3,
+    /// The character's UTF-8, its first `len` bytes.
+    utf8: [4]u8,
+    end: usize,
+
+    pub fn bytes(self: *const CharReference) []const u8 {
+        return self.utf8[0..self.len];
+    }
 };
 /// The reference at `at` (an `&`) in `bytes`, or null where it is not one.
 pub fn reference(bytes: []const u8, at: usize) Error!?Reference {
@@ -461,7 +471,11 @@ pub fn reference(bytes: []const u8, at: usize) Error!?Reference {
             if (value > 0x10FFFF) return null;
         }
         if (i == start or i >= bytes.len or !text.isChar(@intCast(value))) return null;
-        return .{ .char = .{ .value = @intCast(value), .end = i + 1 } };
+        // A Char is a scalar value, which UTF-8 spells; what it cannot spell
+        // is no Char, and so no reference.
+        var utf8: [4]u8 = undefined;
+        const len = std.unicode.utf8Encode(@intCast(value), &utf8) catch return null;
+        return .{ .char = .{ .len = len, .utf8 = utf8, .end = i + 1 } };
     }
     const n = text.nameLength(bytes[i..]) orelse return error.InvalidUtf8;
     if (n == 0 or i + n >= bytes.len or bytes[i + n] != ';') return null;

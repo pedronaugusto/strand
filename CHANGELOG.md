@@ -31,7 +31,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- Development: the build configurations ci/workflow.json names (`plain`, `schema`) are checked as their own option says: the development build takes `-Dschema` and builds the package with it, where it refused the option. Development on preflight's ci-standard f991816 and shakedown 327bc61, whose fuzz runner takes the options that preflight passes it; the release tier's test and Windows jobs take 40 minutes.
+- Development: the build configurations ci/workflow.json names (`plain`, `schema`) are checked as their own option says: the development build takes `-Dschema` and builds the package with it, where it refused the option. Development on preflight's ci-standard f991816 and shakedown 327bc61, whose fuzz runner takes the options that preflight passes it; the release tier's test and Windows jobs, and the cross compiles (x86_64-windows-gnu's alone passed 20 on a loaded runner), take 40 minutes.
 - Pins aegis dc3ed602, still 0.2.4, and on it xenoglyph 22f2b49, spectra 600167c, almanac c11d303 and shakedown 9005b65. Development is on preflight's ci-standard 0990716 and glint 0.8: the rules in 0.8's names, the disallowed names in `glint.json`, the build's configurations in `ci/workflow.json`.
 - The README describes `strand_schema` (JSON Schema, Install's `.schema = true`, Scope, Built with, Testing), its example `examples/validate.zig` run by `bay examples`.
 - Pins xenoglyph ef20e2d, still 0.5.1, for `idna.check2008`, IDNA2008's validity of a name as written.

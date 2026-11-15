@@ -14,6 +14,7 @@
   "hardened": true,
   "test_job_timeout": 40,
   "windows_job_timeout": 40,
+  "cross_job_timeout": 40,
   "configurations": [
     {
       "name": "plain",

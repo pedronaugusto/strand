@@ -12,6 +12,8 @@
   "compile_once": true,
   "fast_shards": 2,
   "hardened": true,
+  "test_job_timeout": 40,
+  "windows_job_timeout": 40,
   "cross_job_timeout": 40,
   "configurations": [
     {

@@ -12,6 +12,7 @@
   "compile_once": true,
   "fast_shards": 2,
   "hardened": true,
+  "cross_job_timeout": 40,
   "configurations": [
     {
       "name": "plain",

@@ -3,6 +3,7 @@ const shakedown = @import("shakedown");
 const jsonl = @import("jsonl.zig");
 const std = @import("std");
 const json = @import("json.zig");
+const testing = std.testing;
 test "S2 JSON exact decimal integers, shared field policy and lifetime" {
     const T = struct {
         n: u128,
@@ -555,4 +556,45 @@ test "text_or_bytes writes text when the bytes are UTF-8 and their byte values o
     try std.testing.expectError(error.SyntaxError, json.parseLeaky(OsName, a, "{\"name\":\"\xff\"}", .{}));
     try std.testing.expectError(error.UnexpectedType, json.parseLeaky(OsName, a, "{\"name\":\"x\",\"id\":[1,2,3]}", .{}));
     try std.testing.expectError(error.NumberOutOfRange, json.parseLeaky(OsName, a, "{\"name\":[256]}", .{}));
+}
+
+test "writeString writes a string as write writes it, for any UTF-8" {
+    var prng: std.Random.DefaultPrng = .init(0x57a1);
+    const r = prng.random();
+    const pieces = [_][]const u8{ "a", "\"", "\\", "\n", "\r", "\t", "\x08", "\x0c", "\x00", "\x1f", "\x7f", "/", "é", "€", "𝄞", "z9 " };
+    for (0..2000) |_| {
+        var text: std.ArrayList(u8) = .empty;
+        defer text.deinit(testing.allocator);
+        for (0..r.uintLessThan(usize, 12)) |_| try text.appendSlice(testing.allocator, pieces[r.uintLessThan(usize, pieces.len)]);
+        var by_write: std.Io.Writer.Allocating = .init(testing.allocator);
+        defer by_write.deinit();
+        try json.write(&by_write.writer, @as([]const u8, text.items), .{});
+        var by_string: std.Io.Writer.Allocating = .init(testing.allocator);
+        defer by_string.deinit();
+        try json.writeString(&by_string.writer, text.items, .refuse);
+        try testing.expectEqualStrings(by_write.written(), by_string.written());
+    }
+}
+
+test "writeString refuses bytes that are not UTF-8 before writing, or replaces each" {
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    try testing.expectError(error.InvalidUtf8, json.writeString(&out.writer, "ok\xffno", .refuse));
+    try testing.expectEqualStrings("", out.written());
+    try json.writeString(&out.writer, "ok\xff\xc3(\xe2\x82", .replace);
+    try testing.expectEqualStrings("\"ok\u{fffd}\u{fffd}(\u{fffd}\u{fffd}\"", out.written());
+}
+
+test "an open object's member takes a name known at run time" {
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    var object = try json.writeObjectOpen(&out.writer, struct { a: u8 = 1 }{}, .{});
+    var name_buffer: [8]u8 = undefined;
+    var w: std.Io.Writer = .fixed(&name_buffer);
+    try w.print("f{d}\n", .{2});
+    const name = w.buffered();
+    try object.member(name, @as(u8, 2));
+    try testing.expectError(error.InvalidUtf8, object.member("\xff", @as(u8, 3)));
+    try object.close();
+    try testing.expectEqualStrings("{\"a\":1,\"f2\\n\":2}", out.written());
 }

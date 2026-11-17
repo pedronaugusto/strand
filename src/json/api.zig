@@ -419,12 +419,16 @@ pub const OpenObject = struct {
     /// Whether no member has been written, so the next needs no comma.
     empty: bool,
 
-    /// Writes one more member: `name` and `value` as `write` writes a struct's
-    /// field, after a comma where a member came before it. Nothing checks that
-    /// `name` is not one already written.
-    pub fn member(object: *OpenObject, comptime name: []const u8, value: anytype) WriteError(@TypeOf(value))!void {
-        const key = comptime "\"" ++ WireEncoder.escapedName(name) ++ "\":";
-        try object.output.writeAll(if (object.empty) key else "," ++ key);
+    /// Writes one more member: `name`, known at run time, escaped as
+    /// `writeString` escapes it, and `value` as `write` writes a struct's
+    /// field, after a comma where a member came before it. A name that is not
+    /// UTF-8 is refused before anything is written. Nothing checks that `name`
+    /// is not one already written.
+    pub fn member(object: *OpenObject, name: []const u8, value: anytype) (WriteError(@TypeOf(value)) || error{InvalidUtf8})!void {
+        if (!std.unicode.utf8ValidateSlice(name)) return error.InvalidUtf8;
+        if (!object.empty) try object.output.writeByte(',');
+        try writeString(object.output, name, .refuse);
+        try object.output.writeByte(':');
         object.empty = false;
         try write(object.output, value, object.options);
     }
@@ -434,6 +438,62 @@ pub const OpenObject = struct {
         try object.output.writeByte('}');
     }
 };
+
+/// What `writeString` does with bytes that are not UTF-8.
+pub const InvalidUtf8 = enum {
+    /// `error.InvalidUtf8`, as `write` refuses such a string.
+    refuse,
+    /// U+FFFD in place of each byte no valid sequence holds: for text that
+    /// must be written whatever it holds, such as a log line's.
+    replace,
+};
+
+/// Writes `bytes` as one JSON string, its quotes included, escaped as `write`
+/// escapes a string: `"` and `\` with a backslash, control characters as
+/// `\b`, `\f`, `\n`, `\r`, `\t` or `\u00XX`, everything else as it is.
+/// Bytes that are not UTF-8 are refused or replaced, as `invalid` says; a
+/// refusal comes before anything is written.
+pub fn writeString(output: *std.Io.Writer, bytes: []const u8, invalid: InvalidUtf8) (std.Io.Writer.Error || error{InvalidUtf8})!void {
+    if (invalid == .refuse and !std.unicode.utf8ValidateSlice(bytes)) return error.InvalidUtf8;
+    try output.writeByte('"');
+    var start: usize = 0;
+    var i: usize = 0;
+    while (i < bytes.len) {
+        const byte = bytes[i];
+        if (byte >= 0x80) {
+            const len = std.unicode.utf8ByteSequenceLength(byte) catch 0;
+            if (len != 0 and i + len <= bytes.len and std.unicode.utf8ValidateSlice(bytes[i..][0..len])) {
+                i += len;
+                continue;
+            }
+            try output.writeAll(bytes[start..i]);
+            try output.writeAll("\u{fffd}");
+            i += 1;
+            start = i;
+            continue;
+        }
+        const escape: ?[]const u8 = switch (byte) {
+            '"' => "\\\"",
+            '\\' => "\\\\",
+            '\n' => "\\n",
+            '\r' => "\\r",
+            '\t' => "\\t",
+            8 => "\\b",
+            12 => "\\f",
+            0...7, 11, 14...31 => null,
+            else => {
+                i += 1;
+                continue;
+            },
+        };
+        try output.writeAll(bytes[start..i]);
+        if (escape) |e| try output.writeAll(e) else try output.print("\\u00{x:0>2}", .{byte});
+        i += 1;
+        start = i;
+    }
+    try output.writeAll(bytes[start..]);
+    try output.writeByte('"');
+}
 
 /// Writes a struct as `write` writes it but for the closing brace, and hands
 /// back the object to go on with: members the struct does not have, such as

@@ -116,23 +116,12 @@ pub const layers: []const gantry.rules.Layer = &.{
         "src/strand.zig",
     } },
     .{ .name = "benchmark seam", .patterns = &.{"src/seam.zig"} },
-    .{ .name = "schema vocabulary", .patterns = &.{ "src/schema/Limits.zig", "src/schema/Location.zig", "src/schema/Decimal.zig", "src/schema/dialect.zig" } },
-    .{ .name = "schema values", .patterns = &.{"src/schema/canonical.zig"} },
-    .{ .name = "schema format grammars", .patterns = &.{ "src/schema/formats/net.zig", "src/schema/formats/text.zig" } },
-    .{ .name = "schema formats", .patterns = &.{"src/schema/formats.zig"} },
-    .{ .name = "schema resolve", .patterns = &.{ "src/schema/Loader.zig", "src/schema/metaschemas.zig", "src/schema/registry.zig" } },
-    .{ .name = "schema program", .patterns = &.{"src/schema/Program.zig"} },
-    .{ .name = "schema compile", .patterns = &.{"src/schema/compile.zig"} },
-    .{ .name = "schema evaluate", .patterns = &.{"src/schema/evaluate.zig"} },
-    .{ .name = "schema public", .patterns = &.{"src/schema/Schema.zig"} },
-    .{ .name = "schema module", .patterns = &.{"src/schema.zig"} },
 };
 
 pub const entries: []const []const u8 = &.{};
 
 pub const modules: []const gantry.NamedModule = &.{
     .{ .name = "strand", .path = "src/strand.zig" },
-    .{ .name = "strand_schema", .path = "src/schema.zig" },
 };
 pub const references: []const gantry.rules.ReferenceRule = &.{
     .{
@@ -143,16 +132,11 @@ pub const references: []const gantry.rules.ReferenceRule = &.{
             "airlock",
             "airlock.testing",
             "builtin",
-            "almanac",
-            "json_schema_suite",
             "other_aegis",
             "rejection_options",
             "xmlconf_documents",
             "shakedown",
-            "spectra",
             "std",
-            "strand_options",
-            "uplink.wire",
             "xenoglyph",
         },
     },

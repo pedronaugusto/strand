@@ -14,23 +14,5 @@
   "hardened": true,
   "test_job_timeout": 40,
   "windows_job_timeout": 40,
-  "cross_job_timeout": 40,
-  "configurations": [
-    {
-      "name": "plain",
-      "options": {
-        "schema": false
-      }
-    },
-    {
-      "name": "schema",
-      "options": {
-        "schema": true
-      },
-      "modules": [
-        "strand",
-        "strand_schema"
-      ]
-    }
-  ]
+  "cross_job_timeout": 40
 }

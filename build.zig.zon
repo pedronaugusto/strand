@@ -33,31 +33,6 @@
             .hash = "xenoglyph-0.5.1-YKXZlcMCVABOnefwWET72nJLsmnBsMepiQwrB2Ll5HI9",
         },
 
-        // uplink's codecs, `uplink.wire`, for strand_schema's URI references:
-        // fetched only by a build with `.schema = true`, without the client.
-        .uplink = .{
-            .url = "git+https://github.com/pedronaugusto/uplink#e3cd60c58605b738c46b7e422c0e475afee33c1c",
-            .hash = "uplink-0.10.2-0eVSJgi2HgAcbj3U8OV7T4bs5-JxtGE2YVAR4RgX9GWG",
-            .lazy = true,
-        },
-
-        // ECMAScript patterns in linear time, for strand_schema's `pattern`,
-        // `patternProperties` and the `regex` format: fetched only by a build
-        // with `.schema = true`.
-        .spectra = .{
-            .url = "git+https://github.com/pedronaugusto/spectra#6dd0ffa18803ca10bd71315b6194064d2bc02056",
-            .hash = "spectra-0.0.0-t6DGCEXiDQDH7cmxrR5H6k3LrmHxPIzeISlgsRqiMzg9",
-            .lazy = true,
-        },
-
-        // RFC 3339's grammar, for strand_schema's `date-time`, `date`, `time`
-        // and `duration` formats: fetched only by a build with `.schema = true`.
-        .almanac = .{
-            .url = "git+https://github.com/pedronaugusto/almanac#514f562cda12d4a6fb2915afe146a4474151bc6f",
-            .hash = "almanac-0.0.0-sQeSOWtoCgDbTpJJ6xIDc7nridOruMC_DFStdIuDe_z8",
-            .lazy = true,
-        },
-
         // Test doubles, for the tests alone: no module a consumer builds
         // imports it, and a consumer never fetches it.
 
@@ -68,13 +43,6 @@
         .xmlts = .{
             .url = "https://www.w3.org/XML/Test/xmlts20130923.tar.gz",
             .hash = "N-V-__8AAKKMKQAyL3KQidU3H84LB3ftuZRsxUo4mqNyyHnZ",
-            .lazy = true,
-        },
-
-        // The JSON-Schema-Test-Suite, for strand_schema's tests alone.
-        .json_schema_test_suite = .{
-            .url = "git+https://github.com/json-schema-org/JSON-Schema-Test-Suite#38dea932b02986f496345bf007108277777630bf",
-            .hash = "N-V-__8AAM4EEACCaWf61qxGMqrrNghGcq_MHInO3gTd63XY",
             .lazy = true,
         },
 

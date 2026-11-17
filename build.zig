@@ -10,10 +10,10 @@ pub fn build(b: *std.Build) void {
     //=====================================================================
     // The module. Pure Zig on `std`, aegis (the checked work in the core) and
     // airlock (which syncs the file under a writer and tells one file from
-    // another for a follower): nothing to link and nothing to vendor. One
-    // build option, `schema`, off unless asked for, adds the `strand_schema`
-    // module beside `strand`, and uplink's codecs for it, and changes nothing
-    // in `strand`. core, json, jsonl and
+    // another for a follower): nothing to link and nothing to vendor, and no
+    // build option: a library takes every dependency with its default
+    // options, and options are the application's to set. JSON Schema
+    // validation is strand_schema's own package, on this module. core, json, jsonl and
     // zon are namespaces of it, not modules of their own: every user fetches
     // the same two packages whichever part they take, no part links anything,
     // and Zig analyzes only the part a program names. The layering inside is
@@ -24,74 +24,19 @@ pub fn build(b: *std.Build) void {
     const airlock = airlock_dependency.module("airlock");
     const aegis = b.dependency("aegis", .{ .target = target, .optimize = optimize }).module("aegis");
     const xenoglyph = b.dependency("xenoglyph", .{ .target = target, .optimize = optimize }).module("xenoglyph");
-    // JSON Schema validation, `strand_schema`: off unless a project asks for
-    // it with `.schema = true`, since most validate by decoding into a type.
-    // `strand.built_with.schema` says which.
-    const schema = b.option(bool, "schema", "Build strand_schema, JSON Schema validation") orelse false;
-    const strand = b.addModule("strand", .{
+    _ = b.addModule("strand", .{
         .root_source_file = b.path("src/strand.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{ .{ .name = "aegis", .module = aegis }, .{ .name = "airlock", .module = airlock }, .{ .name = "xenoglyph", .module = xenoglyph }, .{ .name = "strand_options", .module = featureOptions(b, schema) } },
-    });
-    if (!schema) return;
-    // strand_schema's dependencies are fetched only for it, lazily: uplink's
-    // codecs (`uplink.wire`, without its client) for URIs, spectra for
-    // ECMAScript patterns, almanac's RFC 3339 grammar (no zone data) for
-    // dates and times.
-    const lazy = schemaDependencies(b, target, optimize) orelse return;
-    _ = b.addModule("strand_schema", .{
-        .root_source_file = b.path("src/schema.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{ .{ .name = "strand", .module = strand }, .{ .name = "aegis", .module = aegis }, .{ .name = "xenoglyph", .module = xenoglyph }, .{ .name = "uplink.wire", .module = lazy.wire }, .{ .name = "spectra", .module = lazy.spectra }, .{ .name = "almanac", .module = lazy.almanac } },
+        .imports = &.{ .{ .name = "aegis", .module = aegis }, .{ .name = "airlock", .module = airlock }, .{ .name = "xenoglyph", .module = xenoglyph } },
     });
 }
-
-/// strand_schema's lazy dependencies' modules.
-const SchemaDependencies = struct { wire: *std.Build.Module, spectra: *std.Build.Module, almanac: *std.Build.Module };
-
-/// strand_schema's lazy dependencies; null until each is fetched, which
-/// ends this configure pass.
-fn schemaDependencies(p: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize) ?SchemaDependencies {
-    const uplink = p.dependencyLazy("uplink", .{ .target = target, .optimize = optimize, .client = false }) catch null;
-    const spectra = p.dependencyLazy("spectra", .{ .target = target, .optimize = optimize }) catch null;
-    const almanac = p.dependencyLazy("almanac", .{ .target = target, .optimize = optimize, .tzdb = .system }) catch null;
-    return .{
-        .wire = (uplink orelse return null).module("uplink.wire"),
-        .spectra = (spectra orelse return null).module("spectra"),
-        .almanac = (almanac orelse return null).module("almanac"),
-    };
-}
-
-/// `strand_options`, saying whether `strand_schema` was built.
-fn featureOptions(p: *std.Build, schema: bool) *std.Build.Module {
-    const features = p.addOptions();
-    features.addOption(bool, "schema", schema);
-    return features.createModule();
-}
-
-/// The `strand_schema` module's sources and imports, as `build` adds it,
-/// for its tests.
-fn schemaOptions(p: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize, strand: *std.Build.Module, aegis: *std.Build.Module, xenoglyph: *std.Build.Module, lazy: SchemaDependencies) std.Build.Module.CreateOptions {
-    return .{
-        .root_source_file = p.path("src/schema.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = p.allocator.dupe(std.Build.Module.Import, &.{ .{ .name = "strand", .module = strand }, .{ .name = "aegis", .module = aegis }, .{ .name = "xenoglyph", .module = xenoglyph }, .{ .name = "uplink.wire", .module = lazy.wire }, .{ .name = "spectra", .module = lazy.spectra }, .{ .name = "almanac", .module = lazy.almanac } }) catch @panic("OOM"),
-    };
-}
-
 /// strand's development: its tests, examples, checks and benchmarks, under
 /// preflight's gate. Run through bay.
 pub fn dev(b: *std.Build, tools: type) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
-    // A configuration's option (ci/workflow.json): the package is built
-    // with strand_schema or without, as a project would build it, and
-    // checked so. strand_schema's own tests below build it either way.
-    const with_strand_schema = b.option(bool, "schema", "Build the package with strand_schema, as a configuration checks it") orelse false;
-    const package = b.dependency("strand", .{ .target = target, .optimize = optimize, .schema = with_strand_schema });
+    const package = b.dependency("strand", .{ .target = target, .optimize = optimize });
     const p = package.builder;
     const preflight = tools.preflight;
     const module = package.module("strand");
@@ -113,7 +58,7 @@ pub fn dev(b: *std.Build, tools: type) void {
             .root_source_file = p.path("src/tests.zig"),
             .target = target,
             .optimize = optimize,
-            .imports = &.{ .{ .name = "aegis", .module = aegis }, .{ .name = "airlock", .module = airlock }, .{ .name = "xenoglyph", .module = xenoglyph }, .{ .name = "strand_options", .module = featureOptions(p, false) } },
+            .imports = &.{ .{ .name = "aegis", .module = aegis }, .{ .name = "airlock", .module = airlock }, .{ .name = "xenoglyph", .module = xenoglyph } },
         }),
     });
     // shakedown, and airlock's seam built on it.
@@ -132,20 +77,6 @@ pub fn dev(b: *std.Build, tools: type) void {
     const test_step = b.step("test", "Run strand tests");
     // The assembly reaches every test once, in one executable.
     test_step.dependOn(&b.addRunArtifact(tests).step);
-    // strand_schema's tests, an executable of their own over the module.
-    const lazy = schemaDependencies(p, target, optimize) orelse return;
-    const schema_module = b.createModule(schemaOptions(p, target, optimize, module, aegis, xenoglyph, lazy));
-    schema_module.addImport("shakedown", shakedown.module("shakedown"));
-    schema_module.addImport("json_schema_suite", jsonSchemaSuite(b));
-    const schema_tests = b.addTest(.{
-        .name = "strand-schema-tests",
-        .filters = if (test_filter) |filter| &.{filter} else &.{},
-        .root_module = schema_module,
-    });
-    test_step.dependOn(&b.addRunArtifact(schema_tests).step);
-    const schema_check = b.step("check-schema", "Compile strand_schema's tests without running them");
-    schema_check.dependOn(&schema_tests.step);
-
     const scratch_tests = b.addTest(.{
         .name = "logbook-scratch-tests",
         .filters = if (test_filter) |filter| &.{filter} else &.{},
@@ -251,21 +182,6 @@ pub fn dev(b: *std.Build, tools: type) void {
         examples_step.dependOn(&b.addRunArtifact(example).step);
         check_step.dependOn(&example.step);
     }
-    // strand_schema's example, against strand built with `.schema = true`.
-    {
-        const with_schema = b.dependency("strand", .{ .target = target, .optimize = optimize, .schema = true });
-        const example = b.addExecutable(.{
-            .name = "validate",
-            .root_module = b.createModule(.{
-                .root_source_file = p.path("examples/validate.zig"),
-                .target = target,
-                .optimize = optimize,
-                .imports = &.{ .{ .name = "strand", .module = with_schema.module("strand") }, .{ .name = "strand_schema", .module = with_schema.module("strand_schema") } },
-            }),
-        });
-        examples_step.dependOn(&b.addRunArtifact(example).step);
-        check_step.dependOn(&example.step);
-    }
     test_step.dependOn(examples_step);
 
     //=====================================================================
@@ -325,18 +241,6 @@ pub fn dev(b: *std.Build, tools: type) void {
         const yaml_smoke = b.addRunArtifact(yaml_bench);
         yaml_smoke.addArg("--smoke");
         test_step.dependOn(&yaml_smoke.step);
-        // strand_schema's observations, over a strand built with `.schema = true`.
-        const with_schema = b.dependency("strand", .{ .target = target, .optimize = bench_mode, .schema = true });
-        const validate_bench = b.addExecutable(.{
-            .name = "strand-validate-bench",
-            .root_module = b.createModule(.{ .root_source_file = p.path("bench/validate.zig"), .target = target, .optimize = bench_mode, .imports = &.{ .{ .name = "strand", .module = with_schema.module("strand") }, .{ .name = "strand_schema", .module = with_schema.module("strand_schema") } } }),
-        });
-        validate_bench.root_module.addImport("shakedown", dependency.module("shakedown"));
-        b.step("validate-bench-build", "Compile strand_schema observations").dependOn(&b.addInstallArtifact(validate_bench, .{}).step);
-        check_step.dependOn(&validate_bench.step);
-        const validate_smoke = b.addRunArtifact(validate_bench);
-        validate_smoke.addArg("--smoke");
-        test_step.dependOn(&validate_smoke.step);
         const xml_bench = b.addExecutable(.{
             .name = "strand-xml-bench",
             .root_module = b.createModule(.{ .root_source_file = p.path("bench/xml.zig"), .target = target, .optimize = bench_mode, .imports = benchImports(b, target, bench_mode) }),
@@ -451,13 +355,12 @@ pub fn dev(b: *std.Build, tools: type) void {
         },
     });
     // A project that depends on strand by path, with airlock, aegis and xenoglyph
-    // and nothing else to fetch: the build a consumer gets, once plain and once
-    // with `.schema = true`, which reads uplink, spectra and almanac too.
+    // and nothing else to fetch: the build a consumer gets.
     preflight.addConsumerCheck(b, p, .{
         .package = "strand",
         .modules = &.{"strand"},
         .program = p.path("ci/consumer.zig"),
-        .packages = &.{ p.dependency("aegis", .{}), p.dependency("airlock", .{}), p.dependency("xenoglyph", .{}), p.dependency("uplink", .{ .client = false }), p.dependency("spectra", .{}), p.dependency("almanac", .{ .tzdb = .system }) },
+        .packages = &.{ p.dependency("aegis", .{}), p.dependency("airlock", .{}), p.dependency("xenoglyph", .{}) },
     });
 }
 
@@ -478,7 +381,7 @@ fn benchSeam(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang
     const airlock = p.dependency("airlock", .{ .target = target, .optimize = optimize }).module("airlock");
     const aegis = p.dependency("aegis", .{ .target = target, .optimize = optimize }).module("aegis");
     const xenoglyph = p.dependency("xenoglyph", .{ .target = target, .optimize = optimize }).module("xenoglyph");
-    return b.createModule(.{ .root_source_file = p.path("src/seam.zig"), .target = target, .optimize = optimize, .imports = &.{ .{ .name = "aegis", .module = aegis }, .{ .name = "airlock", .module = airlock }, .{ .name = "xenoglyph", .module = xenoglyph }, .{ .name = "strand_options", .module = featureOptions(p, false) } } });
+    return b.createModule(.{ .root_source_file = p.path("src/seam.zig"), .target = target, .optimize = optimize, .imports = &.{ .{ .name = "aegis", .module = aegis }, .{ .name = "airlock", .module = airlock }, .{ .name = "xenoglyph", .module = xenoglyph } } });
 }
 
 /// Every example, listed rather than globbed: a build graph that scans a
@@ -519,109 +422,6 @@ const clone_rejections = [_][]const u8{
 
 /// A module of the W3C XML suite's documents, one per line of strand's
 /// manifest and in its order: `documents`, or `null` without the suite.
-/// The JSON-Schema-Test-Suite's validation tests, each file embedded from where
-/// the build fetched them (`null` when it runs without lazy dependencies).
-fn jsonSchemaSuite(b: *std.Build) *std.Build.Module {
-    const files = b.addWriteFiles();
-    var source: std.ArrayList(u8) = .empty;
-    if (b.dependencyLazy("json_schema_test_suite", .{})) |suite| {
-        source.appendSlice(b.allocator, "pub const File = struct { name: []const u8, text: []const u8 };\npub const files: ?[]const File = &.{\n") catch @panic("OOM");
-        for (json_schema_suite_files) |name| {
-            _ = files.addCopyFile(suite.path(b.fmt("validation/tests/{s}", .{name})), b.fmt("suite/{s}", .{name}));
-            source.print(b.allocator, "    .{{ .name = \"{s}\", .text = @embedFile(\"suite/{s}\") }},\n", .{ name, name }) catch @panic("OOM");
-        }
-        source.appendSlice(b.allocator, "};\n") catch @panic("OOM");
-    } else |_| source.appendSlice(b.allocator, "pub const File = struct { name: []const u8, text: []const u8 };\npub const files: ?[]const File = null;\n") catch @panic("OOM");
-    return b.createModule(.{ .root_source_file = files.add("suite.zig", source.items) });
-}
-
-/// The suite's validation test files, listed rather than globbed: the
-/// required ones and `optional/`, not `proposals/`.
-const json_schema_suite_files = [_][]const u8{
-    "additionalProperties.json",
-    "allOf.json",
-    "anchor-legacy.json",
-    "anchor.json",
-    "anyOf.json",
-    "boolean_schema.json",
-    "const.json",
-    "contains.json",
-    "content.json",
-    "default.json",
-    "dependentRequired.json",
-    "dependentSchemas.json",
-    "disallow.json",
-    "dynamicRef.json",
-    "enum.json",
-    "extends.json",
-    "format-color.json",
-    "format-date-time.json",
-    "format-date.json",
-    "format-duration.json",
-    "format-email.json",
-    "format-host-name.json",
-    "format-hostname.json",
-    "format-idn-email.json",
-    "format-idn-hostname.json",
-    "format-ip-address.json",
-    "format-ipv4.json",
-    "format-ipv6.json",
-    "format-iri-reference.json",
-    "format-iri.json",
-    "format-json-pointer.json",
-    "format-regex.json",
-    "format-relative-json-pointer.json",
-    "format-time.json",
-    "format-unknown.json",
-    "format-uri-reference.json",
-    "format-uri-template.json",
-    "format-uri.json",
-    "format-uuid.json",
-    "id-legacy.json",
-    "id.json",
-    "if-then-else.json",
-    "infinite-loop-detection-legacy.json",
-    "infinite-loop-detection.json",
-    "items.json",
-    "maximum.json",
-    "maxItems.json",
-    "maxLength.json",
-    "maxProperties.json",
-    "minimum.json",
-    "minItems.json",
-    "minLength.json",
-    "minProperties.json",
-    "multipleOf.json",
-    "not.json",
-    "oneOf.json",
-    "pattern.json",
-    "patternProperties.json",
-    "properties.json",
-    "propertyNames.json",
-    "recursiveRef.json",
-    "ref-legacy.json",
-    "ref.json",
-    "required.json",
-    "type.json",
-    "unevaluatedItems.json",
-    "unevaluatedProperties.json",
-    "uniqueItems.json",
-    "vocabulary.json",
-    "optional/bignum.json",
-    "optional/content.json",
-    "optional/cross-draft.json",
-    "optional/dependencies-compatibility.json",
-    "optional/dynamicRef.json",
-    "optional/ecmascript-regex.json",
-    "optional/float-overflow.json",
-    "optional/format-assertion.json",
-    "optional/format-regex.json",
-    "optional/format-time.json",
-    "optional/non-bmp-regex.json",
-    "optional/non-schemas.json",
-    "optional/zero-terminated-floats.json",
-};
-
 fn xmlconfDocuments(b: *std.Build, p: *std.Build) *std.Build.Module {
     const files = b.addWriteFiles();
     var source: std.ArrayList(u8) = .empty;

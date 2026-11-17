@@ -69,7 +69,11 @@ const Read = struct {
     fn entry(self: *const Read, m: Member) u32 {
         return self.span(m.first).entry;
     }
+    /// Where a member's text ends: its last node's, or its key's where its
+    /// value is written nowhere (`? key` with no `:`), whose empty node the
+    /// reader places at the next token, past the member's own text.
     fn end(self: *const Read, m: Member) u32 {
+        if (m.last != m.first and writtenNowhere(self, m.first, m.last)) return self.span(m.first).end;
         return self.span(m.last).end;
     }
 };
@@ -327,18 +331,24 @@ fn emptyValue(a: std.mem.Allocator, r: *const Read, n: u32, spelled: []const u8)
     const text = r.text;
     const parent = r.parents[n];
     if (parent == 0 or r.node(parent).kind != .mapping) return null;
-    const node = r.node(n);
-    const s = r.span(n);
-    if (node.kind != .scalar or node.style != .plain or node.data.len != 0 or node.tag != .none or s.start != s.end) return null;
     const k = keyBefore(r, parent, n);
+    if (!writtenNowhere(r, k, n)) return null;
     const key_end = r.span(k).end;
-    if (colonAfter(text, key_end) != null or (s.start > 0 and text[s.start - 1] == ':')) return null;
     const body = trimLine(spelled);
     if (r.span(parent).flow) return .{ .start = key_end, .end = key_end, .replacement = try std.mem.concat(a, u8, &.{ ": ", body }) };
     const key_column = column(text, r.span(k).entry);
     const after = lineEnd(text, key_end);
     const line = try std.mem.concat(a, u8, &.{ try spaces(a, key_column), ": ", try edit.indented(a, body, try spaces(a, key_column + 2)), "\n" });
     return .{ .start = after, .end = after, .replacement = try newlineBefore(a, text, after, line) };
+}
+/// Whether value `n` of key `k` is written nowhere: empty, plain, untagged,
+/// with no `:` after its key or before it (`? key` alone). The reader places
+/// such a node at the next token.
+fn writtenNowhere(r: *const Read, k: u32, n: u32) bool {
+    const node = r.node(n);
+    const s = r.span(n);
+    if (node.kind != .scalar or node.style != .plain or node.data.len != 0 or node.tag != .none or s.start != s.end) return false;
+    return colonAfter(r.text, r.span(k).end) == null and !(s.start > 0 and r.text[s.start - 1] == ':');
 }
 /// Whether flow mapping `n` is written in braces: not a pair in a flow sequence.
 fn braced(r: *const Read, n: u32) bool {

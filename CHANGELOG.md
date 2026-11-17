@@ -45,6 +45,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `yaml.Edit`: a key written with no value (`? key`, no `:`) ends with its key. The reader places its empty value at the next token, on a later line, so removing such a member cut into the next line's indentation and was refused as text that no longer reads (`- ? a\n  ? b\n- x` with `/0/b` removed left `  - x`), and a key added after it went after the next line. Found by the release tier's fuzz run (release run 44137916154), its case shrunk into a test with removals, additions and replacements around such keys.
 - A JSON integer read straight into an integer type is held to `numeric_bytes` by its whole token, the minus included, as every other number is: `-0` or `-7` under a one-byte limit was read on that path alone, where the tape refused it. `numeric_bytes` says so.
 - A record's key that matches the name the schema expects next is held to `key_bytes`, as every other key is: a field name longer than the limit was accepted on that path alone.
 - A writer's scratch (`ini`, `dotenv`, `zon` and `urlencoded`'s keys and frames past what they keep inline) holds a list where it lies as the list grows, its growth charged to the allocation budget as an allocation is: each growth took a new block and left the last behind, so a fixed scratch ran out at a size that depended on the target's growth steps (riscv64 needed 4256 bytes for 200 INI keys where x86_64 needed 2416, and a 4096-byte scratch failed with `OutOfMemory` there).

@@ -309,6 +309,54 @@ test "YAML: removals take their lines; flow collections; empty values" {
     try std.testing.expectEqualStrings("whole: true\n", e.bytes());
 }
 
+test "YAML: a key written with no value (`? key`) ends with its key, where a removal or an addition goes" {
+    // The release tier's fuzz case (strand a49e6c5, release run 44137916154), shrunk: the empty
+    // value of `? value` is placed at the next token, so the removal ended on the next line and
+    // left `  - x`, which does not read.
+    const cases = [_]struct { text: []const u8, edit: enum { remove, add, set }, path: []const u8, want: []const u8 }{
+        .{ .text = "- ? complex\n  ? value\n- x\n", .edit = .remove, .path = "/0/value", .want = "- ? complex\n- x\n" },
+        .{
+            .text = "- name: a\n  tags: {k: v, w: [1]}\n- ? complex\n  ? value\n-\n  - nested\n",
+            .edit = .remove,
+            .path = "/1/value",
+            .want = "- name: a\n  tags: {k: v, w: [1]}\n- ? complex\n-\n  - nested\n",
+        },
+        .{ .text = "- ? complex\n  ? value\n- x\n", .edit = .remove, .path = "/0/complex", .want = "- ? value\n- x\n" },
+        .{ .text = "x:\n  ? a\n  ? b\n  ? c\ny: 1\n", .edit = .remove, .path = "/x/b", .want = "x:\n  ? a\n  ? c\ny: 1\n" },
+        .{ .text = "x:\n  ? a\n  ? b\n  ? c\ny: 1\n", .edit = .remove, .path = "/x/c", .want = "x:\n  ? a\n  ? b\ny: 1\n" },
+        .{ .text = "x:\n  ? a # about a\n  ? b\ny: 1\n", .edit = .remove, .path = "/x/b", .want = "x:\n  ? a # about a\ny: 1\n" },
+        .{ .text = "x:\n  k: 1\n  ? b\ny: 1\n", .edit = .remove, .path = "/x/b", .want = "x:\n  k: 1\ny: 1\n" },
+        // An addition after such a member goes after its line, not after the next one.
+        .{ .text = "- ? complex\n  ? value\n- x\n", .edit = .add, .path = "/0/k", .want = "- ? complex\n  ? value\n  k: 1\n- x\n" },
+        .{ .text = "x:\n  ? a\ny: 1\n", .edit = .add, .path = "/x/k", .want = "x:\n  ? a\n  k: 1\ny: 1\n" },
+        // The collection it ends replaced: up to its key, the next line kept.
+        .{ .text = "- ? complex\n  ? value\n- x\n", .edit = .set, .path = "/0", .want = "- 1\n- x\n" },
+        .{ .text = "x:\n  ? a\ny: 1\n", .edit = .set, .path = "/x", .want = "x: 1\ny: 1\n" },
+        // Its value set, as before: on a line of its own after the key.
+        .{ .text = "- ? a\n  ? b\n- x\n", .edit = .set, .path = "/0/b", .want = "- ? a\n  ? b\n  : 1\n- x\n" },
+    };
+    for (cases) |case| {
+        var e = try yaml.Edit.init(gpa, case.text, .{});
+        defer e.deinit();
+        errdefer std.debug.print("{t} {s} on:\n{s}\n", .{ case.edit, case.path, case.text });
+        switch (case.edit) {
+            .remove => try e.remove(case.path),
+            .add, .set => try e.set(case.path, @as(u8, 1)),
+        }
+        try std.testing.expectEqualStrings(case.want, e.bytes());
+    }
+    // In flow style the member's text ends with its key too: what is left reads as the rest.
+    const flows = [_][2][]const u8{ .{ "{? a, ? b}", "/a" }, .{ "{? a, ? b}", "/b" }, .{ "[{? a, ? b, c: 1}]", "/0/b" } };
+    for (flows) |f| {
+        var e = try yaml.Edit.init(gpa, f[0], .{});
+        defer e.deinit();
+        try e.remove(f[1]);
+        var arena: std.heap.ArenaAllocator = .init(gpa);
+        defer arena.deinit();
+        _ = try yaml.parseLeaky(yaml.Value, arena.allocator(), e.bytes(), .{});
+    }
+}
+
 test "YAML: a carriage return alone ends a line, as the reader reads it" {
     // Found by the fuzzer: the comment after `a` ends at the carriage return,
     // and `b` is the next key, not part of `a`'s line.

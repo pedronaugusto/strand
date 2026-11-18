@@ -6,8 +6,9 @@
 //! properties over generated values and bytes.
 //!
 //! msgpack-test-suite at e04f6edeaae589c768d6b70fcce80aa786b7800e (MIT,
-//! src/corpus/msgpack/LICENSE).
+//! testdata/corpus/msgpack/LICENSE).
 const std = @import("std");
+const testdata = @import("testdata");
 const msgpack = @import("msgpack.zig");
 const json = @import("json.zig");
 const shakedown = @import("shakedown");
@@ -284,7 +285,7 @@ test "msgpack-test-suite: every encoding of every value read, and ours the short
     var arena: std.heap.ArenaAllocator = .init(gpa);
     defer arena.deinit();
     const a = arena.allocator();
-    const suite = try json.parseLeaky(json.Value, a, @embedFile("corpus/msgpack/msgpack-test-suite.json"), .{});
+    const suite = try json.parseLeaky(json.Value, a, testdata.file("corpus/msgpack/msgpack-test-suite.json"), .{});
     var cases: usize = 0;
     var encodings: usize = 0;
     for (suite.object) |group| for (group.value.array) |case| {

@@ -573,7 +573,7 @@ signalling NaN: a NaN read from the wire is written back as it came.
 The evidence: golden vectors derived from the specification for every format family at
 each of its edges, read and written back and refused when cut short anywhere;
 [msgpack-test-suite](https://github.com/kawanet/msgpack-test-suite) (MIT, vendored at
-`src/corpus/msgpack`), every encoding of each of its 85 values read and ours the
+`testdata/corpus/msgpack`), every encoding of each of its 85 values read and ours the
 shortest of each kind; properties over generated values (round trip, every truncation,
 the deterministic profile twice the same) and over arbitrary bytes (read, written in
 no more bytes, read again as the same value). A cross-check against rmpv decoded 200,000
@@ -623,7 +623,7 @@ floats the shortest spelling that reads back as the same binary64, with a fracti
 an exponent, dates and times RFC 3339's spelling with seconds. All of it reads as TOML
 1.0 and 1.1. A null is refused unless the write leaves null optionals out.
 
-The evidence is toml-test (vendored at `src/corpus/toml` with its MIT license), every
+The evidence is toml-test (vendored at `testdata/corpus/toml` with its MIT license), every
 file its 1.0.0 and 1.1.0 lists name, nothing skipped: each valid document read as the
 value its JSON says, each invalid one refused, and each valid document's value written
 and read back as TOML 1.0 to the same value. Properties write generated documents and
@@ -702,7 +702,7 @@ the reader compares them. The writer allocates nothing unless a value nests past
 levels or a map has more than 128 keys; then it needs `WriteOptions.allocator`.
 
 The evidence is yaml-test-suite (the data-2022-01-17 release, vendored at
-`src/corpus/yaml` with its MIT license): all 402 cases, each valid one read as its
+`testdata/corpus/yaml` with its MIT license): all 402 cases, each valid one read as its
 events and each invalid one refused; each valid case with JSON read as `yaml.Value` as
 its JSON says (263), written and read back as the same values, apart from the 16 whose
 tags the core schema lacks, which are refused (`UnsupportedValue`) and listed by name.

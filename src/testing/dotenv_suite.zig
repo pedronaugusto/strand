@@ -1,5 +1,5 @@
 //! The inputs of python-dotenv 1.2.4's own parser tests (`tests/test_parser.py`;
-//! BSD-3-Clause, its licence in `src/corpus/python-dotenv/LICENSE`), each with
+//! BSD-3-Clause, its licence in `testdata/corpus/python-dotenv/LICENSE`), each with
 //! what python-dotenv reads from a file of it, as trials'
 //! `strand/formats/dotenv/python_dotenv.py suite` writes these cases: every
 //! key and value in order, a key with no `=` null. `null` for the cases

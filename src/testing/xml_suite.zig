@@ -9,10 +9,11 @@
 //! leaves out those for XML 1.1, for editions before the fifth, those whose
 //! documents need an external entity, and the optional `error` ones.
 const std = @import("std");
+const testdata = @import("testdata");
 const xml = @import("../xml.zig");
 const suite = @import("xmlconf_documents");
 
-const manifest = @embedFile("../corpus/xml/xmlconf.manifest");
+const manifest = testdata.file("corpus/xml/xmlconf.manifest");
 
 /// Tests strand does not pass, each with its reason.
 const skipped = [_]struct { []const u8, []const u8 }{

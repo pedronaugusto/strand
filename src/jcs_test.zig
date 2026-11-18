@@ -2,6 +2,7 @@
 //! json-canonicalization corpus at 32a48195b9b20fe67b1795e39e4509f14d860b45
 //! (Apache-2.0, its licence beside the files).
 const std = @import("std");
+const testdata = @import("testdata");
 const json = @import("json.zig");
 const canonical = @import("json/canonical.zig");
 
@@ -53,14 +54,14 @@ test "JCS: RFC 8785 Appendix B, every number sample" {
 test "JCS: the cyberphone corpus, every file" {
     const files = [_][]const u8{ "arrays", "french", "structures", "unicode", "values", "weird" };
     const inputs = [_][]const u8{
-        @embedFile("corpus/jcs/input/arrays.json"),     @embedFile("corpus/jcs/input/french.json"),
-        @embedFile("corpus/jcs/input/structures.json"), @embedFile("corpus/jcs/input/unicode.json"),
-        @embedFile("corpus/jcs/input/values.json"),     @embedFile("corpus/jcs/input/weird.json"),
+        testdata.file("corpus/jcs/input/arrays.json"),     testdata.file("corpus/jcs/input/french.json"),
+        testdata.file("corpus/jcs/input/structures.json"), testdata.file("corpus/jcs/input/unicode.json"),
+        testdata.file("corpus/jcs/input/values.json"),     testdata.file("corpus/jcs/input/weird.json"),
     };
     const outputs = [_][]const u8{
-        @embedFile("corpus/jcs/output/arrays.json"),     @embedFile("corpus/jcs/output/french.json"),
-        @embedFile("corpus/jcs/output/structures.json"), @embedFile("corpus/jcs/output/unicode.json"),
-        @embedFile("corpus/jcs/output/values.json"),     @embedFile("corpus/jcs/output/weird.json"),
+        testdata.file("corpus/jcs/output/arrays.json"),     testdata.file("corpus/jcs/output/french.json"),
+        testdata.file("corpus/jcs/output/structures.json"), testdata.file("corpus/jcs/output/unicode.json"),
+        testdata.file("corpus/jcs/output/values.json"),     testdata.file("corpus/jcs/output/weird.json"),
     };
     for (files, inputs, outputs) |name, input, want| {
         var out: std.Io.Writer.Allocating = .init(gpa);

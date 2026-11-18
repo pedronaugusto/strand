@@ -73,6 +73,8 @@ pub fn dev(b: *std.Build, tools: type) void {
     // The W3C XML suite's documents the manifest lists, embedded from where
     // the build fetched them (`null` when it runs without lazy dependencies).
     tests.root_module.addImport("xmlconf_documents", xmlconfDocuments(b, p));
+    // The corpora the tests read, outside src/ and the paths a project fetches.
+    tests.root_module.addImport("testdata", b.createModule(.{ .root_source_file = p.path("testdata/root.zig") }));
 
     const test_step = b.step("test", "Run strand tests");
     // The assembly reaches every test once, in one executable.
@@ -427,7 +429,7 @@ fn xmlconfDocuments(b: *std.Build, p: *std.Build) *std.Build.Module {
     var source: std.ArrayList(u8) = .empty;
     if (b.dependencyLazy("xmlts", .{})) |xmlts| {
         source.appendSlice(b.allocator, "pub const documents: ?[]const []const u8 = &.{\n") catch @panic("OOM");
-        var lines = std.mem.tokenizeScalar(u8, @embedFile("src/corpus/xml/xmlconf.manifest"), '\n');
+        var lines = std.mem.tokenizeScalar(u8, @embedFile("testdata/corpus/xml/xmlconf.manifest"), '\n');
         while (lines.next()) |line| {
             var fields = std.mem.tokenizeScalar(u8, line, ' ');
             _ = fields.next();

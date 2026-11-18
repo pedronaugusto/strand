@@ -5,6 +5,7 @@
 //! as a `toml.Value`, is written and reads back, as TOML 1.0, as that value.
 //! No file is skipped.
 const std = @import("std");
+const testdata = @import("testdata");
 const toml = @import("../toml.zig");
 const json = @import("../json.zig");
 
@@ -21,14 +22,14 @@ fn listed(comptime list: []const u8) []const Case {
         const valid = comptime std.mem.startsWith(u8, line, "valid/");
         found = found ++ &[_]Case{.{
             .name = line,
-            .toml = @embedFile("../corpus/toml/" ++ line),
-            .json = if (valid) @embedFile("../corpus/toml/" ++ stem ++ ".json") else null,
+            .toml = testdata.file("corpus/toml/" ++ line),
+            .json = if (valid) testdata.file("corpus/toml/" ++ stem ++ ".json") else null,
         }};
     }
     return found;
 }
-pub const v1_0 = listed(@embedFile("../corpus/toml/files-toml-1.0.0"));
-pub const v1_1 = listed(@embedFile("../corpus/toml/files-toml-1.1.0"));
+pub const v1_0 = listed(testdata.file("corpus/toml/files-toml-1.0.0"));
+pub const v1_1 = listed(testdata.file("corpus/toml/files-toml-1.1.0"));
 
 test "toml-test decoder, TOML 1.0.0 and 1.1.0" {
     // Every file each list names, as the pinned lists count them.

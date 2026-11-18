@@ -36,6 +36,10 @@ options are the application's to set, so a program that reaches strand through s
 packages builds one strand. JSON Schema validation is
 [strand_schema](https://github.com/pedronaugusto/strand-schema), its own package on strand.
 
+The package a project fetches is strand's build files, its Zig sources and its docs: 604 KB
+compressed, 2.6 MiB unpacked. Its test data (the JSON, JSON5, TOML, YAML, msgpack, JCS and
+dotenv conformance corpora) stays in the repository under `testdata/corpus/`.
+
 ## Stability
 
 strand is 0.x and tracks Zig 0.17.x. A breaking change comes only in a minor release

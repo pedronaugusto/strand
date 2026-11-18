@@ -3,12 +3,13 @@
 //! recorded answers, and the writer writing the one shape.
 
 const std = @import("std");
+const testdata = @import("testdata");
 const testing = std.testing;
 const strand_module = @import("strand.zig");
 const json = strand_module.json;
 const jsonl = strand_module.jsonl;
 
-/// The union `src/corpus/tagged/answers.txt` was recorded against, tagged by
+/// The union `testdata/corpus/tagged/answers.txt` was recorded against, tagged by
 /// `type`, with no catch-all.
 const Closed = union(enum) {
     assistant: struct { text: []const u8, n: u64 = 0 },
@@ -34,8 +35,8 @@ const Kept = union(enum) {
     pub const strand = .{ .tag = "type", .other = "other" };
 };
 
-const cases = @embedFile("corpus/tagged/cases.jsonl");
-const recorded = @embedFile("corpus/tagged/answers.txt");
+const cases = testdata.file("corpus/tagged/cases.jsonl");
+const recorded = testdata.file("corpus/tagged/answers.txt");
 
 /// The class a recorded answer names, from the error this package names.
 fn class(err: anyerror) []const u8 {

@@ -3,6 +3,7 @@
 //! every case its list names. Events: each valid stream's events are the ones
 //! its `test.event` gives, each invalid one is refused.
 const std = @import("std");
+const testdata = @import("testdata");
 const parser = @import("../yaml/parser.zig");
 const yaml = @import("../yaml.zig");
 const json = @import("../json.zig");
@@ -19,19 +20,19 @@ fn listed(comptime list: []const u8) []const Case {
         const path = comptime fields.next().?;
         const flags = comptime fields.next().?;
         const name = comptime fields.rest();
-        const dir = "../corpus/yaml/" ++ path ++ "/";
+        const dir = "corpus/yaml/" ++ path ++ "/";
         found = found ++ &[_]Case{.{
             .path = path,
             .name = name,
-            .yaml = @embedFile(dir ++ "in.yaml"),
-            .events = @embedFile(dir ++ "test.event"),
-            .json = if (comptime std.mem.findScalar(u8, flags, 'j') != null) @embedFile(dir ++ "in.json") else null,
+            .yaml = testdata.file(dir ++ "in.yaml"),
+            .events = testdata.file(dir ++ "test.event"),
+            .json = if (comptime std.mem.findScalar(u8, flags, 'j') != null) testdata.file(dir ++ "in.json") else null,
             .invalid = comptime std.mem.findScalar(u8, flags, 'e') != null,
         }};
     }
     return found;
 }
-pub const cases = listed(@embedFile("../corpus/yaml/cases"));
+pub const cases = listed(testdata.file("corpus/yaml/cases"));
 
 /// The events of `input` in the suite's notation, or the refusal.
 pub fn events(gpa: std.mem.Allocator, input: []const u8, out: *std.Io.Writer) !void {

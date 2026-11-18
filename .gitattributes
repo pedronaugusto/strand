@@ -5,7 +5,7 @@
 # Corpus files are bytes, not text: they are fed to the fuzzer exactly as
 # they are, and a line ending rewritten on the way in or out is a different
 # seed.
-src/corpus/** -text
+testdata/corpus/** -text
 
 # Two changes that add lines under one group of CHANGELOG.md both keep them, with no
 # conflict to resolve; `bay release` orders the section.

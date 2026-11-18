@@ -137,6 +137,7 @@ pub const references: []const gantry.rules.ReferenceRule = &.{
             "xmlconf_documents",
             "shakedown",
             "std",
+            "testdata",
             "xenoglyph",
         },
     },

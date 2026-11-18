@@ -1,9 +1,10 @@
 # Serialization core and its formats
 
 Strand is one build module, `strand`, whose namespaces are `strand.core`,
-`strand.json`, `strand.jsonl`, `strand.zon`, `strand.urlencoded`, `strand.csv`,
-`strand.cbor`, `strand.msgpack`, `strand.toml`, `strand.yaml` and `strand.xml`; the
-root names only those eleven.
+`strand.json` (JSONC, JSON5 and the JCS profile within it), `strand.jsonl`, `strand.zon`,
+`strand.urlencoded`, `strand.csv`, `strand.cbor`, `strand.msgpack`, `strand.toml`,
+`strand.yaml`, `strand.xml`, `strand.ini` and `strand.dotenv`; the root names only those
+thirteen.
 There is one API per thing: JSON is parsed and written by `strand.json` alone,
 and JSON Lines is framing around it, not a codec of its own. A separate build
 module buys something only where it keeps dependencies from users who do not need
@@ -18,6 +19,93 @@ The layering inside the module is Gantry's, checked at file level by `ci/layers.
 every source has one named layer and imports only downward. Core and JSON import no
 airlock; JSONL owns that durability edge. Test/tool dependencies remain lazy
 and outside the module.
+
+## Scope and decisions
+
+strand serves any Zig program's serialization, with Serde's data model as the comparison.
+One API: nothing kept for an older one.
+
+| Concern | Decision |
+|---|---|
+| Type mapping | A format-independent comptime core derives a codec from `T`, its declarations and the format's capabilities. No source generator, runtime reflection, global registry or compulsory DOM. |
+| Format syntax | Each format owns its lexer or parser, wire primitives, capabilities and conformance, and calls the one core for type, field and union policy. JSONL is framing around JSON, not another codec. |
+| Type policy | One `pub const strand` declaration on the type. Schema errors are compile errors with a field path; value-dependent errors are returned. |
+| Ownership | Every allocating result has one explicit owner: borrowed, arena and owned results are distinct operations. |
+| Limits | Finite defaults in every entry point (`core.Limits`); a caller raises them explicitly, a field may only tighten them, and no zero means unlimited. Skipped fields, unknown payloads, `Raw`, custom codecs and dynamic trees are charged like reflected values, and a binary length header is checked against the remaining budget before any allocation. |
+| Durability | airlock's. `jsonl.Writer` decides when to flush and sync; airlock decides what was reached. Journal checksums, sequence, segments and crash semantics are chronicle's. |
+| Transport | `std.Io.Reader` and `Writer` and borrowed bytes. strand opens no configuration files, guesses no network protocol and stores no Io; HTTP is uplink's, compression warp's, scheduling reactor's. |
+| Owns | Type mapping, every format's wire codec, JSONL framing, tail and follow. Not transport, compression, scheduling, durability semantics, file watching or journal semantics. |
+| Not admitted | BSON and Avro (narrow ecosystems whose users carry their own libraries); schema-first tooling (`.proto` and `.fbs` compilation, evolution checks, gRPC), a schema registry, RPC, object identity, automatic resource serialization, code execution. A Protobuf or FlatBuffers-compatible wire format is a strand format on the core when a consumer needs one, the schema's source deciding as in kotlinx.serialization. |
+| Adoption | Family consumers prove adoption; they do not limit what strand admits. gantry and preflight keep their own TOML and JSON readers: strand would bring an airlock edge into the tools' bootstrap. No family package replaces std only to adopt strand. |
+
+Core decisions:
+
+- No cross-format DOM. Each format's `Value` keeps its native distinctions (JSON number
+  lexemes, CBOR tags and undefined, MessagePack ext, TOML local against offset time), and
+  `Raw(Format)` is branded by its format. Converting between formats is a typed decode then
+  a typed encode with both capability checks; it never strips an unknown tag, coerces bytes
+  to UTF-8 or guesses a time zone.
+- A round trip is semantic equality within a declared subset, not whitespace, comments,
+  pointer identity, field order or NaN payloads.
+- No speculative, trial-decoded untagged enums (replay changes complexity and what an error
+  means): a caller writes a bounded codec with a declared discriminator. No dynamic flatten
+  or catch-all field: it conflicts with the proof of duplicate and unknown fields.
+- No decoding into a caller's existing value or partial update of one; a member given again
+  in one reading may merge into the earlier one (`duplicates = .merge`), and the reading still
+  succeeds or fails whole.
+- One mapping core and one decode path. What a lenient reader accepts beyond the strict
+  default is a reading choice (`core.Acceptance`: duplicates, case-folded names, null keeping
+  a value, integers by their digits, invalid Unicode as U+FFFD), and a type's own reading is
+  its `strandDeserialize`. Go's `encoding/json` is these choices together, held to Go by a
+  differential corpus.
+- Encoding follows pointers and keeps values, not addresses: a shared branch serializes
+  twice, and a cycle on the active path is `error.CycleDetected`.
+- A type holding a secret fails at compile time, nested or not; exporting one takes an
+  explicit, reviewed codec.
+
+Conformance references: Serde's data model; RFC 8259 for JSON and RFC 8785 for JCS;
+jsonlines.org (RFC 7464's record-separator mode is another protocol); RFC 8949 for CBOR, with
+well-formed, valid and application-expected as separate gates; the MessagePack spec, which
+has no canonical profile; TOML 1.1.0, with 1.0 on request; the installed Zig's `std.zon`
+for ZON, re-pinned with each compiler; YAML 1.2's core schema; RFC 4180 for CSV.
+
+The binary and TOML formats' capabilities:
+
+| Capability | CBOR | MessagePack | TOML |
+|---|---|---|---|
+| Roots, keys | any item; any map key | any item; any map key | a root table; text keys |
+| Integers | uint64 down to −2^64 natively; tags 2 and 3 wider | int64, uint64 | signed 64-bit |
+| Floats | f16, f32, f64, nonfinite | f32, f64, nonfinite | f64 with signed inf and nan |
+| Text, bytes | text distinct from byte strings | str (strict UTF-8) distinct from bin | strings; bytes need a codec |
+| Null, options | null distinct from undefined; a nested option needs a codec | nil; a nested option needs a codec | no null: an optional is omitted only under an explicit omission policy |
+| Extras | tags, undefined, simple values, indefinite containers | ext, timestamp (−1) | offset and local date-time, local date, local time |
+| Borrowing | contiguous definite strings; indefinite chunks copy | contiguous str, bin, ext | unescaped basic and literal spans |
+| Canonical | RFC 8949 core deterministic; length-first as its own profile | strand's deterministic profile, no standard claim | stable output, no standard claim |
+
+CBOR and MessagePack share audited byte and length kernels, not a grammar. JCS is opt-in
+(`json.jcs`): UTF-16 key order, ECMAScript number spelling, duplicates refused, and integers
+past ±(2^53−1) need a string codec or are refused.
+
+Targets, measured by hand in private trials, never as CI gates (macOS arm64 and Linux
+x86-64; Zig ReleaseFast against Rust at opt-level 3 and Go's default build; seven samples or
+more after warmup; each row at matched policy, and a row where the rival lacks a check is a
+policy mismatch that shows no win):
+
+| Row | Target |
+|---|---|
+| Core against hand-written codecs | no extra heap allocation; dispatch ≤3%; cold build ≤1.25× (100 fields, ten schemas) |
+| JSON 512 B parse, borrowed | ≥1 GB/s; ≥1.50× std.json; ≥1.10× serde_json and Go |
+| JSON 512 B parse, owned; write | ≥1 GB/s each |
+| JSON long strings | ≥4 GB/s |
+| JSON 512 B latency | borrowed p50 ≤2 µs, p99 ≤10 µs; owned p50 ≤5 µs, p99 ≤20 µs |
+| JSONL framing | ≤10% of JSON's time; no per-record allocation after warmup |
+| JSONL tail, last 1,000 of 1 GiB | p50 ≤0.5 ms |
+| ZON | typed 256 KiB ≥100 MB/s and ≥1.10× std.zon; 4 KiB owned p50 ≤50 µs; long plain strings zero-copy and ≥2× std |
+| CBOR, MessagePack | typed 512 B ≥1 GB/s and ≥1.10× the fastest peer (Ciborium and fxamacker; rmp-serde and msgpack-c); 64 B fixed-buffer tuple p50 ≤0.5 µs, p99 ≤3 µs |
+| TOML | typed 256 KiB ≥100 MB/s and ≥1.10× Rust's toml and go-toml; 4 KiB owned p50 ≤50 µs, p99 ≤200 µs; auxiliary memory ≤2× input plus decoded |
+| Compactness | exact bytes against Postcard and Go's encoding/binary reported; no allocation on fixed-buffer paths |
+
+A missed target is fixed, or returned to the owner with workloads, numbers and alternatives.
 
 ## Module boundaries
 

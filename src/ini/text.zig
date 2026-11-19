@@ -138,13 +138,17 @@ pub fn lower(key: []const u8, w: *std.Io.Writer) std.Io.Writer.Error!void {
 
 /// Whether `key = value` reads back as that key: some bytes, none of them a
 /// delimiter or a line feed, no white space at either end, no comment's
-/// start, not a section header (`[` first and a `]` after it on the line),
-/// and as the dialect folds it.
+/// start, not a section header as `sectionName` reads one (`[` first and a
+/// `]` two bytes or more after it on the line: `[]` alone is a key), and as
+/// the dialect folds it.
 pub fn writableKey(key: []const u8, value: []const u8, d: Dialect) bool {
     if (key.len == 0 or !std.mem.eql(u8, trim(key), key)) return false;
     if (key[0] == '[') {
+        // The line written is the key, then the delimiter and the value's first line, which
+        // stand past the key's second byte.
         const first_line = value[0 .. std.mem.findScalar(u8, value, '\n') orelse value.len];
-        if (std.mem.findScalar(u8, key, ']') != null or std.mem.findScalar(u8, first_line, ']') != null) return false;
+        if (key.len > 2 and std.mem.findScalarPos(u8, key, 2, ']') != null) return false;
+        if (std.mem.findScalar(u8, first_line, ']') != null) return false;
     }
     if (std.mem.findScalar(u8, key, '\n') != null or std.mem.findAny(u8, key, d.delimiters) != null) return false;
     if (!plainText(key, d)) return false;
@@ -224,6 +228,15 @@ test "a line's content, comments and section names as configparser reads them" {
     try std.testing.expectEqualStrings("a]b", sectionName("[a]b]").?);
     try std.testing.expectEqualStrings("a", sectionName("[a] tail").?);
     try std.testing.expect(sectionName("[]") == null);
+    // A key starting `[` is writable exactly where its line is no section header.
+    try std.testing.expect(writableKey("[]", "", d));
+    try std.testing.expect(writableKey("[]", "v", d));
+    try std.testing.expect(writableKey("[]x", "v", d));
+    try std.testing.expect(writableKey("[", "", d));
+    try std.testing.expect(!writableKey("[a]", "", d));
+    try std.testing.expect(!writableKey("[]", "v]", d));
+    try std.testing.expect(!writableKey("[a", "b]", d));
+    for ([_][]const u8{ "[]", "[]x", "[" }) |key| try std.testing.expect(sectionName(key) == null);
     try std.testing.expectEqual(true, boolean("YES").?);
     try std.testing.expectEqual(false, boolean("Off").?);
     try std.testing.expect(boolean("2") == null);

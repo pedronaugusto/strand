@@ -324,5 +324,12 @@ fn anyBytes(_: void, case: *shakedown.Case) anyerror!void {
 }
 
 test "fuzz: any bytes are a document or refused, and a document read writes and reads back as itself" {
-    try shakedown.check(gpa, {}, anyBytes, .{ .cases = 3000 });
+    try shakedown.check(gpa, {}, anyBytes, .{
+        .cases = 3000,
+        .regressions = &.{
+            // `[]`, too short to be a section header, read as a key with no value, which the
+            // writer refused as one.
+            "0:1:2:4:11:5:1:5d",
+        },
+    });
 }

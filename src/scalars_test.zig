@@ -12,8 +12,9 @@ const zon = @import("zon.zig");
 const Tag = struct {};
 
 test "aegis scalars are recognized by the literal each declares" {
-    try std.testing.expectEqual(scalars.Kind.text, scalars.kind(aegis.units.Duration(.millisecond, u64)).?);
-    try std.testing.expectEqual(scalars.Kind.text, scalars.kind(aegis.units.Bytes(u64)).?);
+    // A duration and a size are their text form, not an integer kind.
+    try std.testing.expectEqual(null, scalars.kind(aegis.units.Duration(.millisecond, u64)));
+    try std.testing.expectEqual(null, scalars.kind(aegis.units.Bytes(u64)));
     try std.testing.expectEqual(scalars.Kind.integer, scalars.kind(aegis.units.Count(Tag, u32)).?);
     try std.testing.expectEqual(scalars.Kind.integer, scalars.kind(aegis.units.Bits(u32)).?);
     try std.testing.expectEqual(scalars.Kind.integer, scalars.kind(aegis.units.Instant(.real, .second, i64)).?);
@@ -112,14 +113,15 @@ test "aegis scalars refuse what they cannot hold" {
     const cases = [_]struct { input: []const u8, err: anyerror }{
         .{ .input = "{\"retries\":11}", .err = error.NumberOutOfRange },
         .{ .input = "{\"owner\":0}", .err = error.NumberOutOfRange },
-        // Finer than a second, past a u32 of seconds, no duration at all.
-        .{ .input = "{\"timeout\":\"1.5s\"}", .err = error.InexactNumber },
-        .{ .input = "{\"timeout\":\"200000d\"}", .err = error.NumberOutOfRange },
-        .{ .input = "{\"timeout\":\"soon\"}", .err = error.SyntaxError },
+        // Finer than a second, past a u32 of seconds, no duration at all: a
+        // duration's text form refuses each (text_form_test has the names).
+        .{ .input = "{\"timeout\":\"1.5s\"}", .err = error.InvalidValue },
+        .{ .input = "{\"timeout\":\"200000d\"}", .err = error.InvalidValue },
+        .{ .input = "{\"timeout\":\"soon\"}", .err = error.InvalidValue },
         // A duration is text, never a bare number of an unstated unit.
         .{ .input = "{\"timeout\":30}", .err = error.UnexpectedType },
-        .{ .input = "{\"size\":\"64KB\"}", .err = error.SyntaxError },
-        .{ .input = "{\"size\":\"0.1KiB\"}", .err = error.InexactNumber },
+        .{ .input = "{\"size\":\"64KB\"}", .err = error.InvalidValue },
+        .{ .input = "{\"size\":\"0.1KiB\"}", .err = error.InvalidValue },
         .{ .input = "{\"retries\":\"3\"}", .err = error.UnexpectedType },
     };
     for (cases) |case| {

@@ -6,6 +6,7 @@ pub const layers: []const gantry.rules.Layer = &.{
     .{ .name = "core vocabulary and schema", .patterns = &.{
         "src/core/model.zig",
         "src/core/scalars.zig",
+        "src/core/text_form.zig",
         "src/core/descriptor.zig",
         "src/core/codecs.zig",
         "src/core/edit.zig",

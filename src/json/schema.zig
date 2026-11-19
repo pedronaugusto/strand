@@ -16,6 +16,7 @@
 const std = @import("std");
 const descriptor = @import("../core/descriptor.zig");
 const scalars = @import("../core/scalars.zig");
+const text_form = @import("../core/text_form.zig");
 
 pub const Direction = enum {
     /// What `json.parse` accepts.
@@ -83,8 +84,8 @@ const Gen = struct {
         if (descriptor.has(T, "StrandRawFormat")) return "true";
         if (descriptor.has(T, "strandSerialize") or descriptor.has(T, "strandDeserialize") or descriptor.has(T, "StrandKey") or descriptor.has(T, "strand_scalar") or descriptor.has(T, "strand_bytes") or descriptor.has(T, "strand_named_shape"))
             @compileError(path ++ ": a type with a codec of its own declares its schema as `strand_json_schema`");
+        if (text_form.declares(T)) return if (text_form.schemaFormat(T)) |f| "{\"type\":\"string\",\"format\":" ++ string(f) ++ "}" else "{\"type\":\"string\"}";
         if (scalars.kind(T)) |k| return switch (k) {
-            .text => "{\"type\":\"string\"}",
             .ranged => integer(T.aegis_scalar.minimum, T.aegis_scalar.maximum),
             .nonzero => merge(bounds(scalars.Representation(T)), "\"not\":{\"const\":0}"),
             .integer, .counter => integer(std.math.minInt(scalars.Representation(T)), std.math.maxInt(scalars.Representation(T))),
@@ -340,7 +341,7 @@ fn shortName(comptime T: type) []const u8 {
 fn findRecursive(comptime T: type, comptime stack: []const type, comptime found: []const type) []const type {
     for (stack) |S| if (S == T) return if (containsType(found, T)) found else found ++ .{T};
     if (descriptor.has(T, "strand_json_schema") or descriptor.has(T, "StrandRawFormat")) return found;
-    if (scalars.kind(T) != null) return found;
+    if (text_form.declares(T) or scalars.kind(T) != null) return found;
     var result = found;
     switch (@typeInfo(T)) {
         inline .optional, .array, .vector => |i| result = findRecursive(i.child, stack, result),

@@ -1,4 +1,5 @@
-//! The aegis scalars, read and written as what they hold. Each says which it
+//! The aegis scalars of an integer, read and written as the integer they hold
+//! (a duration or a size is its text form, `text_form.zig`). Each says which it
 //! is in its `aegis_scalar` declaration (aegis 0.1.18, contract 1), by which a
 //! type is recognized and its integer and range read, never by its name or its
 //! shape: a program pinning another aegis version than strand's builds another
@@ -6,7 +7,6 @@
 //! but declare the same. A value is made only through its own checked
 //! functions, as the contract names them.
 const std = @import("std");
-const aegis = @import("aegis");
 
 pub const Kind = enum {
     /// Its representation's integer: `int.Checked`, `int.Saturating`,
@@ -18,9 +18,6 @@ pub const Kind = enum {
     nonzero,
     /// `id.Counter`: the last id it issued, 0 before the first.
     counter,
-    /// `units.Duration` and `units.Bytes`: their text form (`1m30s`,
-    /// `64MiB`), which is exact both ways.
-    text,
 };
 
 /// What `T` is as an aegis scalar, or null when it is none. A contract other
@@ -39,7 +36,12 @@ pub fn kind(comptime T: type) ?Kind {
     if (scalar == .ranged) return .ranged;
     if (scalar == .nonzero) return .nonzero;
     if (scalar == .counter) return .counter;
-    if (scalar == .duration or scalar == .bytes) return .text;
+    // A duration or a size is read and written by its text form
+    // (`text_form.zig`), which aegis declares from 0.3.0 on.
+    if (scalar == .duration or scalar == .bytes) {
+        if (@hasDecl(T, "text_form")) return null;
+        @compileError("strand: " ++ @typeName(T) ++ " is an aegis duration or size without text_form; strand reads them by their text form, which aegis 0.3.0 declares");
+    }
     if (scalar == .checked or scalar == .saturating or scalar == .count or scalar == .bits or scalar == .instant or scalar == .id) return .integer;
     return null;
 }
@@ -63,22 +65,5 @@ pub fn fromInteger(comptime T: type, n: Representation(T)) error{NumberOutOfRang
         .nonzero => T.fromRaw(n) catch error.NumberOutOfRange,
         .counter => T.init(n),
         .integer => if (@typeInfo(T) == .@"struct") T.init(n) else T.fromRaw(n),
-        .text => comptime unreachable, // unreachable: a text kind is read as text
-    };
-}
-
-/// The text form of a scalar of the text kind, in `buffer`.
-pub fn text(value: anytype, buffer: *[@TypeOf(value).max_text_len]u8) []const u8 {
-    var w: std.Io.Writer = .fixed(buffer);
-    value.format(&w) catch aegis.assert.never("max_text_len holds every value's text");
-    return w.buffered();
-}
-
-/// The scalar of the text kind that `bytes` spells.
-pub fn parse(comptime T: type, bytes: []const u8) error{ SyntaxError, NumberOutOfRange, InexactNumber }!T {
-    return T.parse(bytes) catch |err| switch (err) {
-        error.Malformed => error.SyntaxError,
-        error.Overflow => error.NumberOutOfRange,
-        error.Inexact => error.InexactNumber,
     };
 }

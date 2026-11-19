@@ -23,8 +23,8 @@
         // finite budgets, checked arithmetic, closed public diagnostics and
         // always-on contracts. std only, pinned to a commit.
         .aegis = .{
-            .url = "git+https://github.com/pedronaugusto/aegis#f52eabef3ec6534c3a74bea3a3b7d95a91ce2581",
-            .hash = "aegis-0.2.4-rsxouoquDQApwYDuGdd2YyEeTeNp6CnJoOZKdVCfc3jt",
+            .url = "git+https://github.com/pedronaugusto/aegis#1522b2c44d5627efc1e803cd7ae6cb1badf48140",
+            .hash = "aegis-0.2.4-rsxouvkoDgDVsx17ZWHJVSYIH7aZwhnYOsyfKO0Oy3Bk",
         },
 
         // Unicode's simple case folding, for member names read by folding.

@@ -4,22 +4,23 @@ const descriptor = @import("descriptor.zig");
 const ctx = @import("context.zig");
 const model = @import("model.zig");
 const scalars = @import("scalars.zig");
+const text_form = @import("text_form.zig");
 
 pub fn serialize(value: anytype, serializer: anytype, c: *ctx.Context) Errors(@TypeOf(value), @TypeOf(serializer.*))!void {
     comptime descriptor.check(@TypeOf(value), @TypeOf(serializer.*).capabilities, false, .borrowed);
     try emit(.{}, value, serializer, c, null);
 }
 const Active = struct { address: usize, previous: ?*const Active };
-/// An aegis scalar: the integer it holds, or a duration's or size's text.
+/// A value of a type with a text form (`text_form.zig`): its text.
+fn emitText(value: anytype, out: anytype, c: *ctx.Context) Errors(@TypeOf(value), @TypeOf(out.*))!void {
+    var buffer: [text_form.maxLen(@TypeOf(value))]u8 = undefined;
+    const text = try text_form.write(value, &buffer);
+    try c.span(text.len, false);
+    try c.chargeWork(text.len);
+    return out.text(text, c);
+}
+/// An aegis scalar: the integer it holds.
 fn emitScalar(comptime policy: descriptor.Field, value: anytype, out: anytype, c: *ctx.Context, active: ?*const Active) Errors(@TypeOf(value), @TypeOf(out.*))!void {
-    const T = @TypeOf(value);
-    if (comptime scalars.kind(T) == .text) {
-        var buffer: [T.max_text_len]u8 = undefined;
-        const text = scalars.text(value, &buffer);
-        try c.span(text.len, false);
-        try c.chargeWork(text.len);
-        return out.text(text, c);
-    }
     // The integer it holds is this node.
     c.items -= 1;
     return emit(policy, scalars.integer(value), out, c, active);
@@ -51,6 +52,7 @@ fn emit(comptime policy: descriptor.Field, value: anytype, out: anytype, c: *ctx
         if (!access.used) return error.CustomRejected;
         return;
     }
+    if (comptime text_form.declares(T)) return emitText(value, out, c);
     if (comptime scalars.kind(T) != null) return emitScalar(policy, value, out, c, active);
     switch (@typeInfo(T)) {
         .bool => try out.boolean(value, c),

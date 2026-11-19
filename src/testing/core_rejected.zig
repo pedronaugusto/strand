@@ -73,6 +73,63 @@ pub export fn rejected() void {
             };
             core.serialize(@as(Later, @fromBackingInt(@intCast(1))), &backend, &c) catch unreachable;
         },
+        // A text form declared, each part of it wrong: named at compile time.
+        10 => {
+            const NoParse = struct {
+                pub const text_form = .{ .max_len = 8 };
+                pub fn format(_: @This(), _: *std.Io.Writer) std.Io.Writer.Error!void {}
+            };
+            core.serialize(NoParse{}, &backend, &c) catch unreachable;
+        },
+        11 => {
+            const Allocating = struct {
+                pub const text_form = .{ .max_len = 8 };
+                pub fn parse(_: std.mem.Allocator, _: []const u8) error{Malformed}!@This() {
+                    return .{};
+                }
+                pub fn format(_: @This(), _: *std.Io.Writer) std.Io.Writer.Error!void {}
+            };
+            core.serialize(Allocating{}, &backend, &c) catch unreachable;
+        },
+        12 => {
+            const LooseFormat = struct {
+                pub const text_form = .{ .max_len = 8 };
+                pub fn parse(_: []const u8) error{Malformed}!@This() {
+                    return .{};
+                }
+                pub fn format(_: @This(), _: *std.Io.Writer) error{Unwritten}!void {}
+            };
+            core.serialize(LooseFormat{}, &backend, &c) catch unreachable;
+        },
+        13 => {
+            const NoLength = struct {
+                pub const text_form = .{ .schema_format = "date" };
+                pub fn parse(_: []const u8) error{Malformed}!@This() {
+                    return .{};
+                }
+                pub fn format(_: @This(), _: *std.Io.Writer) std.Io.Writer.Error!void {}
+            };
+            core.serialize(NoLength{}, &backend, &c) catch unreachable;
+        },
+        14 => {
+            const Misspelled = struct {
+                pub const text_form = .{ .max_len = 8, .maxlen = 8 };
+                pub fn parse(_: []const u8) error{Malformed}!@This() {
+                    return .{};
+                }
+                pub fn format(_: @This(), _: *std.Io.Writer) std.Io.Writer.Error!void {}
+            };
+            core.serialize(Misspelled{}, &backend, &c) catch unreachable;
+        },
+        15 => {
+            // An aegis duration of a copy that declares no text form: refused,
+            // never read as the enum it is held in.
+            const OldDuration = enum(u64) {
+                pub const aegis_scalar = .{ .contract = 1, .kind = .duration, .representation = u64, .unit = .millisecond };
+                _,
+            };
+            core.serialize(@as(OldDuration, @fromBackingInt(@intCast(1))), &backend, &c) catch unreachable;
+        },
         else => unreachable,
     }
 }

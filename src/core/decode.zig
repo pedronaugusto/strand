@@ -5,6 +5,7 @@ const descriptor = @import("descriptor.zig");
 const ctx = @import("context.zig");
 const model = @import("model.zig");
 const scalars = @import("scalars.zig");
+const text_form = @import("text_form.zig");
 const xenoglyph = @import("xenoglyph");
 
 /// Backend.next(context, request) must meter wire reads/scratch through context before
@@ -168,7 +169,7 @@ fn emptiedByNull(comptime T: type) bool {
 /// else, a type with a reading of its own among them, is read afresh.
 fn merges(comptime T: type, comptime policy: descriptor.Field) bool {
     if (comptime isPairs(T)) return true;
-    if (comptime descriptor.has(T, "strandDeserialize") or scalars.kind(T) != null) return false;
+    if (comptime descriptor.has(T, "strandDeserialize") or text_form.declares(T) or scalars.kind(T) != null) return false;
     return switch (@typeInfo(T)) {
         .optional => true,
         .pointer => |p| p.size == .one or (p.size == .slice and p.child != u8),
@@ -624,10 +625,8 @@ pub fn Cursor(comptime Backend: type) type {
                 if (!access.used or !access.complete) return error.CustomRejected;
                 return value;
             }
-            if (comptime scalars.kind(T)) |k| {
-                if (k == .text) return scalars.parse(T, try self.textValue());
-                return scalars.fromInteger(T, try self.readInteger(scalars.Representation(T)));
-            }
+            if (comptime text_form.declares(T)) return text_form.read(T, try self.textValue(), self.context);
+            if (comptime scalars.kind(T) != null) return scalars.fromInteger(T, try self.readInteger(scalars.Representation(T)));
             switch (@typeInfo(T)) {
                 .bool => {
                     const event = try self.take();
@@ -1763,7 +1762,8 @@ fn PolicyCompoundAccess(comptime Backend: type, comptime policy: descriptor.Fiel
 }
 
 fn expectedKind(comptime T: type, comptime policy: descriptor.Field) ctx.Diagnostics.Expected {
-    if (comptime scalars.kind(T)) |k| return if (k == .text) .text else .integer;
+    if (comptime text_form.declares(T)) return .text;
+    if (comptime scalars.kind(T) != null) return .integer;
     // A type with a codec of its own has no shape the core can name: what
     // its codec reads says what it asks for.
     if (comptime descriptor.has(T, "strandDeserialize")) return .unknown;
@@ -1785,8 +1785,9 @@ fn expectedKind(comptime T: type, comptime policy: descriptor.Field) ctx.Diagnos
 
 fn typeRequest(comptime T: type, comptime policy: descriptor.Field) model.Request {
     var result: model.Request = .{ .expected = expectedKind(T, policy), .exact = policy.exact, .borrow = policy.borrow };
-    if (comptime scalars.kind(T)) |k| {
-        if (k != .text) result.integer_bits = @typeInfo(scalars.Representation(T)).int.bits;
+    if (comptime text_form.declares(T)) return result;
+    if (comptime scalars.kind(T) != null) {
+        result.integer_bits = @typeInfo(scalars.Representation(T)).int.bits;
         return result;
     }
     switch (@typeInfo(T)) {

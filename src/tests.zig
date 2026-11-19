@@ -4,6 +4,7 @@ test {
     _ = @import("core_test.zig");
     _ = @import("seed_test.zig");
     _ = @import("scalars_test.zig");
+    _ = @import("text_form_test.zig");
     _ = @import("json_test.zig");
     _ = @import("json_shape_test.zig");
     _ = @import("jsonl_test.zig");

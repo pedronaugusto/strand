@@ -135,10 +135,12 @@ pub fn dev(b: *std.Build, tools: type) void {
 
     if (test_filter == null or std.mem.find(u8, "S1", test_filter.?) != null) {
         const expected = [_][]const u8{
-            "error: : resource or secret is not automatic data",              "error: wire alias collision at left",               "error: owned decoding conflicts with borrow.require at label",
-            "error: : explicit data codec",                                   "error: : resource or secret is not automatic data", "error: : pointer has no safe data meaning",
-            "error: tag collides with payload alias",                         "error: data codecs require a named error set",      "error: : std.json hooks are not read here; declare strandDeserialize and strandSerialize",
-            "is an aegis scalar of contract 2; this strand reads contract 1",
+            "error: : resource or secret is not automatic data",                                                                                  "error: wire alias collision at left",                                   "error: owned decoding conflicts with borrow.require at label",
+            "error: : explicit data codec",                                                                                                       "error: : resource or secret is not automatic data",                     "error: : pointer has no safe data meaning",
+            "error: tag collides with payload alias",                                                                                             "error: data codecs require a named error set",                          "error: : std.json hooks are not read here; declare strandDeserialize and strandSerialize",
+            "is an aegis scalar of contract 2; this strand reads contract 1",                                                                     "declares text_form, but has no `pub fn parse(text: []const u8) !Self`", "declares text_form, but parse is not `fn (text: []const u8) !Self`: it takes no allocator, a text form is a value type's",
+            "declares text_form, but format is not `fn (self: Self, w: *std.Io.Writer) std.Io.Writer.Error!void`, the signature std's {f} calls", "declares text_form, but text_form has no max_len",                      "declares text_form, but text_form has a field strand does not read: maxlen",
+            "is an aegis duration or size without text_form; strand reads them by their text form, which aegis 0.3.0 declares",
         };
         for (expected, 0..) |message, case| {
             const rejection_options = b.addOptions();

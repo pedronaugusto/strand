@@ -11,7 +11,7 @@ const err = aegis.err;
 const int = aegis.int;
 
 pub const LimitError = error{ InputLimit, OutputLimit, DepthLimit, ItemLimit, LengthLimit, AllocationLimit, WorkLimit };
-pub const DecodeError = error{ InputLimit, DepthLimit, ItemLimit, LengthLimit, AllocationLimit, WorkLimit } || error{ SyntaxError, InvalidUtf8, UnexpectedType, MissingField, UnknownField, DuplicateField, UnknownVariant, NumberOutOfRange, InexactNumber, UnsupportedValue, BorrowUnavailable, CustomRejected, OutOfMemory };
+pub const DecodeError = error{ InputLimit, DepthLimit, ItemLimit, LengthLimit, AllocationLimit, WorkLimit } || error{ SyntaxError, InvalidUtf8, UnexpectedType, MissingField, UnknownField, DuplicateField, UnknownVariant, NumberOutOfRange, InexactNumber, InvalidValue, UnsupportedValue, BorrowUnavailable, CustomRejected, OutOfMemory };
 pub const EncodeError = LimitError || error{ DuplicateField, InvalidRaw, InvalidUtf8, NumberOutOfRange, InexactNumber, UnsupportedValue, CycleDetected, CustomRejected, OutOfMemory };
 pub const Lifetime = enum { borrowed, transient, owned };
 pub const Ownership = enum { borrowed, owned };
@@ -119,6 +119,9 @@ pub const Diagnostics = struct {
     format: []const u8 = "",
     expected: Expected = .unknown,
     custom_code: ?u32 = null,
+    /// The error a type's text form gave for its text (`InvalidValue`):
+    /// the name of the type's own error, such as `Malformed`.
+    value_error: []const u8 = "",
     /// Where in the value the failure is, outermost first. Past `path_steps`
     /// the path stops growing and says so (`path.truncated`).
     path: err.Context(Step, path_steps) = .{},
@@ -367,6 +370,11 @@ pub const Context = struct {
     /// budget bounds all the memory the operation asked for.
     pub fn scratch(self: *Context, backing: std.mem.Allocator) Scratch {
         return .{ .context = self, .backing = backing };
+    }
+    /// A value whose text its type's text form refused, `name` its error.
+    pub fn invalid(self: *Context, name: []const u8) error{InvalidValue} {
+        if (self.diagnostics) |d| d.value_error = name;
+        return error.InvalidValue;
     }
     pub fn reject(self: *Context, code: u32) error{CustomRejected} {
         if (self.diagnostics) |d| d.custom_code = code;

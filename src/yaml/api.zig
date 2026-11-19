@@ -44,12 +44,12 @@ fn Decode(comptime T: type, comptime root: WireDecoder.Root) type {
         }
     };
 }
-fn parseWith(comptime T: type, comptime root: WireDecoder.Root, comptime ownership: core.Ownership, gpa: std.mem.Allocator, input: []const u8, options: ParseOptions) @typeInfo(@TypeOf(core.acquireWith(T, ownership, gpa, input, .{}, Decode(T, root){ .backing = gpa }))).error_union.error_set!Parsed(T) {
+fn parseWith(comptime T: type, comptime root: WireDecoder.Root, comptime ownership: core.Ownership, gpa: std.mem.Allocator, input: []const u8, options: ParseOptions) @typeInfo(@TypeOf(core.acquire(T, ownership, gpa, input, .{}, Decode(T, root){ .backing = gpa }))).error_union.error_set!Parsed(T) {
     if (options.diagnostics) |d| {
         d.* = .{};
         d.format = "yaml";
     }
-    return core.acquireWith(T, ownership, gpa, input, .{
+    return core.acquire(T, ownership, gpa, input, .{
         .limits = options.limits,
         .acceptance = .{ .reject_unknown_fields = !options.ignore_unknown_fields },
         .diagnostics = options.diagnostics,

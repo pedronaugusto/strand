@@ -198,14 +198,14 @@ fn context(arena: std.mem.Allocator, options: ParseOptions, grammar: decoding.Gr
     c.diagnostics = options.diagnostics;
     return c;
 }
-fn parseWith(comptime T: type, comptime ownership: core.Ownership, gpa: std.mem.Allocator, input: []const u8, options: ParseOptions) @typeInfo(@TypeOf(core.acquireWith(T, ownership, gpa, input, .{}, Decode(T).run))).error_union.error_set!Parsed(T) {
+fn parseWith(comptime T: type, comptime ownership: core.Ownership, gpa: std.mem.Allocator, input: []const u8, options: ParseOptions) @typeInfo(@TypeOf(core.acquire(T, ownership, gpa, input, .{}, Decode(T).run))).error_union.error_set!Parsed(T) {
     return parseDialect(T, .json, ownership, gpa, input, options);
 }
 /// What diagnostics call the format read: JSONC is JSON with comments.
 fn formatName(grammar: decoding.Grammar) []const u8 {
     return if (grammar == .json5) "json5" else "json";
 }
-fn parseDialect(comptime T: type, comptime grammar: decoding.Grammar, comptime ownership: core.Ownership, gpa: std.mem.Allocator, input: []const u8, options: ParseOptions) @typeInfo(@TypeOf(core.acquireWith(T, ownership, gpa, input, .{}, Dialect(T, grammar).run))).error_union.error_set!Parsed(T) {
+fn parseDialect(comptime T: type, comptime grammar: decoding.Grammar, comptime ownership: core.Ownership, gpa: std.mem.Allocator, input: []const u8, options: ParseOptions) @typeInfo(@TypeOf(core.acquire(T, ownership, gpa, input, .{}, Dialect(T, grammar).run))).error_union.error_set!Parsed(T) {
     if (options.diagnostics) |d| {
         d.* = .{};
         d.format = formatName(grammar);
@@ -215,7 +215,7 @@ fn parseDialect(comptime T: type, comptime grammar: decoding.Grammar, comptime o
         .acceptance = acceptance(options),
         .diagnostics = options.diagnostics,
     };
-    return core.acquireWith(T, ownership, gpa, input, acquisition, Dialect(T, grammar).run);
+    return core.acquire(T, ownership, gpa, input, acquisition, Dialect(T, grammar).run);
 }
 /// `input` as a `T`, owned by the returned `Parsed`. Strings with nothing to
 /// unescape point into `input`, which must outlive the result.

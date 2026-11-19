@@ -422,8 +422,8 @@ validator is not part of strand's API).
 
 ## Ownership and failure
 
-`acquire`/`acquireWith` run one decode callback into a bounded result arena and
-return `Parsed(T)`. Borrowed results may retain stable input spans: keep input
+`acquire` runs one decode callback into a bounded result arena, under its
+`AcquisitionOptions` (limits, acceptance, diagnostics), and returns `Parsed(T)`. Borrowed results may retain stable input spans: keep input
 alive and unchanged while they are used. Transient scratch spans always copy.
 Owned acquisition copies input references; mutable, aligned and sentinel spans
 also require independent typed storage. `borrow.require` conflicts with owned

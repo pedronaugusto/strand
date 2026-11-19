@@ -45,13 +45,11 @@ pub const AcquisitionOptions = struct {
 };
 /// The callback only receives budgeted context access. No raw backing allocator
 /// or result owner escapes. Caller-arena decoders have their own leaky contract.
-pub fn acquire(comptime T: type, comptime ownership: context.Ownership, gpa: std.mem.Allocator, bytes: []const u8, limits: context.Limits, comptime decode: anytype) (context.DecodeError || CallbackError(@TypeOf(decode)))!Parsed(T) {
-    return acquireWith(T, ownership, gpa, bytes, .{ .limits = limits }, decode);
-}
-/// Adds caller acceptance and diagnostics without retaining either in the owner.
-/// `decode` is a function of the context and the bytes, or a value whose
-/// `run` is, for a decoder that carries settings of its own (a CSV dialect).
-pub fn acquireWith(comptime T: type, comptime ownership: context.Ownership, gpa: std.mem.Allocator, bytes: []const u8, options: AcquisitionOptions, decode: anytype) (context.DecodeError || CallbackError(@TypeOf(decode)))!Parsed(T) {
+/// `options` bounds the decode (`.{}` for the defaults) and adds caller acceptance and
+/// diagnostics, neither retained in the owner. `decode` is a function of the context and
+/// the bytes, or a value whose `run` is, for a decoder that carries settings of its own
+/// (a CSV dialect).
+pub fn acquire(comptime T: type, comptime ownership: context.Ownership, gpa: std.mem.Allocator, bytes: []const u8, options: AcquisitionOptions, decode: anytype) (context.DecodeError || CallbackError(@TypeOf(decode)))!Parsed(T) {
     const limits = options.limits;
     @setRuntimeSafety(true);
     comptime descriptor.check(T, descriptor.schema_capabilities, true, ownership);

@@ -47,12 +47,12 @@ fn Decode(comptime T: type) type {
 fn acceptance(options: ParseOptions) core.Acceptance {
     return .{ .reject_unknown_fields = !options.ignore_unknown_fields };
 }
-fn parseWith(comptime T: type, comptime ownership: core.Ownership, gpa: std.mem.Allocator, input: []const u8, options: ParseOptions) @typeInfo(@TypeOf(core.acquireWith(T, ownership, gpa, input, .{}, Decode(T).run))).error_union.error_set!Parsed(T) {
+fn parseWith(comptime T: type, comptime ownership: core.Ownership, gpa: std.mem.Allocator, input: []const u8, options: ParseOptions) @typeInfo(@TypeOf(core.acquire(T, ownership, gpa, input, .{}, Decode(T).run))).error_union.error_set!Parsed(T) {
     if (options.diagnostics) |d| {
         d.* = .{};
         d.format = "cbor";
     }
-    return core.acquireWith(T, ownership, gpa, input, .{
+    return core.acquire(T, ownership, gpa, input, .{
         .limits = options.limits,
         .acceptance = acceptance(options),
         .diagnostics = options.diagnostics,

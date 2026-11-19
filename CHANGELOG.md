@@ -13,6 +13,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Breaking
 
+- `core.acquire` takes `AcquisitionOptions` (`limits`, `acceptance`, `diagnostics`), `.{}` for the defaults, where it took `Limits` alone; `core.acquireWith`, the same call with the options, is gone. A caller of `acquire` with limits passes `.{ .limits = limits }`; one of `acquireWith` calls `acquire`.
 - `OpenObject.member` (`json.OpenObject.member`) takes the member's name at run time (`name: []const u8`, escaped as `writeString` escapes it; a name that is not UTF-8 refused before anything is written), so a writer whose names come from a table, such as a log sink's fields, needs no comptime name. A call with a literal name compiles as it did; the error set gains `error.InvalidUtf8`.
 - `jsonl.PathOpener.dir` is an `aegis.own.Unowned(std.Io.Dir)`, the caller's directory given as `.of(dir)`.
 - A follower's `Options.wait` takes aegis durations (`.poll = .literal("20ms")`), and its wake is an `aegis.Pulse` (`.wake = .{ .pulse = &pulse }`), bumped where `std.Io.Event` was set: the follower keeps the generation it last waited past, so a bump while it reads ends its next wait at once.

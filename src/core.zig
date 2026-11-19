@@ -46,7 +46,6 @@ pub const Integers = @import("core/context.zig").Integers;
 pub const InvalidUnicode = @import("core/context.zig").InvalidUnicode;
 pub const Request = @import("core/model.zig").Request;
 pub const codecs = @import("core/codecs.zig");
-pub const acquireWith = @import("core/owner.zig").acquireWith;
 pub const AcquisitionOptions = @import("core/owner.zig").AcquisitionOptions;
 pub const Bytes = @import("core/model.zig").Bytes;
 

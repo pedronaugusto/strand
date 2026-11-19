@@ -7,7 +7,6 @@ const std_value = @import("std_value.zig");
 const decoding = @import("Decoder.zig");
 const tape = @import("tape.zig");
 const encoding = @import("Encoder.zig");
-const WireEncoder = encoding.Dialect(false);
 const indent = @import("indent.zig");
 const route = @import("route.zig");
 const object_members = @import("members.zig");

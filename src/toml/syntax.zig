@@ -333,7 +333,7 @@ fn ReaderOf(comptime recording: bool) type {
         fn string(self: *Reader, kind: text.Kind) Error!Ref {
             const scanned = try text.scan(self.input, self.at, kind, self.version == .v1_1);
             self.at = scanned.end;
-            if (scanned.plain) return .{ .start = @intCast(scanned.content.ptr - self.input.ptr), .len = @intCast(scanned.content.len) }; // safe: a span of the input, below 4 GiB.
+            if (scanned.plain) return .{ .start = @intCast(scanned.start), .len = @intCast(scanned.content.len) }; // safe: a span of the input, below 4 GiB.
             try self.c.span(scanned.len, false);
             return self.decode(scanned.len, .{ .string = .{ .scanned = scanned, .kind = kind } });
         }

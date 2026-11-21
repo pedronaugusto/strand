@@ -13,6 +13,8 @@ pub const Kind = enum { basic, multiline_basic, literal, multiline_literal };
 /// multiline string's first newline left off), where the string ends in the
 /// input, and whether its value is those bytes or needs `decode`.
 pub const Scanned = struct {
+    /// Where `content` starts in the input.
+    start: usize,
     content: []const u8,
     end: usize,
     /// The value is `content`, byte for byte.
@@ -45,7 +47,7 @@ pub fn scan(input: []const u8, at: usize, kind: Kind, version_1_1: bool) Error!S
             var i = at + 1;
             while (i < input.len) : (i += 1) {
                 const byte = input[i];
-                if (byte == '\'') return .{ .content = input[at + 1 .. i], .end = i + 1, .plain = true, .len = i - at - 1 };
+                if (byte == '\'') return .{ .start = at + 1, .content = input[at + 1 .. i], .end = i + 1, .plain = true, .len = i - at - 1 };
                 if (!ordinary(byte)) return error.SyntaxError;
             }
             return error.SyntaxError;
@@ -56,7 +58,7 @@ pub fn scan(input: []const u8, at: usize, kind: Kind, version_1_1: bool) Error!S
             var plain = true;
             while (i < input.len) {
                 const byte = input[i];
-                if (byte == '"') return .{ .content = input[at + 1 .. i], .end = i + 1, .plain = plain, .len = len };
+                if (byte == '"') return .{ .start = at + 1, .content = input[at + 1 .. i], .end = i + 1, .plain = plain, .len = len };
                 if (byte == '\\') {
                     plain = false;
                     const e = try escape(input, i, version_1_1);
@@ -86,7 +88,7 @@ pub fn scan(input: []const u8, at: usize, kind: Kind, version_1_1: bool) Error!S
                     if (run >= 3) {
                         // Up to two quotes before the delimiter are content.
                         if (run > 5) return error.SyntaxError;
-                        return .{ .content = input[start .. i + run - 3], .end = i + run, .plain = plain, .len = len + run - 3 };
+                        return .{ .start = start, .content = input[start .. i + run - 3], .end = i + run, .plain = plain, .len = len + run - 3 };
                     }
                     len += run;
                     i += run;

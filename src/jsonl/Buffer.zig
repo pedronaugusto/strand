@@ -83,9 +83,10 @@ fn drain(writer: *std.Io.Writer, data: []const []const u8, splat: usize) std.Io.
     try self.grow(total);
     switch (pattern.len) {
         0 => {},
+        // One byte repeated `splat` times: `total` is `splat`.
         1 => {
-            @memset(writer.buffer[writer.end..][0..total], pattern[0]);
-            writer.end += total;
+            @memset(writer.buffer[writer.end..][0..splat], pattern[0]);
+            writer.end += splat;
         },
         else => for (0..splat) |_| {
             @memcpy(writer.buffer[writer.end..][0..pattern.len], pattern);

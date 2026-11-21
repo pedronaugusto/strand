@@ -811,12 +811,13 @@ pub const LineReader = struct {
             self.record_offset = self.consumed;
             self.record_number = self.number;
         }
-        const max = self.options.max_line_bytes.raw();
+        const max = self.options.max_line_bytes;
         // One past the bound, so that a record of exactly `max` bytes is
         // accepted and the first byte over it is what trips the limit.
         // Saturating, because `Limit` reads a saturated `usize` as
-        // unlimited, which is what a bound of `maxInt(usize)` means.
-        const room = max -| before;
+        // unlimited, which is what a bound of `maxInt(usize)` means: past
+        // the bound, no room is left.
+        const room = max.sub(.fromRaw(before)) catch @TypeOf(max).fromRaw(0);
 
         // A whole line already in `input`'s buffer is handed back as a
         // slice of it. The bytes have been read once and are not read
@@ -825,7 +826,7 @@ pub const LineReader = struct {
         // follows is for the line that straddles a refill, which is the
         // only one whose bytes are not all in one place.
         if (before == 0) {
-            if (self.frameBuffered()) |frame| return self.takeFrame(frame, room);
+            if (self.frameBuffered()) |frame| return self.takeFrame(frame, room.raw());
         }
         self.borrowed = false;
         self.cleared = false;
@@ -836,7 +837,7 @@ pub const LineReader = struct {
             // One byte beyond the record bound may be the `\r` half of
             // its terminator; the next byte distinguishes that from an
             // over-long record.
-            .limited(room +| 2),
+            .limited((room.add(.fromRaw(2)) catch @TypeOf(room).fromRaw(std.math.maxInt(usize))).raw()),
         ) catch |err| switch (err) {
             error.ReadFailed => return error.ReadFailed,
             // The only writer is `line_buf`, which fails only to allocate.
@@ -884,7 +885,7 @@ pub const LineReader = struct {
             self.line_buf.writer.end - 1
         else
             self.line_buf.writer.end;
-        if (record_len > max) {
+        if (max.compare(.fromRaw(record_len)) == .lt) {
             self.number += 1;
             self.fault.framing(self.number);
             self.offset = self.record_offset;

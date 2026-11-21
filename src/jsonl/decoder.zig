@@ -67,13 +67,15 @@ pub fn Decoder(comptime T: type) type {
             return limit.left(self.options.parse.limits.allocation_bytes, self.buffer.len) orelse unreachable;
         }
         fn append(self: *Self, bytes: []const u8, backing: *core.Backing) Error!void {
-            const cap = (aegis.int.Checked(usize).init(@min(self.options.max_line_bytes.raw(), self.options.parse.limits.input_bytes.raw())).add(4) catch return error.InputLimit).raw();
-            if (bytes.len > cap - self.used) return error.LineTooLong;
+            const cap = aegis.int.Checked(usize).init(@min(self.options.max_line_bytes.raw(), self.options.parse.limits.input_bytes.raw())).add(4) catch return error.InputLimit;
+            const room = cap.sub(self.used) catch aegis.assert.never("the line holds no more than its cap");
+            if (room.compare(.init(bytes.len)) == .lt) return error.LineTooLong;
             const needed = self.used + bytes.len;
             if (needed > self.buffer.len) {
-                const capacity = @min(cap, @max(needed, @max(@as(usize, 64), self.buffer.len *| 2)));
-                const available = (limit.left(self.options.parse.limits.allocation_bytes, backing.live) orelse return error.AllocationLimit).raw();
-                if (self.buffer.len > available or capacity > available - self.buffer.len) return error.AllocationLimit;
+                const capacity = @min(cap.raw(), @max(needed, @max(@as(usize, 64), self.buffer.len *| 2)));
+                const available = limit.left(self.options.parse.limits.allocation_bytes, backing.live) orelse return error.AllocationLimit;
+                const beyond_buffer = available.sub(.fromRaw(self.buffer.len)) catch return error.AllocationLimit;
+                if (beyond_buffer.compare(.fromRaw(capacity)) == .lt) return error.AllocationLimit;
                 const next = try self.gpa.alloc(u8, capacity);
                 @memcpy(next[0..self.used], self.buffer[0..self.used]);
                 self.gpa.free(self.buffer);

@@ -28,6 +28,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- The manual hosted observations workflow (`.github/workflows/observations.yml`) is removed: timings are taken on a quiet machine, never on hosted runners, and CI runs only the workflow preflight generates.
 - The package a project fetches holds no test data: the conformance corpora and recorded answers move from `src/corpus/` to `testdata/corpus/`, outside `build.zig.zon`'s paths, and the tests read them through the development build's `testdata` module. A fetch is 604 KB compressed and 2.6 MiB unpacked, where it was 754 KB and 5.9 MiB.
 - JSON Schema validation is strand_schema's own package (github.com/pedronaugusto/strand-schema), on strand's core, not a module behind a build option: strand has no build options, and takes every dependency with its default options. A program with strand_schema and another strand user builds one strand. The unreleased `-Dschema`, `strand_schema` module and `strand.built_with` go with it, and strand no longer depends on uplink, spectra, almanac or the JSON-Schema-Test-Suite.
 - Pins aegis f52eabe, still 0.2.4, the one aegis the family builds on, and on it airlock cd4c29a, xenoglyph ab4d381, uplink cd13bdc, spectra 6dd0ffa and almanac 514f562; development on preflight's ci-standard 158c176, whose one job budget rule replaces the package's own test and Windows timeouts, and shakedown b168f3a.

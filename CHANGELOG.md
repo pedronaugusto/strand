@@ -28,7 +28,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- /Users/gusto/work/tycho/.wt/cars/strand's own development holds it to the family's policy: `"policy": "family"` in ci/preflight.json, beside the hardened profile ci/workflow.json declares; the hardened and hardened-tsan legs pass.
+- strand's own development holds it to the family's policy: `"policy": "family"` in ci/preflight.json, beside the hardened profile ci/workflow.json declares; the hardened and hardened-tsan legs pass.
 - The manual hosted observations workflow (`.github/workflows/observations.yml`) is removed: timings are taken on a quiet machine, never on hosted runners, and CI runs only the workflow preflight generates.
 - The package a project fetches holds no test data: the conformance corpora and recorded answers move from `src/corpus/` to `testdata/corpus/`, outside `build.zig.zon`'s paths, and the tests read them through the development build's `testdata` module. A fetch is 604 KB compressed and 2.6 MiB unpacked, where it was 754 KB and 5.9 MiB.
 - JSON Schema validation is strand_schema's own package (github.com/pedronaugusto/strand-schema), on strand's core, not a module behind a build option: strand has no build options, and takes every dependency with its default options. A program with strand_schema and another strand user builds one strand. The unreleased `-Dschema`, `strand_schema` module and `strand.built_with` go with it, and strand no longer depends on uplink, spectra, almanac or the JSON-Schema-Test-Suite.

@@ -4,6 +4,7 @@
 //! type, each carrying what its position needs.
 const std = @import("std");
 const strand = @import("strand.zig");
+const shakedown = @import("shakedown");
 const testing = std.testing;
 
 /// Counts the numbers in a document into `total`, by depth, and returns how
@@ -99,4 +100,27 @@ test "every format reads with a seed" {
     try testing.expect(try strand.xml.parseLeakySeeded(seed, a, "<r><a>1</a></r>", .{}) > 0);
     try testing.expect(try strand.cbor.parseLeakySeeded(seed, a, &.{ 0x82, 0x01, 0x82, 0x02, 0x03 }, .{}) > 0);
     try testing.expect(try strand.msgpack.parseLeakySeeded(seed, a, &.{ 0x92, 0x01, 0x92, 0x02, 0x03 }, .{}) > 0);
+}
+
+/// Any bytes, read by a seed in every format: a value the seed made, or a
+/// refusal, and a value counts no more numbers than the values it read.
+fn anySeeded(_: void, case: *shakedown.Case) anyerror!void {
+    const input = try shakedown.gen.string(case.source, case.gpa, .{ .kind = .bytes, .max_len = 96 });
+    case.note("input: {any}", .{input});
+    var state: std.heap.ArenaAllocator = .init(case.gpa);
+    defer state.deinit();
+    const a = state.allocator();
+    inline for (.{ strand.json, strand.json.jsonc, strand.json.json5, strand.yaml, strand.zon, strand.toml, strand.ini, strand.dotenv, strand.urlencoded, strand.csv, strand.xml, strand.cbor, strand.msgpack }) |format| {
+        var numbers: [4]usize = @splat(0);
+        if (format.parseLeakySeeded(Tally{ .numbers = &numbers, .depth = 0 }, a, input, .{})) |read| {
+            var counted: usize = 0;
+            for (numbers) |n| counted += n;
+            try testing.expect(counted <= read);
+        } else |_| {}
+        _ = state.reset(.retain_capacity);
+    }
+}
+
+test "fuzz: any bytes read by a seed are the seed's value or refused, in every format" {
+    try shakedown.check(testing.allocator, {}, anySeeded, .{ .cases = 500 });
 }

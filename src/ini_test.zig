@@ -2,6 +2,7 @@
 //! `ini.Value`, what is refused, and properties over generated documents and
 //! any bytes.
 const std = @import("std");
+const fixtures = @import("testing/fixtures.zig");
 const ini = @import("ini.zig");
 const core = @import("core.zig");
 const shakedown = @import("shakedown");
@@ -332,4 +333,14 @@ test "fuzz: any bytes are a document or refused, and a document read writes and 
             "0:1:2:4:11:5:1:5d",
         },
     });
+}
+
+test "a map's keys spelled on their serializer's stack are held past the call that spelled them" {
+    const maps = fixtures.stackKeyed("");
+    var buffer: [64]u8 = undefined;
+    var output = std.Io.Writer.fixed(&buffer);
+    try ini.write(&output, maps[0], .{});
+    try std.testing.expectEqualStrings("a = 1\nb = 2\n", output.buffered());
+    output = std.Io.Writer.fixed(&buffer);
+    try std.testing.expectError(error.DuplicateField, ini.write(&output, maps[1], .{}));
 }

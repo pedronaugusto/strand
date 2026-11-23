@@ -107,8 +107,9 @@ pub fn parseStreamLeaky(comptime T: type, arena: std.mem.Allocator, input: []con
 pub const WriteOptions = struct {
     limits: core.Limits = .{},
     /// Where what a write holds past its own storage is held: collections
-    /// nested past 64 levels, and a map's keys past 128 (kept to refuse one
-    /// given twice). With none, a value that needs it is refused.
+    /// nested past 64 levels, and past 128 keys or 4 KiB of key bytes in open
+    /// maps (held to refuse one given twice). With none, a value that needs it
+    /// is refused.
     allocator: ?std.mem.Allocator = null,
     /// What a null optional field is: written as `null`, or left out of its
     /// mapping.

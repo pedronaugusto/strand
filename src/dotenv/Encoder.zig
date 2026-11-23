@@ -11,7 +11,7 @@ const limit = @import("../core/limit.zig");
 const core = @import("../core.zig");
 const Decoder = @import("Decoder.zig");
 const syntax = @import("text.zig");
-const Names = @import("../ini/Encoder.zig").Names;
+const Keys = @import("../core/keys.zig").Keys(void);
 pub const Format = Decoder.Format;
 pub const capabilities = Decoder.capabilities;
 pub const canonical = false;
@@ -20,22 +20,24 @@ pub const Error = core.EncodeError || std.Io.Writer.Error;
 writer: *std.Io.Writer,
 /// Whether the root has begun.
 open: bool,
-/// The member whose key was written, and whose value is next.
-member: ?[]const u8,
+/// A member's key was written and its value is next: the last of `keys`.
+pending: bool,
 /// Whether the root is a map, whose keys are checked for one given twice.
 map: bool,
-keys: Names,
+/// The keys written, a map's checked for one given twice, then the key
+/// whose value is next.
+keys: Keys,
 const Self = @This();
 
 pub fn init(self: *Self, writer: *std.Io.Writer) void {
     self.writer = writer;
     self.open = false;
-    self.member = null;
+    self.pending = false;
     self.map = false;
-    self.keys = .empty;
+    self.keys.init();
 }
 pub fn deinit(self: *Self, c: *core.Context) void {
-    self.keys.far.deinit(c.allocator());
+    self.keys.deinit(c.allocator());
     self.* = undefined;
 }
 
@@ -44,24 +46,26 @@ fn put(self: *Self, data: []const u8, c: *core.Context) Error!void {
     try self.writer.writeAll(data);
 }
 /// The key of the member being written, checked and written, with `=` after
-/// it unless it is to have no value.
-fn startLine(self: *Self, sign: bool, c: *core.Context) Error![]const u8 {
-    const name = self.member orelse return error.CustomRejected;
-    self.member = null;
+/// it unless it is to have no value. It stays held where a map's keys are
+/// checked, and else is let go.
+fn startLine(self: *Self, sign: bool, c: *core.Context) Error!void {
+    if (!self.pending) return error.CustomRejected;
+    self.pending = false;
+    const name = self.keys.last();
     try c.chargeWork(name.len);
     if (!std.unicode.utf8ValidateSlice(name)) return error.UnsupportedValue;
     const quoting = syntax.keyQuoting(name) orelse return error.UnsupportedValue;
-    if (self.map) try self.keys.add(name, c);
+    if (self.map) try self.keys.checkLast(c, 0);
     if (quoting == .single) try self.put("'", c);
     try self.put(name, c);
     if (quoting == .single) try self.put("'", c);
     if (sign) try self.put("=", c);
-    return name;
+    if (!self.map) self.keys.reset(self.keys.mark() - 1);
 }
 /// `KEY=value` for the member whose key was written.
 fn line(self: *Self, value: []const u8, c: *core.Context) Error!void {
     if (!std.unicode.utf8ValidateSlice(value)) return error.UnsupportedValue;
-    _ = try self.startLine(true, c);
+    try self.startLine(true, c);
     try c.chargeWork(value.len);
     switch (syntax.quotingOf(value)) {
         .none => try self.put(value, c),
@@ -104,7 +108,7 @@ pub fn floating(self: *Self, value: anytype, c: *core.Context) Error!void {
 }
 pub fn text(self: *Self, value: []const u8, c: *core.Context) Error!void {
     // A map's key comes as text.
-    if (self.open and self.member == null) return self.key(value, c);
+    if (self.open and !self.pending) return self.key(value, c);
     try self.line(value, c);
 }
 pub fn bytes(self: *Self, value: []const u8, c: *core.Context) Error!void {
@@ -115,7 +119,7 @@ pub fn scalar(_: *Self, _: u21, _: *core.Context) Error!void {
 }
 /// A null is a key with no `=`.
 pub fn nullValue(self: *Self, c: *core.Context) Error!void {
-    _ = try self.startLine(false, c);
+    try self.startLine(false, c);
     try self.put("\n", c);
 }
 /// A union's arm with no payload: its key with an empty value.
@@ -123,9 +127,9 @@ pub fn unit(self: *Self, c: *core.Context) Error!void {
     try self.line("", c);
 }
 pub fn key(self: *Self, name: []const u8, c: *core.Context) Error!void {
-    _ = c;
-    if (!self.open or self.member != null) return error.CustomRejected;
-    self.member = name;
+    if (!self.open or self.pending) return error.CustomRejected;
+    try self.keys.keep(c.allocator(), {}, name);
+    self.pending = true;
 }
 pub fn begin(self: *Self, kind: core.Kind, name: []const u8, len: usize, c: *core.Context) Error!void {
     _ = name;
@@ -141,7 +145,7 @@ pub fn begin(self: *Self, kind: core.Kind, name: []const u8, len: usize, c: *cor
 }
 pub fn end(self: *Self, c: *core.Context) Error!void {
     _ = c;
-    if (self.member != null) return error.CustomRejected;
+    if (self.pending) return error.CustomRejected;
 }
 pub fn validateRaw(_: *Self, _: []const u8, _: *core.Context) Error!void {
     return error.UnsupportedValue;

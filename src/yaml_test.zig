@@ -8,6 +8,7 @@
 //! over generated values and over any bytes. yaml-test-suite runs in
 //! `testing/yaml_suite.zig`.
 const std = @import("std");
+const fixtures = @import("testing/fixtures.zig");
 const yaml = @import("yaml.zig");
 const core = @import("core.zig");
 const shakedown = @import("shakedown");
@@ -531,4 +532,31 @@ fn anyBytes(_: void, case: *shakedown.Case) anyerror!void {
 
 test "fuzz: any bytes are a stream or refused, and a document read is written and read back as itself" {
     try shakedown.check(gpa, {}, anyBytes, .{ .cases = 3000 });
+}
+
+test "a map's keys spelled on their serializer's stack are held past the call that spelled them" {
+    const maps = fixtures.stackKeyed("");
+    var buffer: [64]u8 = undefined;
+    var output = std.Io.Writer.fixed(&buffer);
+    try yaml.write(&output, maps[0], .{});
+    try std.testing.expectEqualStrings("a: 1\nb: 2\n", output.buffered());
+    output = std.Io.Writer.fixed(&buffer);
+    try std.testing.expectError(error.DuplicateField, yaml.write(&output, maps[1], .{}));
+}
+
+const TextKeyed = struct {
+    pairs: []const core.Pair([]const u8, u8),
+    pub fn strandSerialize(self: TextKeyed, access: anytype) @TypeOf(access.*).Error!void {
+        try access.writePairs(self.pairs);
+    }
+};
+test "a map's keys are held inline to 4 KiB of their bytes, past which a write needs an allocator" {
+    const a: [2048]u8 = @splat('a');
+    const b: [2049]u8 = @splat('b');
+    var sink: std.Io.Writer.Allocating = .init(gpa);
+    defer sink.deinit();
+    try yaml.write(&sink.writer, TextKeyed{ .pairs = &.{ .{ .key = &a, .value = 1 }, .{ .key = b[0..2048], .value = 2 } } }, .{});
+    const over: TextKeyed = .{ .pairs = &.{ .{ .key = &a, .value = 1 }, .{ .key = &b, .value = 2 } } };
+    try std.testing.expectError(error.OutOfMemory, yaml.write(&sink.writer, over, .{}));
+    try yaml.write(&sink.writer, over, .{ .allocator = gpa });
 }

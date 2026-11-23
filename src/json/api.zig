@@ -345,8 +345,9 @@ pub fn parseStdValue(gpa: std.mem.Allocator, input: []const u8, options: ParseOp
 pub const Whitespace = enum { minified, indent_1, indent_2, indent_3, indent_4, indent_8, indent_tab };
 pub const WriteOptions = struct {
     limits: core.Limits = .{},
-    /// Scratch for checking a `Raw` and converting a `std.json.Value`; a
-    /// fixed schema needs none.
+    /// Scratch for checking a `Raw` and converting a `std.json.Value`, and,
+    /// past 128 keys or 4 KiB of key bytes in open maps, for the keys held to
+    /// refuse one given twice (`OutOfMemory` where it runs out).
     scratch: []u8 = &.{},
     whitespace: Whitespace = .minified,
     /// What a null optional field is: written as `null`, or left out of its

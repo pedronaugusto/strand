@@ -54,4 +54,5 @@ test {
     _ = @import("yaml/api.zig");
     _ = @import("xml/api.zig");
     _ = @import("core/edit.zig");
+    _ = @import("core/keys.zig");
 }

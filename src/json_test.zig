@@ -2,6 +2,7 @@ const core = @import("core.zig");
 const shakedown = @import("shakedown");
 const jsonl = @import("jsonl.zig");
 const std = @import("std");
+const fixtures = @import("testing/fixtures.zig");
 const json = @import("json.zig");
 const testing = std.testing;
 test "S2 JSON exact decimal integers, shared field policy and lifetime" {
@@ -597,4 +598,61 @@ test "an open object's member takes a name known at run time" {
     try testing.expectError(error.InvalidUtf8, object.member("\xff", @as(u8, 3)));
     try object.close();
     try testing.expectEqualStrings("{\"a\":1,\"f2\\n\":2}", out.written());
+}
+
+const ScalarKeyed = struct {
+    pairs: []const core.Pair(core.Scalar, u8),
+    pub fn strandSerialize(self: ScalarKeyed, access: anytype) @TypeOf(access.*).Error!void {
+        try access.writePairs(self.pairs);
+    }
+};
+test "a map's keys spelled from characters are kept by the encoder past the call that spelled them" {
+    var buffer: [64]u8 = undefined;
+    var output = std.Io.Writer.fixed(&buffer);
+    try json.write(&output, ScalarKeyed{ .pairs = &.{ .{ .key = .{ .value = 'a' }, .value = 1 }, .{ .key = .{ .value = 'b' }, .value = 2 } } }, .{});
+    try testing.expectEqualStrings("{\"a\":1,\"b\":2}", output.buffered());
+    output = std.Io.Writer.fixed(&buffer);
+    try testing.expectError(error.DuplicateField, json.write(&output, ScalarKeyed{ .pairs = &.{ .{ .key = .{ .value = 'a' }, .value = 1 }, .{ .key = .{ .value = 'a' }, .value = 2 } } }, .{}));
+}
+
+test "a map's keys spelled on their serializer's stack are held past the call that spelled them" {
+    const maps = fixtures.stackKeyed("");
+    var buffer: [64]u8 = undefined;
+    var output = std.Io.Writer.fixed(&buffer);
+    try json.write(&output, maps[0], .{});
+    try std.testing.expectEqualStrings("{\"a\":1,\"b\":2}", output.buffered());
+    output = std.Io.Writer.fixed(&buffer);
+    try std.testing.expectError(error.DuplicateField, json.write(&output, maps[1], .{}));
+}
+
+const TextKeyed = struct {
+    pairs: []const core.Pair([]const u8, u8),
+    pub fn strandSerialize(self: TextKeyed, access: anytype) @TypeOf(access.*).Error!void {
+        try access.writePairs(self.pairs);
+    }
+};
+test "a map's keys are held inline to 4 KiB of their bytes, past which a write needs scratch" {
+    const a: [2048]u8 = @splat('a');
+    const b: [2049]u8 = @splat('b');
+    var sink: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer sink.deinit();
+    try json.write(&sink.writer, TextKeyed{ .pairs = &.{ .{ .key = &a, .value = 1 }, .{ .key = b[0..2048], .value = 2 } } }, .{});
+    const over: TextKeyed = .{ .pairs = &.{ .{ .key = &a, .value = 1 }, .{ .key = &b, .value = 2 } } };
+    try testing.expectError(error.OutOfMemory, json.write(&sink.writer, over, .{}));
+    var scratch: [16384]u8 = undefined;
+    try json.write(&sink.writer, over, .{ .scratch = &scratch });
+}
+test "a map's first 128 keys are held inline, past which a write needs scratch" {
+    var names: [129][3]u8 = undefined;
+    var pairs: [129]core.Pair([]const u8, u8) = undefined;
+    for (&names, &pairs, 0..) |*name, *pair, i| {
+        _ = try std.mem.print(name, "{d:0>3}", .{i});
+        pair.* = .{ .key = name, .value = 0 };
+    }
+    var sink: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer sink.deinit();
+    try json.write(&sink.writer, TextKeyed{ .pairs = pairs[0..128] }, .{});
+    try testing.expectError(error.OutOfMemory, json.write(&sink.writer, TextKeyed{ .pairs = &pairs }, .{}));
+    var scratch: [16384]u8 = undefined;
+    try json.write(&sink.writer, TextKeyed{ .pairs = &pairs }, .{ .scratch = &scratch });
 }

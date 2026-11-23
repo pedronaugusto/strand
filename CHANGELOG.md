@@ -28,6 +28,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- A writer holds a copy of each map key it keeps, where it held the caller's slice: inline up to 128 keys and 4 KiB of key bytes in open maps, and past either in the write's scratch (JSON, ZON, INI, .env) or allocator (YAML, XML), `OutOfMemory` with none. An INI, .env or XML writer holds the key whose value comes next the same way, and an XML writer the attribute names of every open element until it closes, where it held 32 for the open start tag alone.
+
 - strand's own development holds it to the family's policy: `"policy": "family"` in ci/preflight.json, beside the hardened profile ci/workflow.json declares; the hardened and hardened-tsan legs pass.
 - The manual hosted observations workflow (`.github/workflows/observations.yml`) is removed: timings are taken on a quiet machine, never on hosted runners, and CI runs only the workflow preflight generates.
 - The package a project fetches holds no test data: the conformance corpora and recorded answers move from `src/corpus/` to `testdata/corpus/`, outside `build.zig.zon`'s paths, and the tests read them through the development build's `testdata` module. A fetch is 604 KB compressed and 2.6 MiB unpacked, where it was 754 KB and 5.9 MiB.
@@ -48,6 +50,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Development: file identity belongs to airlock as a resolved rule, the way durability does: `ci/preflight.json` keeps std's `c.fstat`, `c.fstatat`, `c.statx`, `os.linux.statx` and `os.linux.IoUring.statx`, and every extern `fstat`, `fstatat` and `statx`, out of production code (P006, owned by airlock). The token rule in `ci/layers.zig` that matched their spellings is gone.
 
 ### Fixed
+
+- A map key whose bytes live only for the call that gives it, such as a character JSON spells as a key or one a custom `strandSerialize` spells on its stack, is no longer read after that call: JSON, ZON, YAML and XML refused a map whose next key reused the bytes as a key given twice, and INI, .env and XML wrote a key's name from bytes already gone.
 
 - `yaml.Edit`: a key written with no value (`? key`, no `:`) ends with its key. The reader places its empty value at the next token, on a later line, so removing such a member cut into the next line's indentation and was refused as text that no longer reads (`- ? a\n  ? b\n- x` with `/0/b` removed left `  - x`), and a key added after it went after the next line. Found by the release tier's fuzz run (release run 44137916154), its case shrunk into a test with removals, additions and replacements around such keys.
 - A JSON integer read straight into an integer type is held to `numeric_bytes` by its whole token, the minus included, as every other number is: `-0` or `-7` under a one-byte limit was read on that path alone, where the tape refused it. `numeric_bytes` says so.

@@ -119,8 +119,10 @@ pub const WriteOptions = struct {
     /// Namespace declarations on the root's start tag.
     namespaces: []const Namespace = &.{},
     /// Where what a write holds past its own storage is held: elements nested
-    /// past 64 levels, and the attribute names of open tags past 32 (kept to
-    /// refuse one given twice). With none, a value that needs it is refused.
+    /// past 64 levels, and past 128 names or 4 KiB of name bytes held for the
+    /// elements open (an element's name a key gave, and its attribute names,
+    /// kept to refuse one given twice). With none, a value that needs it is
+    /// refused.
     allocator: ?std.mem.Allocator = null,
 };
 /// The error set of a write of `T`.

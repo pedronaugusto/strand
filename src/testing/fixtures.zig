@@ -6,6 +6,7 @@
 
 const std = @import("std");
 const testing = std.testing;
+const core = @import("../core.zig");
 
 /// The smallest record worth reading: a string and a number. `strand_test.zig` and
 /// `fuzz.zig` have their own, richer, because what they are about is what a
@@ -99,3 +100,32 @@ pub const Chunked = struct {
         return n;
     }
 };
+
+/// A map's key that its own serializer spells into a buffer on its stack,
+/// gone once that call returns: what an encoder holds of a key past the call
+/// must be a copy. Two keys spelled one after the other share the buffer's
+/// place, so a key held by its slice reads as the next.
+pub const StackKey = struct {
+    name: []const u8,
+    pub fn strandSerialize(self: StackKey, access: anytype) @TypeOf(access.*).Error!void {
+        var spelled: [16]u8 = undefined;
+        @memcpy(spelled[0..self.name.len], self.name);
+        try access.write(@as([]const u8, spelled[0..self.name.len]));
+    }
+};
+/// A map keyed by `StackKey`s.
+pub fn StackKeyed(comptime V: type) type {
+    return struct {
+        pairs: []const core.Pair(StackKey, V),
+        pub fn strandSerialize(self: @This(), access: anytype) @TypeOf(access.*).Error!void {
+            try access.writePairs(self.pairs);
+        }
+    };
+}
+/// `{a: 1, b: 2}`, then `{a: 1, a: 2}`, keyed by `StackKey`s named `prefix ++ "a"` and so on.
+pub fn stackKeyed(comptime prefix: []const u8) [2]StackKeyed(u8) {
+    return .{
+        .{ .pairs = &.{ .{ .key = .{ .name = prefix ++ "a" }, .value = 1 }, .{ .key = .{ .name = prefix ++ "b" }, .value = 2 } } },
+        .{ .pairs = &.{ .{ .key = .{ .name = prefix ++ "a" }, .value = 1 }, .{ .key = .{ .name = prefix ++ "a" }, .value = 2 } } },
+    };
+}

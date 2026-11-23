@@ -6,6 +6,7 @@
 //! generated values and over any bytes. The W3C conformance suite runs in
 //! `testing/xml_suite.zig`.
 const std = @import("std");
+const fixtures = @import("testing/fixtures.zig");
 const xml = @import("xml.zig");
 const core = @import("core.zig");
 const shakedown = @import("shakedown");
@@ -414,4 +415,25 @@ test "limits at their edges" {
     try std.testing.expectError(error.LengthLimit, xml.parse([]const u8, gpa, "<a>abcdef</a>", .{ .limits = .{ .string_bytes = .literal("5B") } }));
     var five = try xml.parse([]const u8, gpa, "<a>abcde</a>", .{ .limits = .{ .string_bytes = .literal("5B") } });
     five.deinit();
+}
+
+test "a map's keys spelled on their serializer's stack are held past the call that spelled them" {
+    const maps = fixtures.stackKeyed("@");
+    var buffer: [64]u8 = undefined;
+    var output = std.Io.Writer.fixed(&buffer);
+    try xml.write(&output, maps[0], .{ .root = "r" });
+    try std.testing.expectEqualStrings("<?xml version=\"1.0\" encoding=\"UTF-8\"?><r a=\"1\" b=\"2\"/>", output.buffered());
+    output = std.Io.Writer.fixed(&buffer);
+    try std.testing.expectError(error.DuplicateField, xml.write(&output, maps[1], .{ .root = "r" }));
+}
+
+test "a child element's name spelled on its key's stack is held while its element is written" {
+    const maps = fixtures.stackKeyed("");
+    var buffer: [64]u8 = undefined;
+    var output = std.Io.Writer.fixed(&buffer);
+    try xml.write(&output, maps[0], .{ .root = "r" });
+    try std.testing.expectEqualStrings("<?xml version=\"1.0\" encoding=\"UTF-8\"?><r><a>1</a><b>2</b></r>", output.buffered());
+    output = std.Io.Writer.fixed(&buffer);
+    try xml.write(&output, maps[1], .{ .root = "r" });
+    try std.testing.expectEqualStrings("<?xml version=\"1.0\" encoding=\"UTF-8\"?><r><a>1</a><a>2</a></r>", output.buffered());
 }

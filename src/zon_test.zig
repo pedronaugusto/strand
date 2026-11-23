@@ -3,6 +3,7 @@
 //! value of the type and, if it is, on which. Where strand deliberately says
 //! otherwise, the test says so in its name.
 const std = @import("std");
+const fixtures = @import("testing/fixtures.zig");
 const zon = @import("zon.zig");
 const core = @import("core.zig");
 const shakedown = @import("shakedown");
@@ -920,4 +921,14 @@ test "an exact float refuses what its width cannot hold" {
         try testing.expectError(error.InexactNumber, zon.parse(Exact, testing.allocator, source, .{}));
     }
     try testing.expectError(error.NumberOutOfRange, zon.parse(Exact, testing.allocator, ".{ .x = 1e50 }", .{}));
+}
+
+test "a map's keys spelled on their serializer's stack are held past the call that spelled them" {
+    const maps = fixtures.stackKeyed("");
+    var buffer: [64]u8 = undefined;
+    var output = std.Io.Writer.fixed(&buffer);
+    try zon.write(&output, maps[0], .{});
+    try std.testing.expectEqualStrings(".{ .a = 1, .b = 2 }", output.buffered());
+    output = std.Io.Writer.fixed(&buffer);
+    try std.testing.expectError(error.DuplicateField, zon.write(&output, maps[1], .{}));
 }

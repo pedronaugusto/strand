@@ -482,6 +482,17 @@ can supply; it never permits labelling scratch as input. Canonical Raw emission
 must normalize or refuse; the core refuses unnormalized Raw in canonical mode.
 The binary `testing/Reference.zig` backend exists only to exercise these contracts.
 
+A writer holds a key past the call that gives it only as a copy: a key's bytes are its
+caller's for that call alone, such as a character spelled on the stack or a custom
+codec's temporary. The streaming writers (JSON, ZON, INI, .env, YAML, XML) hold the keys
+of their open maps, kept to refuse one given twice, and a key whose value comes next, in
+`core/keys.zig`: 128 keys and 4 KiB of key bytes inline, past either in the write's
+scratch or allocator, `OutOfMemory` with none. TOML's writer is not on it, by design: it
+builds the document as a tree in its arena and writes it once the root closes, so its keys
+are the tree's own arena copies, kept to the end and checked per table. They are not a
+stack of open maps, and holding them in `Keys` as well would be a second index over the
+same tree.
+
 Hooks and field codecs consume one value through bounded access that carries
 the enclosing field's representation, borrow policy, exactness and length limit.
 A container codec can expose a pure `length(value) usize` to validate constructed
@@ -787,7 +798,8 @@ double-quoted otherwise, every character that is not printable escaped. A float 
 shortest spelling that reads back as the same binary64, with a fraction or an
 exponent, or `.inf`, `-.inf`, `.nan`. A map's keys are checked for one given twice as
 the reader compares them. The writer allocates nothing unless a value nests past 64
-levels or a map has more than 128 keys; then it needs `WriteOptions.allocator`.
+levels or its open maps hold past 128 keys or 4 KiB of key bytes; then it needs
+`WriteOptions.allocator`.
 
 The evidence is yaml-test-suite (the data-2022-01-17 release, vendored at
 `testdata/corpus/yaml` with its MIT license): all 402 cases, each valid one read as its

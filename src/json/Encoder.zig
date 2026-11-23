@@ -1,6 +1,7 @@
 //! JSON wire emission. Shape and field policy belong to core.
 const std = @import("std");
 const limit = @import("../core/limit.zig");
+const Keys = @import("../core/keys.zig").Keys(void);
 const core = @import("../core.zig");
 const strings = @import("text.zig");
 const decoding = @import("Decoder.zig");
@@ -27,9 +28,7 @@ pub fn Dialect(comptime json5: bool) type {
         depth: usize,
         top: *Frame,
         key_written: bool,
-        keys: [128][]const u8,
-        extra_keys: std.ArrayList([]const u8),
-        key_count: usize,
+        keys: Keys,
         /// Where output waits to be counted and published: the writer's own unused
         /// buffer when it has room, `local` when it has not.
         stage: []u8,
@@ -50,15 +49,14 @@ pub fn Dialect(comptime json5: bool) type {
             self.frames[0] = .{ .object = false, .check_duplicates = false, .key_start = 0 };
             self.top = &self.frames[0];
             self.key_written = false;
-            self.extra_keys = .empty;
-            self.key_count = 0;
+            self.keys.init();
             self.open_root = false;
             self.root_members = false;
             self.restage();
         }
         pub fn deinit(self: *Self, c: *core.Context) void {
             self.extra.deinit(c.allocator());
-            self.extra_keys.deinit(c.allocator());
+            self.keys.deinit(c.allocator());
             self.* = undefined;
         }
         fn frame(self: *Self, depth: usize) *Frame {
@@ -190,15 +188,7 @@ pub fn Dialect(comptime json5: bool) type {
         }
         pub fn text(self: *Self, value: []const u8, c: *core.Context) Error!void {
             const is_key = self.top.object and !self.key_written;
-            if (is_key and self.top.check_duplicates) {
-                for (self.top.key_start..self.key_count) |i| {
-                    const prior = if (i < self.keys.len) self.keys[i] else self.extra_keys.items[i - self.keys.len];
-                    try c.chargeWork(@min(value.len, prior.len));
-                    if (std.mem.eql(u8, value, prior)) return error.DuplicateField;
-                }
-                if (self.key_count < self.keys.len) self.keys[self.key_count] = value else try self.extra_keys.append(c.allocator(), value);
-                self.key_count += 1;
-            }
+            if (is_key and self.top.check_duplicates) try self.keys.add(c, c.allocator(), self.top.key_start, {}, value);
             try self.before(c);
             try self.quoted(value, c);
             if (is_key) {
@@ -263,7 +253,7 @@ pub fn Dialect(comptime json5: bool) type {
             try self.before(c);
             const object = kind == .record or kind == .map or kind == .variant;
             try self.put(if (object) "{" else "[", c);
-            const entry: Frame = .{ .object = object, .check_duplicates = kind == .map, .key_start = self.key_count };
+            const entry: Frame = .{ .object = object, .check_duplicates = kind == .map, .key_start = self.keys.mark() };
             const depth = self.depth + 1;
             if (depth < self.frames.len) self.frames[depth] = entry else try self.extra.append(c.allocator(), entry);
             self.depth = depth;
@@ -279,8 +269,7 @@ pub fn Dialect(comptime json5: bool) type {
             if (self.depth >= self.frames.len) _ = self.extra.pop();
             self.depth -= 1;
             self.top = self.frame(self.depth);
-            self.key_count = f.key_start;
-            self.extra_keys.shrinkRetainingCapacity(self.key_count - @min(self.key_count, self.keys.len));
+            self.keys.reset(f.key_start);
         }
         pub fn validateRaw(_: *Self, payload: []const u8, c: *core.Context) Error!void {
             c.input(payload.len) catch |err| return encodeError(err);

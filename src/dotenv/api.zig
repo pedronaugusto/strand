@@ -91,8 +91,8 @@ pub fn parseLeakySeeded(seed: anytype, arena: std.mem.Allocator, input: []const 
 
 pub const WriteOptions = struct {
     limits: core.Limits = .{},
-    /// Scratch for a map's keys past its 128th, remembered to refuse one
-    /// given twice (`OutOfMemory` where it runs out); a struct needs none.
+    /// Scratch for a map's keys past 128 or 4 KiB of their bytes, held to
+    /// refuse one given twice (`OutOfMemory` where it runs out).
     scratch: []u8 = &.{},
 };
 /// Streams `value`, a struct or a map, as a .env file: a `KEY=value` line

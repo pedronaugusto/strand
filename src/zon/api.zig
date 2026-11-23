@@ -83,8 +83,9 @@ pub fn parseLeakySeeded(seed: anytype, arena: std.mem.Allocator, input: []const 
 }
 pub const WriteOptions = struct {
     limits: core.Limits = .{},
-    /// Scratch for what writing needs beyond the stack: nesting past 128 levels
-    /// and map keys, a fixed budget of bytes. None is enough for ordinary values.
+    /// Scratch for what writing needs beyond the stack: nesting past 128
+    /// levels, and the keys held to refuse one given twice past 128 keys or
+    /// 4 KiB of key bytes in open maps (`OutOfMemory` where it runs out).
     scratch: []u8 = &.{},
     /// std's layout, or only the whitespace the syntax needs.
     whitespace: bool = true,
@@ -98,7 +99,7 @@ pub fn write(output: *std.Io.Writer, value: anytype, options: WriteOptions) @typ
     var encoder: WireEncoder = undefined;
     encoder.init(output, options.whitespace);
     defer encoder.extra.deinit(c.allocator());
-    defer encoder.extra_keys.deinit(c.allocator());
+    defer encoder.keys.deinit(c.allocator());
     try core.serialize(value, &encoder, &c);
     try encoder.flush(&c);
 }

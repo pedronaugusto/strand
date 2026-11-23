@@ -5,6 +5,7 @@
 //! no payload and `.{ .arm = payload }` with one.
 const std = @import("std");
 const limit = @import("../core/limit.zig");
+const Keys = @import("../core/keys.zig").Keys(void);
 const core = @import("../core.zig");
 const Decoder = @import("Decoder.zig");
 pub const Format = Decoder.Format;
@@ -20,9 +21,8 @@ extra: std.ArrayList(Frame),
 depth: usize,
 /// Containers open that wrap, which is how far a line is indented.
 indent_level: usize,
-keys: [128][]const u8,
-extra_keys: std.ArrayList([]const u8),
-key_count: usize,
+/// The keys of each open map, copied: a key's bytes may be its caller's for one call only.
+keys: Keys,
 stage: [4096]u8,
 staged: usize,
 
@@ -35,8 +35,7 @@ pub fn init(self: *Self, writer: *std.Io.Writer, whitespace: bool) void {
     self.extra = .empty;
     self.depth = 0;
     self.indent_level = 0;
-    self.extra_keys = .empty;
-    self.key_count = 0;
+    self.keys.init();
     self.staged = 0;
 }
 
@@ -354,13 +353,7 @@ pub fn key(self: *Self, value: []const u8, c: *core.Context) Error!void {
     const f = self.frame();
     if (f.kind != .record or f.value_pending) return error.CustomRejected;
     if (f.check_duplicates) {
-        for (f.key_start..self.key_count) |i| {
-            const prior = if (i < self.keys.len) self.keys[i] else self.extra_keys.items[i - self.keys.len];
-            try c.chargeWork(@min(value.len, prior.len));
-            if (std.mem.eql(u8, value, prior)) return error.DuplicateField;
-        }
-        if (self.key_count < self.keys.len) self.keys[self.key_count] = value else try self.extra_keys.append(c.allocator(), value);
-        self.key_count += 1;
+        try self.keys.add(c, c.allocator(), f.key_start, {}, value);
     }
     try self.member(c, value);
     f.value_pending = true;
@@ -380,7 +373,7 @@ pub fn begin(self: *Self, kind: core.Kind, name: []const u8, len: usize, c: *cor
         .wrap = shape != .variant and len > 2,
         .elide = shape == .sequence and len == 1,
         .name = name,
-        .key_start = self.key_count,
+        .key_start = self.keys.mark(),
     };
     if (self.depth < self.frames.len) self.frames[self.depth] = entry else try self.extra.append(c.allocator(), entry);
     self.depth += 1;
@@ -422,8 +415,7 @@ pub fn end(self: *Self, c: *core.Context) Error!void {
     }
     if (self.depth > self.frames.len) _ = self.extra.pop();
     self.depth -= 1;
-    self.key_count = f.key_start;
-    self.extra_keys.shrinkRetainingCapacity(self.key_count - @min(self.key_count, self.keys.len));
+    self.keys.reset(f.key_start);
 }
 pub fn validateRaw(_: *Self, payload: []const u8, c: *core.Context) Error!void {
     c.input(payload.len) catch |err| return encodeError(err);

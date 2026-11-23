@@ -12,6 +12,7 @@ const limit = @import("../core/limit.zig");
 const core = @import("../core.zig");
 const Decoder = @import("Decoder.zig");
 const xml_text = @import("text.zig");
+const Keys = @import("../core/keys.zig").Keys(void);
 pub const Format = Decoder.Format;
 pub const capabilities = Decoder.capabilities;
 pub const canonical = false;
@@ -24,14 +25,17 @@ pub const Error = core.EncodeError || std.Io.Writer.Error;
 /// children on its line, since white space there would be content).
 pub const Whitespace = enum { minified, indent_1, indent_2, indent_3, indent_4, indent_8, indent_tab };
 
+/// An element's name: one the type or the write spells, or a key's, held in
+/// `names` at this index.
+const Name = union(enum) { static: []const u8, held: usize };
 /// Where the next value goes.
 const Slot = union(enum) {
     /// The document's root element, of this name.
     root: []const u8,
     /// A child element of this name.
-    child: []const u8,
-    /// An attribute of the open start tag.
-    attribute: []const u8,
+    child: Name,
+    /// An attribute of the open start tag, its name held in `names` at this index.
+    attribute: usize,
     /// Character data.
     text,
     /// None: a record or map waits for a key.
@@ -40,14 +44,17 @@ const Slot = union(enum) {
 const Frame = struct {
     kind: enum { element, sequence, wrapper, transparent },
     /// The element's name; a sequence's items' name.
-    name: []const u8,
+    name: Name,
+    /// Where the names this frame holds start in `names`: its own, if a key
+    /// gave it, then its attributes'. They are let go when it ends.
+    names_start: usize,
     /// The start tag is not closed: attributes may still come.
     open_tag: bool = false,
     children: bool = false,
     text: bool = false,
     /// A map's keys come as text.
     map: bool = false,
-    /// Where this element's attribute names start in `attributes`.
+    /// Where this element's attribute names start in `names`.
     attributes_start: usize = 0,
 };
 
@@ -56,9 +63,9 @@ allocator: ?std.mem.Allocator,
 indent: []const u8,
 stack: std.ArrayList(Frame),
 frames: [64]Frame,
-/// The attribute names of the start tags open, to refuse one given twice.
-attributes: std.ArrayList([]const u8),
-attribute_buffer: [32][]const u8,
+/// The names held for the elements open: element names that keys gave, and
+/// attribute names, to refuse one given twice.
+names: Keys,
 slot: Slot,
 /// Namespace declarations for the root's start tag.
 namespaces: []const Namespace,
@@ -76,13 +83,27 @@ pub const Namespace = struct {
 };
 
 pub fn init(self: *Self, writer: *std.Io.Writer, root: []const u8, whitespace: Whitespace, namespaces: []const Namespace, allocator: ?std.mem.Allocator) void {
-    self.* = .{ .writer = writer, .allocator = allocator, .indent = indentUnit(whitespace), .stack = .empty, .frames = undefined, .attributes = .empty, .attribute_buffer = undefined, .slot = .{ .root = root }, .namespaces = namespaces, .done = false, .elements = 0, .name_checked = false };
+    self.writer = writer;
+    self.allocator = allocator;
+    self.indent = indentUnit(whitespace);
     self.stack = .initBuffer(&self.frames);
-    self.attributes = .initBuffer(&self.attribute_buffer);
+    self.names.init();
+    self.slot = .{ .root = root };
+    self.namespaces = namespaces;
+    self.done = false;
+    self.elements = 0;
+    self.name_checked = false;
 }
 pub fn deinit(self: *Self) void {
     if (self.stack.items.ptr != &self.frames) self.stack.deinit(self.allocator.?);
-    if (self.attributes.items.ptr != &self.attribute_buffer) self.attributes.deinit(self.allocator.?);
+    self.names.deinit(self.allocator);
+}
+/// `name`'s bytes, until a name is next held.
+fn spell(self: *const Self, name: Name) []const u8 {
+    return switch (name) {
+        .static => |spelled| spelled,
+        .held => |i| self.names.at(i),
+    };
 }
 fn indentUnit(whitespace: Whitespace) []const u8 {
     return switch (whitespace) {
@@ -166,22 +187,30 @@ fn closeTag(self: *Self, c: *core.Context) Error!void {
     const f = self.element() orelse return;
     if (!f.open_tag) return;
     f.open_tag = false;
-    self.attributes.shrinkRetainingCapacity(f.attributes_start);
     try self.put(">", c);
 }
+/// A slot taken, and the index of the name it brings to hold, if a key gave it.
+const Taken = struct { slot: Slot, held: ?usize = null };
 /// Where the next value goes, taken: a record's slot is used once.
-fn take(self: *Self) Error!Slot {
+fn take(self: *Self) Error!Taken {
     if (self.done) return error.UnsupportedValue;
     const slot = self.slot;
     if (self.top()) |f| {
         switch (f.kind) {
             // Every item of a sequence is an element of its name.
-            .sequence => return .{ .child = f.name },
+            .sequence => return .{ .slot = .{ .child = f.name } },
             else => {},
         }
     }
     self.slot = .none;
-    return slot;
+    return .{ .slot = slot, .held = switch (slot) {
+        .child => |name| if (name == .held) name.held else null,
+        else => null,
+    } };
+}
+/// Lets go of the name a slot brought, once its value is written whole.
+fn release(self: *Self, taken: Taken) void {
+    if (taken.held) |i| self.names.reset(i);
 }
 fn checkName(name: []const u8) Error!void {
     if (!xml_text.isWholeName(name)) return error.UnsupportedValue;
@@ -222,13 +251,10 @@ fn textElement(self: *Self, name: []const u8, value: []const u8, c: *core.Contex
     try self.put(">", c);
 }
 fn endTag(self: *Self, f: Frame, c: *core.Context) Error!void {
-    if (f.open_tag) {
-        self.attributes.shrinkRetainingCapacity(f.attributes_start);
-        return self.put("/>", c);
-    }
+    if (f.open_tag) return self.put("/>", c);
     if (f.children and !f.text) try self.newline(self.level(), c);
     try self.put("</", c);
-    try self.put(f.name, c);
+    try self.put(self.spell(f.name), c);
     try self.put(">", c);
 }
 fn finishRoot(self: *Self) void {
@@ -239,13 +265,15 @@ fn finishRoot(self: *Self) void {
 fn scalarValue(self: *Self, value: []const u8, c: *core.Context) Error!void {
     // A map's key comes as text.
     if (self.top()) |f| if (f.map and self.slot == .none) return self.key(value, c);
-    switch (try self.take()) {
-        .root, .child => |name| try self.textElement(name, value, c),
-        .attribute => |name| {
+    const taken = try self.take();
+    switch (taken.slot) {
+        .root => |name| try self.textElement(name, value, c),
+        .child => |name| try self.textElement(self.spell(name), value, c),
+        .attribute => |i| {
             const f = self.element() orelse return error.UnsupportedValue;
             if (!f.open_tag) return error.UnsupportedValue;
             try self.put(" ", c);
-            try self.put(name, c);
+            try self.put(self.names.at(i), c);
             try self.put("=\"", c);
             try self.escaped(value, true, c);
             try self.put("\"", c);
@@ -257,6 +285,7 @@ fn scalarValue(self: *Self, value: []const u8, c: *core.Context) Error!void {
         },
         .none => return error.UnsupportedValue,
     }
+    self.release(taken);
     self.finishRoot();
 }
 
@@ -295,21 +324,28 @@ pub fn nullValue(_: *Self, _: *core.Context) Error!void {
 }
 /// Nothing, such as a union's arm with no payload: an empty element.
 pub fn unit(self: *Self, c: *core.Context) Error!void {
-    switch (try self.take()) {
-        .root, .child => |name| {
+    const taken = try self.take();
+    switch (taken.slot) {
+        .root, .child => {
+            const name = switch (taken.slot) {
+                .root => |name| name,
+                .child => |name| self.spell(name),
+                else => unreachable,
+            };
             try self.startTag(name, c);
             try self.put("/>", c);
         },
-        .attribute => |name| {
+        .attribute => |i| {
             const f = self.element() orelse return error.UnsupportedValue;
             if (!f.open_tag) return error.UnsupportedValue;
             try self.put(" ", c);
-            try self.put(name, c);
+            try self.put(self.names.at(i), c);
             try self.put("=\"\"", c);
         },
         .text => {},
         .none => return error.UnsupportedValue,
     }
+    self.release(taken);
     self.finishRoot();
 }
 /// A member's key: where its value goes.
@@ -318,7 +354,7 @@ pub fn field(self: *Self, comptime name: []const u8, c: *core.Context) Error!voi
     const plain = comptime name.len > 0 and name[0] != '@' and !std.mem.eql(u8, name, "$text") and xml_text.isWholeName(name);
     if (!plain) return self.key(name, c);
     if (self.slot != .none) return error.UnsupportedValue;
-    self.slot = .{ .child = name };
+    self.slot = .{ .child = .{ .static = name } };
     self.name_checked = true;
 }
 pub fn key(self: *Self, name: []const u8, c: *core.Context) Error!void {
@@ -328,67 +364,56 @@ pub fn key(self: *Self, name: []const u8, c: *core.Context) Error!void {
         try checkName(attribute);
         const f = self.element() orelse return error.UnsupportedValue;
         if (!f.open_tag) return error.UnsupportedValue;
-        for (self.attributes.items[f.attributes_start..]) |prior| {
-            try c.chargeWork(@min(prior.len, attribute.len) + 1);
-            if (std.mem.eql(u8, prior, attribute)) return error.DuplicateField;
-        }
-        try self.keepAttribute(attribute);
-        self.slot = .{ .attribute = attribute };
+        try self.names.add(c, self.allocator, f.attributes_start, {}, attribute);
+        self.slot = .{ .attribute = self.names.mark() - 1 };
     } else if (std.mem.eql(u8, name, "$text")) {
         self.slot = .text;
     } else {
         try checkName(name);
-        self.slot = .{ .child = name };
+        try self.names.keep(self.allocator, {}, name);
+        self.slot = .{ .child = .{ .held = self.names.mark() - 1 } };
     }
-}
-fn keepAttribute(self: *Self, name: []const u8) Error!void {
-    if (self.attributes.items.len == self.attributes.capacity) {
-        const allocator = self.allocator orelse return error.OutOfMemory;
-        if (self.attributes.items.ptr == &self.attribute_buffer) {
-            var grown: std.ArrayList([]const u8) = .empty;
-            try grown.ensureTotalCapacity(allocator, self.attribute_buffer.len * 2);
-            grown.appendSliceAssumeCapacity(self.attributes.items);
-            self.attributes = grown;
-        } else try self.attributes.ensureUnusedCapacity(allocator, 1);
-    }
-    self.attributes.appendAssumeCapacity(name);
 }
 
 pub fn begin(self: *Self, kind: core.Kind, name: []const u8, len: usize, c: *core.Context) Error!void {
     _ = len;
     if (self.top()) |f| if (f.map and self.slot == .none) return error.UnsupportedValue;
-    const slot = try self.take();
+    const taken = try self.take();
+    // The frame holds the name a key gave until it ends.
+    const names_start = taken.held orelse self.names.mark();
     switch (kind) {
-        .record, .map => switch (slot) {
-            .root, .child => |element_name| {
-                try self.startTag(element_name, c);
-                try self.pushFrame(.{ .kind = .element, .name = element_name, .open_tag = true, .map = kind == .map, .attributes_start = self.attributes.items.len });
-                self.elements += 1;
-            },
-            else => return error.UnsupportedValue,
+        .record, .map => {
+            const element_name: Name = switch (taken.slot) {
+                .root => |root| .{ .static = root },
+                .child => |child| child,
+                else => return error.UnsupportedValue,
+            };
+            try self.startTag(self.spell(element_name), c);
+            try self.pushFrame(.{ .kind = .element, .name = element_name, .names_start = names_start, .open_tag = true, .map = kind == .map, .attributes_start = self.names.mark() });
+            self.elements += 1;
         },
-        .sequence, .tuple => switch (slot) {
+        .sequence, .tuple => switch (taken.slot) {
             // A sequence repeats its key's element; a sequence's item or the
             // root has no name to repeat.
             .child => |element_name| {
                 if (self.top()) |f| if (f.kind == .sequence) return error.UnsupportedValue;
-                try self.pushFrame(.{ .kind = .sequence, .name = element_name });
+                try self.pushFrame(.{ .kind = .sequence, .name = element_name, .names_start = names_start });
             },
             else => return error.UnsupportedValue,
         },
-        .variant => switch (slot) {
+        .variant => switch (taken.slot) {
             // The root is the arm's element; anywhere else an element
             // holds it.
             .root => {
-                try self.pushFrame(.{ .kind = .transparent, .name = "" });
-                self.slot = .{ .child = name };
+                try self.pushFrame(.{ .kind = .transparent, .name = .{ .static = "" }, .names_start = names_start });
+                self.slot = .{ .child = .{ .static = name } };
             },
             .child => |element_name| {
-                try self.startTag(element_name, c);
+                try self.startTag(self.spell(element_name), c);
                 try self.put(">", c);
-                try self.pushFrame(.{ .kind = .wrapper, .name = element_name, .attributes_start = self.attributes.items.len });
+                try self.pushFrame(.{ .kind = .wrapper, .name = element_name, .names_start = names_start, .attributes_start = self.names.mark() });
                 self.elements += 1;
-                self.slot = .{ .child = name };
+                self.slot = .{ .child = .{ .static = name } };
             },
             else => return error.UnsupportedValue,
         },
@@ -405,6 +430,7 @@ pub fn end(self: *Self, c: *core.Context) Error!void {
         },
         .sequence, .transparent => {},
     }
+    self.names.reset(f.names_start);
     self.finishRoot();
 }
 /// After the value: nothing is left open.

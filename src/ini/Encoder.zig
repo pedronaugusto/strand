@@ -12,6 +12,7 @@
 //! and a map's key or section given twice, `DuplicateField`.
 const std = @import("std");
 const limit = @import("../core/limit.zig");
+const Keys = @import("../core/keys.zig").Keys(void);
 const core = @import("../core.zig");
 const Decoder = @import("Decoder.zig");
 const syntax = @import("text.zig");
@@ -24,8 +25,8 @@ writer: *std.Io.Writer,
 dialect: syntax.Dialect,
 /// 0 before the root, 1 in the root, 2 in a section.
 depth: u8,
-/// The member whose key was written, and whose value is next.
-member: ?[]const u8,
+/// A member's key was written and its value is next: the last of `keys`.
+pending: bool,
 /// Whether a section has begun, after which no key of the root may follow.
 sectioned: bool,
 /// Whether a line has been written, so a section needs the blank line before it.
@@ -34,52 +35,28 @@ written: bool,
 /// are checked for one given twice; a record's are its type's own.
 root_map: bool,
 section_map: bool,
-/// The keys written in the root or the section being written, and the
+/// The keys written in the root or the section being written, a map's
+/// checked for one given twice, then the key whose value is next; and the
 /// sections written: the reader keeps the two apart.
-keys: Names,
-sections: Names,
+keys: Keys,
+sections: Keys,
 const Self = @This();
-
-/// Names written so far, the first 128 kept here and the rest in the
-/// operation's storage, as JSON's writer keeps a map's keys.
-pub const Names = struct {
-    near: [128][]const u8,
-    far: std.ArrayList([]const u8),
-    len: usize,
-
-    pub const empty: Names = .{ .near = undefined, .far = .empty, .len = 0 };
-
-    /// Keeps `name`, refused where it is one kept already.
-    pub fn add(self: *Names, name: []const u8, c: *core.Context) Error!void {
-        for (0..self.len) |i| {
-            const prior = if (i < self.near.len) self.near[i] else self.far.items[i - self.near.len];
-            try c.chargeWork(@min(name.len, prior.len) + 1);
-            if (std.mem.eql(u8, name, prior)) return error.DuplicateField;
-        }
-        if (self.len < self.near.len) self.near[self.len] = name else try self.far.append(c.allocator(), name);
-        self.len += 1;
-    }
-    pub fn clear(self: *Names) void {
-        self.len = 0;
-        self.far.clearRetainingCapacity();
-    }
-};
 
 pub fn init(self: *Self, writer: *std.Io.Writer, dialect: syntax.Dialect) void {
     self.writer = writer;
     self.dialect = dialect;
     self.depth = 0;
-    self.member = null;
+    self.pending = false;
     self.sectioned = false;
     self.written = false;
     self.root_map = false;
     self.section_map = false;
-    self.keys = .empty;
-    self.sections = .empty;
+    self.keys.init();
+    self.sections.init();
 }
 pub fn deinit(self: *Self, c: *core.Context) void {
-    self.keys.far.deinit(c.allocator());
-    self.sections.far.deinit(c.allocator());
+    self.keys.deinit(c.allocator());
+    self.sections.deinit(c.allocator());
     self.* = undefined;
 }
 /// Whether the record being written is a map, whose keys are checked.
@@ -99,14 +76,13 @@ fn checkKey(self: *Self, name: []const u8, value: []const u8, c: *core.Context) 
 /// `key = value` for the member whose key was written, in the root before
 /// any section or in a section.
 fn line(self: *Self, value: []const u8, c: *core.Context) Error!void {
-    const name = self.member orelse return error.CustomRejected;
-    self.member = null;
+    const name = try self.takeKey();
     if (self.depth == 1 and self.sectioned) return error.UnsupportedValue;
     if (!std.unicode.utf8ValidateSlice(value)) return error.UnsupportedValue;
     try self.checkKey(name, value, c);
     try c.chargeWork(value.len);
     if (!syntax.writableValue(value, self.dialect)) return error.UnsupportedValue;
-    if (self.inMap()) try self.keys.add(name, c);
+    if (self.inMap()) try self.keys.checkLast(c, 0);
     try self.put(name, c);
     try self.put(" ", c);
     try self.put(self.dialect.delimiters[0..1], c);
@@ -119,6 +95,7 @@ fn line(self: *Self, value: []const u8, c: *core.Context) Error!void {
     }
     try self.put("\n", c);
     self.written = true;
+    self.release();
 }
 
 pub fn boolean(self: *Self, value: bool, c: *core.Context) Error!void {
@@ -140,7 +117,7 @@ pub fn floating(self: *Self, value: anytype, c: *core.Context) Error!void {
 }
 pub fn text(self: *Self, value: []const u8, c: *core.Context) Error!void {
     // A map's key comes as text.
-    if (self.depth != 0 and self.member == null) return self.key(value, c);
+    if (self.depth != 0 and !self.pending) return self.key(value, c);
     try self.line(value, c);
 }
 pub fn bytes(self: *Self, value: []const u8, c: *core.Context) Error!void {
@@ -151,25 +128,37 @@ pub fn scalar(_: *Self, _: u21, _: *core.Context) Error!void {
 }
 /// A null is a key with no value where the dialect takes one, and else no line.
 pub fn nullValue(self: *Self, c: *core.Context) Error!void {
-    const name = self.member orelse return error.UnsupportedValue;
-    self.member = null;
-    if (!self.dialect.keys_without_values) return;
+    if (!self.pending) return error.UnsupportedValue;
+    const name = try self.takeKey();
+    if (!self.dialect.keys_without_values) return self.keys.reset(self.keys.mark() - 1);
     if (self.depth == 1 and self.sectioned) return error.UnsupportedValue;
     try self.checkKey(name, "", c);
-    if (self.inMap()) try self.keys.add(name, c);
+    if (self.inMap()) try self.keys.checkLast(c, 0);
     try self.put(name, c);
     try self.put("\n", c);
     self.written = true;
+    self.release();
 }
 /// A union's arm with no payload: its key with an empty value.
 pub fn unit(self: *Self, c: *core.Context) Error!void {
     try self.line("", c);
 }
 pub fn key(self: *Self, name: []const u8, c: *core.Context) Error!void {
-    if (self.depth == 0 or self.member != null) return error.CustomRejected;
-    self.member = name;
+    if (self.depth == 0 or self.pending) return error.CustomRejected;
     // A section's name is checked as one when it begins.
-    _ = c;
+    try self.keys.keep(c.allocator(), {}, name);
+    self.pending = true;
+}
+/// The key whose value is next, until a key is next held.
+fn takeKey(self: *Self) Error![]const u8 {
+    if (!self.pending) return error.CustomRejected;
+    self.pending = false;
+    return self.keys.last();
+}
+/// Once its line is written, the key taken stays held where a map's keys
+/// are checked, and else is let go.
+fn release(self: *Self) void {
+    if (!self.inMap()) self.keys.reset(self.keys.mark() - 1);
 }
 pub fn begin(self: *Self, kind: core.Kind, name: []const u8, len: usize, c: *core.Context) Error!void {
     _ = name;
@@ -184,18 +173,17 @@ pub fn begin(self: *Self, kind: core.Kind, name: []const u8, len: usize, c: *cor
             self.root_map = kind == .map;
         },
         1 => {
-            const section = self.member orelse return error.CustomRejected;
-            self.member = null;
+            const section = try self.takeKey();
             try c.chargeWork(section.len);
             if (!std.unicode.utf8ValidateSlice(section) or !syntax.writableSection(section, self.dialect)) return error.UnsupportedValue;
-            if (self.root_map) try self.sections.add(section, c);
-            // The root's keys are over: none may follow a section.
-            self.keys.clear();
-            self.section_map = kind == .map;
+            if (self.root_map) try self.sections.add(c, c.allocator(), 0, {}, section);
             if (self.written) try self.put("\n", c);
             try self.put("[", c);
             try self.put(section, c);
             try self.put("]\n", c);
+            // The root's keys are over: none may follow a section.
+            self.keys.reset(0);
+            self.section_map = kind == .map;
             self.written = true;
             self.sectioned = true;
             self.depth = 2;

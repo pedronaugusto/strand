@@ -1,6 +1,7 @@
 //! .env files: read as python-dotenv reads them, with nothing interpolated,
 //! typed as INI's values are, and written to read back as themselves.
 const std = @import("std");
+const fixtures = @import("testing/fixtures.zig");
 const strand = @import("strand.zig");
 const dotenv = strand.dotenv;
 const core = strand.core;
@@ -190,4 +191,14 @@ fn anyBytes(_: void, case: *shakedown.Case) anyerror!void {
 
 test "fuzz: any bytes are a .env file or refused, and a file read writes and reads back as itself" {
     try shakedown.check(gpa, {}, anyBytes, .{ .cases = 3000 });
+}
+
+test "a map's keys spelled on their serializer's stack are held past the call that spelled them" {
+    const maps = fixtures.stackKeyed("");
+    var buffer: [64]u8 = undefined;
+    var output = std.Io.Writer.fixed(&buffer);
+    try dotenv.write(&output, maps[0], .{});
+    try std.testing.expectEqualStrings("a=1\nb=2\n", output.buffered());
+    output = std.Io.Writer.fixed(&buffer);
+    try std.testing.expectError(error.DuplicateField, dotenv.write(&output, maps[1], .{}));
 }

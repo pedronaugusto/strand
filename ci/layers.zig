@@ -16,6 +16,7 @@ pub const layers: []const gantry.rules.Layer = &.{
     } },
     .{ .name = "core ownership", .patterns = &.{"src/core/owner.zig"} },
     .{ .name = "core public module", .patterns = &.{"src/core.zig"} },
+    .{ .name = "core encoder keys", .patterns = &.{"src/core/keys.zig"} },
     .{ .name = "JSON text", .patterns = &.{
         "src/json/work.zig",
         "src/json/text.zig",

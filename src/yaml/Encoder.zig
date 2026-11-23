@@ -49,8 +49,7 @@ stack: std.ArrayList(Frame),
 allocator: ?std.mem.Allocator,
 frames: [64]Frame,
 /// The scalar keys of the maps open, as what they are.
-keys: std.ArrayList(Key),
-key_buffer: [128]Key,
+keys: Keys,
 /// The string being double-quoted.
 quoting: []const u8,
 /// The root value is written.
@@ -60,45 +59,33 @@ flow: bool,
 const Self = @This();
 
 pub fn init(self: *Self, writer: *std.Io.Writer, allocator: ?std.mem.Allocator, flow: bool) void {
-    self.* = .{ .writer = writer, .stack = .empty, .allocator = allocator, .frames = undefined, .keys = .empty, .key_buffer = undefined, .quoting = "", .done = false, .flow = flow };
+    self.writer = writer;
+    self.allocator = allocator;
     self.stack = .initBuffer(&self.frames);
-    self.keys = .initBuffer(&self.key_buffer);
+    self.keys.init();
+    self.quoting = "";
+    self.done = false;
+    self.flow = flow;
 }
 pub fn deinit(self: *Self) void {
     if (self.stack.items.ptr != &self.frames) self.stack.deinit(self.allocator.?);
-    if (self.keys.items.ptr != &self.key_buffer) self.keys.deinit(self.allocator.?);
+    self.keys.deinit(self.allocator);
 }
 
 /// A scalar key as what it is: two keys are the same when they are the same
-/// value, as a reader compares them. A string is its bytes, the caller's
-/// while the write lasts.
+/// value, as a reader compares them. A string is its bytes, held as the
+/// key's; any other is its kind and bits.
 const Key = struct {
     kind: schema.Kind,
     bits: u128 = 0,
     text: []const u8 = "",
-    fn eql(a: Key, b: Key) bool {
-        return a.kind == b.kind and a.bits == b.bits and std.mem.eql(u8, a.text, b.text);
-    }
 };
+const Keys = @import("../core/keys.zig").Keys(struct { kind: schema.Kind, bits: u128 });
 /// Checks a scalar about to be written: a map's key given twice is refused.
 fn checkKey(self: *Self, key_: Key, c: *core.Context) Error!void {
     const frame = self.top() orelse return;
     if (!frame.map or !frame.key_next) return;
-    for (self.keys.items[frame.key_start..]) |prior| {
-        try c.chargeWork(@min(prior.text.len, key_.text.len) + 1);
-        if (prior.eql(key_)) return error.DuplicateField;
-    }
-    if (self.keys.items.len == self.keys.capacity) {
-        // Past the keys kept inline: on the allocator given, if one was.
-        const allocator = self.allocator orelse return error.OutOfMemory;
-        if (self.keys.items.ptr == &self.key_buffer) {
-            var grown: std.ArrayList(Key) = .empty;
-            try grown.ensureTotalCapacity(allocator, self.key_buffer.len * 2);
-            grown.appendSliceAssumeCapacity(self.keys.items);
-            self.keys = grown;
-        } else try self.keys.ensureUnusedCapacity(allocator, 1);
-    }
-    self.keys.appendAssumeCapacity(key_);
+    try self.keys.add(c, self.allocator, frame.key_start, .{ .kind = key_.kind, .bits = key_.bits }, key_.text);
 }
 
 fn put(self: *Self, out: []const u8, c: *core.Context) Error!void {
@@ -363,7 +350,7 @@ pub fn begin(self: *Self, kind: core.Kind, name: []const u8, _: usize, c: *core.
     // A collection inside a flow collection, or as a key, is in flow style.
     const flow = if (parent) |p| p.flow or (p.mapping and p.key_next) else self.flow;
     const map = kind == .map;
-    const key_start = self.keys.items.len;
+    const key_start = self.keys.mark();
     if (flow) {
         try self.put(if (mapping) "{" else "[", c);
         try self.pushFrame(.{ .mapping = mapping, .map = map, .key_start = key_start, .flow = true, .indent = 0, .placement = .root });
@@ -378,7 +365,7 @@ pub fn begin(self: *Self, kind: core.Kind, name: []const u8, _: usize, c: *core.
 pub fn end(self: *Self, c: *core.Context) Error!void {
     const frame = self.stack.pop() orelse return error.UnsupportedValue;
     if (frame.mapping and !frame.key_next) return error.UnsupportedValue;
-    self.keys.shrinkRetainingCapacity(frame.key_start);
+    self.keys.reset(frame.key_start);
     if (frame.flow) {
         try self.put(if (frame.mapping) "}" else "]", c);
     } else if (frame.count == 0) {
